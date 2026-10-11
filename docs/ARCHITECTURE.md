@@ -47,7 +47,7 @@ The provider connections belong to the external CLIs. Mayasaba does not choose m
 The following are system invariants rather than implementation preferences:
 
 1. **Windows only and fully native.** C++20 implements the controller and UI code; WinUI 3, XAML, and C++/WinRT implement the Control Room.
-2. **One project reality.** The controller owns one durable, source-linked view of project identity, intent, requirements, decisions, tasks, evidence, and state.
+2. **One project reality.** The controller owns one durable, source-linked view of project identity, approved requirements, binding decisions, tasks, evidence, and state. Current scope is derived from approved requirements and binding decisions with source contribution/approval links, without a separate stored summary.
 3. **Three isolated agents.** Hermes, Kilo Code, and Claude Code retain distinct sessions, configurations, providers, tools, and reasoning.
 4. **Exactly thirteen functional layers.** New implementation components must fit a declared layer without creating another authority plane.
 5. **Exactly twelve authoritative state machines.** Other workflows are projections over them.
@@ -71,9 +71,9 @@ Dependencies flow through declared interfaces. Lower layers do not depend on hig
 | 3 | MCF-v2 Communication Fabric | Route, persist, acknowledge, retry, deduplicate, dead-letter, and replay typed traffic | Treat delivery as authorization or task success |
 | 4 | Agent Gateway / Adapters | Discover, probe, launch, stream, interrupt, and translate one CLI each | Leak native wire formats or alter model/provider settings |
 | 5 | Council Engine | Run FULL deliberation, critique assignment, rounds, and synthesis checks | Persist binding decisions or use majority voting |
-| 6 | Context Synchronizer | Build immutable context snapshots, manifests, versions, digests, and stale detection | Invent inspection coverage or authority |
+| 6 | Context Synchronizer | Build immutable context snapshots, versions, digests, and stale detection from Workspace Manager-owned manifests | Invent inspection coverage or authority |
 | 7 | Task/DAG Engine | Own tasks, dependencies, attempts, leases, fencing, scheduling, and recovery | Treat a lease as an operating-system sandbox |
-| 8 | Workspace Manager | Enforce project boundaries; create isolated views; stage, reconcile, and publish changes | Let agents concurrently write the selected root |
+| 8 | Workspace Manager | Own repository manifests; enforce project boundaries; create isolated views; stage, reconcile, and publish changes | Let agents concurrently write the selected root |
 | 9 | Local Execution Kernel | Launch and observe controller-issued processes and commands | Claim hidden CLI-internal actions were mediated without proof |
 | 10 | Validation / Repair Engine | Evaluate criteria, run oracles, diagnose failures, and bound repairs | Accept self-certification or rewrite source for environment failures |
 | 11 | Evidence Engine | Preserve observations, artifacts, hashes, citations, and provenance | Convert narrative, paths, or repeated claims into proof |
@@ -117,7 +117,7 @@ Layer 2 contains several application services, but they do not co-own records.
 
 | Record or controlled effect | Canonical owner |
 | --- | --- |
-| Project identity, folder binding, `ProjectIntent`, project epoch | Project service |
+| Project identity, folder binding, project epoch | Project service |
 | Requirements, amendments, requirement approvals | Requirement service |
 | `UserContribution`, message/question/attachment links | Message/Contribution service |
 | `WorkRequest`, routing, authorization, pending change proposal, `ResearchAssignment` authorization | Work-request authority service |
@@ -128,7 +128,7 @@ Layer 2 contains several application services, but they do not co-own records.
 | CLI session identity, adapter health, translated traffic | Agent Gateway |
 | Snapshot, context version, digest | Context Synchronizer |
 | Task graph, attempt, lease, fencing version | Task/DAG Engine |
-| Workspace view, staging, integration, publication journal | Workspace Manager |
+| Repository manifest, workspace view, staging, integration, publication journal | Workspace Manager |
 | Controller-issued process launch and observed result | Local Execution Kernel |
 | Validation result, failure diagnostic, repair disposition | Validation/Repair Engine |
 | Evidence, artifact/source hash, citation provenance | Evidence Engine |
@@ -187,7 +187,7 @@ Important command flows include:
 - request pause, stop, retry, reassignment, or reopening;
 - query Chat, project, council, task, artifact, evidence, validation, and readiness projections for rendering inside Chat cards or temporary detail sheets.
 
-The UI owns unsent drafts, pending attachment selections, card expansion, temporary-sheet state, focus/scroll restoration, and presentation state only. Domain owners validate and persist all authoritative effects.
+The UI owns unsent drafts, pending attachment selections, card expansion, temporary-sheet state, focus/scroll restoration, and presentation state only. Domain owners validate and persist all authoritative effects. Current scope is a read-only application query over approved requirements and binding decisions, retaining their versions, project epoch, and originating contribution/approval links. It has no separate durable record, version sequence, editor, approval flow, or service owner. No approved build requirements are needed for conversation or separately authorized exploration; a derived view cannot authorize work.
 
 ### Chat-only projection model
 
@@ -205,23 +205,36 @@ Routine controller traffic stays hidden. Cards are emitted for user-relevant cha
 sequenceDiagram
     participant User
     participant UI as Control Room UI
-    participant Project as Project/Workspace services
+    participant App as Controller Application Services
     participant Agents as Adapter probes
-    participant Messages as Contribution service
-    participant Authority as Work-request authority
+    participant Workspace as Workspace Manager
+    participant Policy as Policy Engine
+    participant Project as Project service
 
     UI->>UI: Show Chat and Open Folder immediately
-    UI->>Agents: Start bounded non-mutating readiness probes
+    App->>Agents: Start bounded non-mutating readiness probes
+    UI->>App: Query readiness projection
+    App-->>UI: Current readiness projection without blocking Chat
     User->>UI: Choose Windows folder
-    UI->>Project: Validate root and bind/restore project
-    Project-->>UI: Project projection or exact rejection
+    UI->>App: Open folder command
+    App->>Workspace: Validate canonical root and workspace boundary
+    Workspace-->>App: Validated candidate or rejection
+    App->>Policy: Authorize selected access
+    Policy-->>App: Scoped authorization or denial
+    Note over App,Project: Bind only after validation and authorization pass
+    App->>Project: Bind or restore project identity
+    Project-->>App: Project projection or exact rejection
+    App-->>UI: Folder command result
     Note over Project,Agents: Folder binding does not launch working sessions
     User->>UI: Send message
-    UI->>Messages: SubmitUserContribution
-    Messages-->>UI: Immutable contribution persisted
-    Messages->>Authority: Request scoped interpretation/routing
-    Authority-->>UI: Conversation, clarification, pending authorization, or authorized work
+    UI->>App: SubmitUserContribution
+    Note over App: Message/Contribution service persists the immutable contribution
+    App-->>UI: Contribution persistence result
+    Note over App: Work-request authority service validates scoped interpretation/routing
+    App-->>UI: Conversation, clarification, pending authorization, or authorized work
 ```
+
+The application-services participant represents the typed boundary and coordination within layer 2, not a new service owner. Project service is shown separately to make its exclusive folder-binding authority explicit; root validation and access authorization remain with Workspace Manager and Policy Engine.
 
 Opening a folder never scans files, initializes Git, launches model-backed sessions, or approves work. Every enabled Send after folder binding uses the same command and creates one immutable contribution. If dependent agents are unavailable, the contribution remains persisted while the affected operation truthfully waits or blocks.
 
@@ -296,7 +309,7 @@ User choice/trade-off and missing factual information use distinct typed answer 
 
 ## 11. Context and repository exploration
 
-Context Synchronizer creates versioned, immutable, digest-linked snapshots. Repository relationships and indexes are advisory and carry source file IDs, hashes, extraction method, epoch, and uncertainty.
+Workspace Manager owns the permitted `RepositoryManifest`. Context Synchronizer uses that manifest to create versioned, immutable, digest-linked snapshots. Repository relationships and indexes are advisory and carry source file IDs, hashes, extraction method, epoch, and uncertainty.
 
 Whole-repository exploration is a separately authorized all-three read-only workflow:
 
@@ -441,9 +454,9 @@ The source specification fixes responsibilities but not final folder names. A pr
     application/       # Layer 2 services and typed command/query contracts
     protocol/          # MCF-v2 envelopes, registries, codecs
     council/           # FULL council domain logic
-    context/           # snapshots, manifests, invalidation
+    context/           # snapshots, manifest-derived indexes, invalidation
     tasks/             # DAG, attempts, leases, scheduling
-    workspace/         # roots, views, integration, publication journal
+    workspace/         # roots, manifests, views, integration, publication journal
     execution/         # Win32 process supervision
     validation/        # acceptance matrices, diagnostics, repair
     evidence/          # provenance and artifact evidence
@@ -497,6 +510,8 @@ Classify every material architecture change as `additive`, `refinement`, `replac
 - migration path;
 - affected records, contracts, and tests; and
 - whether a locked decision must be reopened.
+
+The [scope representation refinement](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#scope-representation-refinement-2026-10-11) removes the separately versioned project-direction summary. Approved requirements and binding decisions remain the sources for current scope; Project service retains identity, folder binding, and epoch authority. Ownership and continuous-Chat checks must reject a separate summary record or approval checkpoint and verify source links, pending-change exclusion, and stale-view invalidation. No application-data migration is required at this documentation-only stage.
 
 Historical requirements, decisions, dissent, and evidence remain append-only. A successor links to its predecessor. A conflict between sources is recorded and traced rather than silently edited away.
 

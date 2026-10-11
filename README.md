@@ -1,218 +1,239 @@
 # Mayasaba
 
-**One project reality. Three separate agent sessions.**
+**One controller-owned project reality, three separate agent sessions.**
 
-Mayasaba is a native Windows desktop **control plane** for AI coding agents. You point it at a folder on your own PC and state a request. Three externally installed coding CLIs — **Hermes Agent CLI**, **Kilo Code CLI**, and **Claude Code CLI** — deliberate and carry the work out in isolated workspaces, and Mayasaba declares the result done **only after it has verified the work itself, with evidence**.
+Mayasaba is a native Windows desktop control plane for **Hermes Agent CLI**, **Kilo Code CLI**, and **Claude Code CLI**. You open a local folder and describe your work in Chat. The specified system coordinates the required agents, confines their work to authorized workspaces, and publishes accepted results into that same folder only after the applicable checks pass.
 
-The agents supply the intelligence. Mayasaba supplies **state, authority, safety, orchestration, verification, and proof**.
+The agents provide intelligence. Mayasaba owns **state, authority, safety, orchestration, verification, and proof**.
 
-> Mayasaba is not an AI model, a provider, a cloud IDE, a hosted service, a browser application, an agent marketplace, or a terminal wrapper.
-
----
+> **Project status: specification and architecture stage.** This repository currently contains five Markdown documents, an MIT license, and a Git ignore file. Application source code, machine-readable contracts, build targets, tests, and an MSI installer are not present. The behavior below describes the product specification, not a released or verified application.
 
 ## Contents
 
-- [Why it exists](#why-it-exists)
-- [What it is — and what it refuses to be](#what-it-is--and-what-it-refuses-to-be)
-- [The central invariant](#the-central-invariant)
-- [The three agents](#the-three-agents)
-- [How work flows](#how-work-flows)
-- [Authority and truth: two questions](#authority-and-truth-two-questions)
-- [The FULL council](#the-full-council)
-- [Who owns what](#who-owns-what)
-- [Verification: evidence decides "done"](#verification-evidence-decides-done)
-- [User experience: Chat is the only surface](#user-experience-chat-is-the-only-surface)
-- [Design principles](#design-principles)
-- [Technology stack](#technology-stack)
-- [Toolchain and build](#toolchain-and-build)
-- [Repository layout](#repository-layout)
-- [Documentation](#documentation)
-- [Working rules for contributors and agents](#working-rules-for-contributors-and-agents)
+- [What Mayasaba is for](#what-mayasaba-is-for)
+- [Read the project documents](#read-the-project-documents)
+- [The intended Chat experience](#the-intended-chat-experience)
+- [Which agents do what](#which-agents-do-what)
+- [From a request to verified files](#from-a-request-to-verified-files)
+- [How the FULL council works](#how-the-full-council-works)
+- [Architecture and ownership](#architecture-and-ownership)
+- [Safety, privacy, and recovery](#safety-privacy-and-recovery)
+- [What counts as complete](#what-counts-as-complete)
+- [Technology and development requirements](#technology-and-development-requirements)
+- [Proposed source layout](#proposed-source-layout)
+- [Required proof and next milestones](#required-proof-and-next-milestones)
+- [Contributing](#contributing)
+- [License](#license)
 
----
+## What Mayasaba is for
 
-## Why it exists
+Mayasaba is designed for software work and other authorized local-file tasks: implementing features, fixing bugs, refactoring, preparing documents and research reports, and cleaning up data. Each task uses the lifecycle stages and acceptance checks that fit its result. A report needs checks for its content and sources; it does not need a software build gate.
 
-Today, an AI coding agent's word is usually taken as truth: it says "done," and the task is treated as done. That is unsafe and unverifiable. A clean process exit, a successful build, an agent's confident summary, or even three agents agreeing — none of these is proof that the requested behaviour actually works.
+The controller keeps five things distinct throughout the work:
 
-Mayasaba exists to fix that. It is a **deterministic controller** that sits between a user and multiple agents, and it keeps separate four things that are normally blurred together:
-
-| Concept | Who answers it |
+| Concern | Source of the answer |
 | --- | --- |
-| What the user **authorized** | User instructions, policy, approved requirements, binding decisions |
-| What the controller **decided and scheduled** | The Orchestrator and the owning domain services |
-| What an agent **proposed or reported** | The agent's messages — advisory, never authority |
-| What the machine **actually did / what evidence proves** | Independently observed, reproducible facts |
+| What the user requested | Immutable Chat contributions and their source links |
+| What is permitted | Scoped user authorization, policy, approved requirements, binding decisions, and valid task leases |
+| What is planned | Controller-owned decisions, task dependencies, and scheduling |
+| What an agent claims | Separately attributed proposals, responses, and reported results |
+| What has been established | Current observations and evidence from checks appropriate to the requested property |
 
-A verified fact does not grant permission. A permitted action does not make a technical claim true. **Completion is controller-certified from evidence — never from an agent's claim.**
+A verified fact does not grant permission. A permitted action does not make a technical claim true. Three agents agreeing, a successful build, or an agent saying “done” cannot replace verification of the requested result.
 
-## What it is — and what it refuses to be
+Mayasaba itself runs locally, with no hosted execution service or separate application account. **Local control does not mean every CLI runs offline:** each CLI retains its user-configured model provider, authentication, runtime, and native tools, and may contact its provider or authorized research services. Mayasaba adds no model, model picker, cloud IDE, agent marketplace, or embedded browser interface.
 
-Mayasaba is a fully native, Windows-only desktop application with a deterministic local core. It has **no hosted component and no separate application account or login.**
+## Read the project documents
 
-**Hard boundaries:**
+The repository is organized around the specification. Start with this README for orientation, then read the documents relevant to the work.
 
-- **Windows only, fully local.** All controlled execution happens on the user's own PC. There is no hosted machine, remote executor, or cloud runner.
-- **The opened folder is the boundary.** The folder the user opens is the sole canonical project root and the final publication destination. Mayasaba never scans the whole PC and never infers access to sibling, parent, or neighboring folders.
-- **No unrelated side effects.** It does not send emails, publish content, submit forms, make purchases, change accounts, or control unrelated applications. Read-only web research happens only through each CLI's own user-configured tools, under a scoped assignment.
-- **No hidden model management.** The model, provider, and authentication of each CLI belong to the user; Mayasaba never chooses, changes, or overrides them.
+| Document | Read it for |
+| --- | --- |
+| [Complete system description](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) | The authoritative product definition: lifecycle, ownership, council rules, agent controls, contracts, and verification |
+| [Architecture](./docs/ARCHITECTURE.md) | Service boundaries, communication, execution, storage, integration, and required proof |
+| [UI and UX](./docs/UI-UX.md) | The native Chat experience, accessibility, attachments, details sheets, and desktop acceptance scenarios |
+| [Agent instructions](./AGENTS.md) | Repository working rules, scope, development workflow, validation, and prohibited shortcuts |
+| [README](./README.md) | The project overview and entry point you are reading |
 
-**It refuses to be** an AI model or inference provider, a cloud IDE, a chat wrapper, an agent marketplace, or a system where an agent has the final word. **An agent saying "done" never completes a task.**
+**Repository guidance precedence:** the user's current explicit instruction, then the complete system description, then `AGENTS.md`, then the derived architecture/UI guides, then existing code, tests, schemas, and comments. This README summarizes the specification; it does not replace it. Record and resolve conflicts explicitly.
 
-Mayasaba supports software engineering **and** other authorized local-file work — documents, research reports, data cleanup, and refactors. Lifecycle stages and acceptance checks are **task-applicable**: a report is validated by its own criteria (structure, source and citation validity, record counts, integrity) and is never forced through a build gate that does not apply to it.
+## The intended Chat experience
 
-## The central invariant
+**Chat is the only persistent workspace and top-level route.** The Control Room uses native WinUI 3 controls, XAML, and C++/WinRT.
 
-> **One controller-owned project reality, three separate agent sessions.**
+1. **Open the app.** Chat, local history, and recovery controls appear immediately while bounded CLI readiness checks run in the background.
+2. **Open a folder.** The lower-left **Open Folder** control binds an existing empty or populated Windows directory, or restores its registered project. It is separate from **Attach files**. Folder selection creates no working agent session, repository scan, Git repository, or task approval, and consumes no model-provider usage.
+3. **Keep chatting.** Drafting is available before folder selection. After an authorized root is bound, every Send follows `SubmitUserContribution` and persists exactly one immutable `UserContribution`, even when no CLI is available. First and later messages use the same composer.
+4. **See what needs attention.** Concise controller cards show material progress, questions, decisions, blockers, changed files, validation, and delivery. **Show details** expands a card or opens a temporary sheet; closing it restores Chat focus and reading position.
+5. **Stay in control.** Pause and Stop remain accessible during work. A blocked operation leaves unrelated Chat and eligible work available. A saved message is not shown as answered, authorized, or executed without the corresponding observed outcome.
 
-Mayasaba holds the facts: requirements, decisions, task ownership, context versions, workspace scope, evidence, and validation state. The agents never share a hidden brain, and **nothing an agent claims becomes true until Mayasaba confirms it.**
+**Everything starts in the same Chat.** There is no separate project brief, goal document, or stored intent summary. Current scope is derived from approved requirements and binding decisions, linked back to the original messages and approvals. Proposed changes remain pending until authorized, and an exploratory project needs no approved build goal to keep chatting or request authorized file inspection.
 
-## The three agents
+The normal interface shows warnings only for missing or unusable CLIs. Healthy agents do not occupy permanent `READY` rows. Council, tasks, requirements, files, evidence, delivery, and diagnostics appear through contextual Chat details rather than standalone pages or persistent navigation.
 
-Mayasaba coordinates **exactly three** externally installed coding CLIs, and no others: **Hermes Agent CLI**, **Kilo Code CLI**, and **Claude Code CLI**. It does not replace them or add a model of its own.
+Attachments have separate preparation, persistence, and context-inclusion states. A file appearing in Chat does not imply every agent read it. The UI must preserve drafts, keyboard navigation, screen-reader semantics, high contrast, DPI scaling, reduced motion, and the user's reading position during streaming.
 
-- **The user owns each CLI's model, provider, authentication, tools, and updates.** Mayasaba always uses the CLI's existing selection and never chooses, changes, or overrides a model or provider. There is no model picker.
-- **Compatibility is behavioural.** It is established by bounded behavioural and capability probes, never by release-number comparison or a version allow-list.
-- **All three** participate in every FULL council decision point, in whole-repository exploration, and in three-agent research assignments.
-- **Individual implementation and repair tasks** are leased to a specific agent — only the leased CLI is launched for that work.
-- **A missing CLI blocks only the operations that require it** — never Chat, folder selection, history, drafts, or recovery. An all-three workflow is never silently reduced to two agents.
+## Which agents do what
 
-## How work flows
+The three supported CLIs are **Hermes Agent CLI**, **Kilo Code CLI**, and **Claude Code CLI**. Each has its own adapter and session. The user installs, authenticates, configures, and updates them externally. Mayasaba must preserve their existing model/provider selections, credentials, and update settings.
 
-A software project passes through a lifecycle; other local-file tasks run only the stages their acceptance criteria require.
+| Operation | Required participation |
+| --- | --- |
+| Opening Chat, binding a folder, restoring history, or persisting a message | No working agent session required |
+| Routine conversation or bounded semantic interpretation | May use one available, authorized CLI when needed |
+| A registered FULL council decision point | All three agents, including all six directed peer critiques |
+| Whole-repository exploration | All three agents independently inspecting the authorized read-only scope |
+| Three-agent research | All three agents using their own admitted native search and fetch/extract tools |
+| An individual implementation or repair task | The agent assigned through that task's current scoped lease |
 
-```text
-PROJECT_CREATED → DISCOVERY → INDEPENDENT_ANALYSIS → PROPOSALS
-→ CROSS_CRITIQUE → REBUTTAL_AND_REVISION → DISAGREEMENT_RESOLUTION
-→ USER_INTERVIEW → PRODUCT_AND_UX_DESIGN → TECH_STACK_DEBATE
-→ ARCHITECTURE_REVIEW → ARCHITECTURE_LOCKED → TASK_PLANNING
-→ IMPLEMENTATION → INTEGRATION → BUILD → TEST → E2E
-→ CROSS_AGENT_REVIEW → REPAIR (when needed) → FINAL_VALIDATION → PACKAGE → COMPLETE
+Mayasaba starts and supervises the necessary headless CLI processes for authorized work; the user does not manage three terminal windows. Compatibility comes from **bounded behavioral, capability, and enforcement probes**, never release-number comparisons or a version allow-list. Missing capabilities block the affected operation with a recorded reason. An all-three workflow cannot quietly become a two-agent workflow.
+
+A CLI may propose a source-linked `InterpretationCandidate` for natural-language Chat. The Work-request authority service checks it against the actual contribution and current authority. Confidence, inferred intent, or classifier output cannot approve a material action.
+
+## From a request to verified files
+
+The specified file-change path is:
+
+```mermaid
+flowchart TD
+    Contribution["Persist the Chat contribution"] --> Request["Validate the scoped work request"]
+    Request --> Decision{"Registered decision needed?"}
+    Decision -- "Yes" --> Council["FULL council and required approval gates"]
+    Council --> Plan["Authorized task contract and current lease"]
+    Decision -- "No new decision" --> Plan
+    Plan --> Work["Assigned CLI works in an isolated workspace"]
+    Work --> Candidate["Check scope, freshness, provenance, and conflicts"]
+    Candidate --> Validate["Run applicable checks on the integration candidate"]
+    Validate --> Publish["Journal and publish accepted changes to the selected folder"]
+    Publish --> Final["Check published hashes and required location-dependent behavior"]
+    Final --> Complete["Certify only with current evidence for every blocking criterion"]
 ```
 
-`PAUSED`, `STOPPED`, `BLOCKED`, and `RECOVERING` are **orthogonal operational conditions**, not phases. User interruption has the highest operational priority.
+Arrows represent the eligible success path. Missing authority, failed checks, stale context, conflicts, or unknown outcomes stop the affected transition and enter the appropriate clarification, repair, or recovery path.
 
-**From a Chat request to files in the opened folder:**
+Each `TaskContract` binds the work to its originating request, project, epoch, snapshot, approved scope, dependencies, allowed reads/writes, tools, budgets, expected artifacts, and acceptance criteria. Tasks retain their identity across retries; each execution is a separate attempt with a fenced lease and an attributed evidence bundle.
 
-1. The user opens a Windows folder and describes a task in Chat.
-2. Mayasaba records an immutable `UserContribution` and validates a scoped work request for that operation.
-3. Registered decisions go through a FULL council; approved work becomes a task graph with leases, allowed paths, and acceptance criteria.
-4. Agents write inside isolated, controller-authorized workspaces — **never concurrently into the user's root**.
-5. The controller verifies lease, scope, baseline hashes, and change provenance; stale, out-of-scope, or conflicting writes are rejected before the side effect.
-6. Accepted changes are staged, validated against the applicable oracles, then published through a **durable, recoverable integration journal** that never blindly overwrites newer user edits.
-7. Completion is reported through Chat cards **only** when all applicable blocking criteria carry valid, current evidence.
+Agents work in isolated Git worktrees for compatible existing repositories, or controlled staged copies for other folders. The controller validates an integration candidate before publishing through a durable journal. Final checks bind the result to the actual published files. Opening an empty or non-Git folder never silently initializes Git.
 
-**Response versus implementation.** An agent's text reply is not a file change and not proof of completion. Building successfully, launching a process successfully, and behaving correctly at runtime are three different results — only the last is runtime correctness.
+The software lifecycle covers discovery, independent proposals, critique and revision, user clarification where needed, design and architecture, task planning, implementation, integration, build/test/E2E checks, cross-agent review, bounded repair, final validation, and packaging. The [architecture guide](./docs/ARCHITECTURE.md#project-lifecycle) lists the exact phases. `PAUSED`, `STOPPED`, `BLOCKED`, and `RECOVERING` are operational conditions rather than additional phases.
 
-## Authority and truth: two questions
+New requirements remain ordinary Chat contributions. A material scope change follows the pending-change, FULL-council, and relevant approval gates before the owning services commit new requirements and a successor project epoch. Affected work is invalidated or replanned; historical records and unaffected work remain intact.
 
-Two questions must never be conflated:
+## How the FULL council works
 
-1. **What may Mayasaba do?** — answered by user instructions, policy, approved requirements, binding decisions, and valid task/lease commands.
-2. **What is actually true?** — answered by current, independently checked, reproducible evidence about the world, the project, and running artifacts.
+**FULL is the only council mode.** A registered decision point is a scoped question that needs a recorded choice. Ordinary conversation and routine task assignment do not automatically open a council.
 
-**Nothing that is not authority can create authority:** not an agent's text, a classifier's output, a confidence score, a majority agreement, a transport acknowledgement, or a process exit code. **Unknown or unverifiable state fails closed** and cannot satisfy a positive gate. A newer credible observation may supersede a stale factual claim, but it never grants permission by itself.
+For each decision point, the controller requires:
 
-## The FULL council
+1. A synchronized current context and participation from all three agents.
+2. Independent initial proposals before any agent sees a peer's proposal, followed by a frozen proposal set.
+3. **Six actual directed cross-critiques:** each agent critiques both peers and never itself.
+4. Rebuttals and optional revisions with immutable predecessor links.
+5. Evidence grading, common evaluation criteria, and preservation of material disagreements.
+6. A deterministic round-robin synthesis chair, non-chair review of any synthesis, and a controller coverage check.
+7. Controller and Decision-service gates before a resolution becomes a binding decision.
 
-**FULL is the only council mode.** Every registered decision point requires all three agents:
+The default **five-round cap applies to the whole decision point**. User answers and context changes do not reset it. Later rounds on the same baseline require explicit reaffirmation or revision; a material context change requires fresh independent proposals.
 
-- independent proposals from all three, before any agent sees another's;
-- a frozen proposal set;
-- **six directed cross-critiques** — each agent critiques both peers, never itself;
-- rebuttal and optional revision with immutable predecessor links;
-- computed evidence grading with material disagreement preserved;
-- a deterministic round-robin chair, and non-chair review of any synthesis;
-- a default **five-round cap** for the entire decision point.
+`converged` requires two consecutive comparable completed FULL rounds with identical normalized surviving positions and all positive gates satisfied. An evidence-backed, fully reviewed synthesis may resolve the point earlier as `synthesized`. Other reported outcomes are `cap reached`, `escalated` for a user choice, and `sealed with an open question` for missing facts or clarification. `CONTINUE` is an internal transition and grants no approval.
 
-The externally reported outcomes are **`converged`**, **`synthesized`**, **`cap reached`**, **`escalated`**, and **`sealed with an open question`**. `CONTINUE` is an internal transition, not a positive outcome.
+An absent agent or critique cannot count as participation. Silence, a transport acknowledgement, a majority, and stable agreement cannot substitute for authority or factual evidence. The Council Engine owns deliberation; **the Decision service owns binding decisions and locks**.
 
-**Silence is never agreement.** An ACK, non-participation, a majority, or an agent's claim of agreement is never approval. Positive convergence requires two comparable completed FULL rounds with identical surviving positions, unless an evidence-backed, fully reviewed synthesis resolves the point earlier.
+## Architecture and ownership
 
-## Who owns what
+Mayasaba has **thirteen functional layers**. Lower layers must not depend on higher ones, and every authoritative record has one canonical owner.
 
-Mayasaba is organized into **thirteen functional layers** with strict dependency direction — lower layers never depend on higher ones — and **exactly one owner per authoritative record**, so coordination never implies co-ownership.
-
-A few examples of that rule: the Project service owns project identity and the project epoch; the Council Engine owns deliberation but **cannot bind a decision**; the Orchestrator schedules phases and barriers but never mutates another owner's records; the storage layer persists state but **does not originate authority**; the UI renders projections but never talks to an agent directly.
-
-State is **never one giant status field.** Twelve independent state machines govern project lifecycle, agent session, message delivery, context, task, lease, council round, synchronization barrier, handoff, execution, validation, and repair. Readiness labels, request routing, exploration, research, and decision-validity status are projections over these machines — never additional state machines.
-
-## Verification: evidence decides "done"
-
-Every task and deliverable carries an acceptance-evidence matrix. Each criterion ends in exactly one verdict:
-
-| Verdict | Meaning |
-| --- | --- |
-| `PASS` | The correct current observation was established and preserved |
-| `FAIL` | A valid oracle observed the expectation was not met |
-| `INCONCLUSIVE` | Evidence or oracle adequacy was insufficient |
-| `BLOCKED` | The check could not run safely or with required authority |
-| `NOT_APPLICABLE` | Verified justification shows the criterion does not apply |
-
-**Completion is a matrix gate.** All blocking criteria must be `PASS` or validly `NOT_APPLICABLE`; no blocking `FAIL`, `INCONCLUSIVE`, or `BLOCKED` can be hidden by an aggregate score. Before any `PASS`, an oracle-adequacy review confirms the check actually measures the named requirement — a compile check cannot prove runtime behaviour, and an agent-authored passing test cannot prove its own relevance.
-
-Evidence carries immutable provenance and content hashes. **A bare file path, an agent narrative, a clean exit, or a successful build is never proof by itself.** History is append-only: records are superseded explicitly, never rewritten to simplify the current view.
-
-## User experience: Chat is the only surface
-
-- **Every launch opens native Chat immediately, independent of CLI readiness.**
-- Chat is the **only persistent route** — no project-navigation rail, tabs, dashboard, or standalone Council, Requirements, Decisions, Tasks, Files, Validation, Delivery, Settings, or Agents page.
-- **Open Folder** sits at the lower-left of the Chat shell and is distinct from **Attach files**.
-- Send is disabled **only** until an authorized project root is bound. After binding, every Send persists exactly one immutable `UserContribution` — even if no CLI is available.
-- The first and later messages use the **same composer** and the same submission path. There is no goal-intake wizard and no special first-message mode.
-- Opening a folder creates or restores project identity. It **does not** launch agents, scan the repository, initialize Git, approve work, or consume provider usage.
-- The normal UI shows **only missing or unusable CLI warnings** (`MISSING`, `UNSUPPORTED`, `PROBE_FAILED`). Healthy `READY` agents do not occupy warning rows.
-- Council, requirements, decisions, tasks, files/evidence, validation/repair, delivery, and diagnostics run in the **background** and surface as concise **Chat timeline cards** with an explicit **Show details** action — inline expansion, or a temporary dismissible sheet that restores Chat focus and reading position.
-- An agent's private chain of thought, credentials, and authentication tokens are **never shown**.
-- Keyboard navigation, visible focus, screen-reader semantics, high contrast, DPI scaling, and reduced-motion behaviour are first-class requirements.
-
-## Design principles
-
-- **Deterministic authority.** The controller, not a model, owns state and decisions.
-- **Fail closed.** Unknown, stale, or inconclusive state cannot pass a positive gate.
-- **Evidence over assertion.** Agreement is not verification; a green check is not certification.
-- **One owner per record.** Coordination never implies co-ownership.
-- **Least privilege.** Default-deny capabilities; block an operation when required containment cannot be proven.
-- **Isolation by default.** Agents work in isolated workspaces; only the controller publishes to the user's root, through a recoverable journal.
-- **Honest reporting.** Say `unknown`, `partial`, `stale`, `inconclusive`, or `blocked` when that is the observed state.
-- **Append-only history.** Supersede records explicitly; never rewrite history to simplify the current view.
-
-## Technology stack
-
-Mayasaba is a fully native Windows application: C++20 implements the controller and the interface, WinUI 3 (XAML, C++/WinRT) implements the Chat-only Control Room, and the deterministic core stays independent of the UI so it can be tested without creating a window.
-
-| Area | Baseline | Status |
+| # | Layer | Responsibility |
 | --- | --- | --- |
-| Language | C++20 | Fixed |
-| UI | WinUI 3, XAML, C++/WinRT | Fixed |
-| Platform APIs | Win32 + Windows Runtime; Microsoft WIL for resource wrappers | Fixed approach |
-| Core build / test | CMake, CTest, GoogleTest / GoogleMock | Candidate — pin before build |
-| UI build | MSBuild, Windows SDK, Windows App SDK | Fixed; pin toolchain |
-| JSON | `nlohmann/json` | Candidate — pin and validate |
-| JSON Schema | `pboettch/json-schema-validator` (draft-07) | Candidate — pin and prove dialect coverage |
-| Canonical hashing | Windows CNG SHA-256 over a declared canonical byte profile | Fixed primitive; canonical profile must be vector-tested (never `dump()`) |
-| Persistence | Embedded SQLite C API, single serialized writer | Fixed; WAL / durability configuration requires local proof |
-| Process control | `CreateProcessW`, redirected streams, Job Objects, overlapped I/O / IOCP | Fixed primitives; per-CLI behavior requires proof |
-| Workspace isolation | Git worktrees for compatible repositories, or controller-owned isolated staging | Fixed model; confinement requires proof |
-| Packaging | WiX-authored MSI; unpackaged self-contained Windows App SDK payload candidate | MSI fixed; runtime layout prototype required |
-| UI verification | Windows UI Automation | Pin and prove discriminatory tests |
+| 1 | Control Room UI | Render Chat and immutable projections through typed commands and queries |
+| 2 | Controller Application Services, including the Orchestrator | Own domain records; coordinate phase transitions, scheduling, barriers, and gates |
+| 3 | MCF-v2 Communication Fabric | Persist and route typed traffic; acknowledge, retry, deduplicate, dead-letter, and replay |
+| 4 | Agent Gateway / Adapters | Discover and probe each CLI; manage sessions and translate native traffic |
+| 5 | Council Engine | Own decision points, provisional positions, critiques, rounds, and syntheses |
+| 6 | Context Synchronizer | Build immutable snapshots, context versions, and digests; reject stale context |
+| 7 | Task/DAG Engine | Own task graphs, attempts, leases, and fencing versions |
+| 8 | Workspace Manager | Own repository manifests, authorized views, isolated staging, integration, and publication journals |
+| 9 | Local Execution Kernel | Launch, supervise, cancel, and observe controller-issued processes |
+| 10 | Validation / Repair Engine | Evaluate criteria, diagnose failures, and manage bounded repair |
+| 11 | Evidence Engine | Preserve artifacts, hashes, source citations, and provenance |
+| 12 | Policy Engine | Authorize material actions and record denial reasons |
+| 13 | SQLite Storage | Execute SQL and persist owner-authorized transactions through a serialized write path |
 
-**Deliberately absent:** no cloud service, remote database, hosted component, application account, managed .NET application runtime, embedded browser UI, or JavaScript application runtime. Verification is **local** — there is no hosted CI.
+Within layer 2, **Project service** owns project identity, folder binding, and the project epoch; **Requirement service** owns requirements and approvals; **Message/Contribution service** owns immutable user contributions; **Work-request authority service** owns request routing and authorization; and **Decision service** owns binding decisions. The **Orchestrator** coordinates these owners without mutating their records. SQLite persists their transactions and cannot originate authority.
 
-Before implementation relies on this stack, exact third-party revisions, source hashes, licenses, and an offline-restorable dependency manifest must be pinned, and three local Windows prototypes must pass: a responsive Control Room under sustained CLI/event streaming; process launch, cancellation, and crash cleanup across an owned process tree; and enforceable workspace access with stale-write rejection for every admitted execution profile. **A successful build or an opened window does not satisfy these gates.**
+The UI has a separate typed application command/query boundary. It cannot issue SQL, launch processes, talk directly to agents, schedule their work, or certify results. CLI-native formats stay inside the adapters. MCF-v2 carries agent traffic and bus-routed asynchronous events; its at-least-once delivery requires durable inbox/outbox records and project-plus-operation idempotency. An ACK means receipt and persistence only.
 
-## Toolchain and build
+There are **exactly twelve authoritative state machines**:
 
-- **Native compilation:** MSVC with the Windows SDK. Toolchain and dependency versions are pinned and recorded with verification results.
-- **Core:** CMake and CTest build the WinUI-independent controller core and its tests (unit, integration, contract, fault), with GoogleTest / GoogleMock pinned by exact revision and the MSVC runtime configuration fixed explicitly.
-- **UI:** MSBuild with the Windows App SDK, C++/WinRT, and WIL, delivered through pinned NuGet packages.
-- **Native dependencies:** pinned through a reproducible manifest (for example, vcpkg manifest mode with a pinned baseline, or vendored pinned sources) recording revision, license, and hash so the build is offline-restorable. Listing a candidate never authorizes a download or install.
-- **Installer:** WiX v4 or later (the .NET tool / MSBuild SDK delivery) authors the required MSI. The proposed unpackaged, self-contained Windows App SDK runtime layout remains a prototype until install, launch, upgrade, repair, and uninstall pass on the declared Windows support matrix.
-- **Verification harness:** local fault injection covering child-process exit, pipe backpressure, cancellation, lease revocation, denied filesystem access, SQLite crash/recovery, and multi-file publication — plus static analysis, AddressSanitizer runs on supported targets, bounded parsers, and fuzzing of untrusted JSON and adapter streams. A clean run is not by itself a proof of memory safety.
+| # | State machine | # | State machine |
+| --- | --- | --- | --- |
+| 1 | Project lifecycle | 7 | Council round |
+| 2 | Agent session | 8 | Synchronization barrier |
+| 3 | Message delivery | 9 | Handoff |
+| 4 | Context | 10 | Execution |
+| 5 | Task | 11 | Validation |
+| 6 | Lease | 12 | Repair |
 
-## Repository layout
+Readiness, request routing, exploration, research, and decision validity are projections or workflows over these machines. They introduce no additional state owner or authoritative state machine.
 
-The specification fixes responsibilities, not final folder names. The proposed boundary layout is:
+## Safety, privacy, and recovery
+
+- **Scoped filesystem access.** The selected Windows folder is the canonical project root and final destination. Validate path identity, permissions, aliases, junctions, reparse points, and changes between checking a path and using it. Access to a folder or attachment never implies access to its neighbors.
+- **Enforcement before effects.** A lease, a working directory, a permission file, or a prompt is not a sandbox. Admit an execution profile only when material effects are mediated before execution or independently confined by a tested effective boundary, including stale-write rejection and revocation.
+- **Supervised process trees.** The Execution Kernel creates controlled children suspended, assigns them to controller-owned Job Objects, then resumes them. Job Objects provide lifecycle control and cleanup; they do not alone enforce filesystem or network restrictions. Launching a parent CLI does not prove its internal tools were kernel-mediated.
+- **Protected CLI configuration.** Necessary reads of existing runtime settings or authentication outside the project are narrowly verified exceptions. They cannot expose credentials to task tools, prompts, logs, ordinary state, or evidence, or alter the user's model/provider selection.
+- **Bounded research and honest coverage.** Authorized research uses the CLIs' admitted native read-only web tools. Repository exploration separately tracks inventory, actual content inspection, analysis, exclusions, and stale or unreadable files. Neither repeated claims nor a list of filenames proves full coverage.
+- **Recoverable publication.** Durable journals, guarded file mutations, and post-publication checks protect integration into the selected folder. Multi-file publication is not automatically atomic. Recovery must preserve newer user edits and report unresolved conflicts.
+- **Durable, verifiable state.** SQLite is the sole authoritative state store. Managed attachment/evidence bytes outside it require database-linked identity, provenance, and digest checks. Missing or mismatched bytes are integrity failures. Historical records are superseded explicitly.
+
+Repository files, attachments, and web content are untrusted input. They cannot become controller instructions. Mayasaba must deny unrelated external effects such as messaging, account changes, website publishing, purchases, arbitrary network commands, and agent-invoked plugin installation. Private chain of thought and credentials never appear in Chat.
+
+## What counts as complete
+
+Every task or deliverable requires an `AcceptanceEvidenceMatrix`. Each criterion names the expected property, its source requirement, the applicable environment and artifact hashes, a check or review procedure, evidence, and whether it blocks completion.
+
+| Result | Meaning |
+| --- | --- |
+| `PASS` | An adequate check established the expected property against the current artifacts, with preserved evidence |
+| `FAIL` | A valid check observed that the expectation was not met |
+| `INCONCLUSIVE` | Evidence or the check's coverage was insufficient to determine the result |
+| `BLOCKED` | The check could not run with the required authority, dependencies, or safety |
+| `NOT_APPLICABLE` | A verified task-specific justification establishes that the criterion does not apply |
+
+**All applicable blocking criteria must be `PASS`, or validly `NOT_APPLICABLE`.** An aggregate score cannot hide a blocking failure, uncertainty, or unavailable check.
+
+Before accepting a pass, the controller checks whether the oracle actually measures the criterion. Compilation, process launch, runtime behavior, accessibility, and final certification remain separate results. An agent-authored test needs its own relevance and assertion review. Evidence links to exact artifacts, workspace, environment, check identity/version, time, and provenance.
+
+Failures are classified before repair. Each repair needs a falsifiable hypothesis, bounded scope, a rerun of the affected check, and relevant regressions. Repeating an identical failed strategy without new evidence is not progress.
+
+## Technology and development requirements
+
+These are specification choices and candidates, not a claim that the dependencies are installed or an implementation has been built.
+
+| Area | Required foundation or candidate |
+| --- | --- |
+| Language and core | C++20; deterministic core independent of WinUI |
+| Native interface | WinUI 3, XAML, C++/WinRT, Windows App SDK |
+| Platform and ownership | Win32, Windows Runtime, RAII, standard C++ ownership types, Microsoft WIL |
+| Build | MSVC, Windows SDK, MSBuild for WinUI; CMake and CTest for the core |
+| Core tests | GoogleTest/GoogleMock candidate; pin and validate before use |
+| Contract decoding | `nlohmann/json` and `pboettch/json-schema-validator` candidates; declare and test the schema dialect |
+| Persistence | Embedded SQLite C API with one serialized writer; durability settings require local proof |
+| Integrity | Windows CNG SHA-256 and an explicitly tested canonical byte profile |
+| Processes | Controlled `CreateProcessW`, redirected streams, Job Objects, asynchronous I/O where supported |
+| Workspaces | Git worktrees for compatible repositories or controller-owned staging; effective confinement must be proven |
+| Desktop checks | Windows UI Automation, accessibility, responsiveness, and fault-injection checks |
+| Distribution | Mandatory WiX-authored MSI; proposed unpackaged, self-contained Windows App SDK payload requires a packaging prototype |
+
+Build and validate the product **locally on Windows**. There is no hosted CI or cloud runner. A Linux-only result cannot satisfy a Windows acceptance gate. Keep blocking I/O and agent activity off the UI thread; use bounded queues, cancellation, explicit boundary errors, and reproducible recovery.
+
+There are **no runnable build or installation instructions yet** because this checkout has no application or build definitions. Exact dependency revisions, licenses, hashes, toolchain versions, and supported Windows versions/processor architectures must be declared and verified before relying on them. A candidate in the specification is not authorization to download or install it.
+
+The intended build setup uses pinned NuGet packages for Windows App SDK, C++/WinRT, and WIL, plus an offline-restorable native dependency manifest recording revisions, licenses, and hashes. A pinned vcpkg baseline or pinned vendored sources are possible delivery approaches. Record the MSVC runtime configuration with the toolchain. The installer toolchain is WiX v4 or later, with the exact revision to be pinned and verified. Local verification also covers static analysis, supported AddressSanitizer targets, parser fuzzing, and process/storage/publication fault injection.
+
+## Proposed source layout
+
+Only the documents, license, and Git ignore file exist today. The following implementation layout is a boundary proposal from the architecture guide, not a set of existing build targets:
 
 ```text
 /
@@ -221,9 +242,9 @@ The specification fixes responsibilities, not final folder names. The proposed b
     application/       # Layer 2 services and typed command/query contracts
     protocol/          # MCF-v2 envelopes, registries, codecs
     council/           # FULL council domain logic
-    context/           # snapshots, manifests, invalidation
+    context/           # snapshots, manifest-derived indexes, invalidation
     tasks/             # DAG, attempts, leases, scheduling
-    workspace/         # roots, views, integration, publication journal
+    workspace/         # roots, manifests, views, integration, publication journal
     execution/         # Win32 process supervision
     validation/        # acceptance matrices, diagnostics, repair
     evidence/          # provenance and artifact evidence
@@ -235,32 +256,37 @@ The specification fixes responsibilities, not final folder names. The proposed b
   tests/
     unit/  integration/  contract/  fault/  ui/
   installer/           # WiX MSI sources and packaging verification
-  docs/
+  docs/                # existing specification, architecture, and UI/UX guides
 ```
 
-This is a boundary proposal, not a mandate for placeholder directories: whatever layout is chosen must make forbidden dependencies testable. Today the repository holds only the documents themselves (see below); the source tree above arrives with implementation.
+Final directory names may change, but the selected structure must make forbidden dependencies testable. Creating empty directories alone does not implement these boundaries.
 
-## Documentation
+## Required proof and next milestones
 
-| Document | Role |
+Before implementation relies on the design, three bounded prototypes must produce local Windows evidence:
+
+| Prototype | Required demonstration |
 | --- | --- |
-| docs/Mayasaba — Complete System Description (for AI agents).md | **Authoritative product and architecture specification.** If any other document conflicts with it, this one wins. |
-| AGENTS.md | Repository-wide operating rules for any coding agent working on Mayasaba. |
-| docs/ARCHITECTURE.md | Implementation-facing architectural reference derived from the specification. |
-| docs/UI-UX.md | Implementation-facing UI/UX, accessibility, and desktop-acceptance reference. |
-| README.md | This file — product orientation and entry point. |
+| Responsive Control Room | Native Chat remains responsive under sustained CLI/event streaming |
+| Owned process tree | Controlled launch, stream handling, cancellation, and crash cleanup work across the child process tree |
+| Enforceable workspace access | Each admitted CLI execution profile rejects unauthorized access and stale writes through verified mediation or compatible OS containment |
 
-## Working rules for contributors and agents
+**These proof gates are not yet evidenced in this repository.** A successful build or an opened window would not satisfy them.
 
-- **Build and validate on Windows**, and keep verification **local** — there is no hosted CI or cloud execution.
-- **Keep the deterministic core independent of the interface** so it can be tested without creating a window.
-- **Do not** introduce a fourth agent, a second orchestrator, an alternate state owner, a direct UI-to-agent channel, or a thirteenth state machine.
-- **Every task** requires an acceptance-evidence matrix (or its implementation-stage equivalent); each criterion ends in exactly one of `PASS`, `FAIL`, `INCONCLUSIVE`, `BLOCKED`, `NOT_APPLICABLE`.
-- **Classify failures before repair** and give every repair attempt a falsifiable hypothesis; never repeat an identical failing strategy without new evidence.
-- **Do not** commit, push, publish, or alter external accounts unless explicitly requested.
+The specification also requires an end-to-end slice: persist one Chat request, authorize scoped work, observe a real change by an assigned CLI in isolation, validate it, journal publication into the original folder, and show current criterion-linked evidence. An injected failure must demonstrate honest repair or recovery. Any registered decision encountered on that path still requires the FULL council.
 
-For the full rule set, read `AGENTS.md` before making changes.
+Release work additionally needs contract and parser checks, persistence and publication recovery, per-CLI containment evidence, desktop accessibility, and MSI install/launch/repair/upgrade/uninstall verification on a declared support matrix. These are required milestones without a promised delivery date.
 
----
+## Contributing
 
-**Mayasaba's success condition:** authority, observed execution, and current evidence remain **distinguishable from user input all the way through to final certification.**
+Read the [complete system description](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) and [AGENTS.md](./AGENTS.md) before changing the repository. Read [UI-UX.md](./docs/UI-UX.md) for user-facing work and [ARCHITECTURE.md](./docs/ARCHITECTURE.md) for implementation boundaries.
+
+1. Identify the requirement, owning service/layer, affected paths and contracts, acceptance criteria, and validation method before editing.
+2. Inspect the current repository and Windows toolchain. Keep implementation in authorized isolated worktrees or staged copies, and prefer a small working vertical slice over placeholder scaffolding.
+3. Preserve the native stack, thirteen layers, twelve authoritative state machines, exactly three CLIs, and single-owner boundaries. Material replacements or weaker safety boundaries require an explicit architectural change.
+4. Review the diff, run the relevant checks, and record exact outcomes and limitations in an acceptance matrix or implementation-stage equivalent. Never mark an unexecuted check as passed.
+5. Report changed files, verified behavior, unavailable checks, remaining proof obligations, and the next coherent milestone. Commit, push, or publish only when the user explicitly requests it.
+
+## License
+
+Licensed under the [MIT License](./LICENSE). Copyright (c) 2026 Pavan.

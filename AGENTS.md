@@ -63,7 +63,7 @@ Do not create a second orchestrator, an alternate state owner, a direct UI-to-ag
 
 ### 4.2 One owner per authoritative record
 
-- Project service owns project identity, canonical folder binding, `ProjectIntent`, and the project epoch.
+- Project service owns project identity, canonical folder binding, and the project epoch.
 - Requirement service owns requirements, amendments, and requirement approvals.
 - Message/Contribution service owns immutable `UserContribution` records and their message, question, and attachment links.
 - Work-request authority service owns `WorkRequest`, request routing and authorization, research authorization, and pending change proposals.
@@ -114,7 +114,7 @@ Readiness, request routing, exploration, research, and decision-validity status 
 - Chat is the only persistent user-facing workspace and the only top-level route. Do not add a project-navigation rail, tabs, dashboard, or standalone Council, Requirements, Decisions, Tasks, Files, Validation, Delivery, Settings, or Agents page.
 - `Open Folder` stays at the lower-left of the Chat shell and is distinct from `Attach files`.
 - Send is disabled only until an authorized project root is bound. After binding, every Send persists exactly one immutable `UserContribution`, even if no CLI is available.
-- The first and later messages use the same composer and `SubmitUserContribution` path. There is no initial-goal wizard or special first-message mode.
+- The first and later messages use the same composer and `SubmitUserContribution` path. There is no initial-goal wizard or special first-message mode. Current scope is derived through read-only queries over approved requirements and binding decisions, linked to immutable Chat contributions and approvals; do not introduce a separate project brief, stored intent summary, scope owner, or approval checkpoint.
 - Opening a folder creates or restores project identity. It does not launch agents, scan the repository, initialize Git, approve work, or consume provider usage.
 - The normal UI shows only missing or unusable CLI warnings. Healthy `READY` agents do not occupy warning rows.
 - Council, requirements, decisions, tasks, files/evidence, validation/repair, delivery and diagnostics run in the background. Surface only user-relevant changes as concise Chat timeline cards. Dense details expand inline or in a temporary dismissible sheet that restores Chat focus and reading position.
