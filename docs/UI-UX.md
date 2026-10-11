@@ -37,7 +37,7 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 - The first and every later message use the same composer, Send action, and `SubmitUserContribution` command.
 - Conversation, requirements, questions, change requests, attachments, approvals, and control responses stay in the same Chat.
 - There is no goal-intake wizard, special initial prompt, separate Explore composer, or mode switch that changes the meaning of Send.
-- Each enabled Send persists exactly one immutable `UserContribution` before interpretation.
+- Each enabled Send attempts to persist exactly one immutable `UserContribution` before interpretation; a failed or uncertain persist preserves the draft, shows the precise storage failure with a recovery path, and is never displayed as saved.
 
 ### 2.3 Gate operations, not the interface
 
@@ -726,6 +726,8 @@ Each state explains what happened, what remains trustworthy, and the next availa
 
 After restart, render persisted records as persisted and mark interrupted physical outcomes as reconciling or unknown until observed. Never assume interrupted work completed.
 
+**Storage and cleanup states.** When local application storage reaches its declared ceiling, reclaim disposable data first and keep Chat usable. If protected data still exceeds capacity, show a precise storage blocker naming what is full, what was reclaimed, what remains protected, and the available recovery or cleanup controls; it never silently deletes authoritative records, never touches the user's project files, and never blocks unrelated conversation. A failed or uncertain persist keeps the recoverable draft, states that the message is **not** saved, and offers retry after idempotency reconciliation. Retention that removed historical records under an explicit user policy is disclosed wherever a claim references the missing history — an abbreviated chain is never presented as complete.
+
 ## 18. Accessibility
 
 Accessibility is a release requirement, not polish.
@@ -879,6 +881,10 @@ At minimum, native automated and manual acceptance must cover:
 58. Relaunch and replay with no bound project: the sequence stays on screen 2 with no dead-end, fabricated state or duplicate introduction; no path, shortcut, deep link or replay opens Chat without a bound root.
 59. After a folder is bound, every later launch, restart and project switch opens directly at Chat; onboarding is never repeated and no duplicate introduction appears.
 60. Zero CLIs installed: screen 2 still opens the folder, Chat opens on binding with truthful waiting/blocked status, and no installation prompt, credential form, model picker, version manager or blocked state appears — and nothing is installed into the selected folder. Keyboard focus moves to each screen's heading with **Next**/**Back**/**Escape** mapped, the screen change is announced to screen readers, all three status entries keep accessible names, and high-contrast, DPI-scaling and reduced-motion rendering hold. No authoritative record, state machine or route is created.
+61. Storage pressure: fill local application storage to the declared ceiling. Verify disposable data is reclaimed first while Chat stays usable; when protected data still exceeds capacity a precise storage blocker appears naming what is full, what was reclaimed, what remains protected and the recovery/cleanup controls; the database is not corrupted, the user's project files are untouched, and unrelated conversation is not blocked.
+62. Persistence failure: simulate a failed or uncertain `UserContribution` commit (full device, SQLite failure, interrupted commit). Verify the message is never displayed as saved, accepted, interpreted or answered; the recoverable draft is preserved where possible; the precise storage failure and an explicit recovery path are shown; retry is reconciled through the existing idempotency identity so no duplicate contribution is created; and storage pressure never reports provider usage as Mayasaba budget state.
+63. Cleanup eligibility: create a managed blob, reference it from an authoritative record, then age it past every disposable schedule. Verify it is not deleted while referenced, and that no blob is deleted on age alone. Interrupt a cleanup run mid-plan and verify restart reconciliation records outcomes and never deletes active-lease, unresolved-operation, pending-journal, protected-evidence or recovery-dependency bytes. Attempt a concurrent new reference during the deletion window and verify transactional fencing prevents the eligibility race.
+64. Finite retention opt-in: enable an explicit per-project retention policy and verify immutable log segments, verified retention checkpoints, retained hash-chain boundary anchors and a durable deletion manifest; verify any historical claim referencing removed records discloses exactly what was removed, never presents the abbreviated chain as complete, and never treats expired evidence as independently verifiable. With no opt-in, verify preservation is absolute and nothing expires automatically.
 
 ## 22. UX anti-patterns
 

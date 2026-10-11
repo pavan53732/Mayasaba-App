@@ -266,7 +266,7 @@ Follow the [canonical six-step contract](./Mayasaba%20%E2%80%94%20Complete%20Sys
 
 | Gate | Owner and required record | Reject or wait when |
 | --- | --- | --- |
-| Request intake | Message/Contribution persists one input; Work-request authority validates three source-linked interpretations | Scope or material intent is unresolved; reply completion is not this gate |
+| Request intake | Message/Contribution attempts to record one input (a failed or uncertain persist is never shown as recorded); Work-request authority validates three source-linked interpretations | Scope or material intent is unresolved; reply completion is not this gate |
 | Deliberation | Council Engine records three proposals, six critiques, rebuttals/revisions and reviewed synthesis where used | A required contribution, evidence or choice is missing |
 | Authorized plan | Requirement service owns approvals; Decision service owns binding choices; Task/DAG owns the graph revision and contracts; Policy checks effects | A summary or council outcome is offered as permission |
 | Shared baseline | Context Synchronizer owns the snapshot and application results; Orchestrator owns the all-three barrier | Any required session returns only an ACK, stale digest, missing reference or different baseline |
@@ -430,6 +430,14 @@ WAL is a candidate for eligible local filesystems, not a universal assumption. B
 
 Managed attachment and evidence bytes live outside SQLite only for size and access-management reasons. SQLite remains authoritative for identity and provenance. Every use rechecks existence, hash, permissions, and project association.
 
+### Retention and bounded storage
+
+Retention serves two separately guaranteed promises: **audit integrity** for every retained record, and **storage boundedness** so local application storage never grows without a declared policy or safe stopping behavior. Authoritative records — active requirements, decisions, approvals, contributions, open task/council/lease/recovery records, and evidence substantiating current acceptance claims — are retained while the project exists and are retired only under an explicit per-project user retention policy, with preservation as the default. Reclaimable data — completed operation logs and diagnostics, temporary workspaces and staging copies, context caches and regenerable indexes, and unreferenced managed blobs — is reclaimed automatically on declared `PIN BEFORE BUILD` schedules (30-day logs, 7-day staging grace, 7-day blob-safety grace, cache eviction when stale or under pressure, three verified backups, 365-day closed-project option), and backups are verified together with the managed bytes they reference.
+
+Retirement is a storage-layer execution under owning-service authorization with Policy validation: eligibility is computed from authoritative SQLite references, exclusion lists cover active leases, unresolved operations, pending publication journals, protected evidence and recovery dependencies, a transactional cleanup plan is recorded, references are rechecked immediately before deletion, only controller-managed bytes are deleted, outcomes are recorded and interrupted cleanup is reconciled on restart. Eligibility and deletion are transactionally fenced so a blob cannot become newly referenced after eligibility is finalized, and no blob is deleted on age alone. Under opt-in finite retention, immutable log segments, verified retention checkpoints, retained hash-chain boundary anchors and a durable deletion manifest keep the boundary of intentional removal explicit; an abbreviated chain is never presented as complete and expired evidence is never treated as independently verifiable.
+
+A declared storage-safety ceiling governs local application storage only — never provider token usage. Pressure reclaims disposable data first; protected overflow fails closed with a precise storage blocker and recovery/cleanup controls surfaced in Chat, never corrupting SQLite, never deleting the user's project files, and never representing a contribution as persisted when it was not. A failed or uncertain commit preserves the draft and reconciles through the operation's idempotency identity before retry.
+
 ## 16. Evidence, validation, and repair
 
 Every task and deliverable has an `AcceptanceEvidenceMatrix`. Each criterion identifies the requirement, observable expectation, oracle class, environment, blocking status, expected artifact/hash scope, check procedure, result, evidence, freshness, and disposition.
@@ -551,5 +559,7 @@ The [scope representation refinement](./Mayasaba%20%E2%80%94%20Complete%20System
 Historical requirements, decisions, dissent, and evidence remain append-only. A successor links to its predecessor. A conflict between sources is recorded and traced rather than silently edited away.
 
 The [three-agent conversational participation refinement](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#three-agent-conversational-participation-refinement-2026-10-12) replaces single-CLI conversation with three independent responses, rotating drafting, both peer reviews and one reply. Its contract, readiness, immediate-control, replay and plan-synchronization checks are required; it introduces no extra authority owner or model.
+
+The [retention and bounded-storage refinement](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#retention-and-bounded-storage-refinement-2026-10-12) adds the missing data lifecycle without weakening audit integrity: authoritative history is preserved by default with expiration only under an explicit per-project opt-in, reclaimable operational data is collected on declared crash-safe schedules, blob eligibility and deletion are transactionally fenced, internal cleanup never touches user project files, and storage pressure fails closed with a precise blocker. It also amends the Send-persistence statement so a failed or uncertain commit is never represented as saved. Retention, cleanup, storage-safety and persistence-failure checks are required; the thirteen layers, twelve state machines and single-owner authority are unchanged.
 
 The architecture is successful only when authority, observed execution, and current evidence remain distinguishable from input through final certification.
