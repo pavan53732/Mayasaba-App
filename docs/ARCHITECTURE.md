@@ -185,7 +185,7 @@ Important command flows include:
 - attach or remove a pending file;
 - answer a linked question or decision request;
 - request pause, stop, retry, reassignment, or reopening;
-- query Chat, project, council, task, artifact, evidence, validation, and readiness projections for rendering inside Chat cards or temporary detail sheets.
+- query Chat, project, council, task, artifact, evidence, validation, and readiness projections for rendering inside Chat cards, the compact header CLI status indicator or temporary detail sheets.
 
 The UI owns unsent drafts, pending attachment selections, card expansion, temporary-sheet state, focus/scroll restoration, and presentation state only. Domain owners validate and persist all authoritative effects. Current scope is a read-only application query over approved requirements and binding decisions, retaining their versions, project epoch, and originating contribution/approval links. It has no separate durable record, version sequence, editor, approval flow, or service owner. No approved build requirements are needed for conversation or separately authorized exploration; a derived view cannot authorize work.
 

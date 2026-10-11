@@ -61,7 +61,7 @@ The repository is organized around the specification. Start with this README for
 
 **Chat is the only persistent workspace and top-level route.** The Control Room uses native WinUI 3 controls, XAML, and C++/WinRT.
 
-1. **Open the app.** Chat, local history, and recovery controls appear immediately while bounded CLI readiness checks run in the background.
+1. **Open the app.** Chat, local history, and recovery controls appear immediately while bounded CLI readiness checks run in the background; each CLI's observed readiness appears in the compact header indicator as soon as it is known.
 2. **Open a folder.** The lower-left **Open Folder** control binds an existing empty or populated Windows directory, or restores its registered project. It is separate from **Attach files**. Folder selection creates no working agent session, repository scan, Git repository, or task approval, and consumes no model-provider usage.
 3. **Keep chatting.** Drafting is available before folder selection. After an authorized root is bound, every Send follows `SubmitUserContribution` and persists exactly one immutable `UserContribution`, even when no CLI is available. First and later messages use the same composer.
 4. **See what needs attention.** Concise controller cards show material progress, questions, decisions, blockers, changed files, validation, and delivery. **Show details** expands a card or opens a temporary sheet; closing it restores Chat focus and reading position.
@@ -69,7 +69,7 @@ The repository is organized around the specification. Start with this README for
 
 **Everything starts in the same Chat.** There is no separate project brief, goal document, or stored intent summary. Current scope is derived from approved requirements and binding decisions, linked back to the original messages and approvals. Proposed changes remain pending until authorized, and an exploratory project needs no approved build goal to keep chatting or request authorized file inspection.
 
-The normal interface shows warnings only for missing or unusable CLIs. Healthy agents do not occupy permanent `READY` rows. Council, tasks, requirements, files, evidence, delivery, and diagnostics appear through contextual Chat details rather than standalone pages or persistent navigation.
+The compact Chat header permanently carries a small status indicator with exactly one entry per required CLI — Hermes Agent CLI, Kilo Code CLI, Claude Code CLI — showing the CLI name, its current observed readiness (`CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, `PROBE_FAILED`) and a colored dot. It is a truthful read-only projection: never fabricated, averaged, hidden, percentage-bearing or color-only (name + status text + accessible name), and never a gate on Chat, Open Folder, Send after binding, drafts, history, recovery or project switching. Missing, unsupported or probe-failed CLIs additionally receive inline problem cards with the exact cause, operation impact, **Locate executable** and **Recheck**; a healthy CLI generates no problem card and no setup banner. Council, tasks, requirements, files, evidence, delivery, and diagnostics appear through contextual Chat details rather than standalone pages or persistent navigation.
 
 Attachments have separate preparation, persistence, and context-inclusion states. A file appearing in Chat does not imply every agent read it. The UI must preserve drafts, keyboard navigation, screen-reader semantics, high contrast, DPI scaling, reduced motion, and the user's reading position during streaming.
 

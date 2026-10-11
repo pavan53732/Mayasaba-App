@@ -116,7 +116,7 @@ Readiness, request routing, exploration, research, and decision-validity status 
 - Send is disabled only until an authorized project root is bound. After binding, every Send persists exactly one immutable `UserContribution`, even if no CLI is available.
 - The first and later messages use the same composer and `SubmitUserContribution` path. There is no initial-goal wizard or special first-message mode. Current scope is derived through read-only queries over approved requirements and binding decisions, linked to immutable Chat contributions and approvals; do not introduce a separate project brief, stored intent summary, scope owner, or approval checkpoint.
 - Opening a folder creates or restores project identity. It does not launch agents, scan the repository, initialize Git, approve work, or consume provider usage.
-- The normal UI shows only missing or unusable CLI warnings. Healthy `READY` agents do not occupy warning rows.
+- The compact Chat header permanently carries a small status indicator with exactly one entry per required CLI (Hermes Agent CLI, Kilo Code CLI, Claude Code CLI) showing the CLI name, current observed readiness (`CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, `PROBE_FAILED`) and a colored dot. It is a truthful read-only projection: never fabricated, averaged, hidden, percentage-bearing, color-only (name + status text + accessible name are required), and never a gate on Chat, Open Folder, Send after binding, drafts, history, recovery or project switching. Missing, unsupported or probe-failed CLIs additionally receive inline problem cards with the exact cause, operation impact, **Locate executable** and **Recheck**; a healthy CLI generates no problem card and no setup banner.
 - Council, requirements, decisions, tasks, files/evidence, validation/repair, delivery and diagnostics run in the background. Surface only user-relevant changes as concise Chat timeline cards. Dense details expand inline or in a temporary dismissible sheet that restores Chat focus and reading position.
 - Every controller card that has additional inspectable information uses an explicit **Show details** action; it must not navigate to a standalone page.
 - Gate agent-dependent operations, not Chat, project selection, history, drafts, or recovery controls.
@@ -284,7 +284,7 @@ Do not:
 - create a thirteenth authoritative state machine;
 - gate Chat or folder selection on agent readiness;
 - add persistent project-section navigation or standalone project pages outside Chat;
-- show a permanent three-agent READY panel in the normal UI;
+- show fabricated, averaged, hidden, percentage-bearing or color-only CLI status, or use any CLI status to gate Chat or folder selection;
 - select or rewrite a CLI's model/provider configuration;
 - use release numbers as compatibility gates;
 - grant broad filesystem or network access through prompt wording;

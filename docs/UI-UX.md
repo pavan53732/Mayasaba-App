@@ -61,7 +61,7 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 
 Chat is the only persistent route and fills the application workspace. There is no side rail, tab bar, dashboard, alternate project screen or permanent details pane. The shell has three persistent regions:
 
-1. **Compact Chat header** — project identity, inspectable canonical path, lifecycle phase, operational condition, Pause/Stop and a small overflow menu.
+1. **Compact Chat header** — project identity, inspectable canonical path, lifecycle phase, operational condition, the compact three-CLI status indicator at its top right, Pause/Stop and a small overflow menu.
 2. **Conversation timeline** — user messages, agent responses and controller-owned contextual cards in chronological order.
 3. **Chat footer** — lower-left Open Folder/current-project control plus the composer, pending attachments and Send.
 
@@ -71,7 +71,7 @@ Council, requirements, decisions, tasks, files/evidence, validation/repair, deli
 
 ```text
 +--------------------------------------------------------------------------------------+
-| Mayasaba | Project + path | phase + condition                  [Pause] [Stop] [•••]   |
+| Mayasaba | Project + path | phase + condition | (● Kilo Code  ● Claude Code  ● Hermes) [Pause] [Stop] [•••] |
 +--------------------------------------------------------------------------------------+
 |                                                                                      |
 |                 User message                                                         |
@@ -150,7 +150,7 @@ Render immediately:
 - disabled Send with a clear "Open a folder to send" explanation; and
 - lower-left Open Folder in the Chat shell.
 
-Start bounded, non-mutating CLI checks in the background. A transient checking indicator may appear without rendering three status rows.
+Start bounded, non-mutating CLI checks in the background. The compact CLI status indicator renders in the Chat header as soon as each first observed result arrives; while a check is still running it shows that CLI as `CHECKING` (see §6.2).
 
 Do not show:
 
@@ -158,8 +158,9 @@ Do not show:
 - an authentication or provider form;
 - a model picker;
 - a requirement intake wizard;
-- a permanent three-agent readiness panel; or
-- a spinner that prevents folder selection.
+- a spinner that prevents folder selection;
+- any CLI status presented as a gate on Chat, folder selection or Send; or
+- fabricated readiness, averages, percentages or progress meters.
 
 ### 5.2 Open Folder
 
@@ -224,13 +225,32 @@ Each problem row includes:
 
 Do not label an installed but incompatible CLI as missing. Do not disguise a later provider-login or task-tool failure as an installation problem.
 
-### 6.2 Technical diagnostics
+### 6.2 CLI status indicator
+
+The compact Chat header permanently displays one small status entry per required CLI at its top right. Normal UI warnings still appear only for agents needing attention; this indicator reports each CLI's observed readiness at all times without turning Chat into a monitoring screen.
+
+Each entry contains:
+
+- the exact CLI name (**Hermes Agent CLI**, **Kilo Code CLI**, **Claude Code CLI**);
+- its current observed readiness as short status text — `CHECKING`, `READY`, `MISSING`, `UNSUPPORTED` or `PROBE_FAILED`; and
+- a status dot: neutral/amber `CHECKING`, green `READY`, red `MISSING`, `UNSUPPORTED` or `PROBE_FAILED`.
+
+Rules:
+
+- **Truthful only.** The entry is a projection of the adapter's current record. Never fabricate, average, hide or upgrade a state, and never show a percentage, countdown or progress meter. An entry is never green without the corresponding observed readiness evidence.
+- **Never a gate.** Chat, Open Folder, Send after binding, drafts, history, recovery and project switching stay available regardless of what is shown, and the indicator adds no condition to any operation.
+- **Never color-only.** Status text plus CLI name is always present, with a UI Automation accessible name on each entry; verify high-contrast, DPI-scaling and reduced-motion rendering.
+- **Quiet and compact.** Small, unemphasized control-row typography. It never occupies a warning row, never animates continuously, and never interrupts the conversation with a setup banner.
+- **Detail on demand.** Selecting or expanding an entry opens the existing read-only diagnostics sheet (§6.3). Nothing here is a standalone Agents/Settings page, dashboard, setup wizard, version manager, automatic installer/updater, model selector or credential collector.
+- **Actionable problems still get cards.** A `MISSING`, `UNSUPPORTED` or `PROBE_FAILED` CLI additionally receives the §6.1 problem card with **Locate executable** and **Recheck**; the card disappears once that specific problem is verified resolved.
+
+### 6.3 Technical diagnostics
 
 An explicitly opened temporary diagnostics sheet may show all three adapters, probe time, executable identity, supported observed capabilities, session status, failure details, and recovery history. It opens over Chat, is read-only except for scoped controls such as Locate and Recheck, and returns focus to its invoking control when dismissed.
 
 It must not expose credentials, tokens, private prompts, or model configuration controls.
 
-### 6.3 Operation-specific status
+### 6.4 Operation-specific status
 
 Active work shows attributed session state in contextual Chat cards and their details even when installations are healthy. Distinguish:
 
@@ -370,7 +390,7 @@ Attachment processing never executes the file or treats embedded text as control
 
 Every submitted message, including “Hi”, goes to all three authorized project-scoped CLIs for independent responses and one consolidated reply written by a rotating CLI and reviewed by both peers. Questions and brainstorming do not automatically create implementation tasks, lock requirements, or open a FULL council. The main timeline stays concise; Show details exposes individual contributions and reply provenance. Peer review is not factual certification or user approval.
 
-While collecting responses or reviews, show one source-linked turn status without a permanent healthy-agent panel or fabricated percentages. With any missing response/review, keep the contribution saved and explain what is waiting/blocked; never show a one-/two-agent reply as complete. Bound retries and draft revision, preserve reading position, and mark any displayed draft provisional. Finalization displays one primary answer; replay must not duplicate it, and corrections are explicit supersessions. A disagreement may be stated in the reviewed answer rather than hidden.
+While collecting responses or reviews, show one source-linked turn status without fabricated percentages or simulated agent agreement. The compact header indicator continues to report each CLI's observed installation readiness independently of turn progress; per-agent session and task state stay on the work cards. With any missing response/review, keep the contribution saved and explain what is waiting/blocked; never show a one-/two-agent reply as complete. Bound retries and draft revision, preserve reading position, and mark any displayed draft provisional. Finalization displays one primary answer; replay must not duplicate it, and corrections are explicit supersessions. A disagreement may be stated in the reviewed answer rather than hidden.
 
 Explicit Pause/Stop controls execute immediately without waiting for the three-agent exchange. Show the observed control outcome separately; do not restart stopped agents to obtain a conversational answer. Send, history, drafts and folder controls remain available with missing agents. A greeting grants no scan, web research or file-write authority. For an engineering request, distinguish independent input, FULL-council plan review, required user choices, verified all-three plan application, individually assigned background tasks and evidence-backed delivery. Do not require an extra finalized conversational reply before authorized planning can proceed. No model/provider settings page is added.
 
@@ -409,7 +429,7 @@ For requested implementation, show the source-linked request's progression:
 
 For **“Build a native Windows task manager app”**, follow the [six-step contract](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#engineering-request-six-step-contract). Show necessary clarification in Chat, including whether unresolved “task manager” scope means personal tasks or Windows processes. Show the reviewed plan as a concise source-linked card, with requirements, choices, task assignments, dependencies and acceptance checks in Show details. Label a proposed plan as proposed until its owning services authorize it; do not add a separate brief or approval page.
 
-Distinguish “plan delivered” from “plan applied by all three”. A pending application result names the affected agent without a permanent READY panel. No dependent implementation is displayed as started before that barrier passes. A replaced session or revised plan shows resynchronization; a stale delivery ACK cannot turn the card green.
+Distinguish “plan delivered” from “plan applied by all three”. A pending application result names the affected agent without claiming the plan was applied. No dependent implementation is displayed as started before that barrier passes. A replaced session or revised plan shows resynchronization; a stale delivery ACK cannot turn the card green.
 
 One finalized primary reply may summarize the plan. Necessary question batches, approved-plan updates, progress and delivery cards can follow throughout the same work request without becoming duplicate conversational answers. Each subsequent user answer remains a new contribution linked to the pending operation. Reply-review failure is shown on that reply; independently eligible work may continue. Ask only for details needed by the affected operation. A blocked request must not freeze unrelated Chat or authorized work.
 
@@ -807,7 +827,8 @@ Do not introduce:
 
 - a blocking startup/setup wizard;
 - a model/provider/API-key selector;
-- a permanent READY list for all three agents;
+- a fabricated, averaged, hidden, percentage-bearing or color-only CLI status, or a CLI status used as a gate on Chat, folder selection or Send;
+- a status indicator that becomes a dashboard, navigation destination or standalone Agents/Settings page;
 - a project-navigation rail, project tab bar, dashboard or standalone Council/Requirements/Decisions/Tasks/Files/Validation/Delivery/Settings page;
 - a separate goal intake or Explore input mode;
 - agent terminals the user must launch or manage;
