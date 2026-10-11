@@ -792,7 +792,7 @@ At minimum, native automated and manual acceptance must cover:
 
 ### Startup and readiness
 
-1. First launch with zero, one, two, and three usable CLIs always shows Chat and Open Folder.
+1. First launch with no bound project shows onboarding screen 1, then the mandatory open-folder screen, with zero, one, two and three usable CLIs; the sequence is identical apart from truthful status, and binding a folder opens Chat in every case.
 2. Only `MISSING`, `UNSUPPORTED`, and `PROBE_FAILED` agents appear in the normal warning UI.
 3. All agents ready produces no setup banner.
 4. Recheck updates observed status without installing, updating, or changing a model/provider.
