@@ -152,6 +152,8 @@ Render immediately:
 
 Start bounded, non-mutating CLI checks in the background. The compact CLI status indicator renders in the Chat header as soon as each first observed result arrives; while a check is still running it shows that CLI as `CHECKING` (see §6.2).
 
+A user with no bound project is first offered the dismissible, skippable first-run onboarding sequence (see §5.2). It is never blocking: Chat, Open Folder, drafts and local recovery remain reachable from every screen through **Skip** or Escape.
+
 Do not show:
 
 - a blocking agent-setup page;
@@ -162,7 +164,56 @@ Do not show:
 - any CLI status presented as a gate on Chat, folder selection or Send; or
 - fabricated readiness, averages, percentages or progress meters.
 
-### 5.2 Open Folder
+### 5.2 First-run onboarding
+
+A user with no bound project sees a dismissible, skippable three-screen introduction. It appears only until a project root is bound, is never re-shown afterwards, and introduces no route, state machine, record or owner. Every screen keeps the three-CLI status indicator visible in the header region.
+
+**Screen 1 — welcome.** Explains what Mayasaba is: a native Windows control plane that coordinates the coding CLIs already on the PC and verifies their work before anything is called done. It reminds the user that:
+
+- the three coding CLIs — **Hermes Agent CLI**, **Kilo Code CLI**, **Claude Code CLI** — are installed, authenticated and updated by the user outside Mayasaba;
+- Mayasaba never installs, updates or reconfigures a CLI, and holds no credentials or model picker;
+- a missing CLI only limits the operations that need it — Chat, folder selection, drafts and history stay available now and later;
+- the header shows each CLI's current readiness, and problem cards offer **Locate executable** and **Recheck**.
+
+**Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing and consumes no model-provider usage.
+
+**Screen 3 — Chat.** Chat's welcome view with the composer, the lower-left project control and the header indicator. This is the persistent route for every later launch.
+
+Controls:
+
+- **Next** — bottom-right of each screen; advances welcome → open folder → Chat.
+- **Back** — bottom-left; returns to the previous screen.
+- **Skip** and **Escape** — reach Chat immediately at any point, with or without a bound folder or any installed CLI.
+
+Rules:
+
+- Nothing gates. No screen disables or gates Chat, Open Folder, Send after binding, drafts, history, recovery or project switching, and none gates on CLI readiness.
+- Presentation only. Onboarding progress is UI state; it creates no authoritative record, state machine, owner, route, goal-intake, brief or scope record.
+- No side effects. No installation, download, credential collection, model/provider change, working agent session, repository scan or provider usage results from these screens.
+
+```text
++--------------------------------------------------------------------------------------+
+| (● Kilo Code  ● Claude Code  ● Hermes)                                               |
++--------------------------------------------------------------------------------------+
+|                                                                                      |
+|     Welcome to Mayasaba                                                              |
+|     A native Windows control plane that coordinates the coding CLIs you already       |
+|     have installed and verifies their work before anything is called done.           |
+|                                                                                      |
+|     Mayasaba works with three CLIs you install and sign into yourself:               |
+|       Hermes Agent CLI · Kilo Code CLI · Claude Code CLI                              |
+|     It never installs or changes them. A missing CLI only limits the work that       |
+|     needs it — Chat, folder selection and history stay available.                    |
+|                                                                                      |
+|     Next step: open the project folder you want to work in.                          |
+|                                                                                      |
+|                                                    [Skip]              [Next >]      |
++--------------------------------------------------------------------------------------+
+```
+
+Accessibility: focus moves to each screen's heading when it opens; **Next**, **Back** and **Skip** are keyboard-reachable with **Escape** mapped to Skip; the screen change is announced to screen readers; the layout honors high contrast, DPI scaling and reduced motion; and the status indicator keeps its accessible names on every screen.
+
+### 5.3 Open Folder
 
 Open Folder launches the native Windows directory picker. The selected path is a candidate until Workspace Manager and Policy Engine validate locality, existence, permissions, aliases, and scope. Project service then creates or restores the project identity.
 
@@ -191,7 +242,7 @@ Opening a folder must not visibly or invisibly:
 - approve a request; or
 - grant attachment access outside the selected root.
 
-### 5.3 Project switching
+### 5.4 Project switching
 
 The current-project control offers Open Folder or Switch Folder. Switching uses Project service and must:
 
@@ -227,7 +278,7 @@ Do not label an installed but incompatible CLI as missing. Do not disguise a lat
 
 ### 6.2 CLI status indicator
 
-The compact Chat header permanently displays one small status entry per required CLI at its top right. Normal UI warnings still appear only for agents needing attention; this indicator reports each CLI's observed readiness at all times without turning Chat into a monitoring screen.
+The compact Chat header permanently displays one small status entry per required CLI at its top right, and the same indicator is shown on every first-run onboarding screen. Normal UI warnings still appear only for agents needing attention; this indicator reports each CLI's observed readiness at all times without turning Chat into a monitoring screen.
 
 Each entry contains:
 
@@ -820,12 +871,17 @@ At minimum, native automated and manual acceptance must cover:
 53. Deliver the plan to all three but withhold one context-application result, supply a wrong graph revision/digest, or replace a session: dependent leases remain withheld until the exact current baseline is applied.
 54. Ask and answer a necessary scope question, then change an authorized requirement during execution: retain source links, preserve unaffected work, and show affected invalidation plus successor-plan synchronization before resuming.
 55. Display one finalized conversational reply alongside later question, authorized-plan, progress and delivery cards; replay creates no duplicate reply, and current drafts/reviews preserve historical source attribution.
+56. First launch with no bound project: screen 1 explains Mayasaba and the user-owned CLIs with the truthful status indicator; **Skip** or Escape reaches Chat with no folder and no CLI, and **Next** reaches screen 2.
+57. Screen 2 with no folder bound: **Back** returns to screen 1, **Skip** still reaches Chat, and binding a native folder through **Open Folder** updates the header without launching any session, scan or usage; **Next** then reaches Chat's welcome view.
+58. Zero CLIs installed: onboarding completes to Chat with truthful waiting/blocked status; no installation prompt, credential form, model picker, version manager or blocked state appears, and Chat stays fully available.
+59. After a folder is bound, every later launch, restart and project switch opens directly at Chat; onboarding is never repeated and no duplicate introduction appears.
+60. During onboarding, verify keyboard focus moves to each screen's heading with **Next**/**Back**/**Escape** mapped, screen-reader announcement of the screen change, accessible names on all three status entries, high-contrast, DPI-scaling and reduced-motion rendering, and that no authoritative record, state machine or route is created.
 
 ## 22. UX anti-patterns
 
 Do not introduce:
 
-- a blocking startup/setup wizard;
+- a blocking, mandatory or readiness-gated startup/setup wizard;
 - a model/provider/API-key selector;
 - a fabricated, averaged, hidden, percentage-bearing or color-only CLI status, or a CLI status used as a gate on Chat, folder selection or Send;
 - a status indicator that becomes a dashboard, navigation destination or standalone Agents/Settings page;

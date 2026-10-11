@@ -110,7 +110,7 @@ Readiness, request routing, exploration, research, and decision-validity status 
 
 ## 5. User-experience invariants
 
-- Every launch opens native Chat immediately, independent of CLI readiness.
+- Every launch opens native Chat, independent of CLI readiness. The only permitted prelude is the first-run onboarding sequence for a user with no bound project — screen 1 welcome (what Mayasaba is, the user-owned CLI reminder, live status indicator), screen 2 open folder, screen 3 Chat — which is dismissible and skippable at any point, never re-shown after a project is bound, and never gates Chat, Open Folder, Send after binding, drafts, history, recovery, project switching or CLI readiness. It installs nothing, collects no credentials, and introduces no route, state machine or record.
 - Chat is the only persistent user-facing workspace and the only top-level route. Do not add a project-navigation rail, tabs, dashboard, or standalone Council, Requirements, Decisions, Tasks, Files, Validation, Delivery, Settings, or Agents page.
 - `Open Folder` stays at the lower-left of the Chat shell and is distinct from `Attach files`.
 - Send is disabled only until an authorized project root is bound. After binding, every Send persists exactly one immutable `UserContribution`, even if no CLI is available.
