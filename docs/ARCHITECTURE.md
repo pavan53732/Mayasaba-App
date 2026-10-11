@@ -119,7 +119,7 @@ Layer 2 contains several application services, but they do not co-own records.
 | --- | --- |
 | Project identity, folder binding, project epoch | Project service |
 | Requirements, amendments, requirement approvals | Requirement service |
-| `UserContribution`, message/question/attachment links | Message/Contribution service |
+| `UserContribution`, message/question/attachment links, Chat turn/response/draft/review/consolidated-reply records | Message/Contribution service |
 | `WorkRequest`, routing, authorization, pending change proposal, `ResearchAssignment` authorization | Work-request authority service |
 | Binding decision, lock, disposition, supersession | Decision service |
 | Phase scheduling, barriers, cross-service coordination, decision triggers | Orchestrator |
@@ -230,8 +230,11 @@ sequenceDiagram
     UI->>App: SubmitUserContribution
     Note over App: Message/Contribution service persists the immutable contribution
     App-->>UI: Contribution persistence result
+    Note over App: Orchestrator schedules three independent Chat responses via MCF-v2
+    Note over App: One CLI drafts the combined reply; both peers review its exact digest
     Note over App: Work-request authority service validates scoped interpretation/routing
-    App-->>UI: Conversation, clarification, pending authorization, or authorized work
+    App-->>UI: One consolidated reply or truthful waiting/blocked status
+    App-->>UI: Separate authorized-work and control-result projections
 ```
 
 The application-services participant represents the typed boundary and coordination within layer 2, not a new service owner. Project service is shown separately to make its exclusive folder-binding authority explicit; root validation and access authorization remain with Workspace Manager and Policy Engine.
@@ -240,9 +243,17 @@ Opening a folder never scans files, initializes Git, launches model-backed sessi
 
 ### Semantic interpretation
 
-When deterministic parsing and explicit controls are insufficient, one available authorized CLI may propose a bounded, read-only `InterpretationCandidate`. The candidate contains source-text spans, operation proposals, constraints, referenced records, affected scope, missing details, and suggested acceptance criteria.
+Every conversational turn is dispatched independently to all three authorized project-scoped CLIs. When semantic interpretation is needed, each supplies a bounded, read-only `InterpretationCandidate` before peer disclosure. The candidate contains source-text spans, operation proposals, constraints, referenced records, affected scope, missing details, and suggested acceptance criteria.
 
-The candidate is advisory. Work-request authority verifies it against the exact contribution, approved records, policy, and allowed vocabulary. Unsupported assumptions stay assumptions. Multi-intent turns are split into source-linked operations. Negation and sequencing such as "analyze first; implement only after approval" must be preserved.
+The candidates are advisory. Work-request authority verifies each against the exact contribution, approved records, policy, and allowed vocabulary. Unsupported assumptions stay assumptions. Multi-intent turns are split into source-linked operations. Negation and sequencing such as "analyze first; implement only after approval" must be preserved.
+
+### Three-agent reply coordination
+
+The [authoritative Chat workflow](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#three-agent-chat-and-one-consolidated-reply) applies even to greetings. Message/Contribution service persists the contribution and owns the `ChatTurn`, `AgentChatResponse`, `ChatReplyDraft`, `ChatReplyReview` and `ConsolidatedChatReply` records. Orchestrator schedules three independent initial responses through Gateway/MCF-v2 on the same permitted context. It selects a writer by persisted project-local turn ordinal modulo three in Hermes -> Kilo Code -> Claude Code order. Both other agents review the exact final draft; one revised draft is allowed by default within finite recorded budgets. Schema/version, source IDs, final draft digests, both reviewer identities, context/epoch, operation identity and predecessor links are required by the registered contracts.
+
+The controller validates structural participation, authorization, freshness and evidence references; the selected CLI performs natural-language consolidation. There is no controller-owned model or new service. Reply reviews do not prove prose semantics, authorize work, or replace FULL-council critiques. Message/Contribution service commits at most one finalized primary reply per project/turn, with explicit supersession for corrections. The UI renders a consolidated reply and optional contribution details. Missing responses/reviews, exhausted budgets or stale context block finalization; durable records support bounded replay without duplicate replies. Progress is derived from existing delivery/session/context/task/validation machines, not a new authoritative conversation state machine.
+
+Chat and contribution persistence remain available when a participant is missing. Immediate authorized Pause/Stop controls are executed by their owner before any discussion; notifications to project sessions never restart stopped sessions solely for a reply. Conversational processing grants no source scan, web tool or write permission. Registered planning decisions use the full council; the authorized plan must then be synchronized to all three project sessions through the existing barrier before dependent tasks start. Individually leased implementation continues within its valid authority and dependencies; all-three understanding does not grant shared writes.
 
 ## 8. MCF-v2 communication fabric
 
@@ -514,5 +525,7 @@ Classify every material architecture change as `additive`, `refinement`, `replac
 The [scope representation refinement](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#scope-representation-refinement-2026-10-11) removes the separately versioned project-direction summary. Approved requirements and binding decisions remain the sources for current scope; Project service retains identity, folder binding, and epoch authority. Ownership and continuous-Chat checks must reject a separate summary record or approval checkpoint and verify source links, pending-change exclusion, and stale-view invalidation. No application-data migration is required at this documentation-only stage.
 
 Historical requirements, decisions, dissent, and evidence remain append-only. A successor links to its predecessor. A conflict between sources is recorded and traced rather than silently edited away.
+
+The [three-agent conversational participation refinement](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#three-agent-conversational-participation-refinement-2026-10-12) replaces single-CLI conversation with three independent responses, rotating drafting, both peer reviews and one reply. Its contract, readiness, immediate-control, replay and plan-synchronization checks are required; it introduces no extra authority owner or model.
 
 The architecture is successful only when authority, observed execution, and current evidence remain distinguishable from input through final certification.

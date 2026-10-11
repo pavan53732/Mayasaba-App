@@ -65,7 +65,7 @@ Do not create a second orchestrator, an alternate state owner, a direct UI-to-ag
 
 - Project service owns project identity, canonical folder binding, and the project epoch.
 - Requirement service owns requirements, amendments, and requirement approvals.
-- Message/Contribution service owns immutable `UserContribution` records and their message, question, and attachment links.
+- Message/Contribution service owns immutable `UserContribution` records and their message, question, and attachment links, plus Chat turn, independent response, draft, peer-review, and consolidated-reply records.
 - Work-request authority service owns `WorkRequest`, request routing and authorization, research authorization, and pending change proposals.
 - Decision service owns binding decisions, locks, dispositions, and supersession.
 - Orchestrator owns cross-service scheduling, barriers, registered decision triggers, and phase transitions. It does not mutate the project epoch or another service's records.
@@ -131,7 +131,11 @@ See `docs/UI-UX.md` before changing any user-facing flow.
 - The user owns each CLI's model, provider, authentication, account, native tools, and update settings.
 - Mayasaba must not add model/provider flags, environment overrides, alternate endpoints, configuration writes, silent fallbacks, credential collection, or a model picker.
 - Compatibility is established by bounded behavioral and capability probes, never by release-number comparison or a version allow-list.
-- Mayasaba launches the necessary installed CLIs headlessly only for an authorized operation: all three for a FULL council, complete repository exploration, or three-agent research; only the leased agent for an individual task.
+- Mayasaba launches the necessary installed CLIs headlessly only for an authorized operation: all three for every conversational response/interpretation, FULL council, complete repository exploration, or three-agent research; only the leased agent for an individual implementation/verification task after its required plan synchronization.
+- Every Chat message, including a greeting, is assigned to all three authorized project-scoped CLIs for independent responses. A deterministic rotating CLI writer drafts one consolidated reply; both peers review the exact final draft. Mayasaba has no synthesis model or provider-settings page of its own.
+- Persist one finalized primary reply per turn with all three response references, writer and both reviews; expose contributions through Show details. Chat consolidation is not a council mode, decision, approval, or proof of factual correctness. Material decisions still require FULL council and six actual critiques.
+- Missing participants/reviews or exhausted recorded budgets leave the turn waiting/blocked without a one-/two-agent fallback. Chat persistence remains available. Explicit Pause/Stop controls execute immediately through the controller without waiting for agents or restarting stopped sessions for discussion.
+- Synchronize an approved plan to all three project sessions and verify the barrier before dependent implementation starts. Assign individual tasks through scoped leases; do not make every agent write every task.
 - A missing CLI blocks only operations that require it. Never reduce an all-three workflow to two agents.
 
 ## 7. FULL council rules

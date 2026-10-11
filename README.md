@@ -80,7 +80,7 @@ The three supported CLIs are **Hermes Agent CLI**, **Kilo Code CLI**, and **Clau
 | Operation | Required participation |
 | --- | --- |
 | Opening Chat, binding a folder, restoring history, or persisting a message | No working agent session required |
-| Routine conversation or bounded semantic interpretation | May use one available, authorized CLI when needed |
+| Every Chat message, including greetings and semantic interpretation | All three independently respond; one rotating CLI writes the combined reply and both peers review it |
 | A registered FULL council decision point | All three agents, including all six directed peer critiques |
 | Whole-repository exploration | All three agents independently inspecting the authorized read-only scope |
 | Three-agent research | All three agents using their own admitted native search and fetch/extract tools |
@@ -88,7 +88,11 @@ The three supported CLIs are **Hermes Agent CLI**, **Kilo Code CLI**, and **Clau
 
 Mayasaba starts and supervises the necessary headless CLI processes for authorized work; the user does not manage three terminal windows. Compatibility comes from **bounded behavioral, capability, and enforcement probes**, never release-number comparisons or a version allow-list. Missing capabilities block the affected operation with a recorded reason. An all-three workflow cannot quietly become a two-agent workflow.
 
-A CLI may propose a source-linked `InterpretationCandidate` for natural-language Chat. The Work-request authority service checks it against the actual contribution and current authority. Confidence, inferred intent, or classifier output cannot approve a material action.
+All three CLIs independently propose source-linked `InterpretationCandidate` records when a Chat turn needs semantic interpretation. The Work-request authority service checks each candidate against the actual contribution and current authority. Confidence, inferred intent, or classifier output cannot approve a material action.
+
+**One Chat message, three contributors, one reply.** Even “Hi” goes to all three CLIs against the same authorized context. After their independent responses, Mayasaba assigns a rotating CLI writer to draft one combined answer; both other CLIs review the exact final text. The controller validates participation, references, policy and freshness, then displays one consolidated reply with **Show details** for attribution and disagreements. The CLIs do the language work; Mayasaba adds no AI model or provider-settings page. Peer review does not certify factual claims or authorize actions.
+
+A missing CLI or review leaves that turn saved and waiting/blocked, without a reduced-participant answer. Explicit Pause/Stop controls act immediately without waiting for discussion. A greeting starts no repository scan, research or file changes. Consolidation has recorded finite budgets and at most one draft revision by default; it is not a reduced council mode. See the [complete Chat workflow](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#three-agent-chat-and-one-consolidated-reply).
 
 ## From a request to verified files
 
@@ -96,12 +100,14 @@ The specified file-change path is:
 
 ```mermaid
 flowchart TD
-    Contribution["Persist the Chat contribution"] --> Request["Validate the scoped work request"]
+    Contribution["Persist the Chat contribution"] --> Chat["Three independent responses and one reviewed reply"]
+    Chat --> Request["Validate the scoped work request"]
     Request --> Decision{"Registered decision needed?"}
     Decision -- "Yes" --> Council["FULL council and required approval gates"]
     Council --> Plan["Authorized task contract and current lease"]
     Decision -- "No new decision" --> Plan
-    Plan --> Work["Assigned CLI works in an isolated workspace"]
+    Plan --> Sync["Synchronize the authorized plan to all three CLIs"]
+    Sync --> Work["Assigned CLI works in an isolated workspace"]
     Work --> Candidate["Check scope, freshness, provenance, and conflicts"]
     Candidate --> Validate["Run applicable checks on the integration candidate"]
     Validate --> Publish["Journal and publish accepted changes to the selected folder"]
@@ -159,7 +165,7 @@ Mayasaba has **thirteen functional layers**. Lower layers must not depend on hig
 | 12 | Policy Engine | Authorize material actions and record denial reasons |
 | 13 | SQLite Storage | Execute SQL and persist owner-authorized transactions through a serialized write path |
 
-Within layer 2, **Project service** owns project identity, folder binding, and the project epoch; **Requirement service** owns requirements and approvals; **Message/Contribution service** owns immutable user contributions; **Work-request authority service** owns request routing and authorization; and **Decision service** owns binding decisions. The **Orchestrator** coordinates these owners without mutating their records. SQLite persists their transactions and cannot originate authority.
+Within layer 2, **Project service** owns project identity, folder binding, and the project epoch; **Requirement service** owns requirements and approvals; **Message/Contribution service** owns immutable user contributions and the linked conversational response/review records; **Work-request authority service** owns request routing and authorization; and **Decision service** owns binding decisions. The **Orchestrator** coordinates these owners without mutating their records. SQLite persists their transactions and cannot originate authority.
 
 The UI has a separate typed application command/query boundary. It cannot issue SQL, launch processes, talk directly to agents, schedule their work, or certify results. CLI-native formats stay inside the adapters. MCF-v2 carries agent traffic and bus-routed asynchronous events; its at-least-once delivery requires durable inbox/outbox records and project-plus-operation idempotency. An ACK means receipt and persistence only.
 

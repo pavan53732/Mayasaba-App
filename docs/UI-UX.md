@@ -266,7 +266,7 @@ The timeline contains visually distinct entries for:
 
 Every submitted user message displays author, timestamp, persistence state, interpretation/route state, and links to relevant `UserContribution`, request, question, decision, task, or evidence records.
 
-Agent attribution always names Hermes, Kilo Code, or Claude Code. Controller-owned summaries are not styled as a fourth agent.
+Each successfully finalized conversational turn displays one consolidated primary reply with unobtrusive attribution to Hermes, Kilo Code and Claude Code. Show details exposes the three initial contributions, selected writer, both reviews and preserved disagreements. Individual raw drafts do not appear as three competing primary answers. Controller status/control-result cards are distinct from the CLI-written reply and are not styled as a fourth agent.
 
 Controller cards use a consistent anatomy: plain-language title, source-linked status, one-sentence consequence, timestamp, affected operation, primary next action when one exists, and **Show details**. A narrow evidence spine distinguishes controller authority from conversational messages. Do not emit a new card for every heartbeat or low-level event; update the existing source-linked card when that preserves truthful chronology, and append a new card when the authoritative outcome materially changes.
 
@@ -368,7 +368,11 @@ Attachment processing never executes the file or treats embedded text as control
 
 ### 9.1 Ordinary conversation
 
-Questions and brainstorming can receive normal Chat responses without creating tasks, locking requirements, or opening a FULL council. The UI should avoid adding heavy workflow chrome to a simple answer.
+Every submitted message, including “Hi”, goes to all three authorized project-scoped CLIs for independent responses and one consolidated reply written by a rotating CLI and reviewed by both peers. Questions and brainstorming do not automatically create implementation tasks, lock requirements, or open a FULL council. The main timeline stays concise; Show details exposes individual contributions and reply provenance. Peer review is not factual certification or user approval.
+
+While collecting responses or reviews, show one source-linked turn status without a permanent healthy-agent panel or fabricated percentages. With any missing response/review, keep the contribution saved and explain what is waiting/blocked; never show a one-/two-agent reply as complete. Bound retries and draft revision, preserve reading position, and mark any displayed draft provisional. Finalization displays one primary answer; replay must not duplicate it, and corrections are explicit supersessions. A disagreement may be stated in the reviewed answer rather than hidden.
+
+Explicit Pause/Stop controls execute immediately without waiting for the three-agent exchange. Show the observed control outcome separately; do not restart stopped agents to obtain a conversational answer. Send, history, drafts and folder controls remain available with missing agents. A greeting grants no scan, web research or file-write authority. For an engineering request, distinguish the initial consolidated response, FULL-council plan review, required user choices, verified all-three plan synchronization, individually assigned background tasks and evidence-backed delivery. No model/provider settings page is added.
 
 ### 9.2 Repository exploration
 
@@ -770,6 +774,17 @@ At minimum, native automated and manual acceptance must cover:
 
 41. Verify users describe, refine, and change the project entirely through Chat and linked inline controls, without a separate brief editor, scope-summary record, or initial goal approval.
 42. Verify the current scope card derives from approved requirement/decision versions with source links, excludes pending proposals, handles an empty approved scope, and refreshes after authorized changes without treating stale views as authority.
+
+### Three-agent conversation and consolidated replies
+
+43. Send “Hi”: observe three independent responses, one rotating writer, both peer reviews of the final draft and one concise primary reply; no scan, work lease or FULL council starts.
+44. Inspect Show details for the three contributors, writer, both reviews, source/context references and preserved uncertainty without exposing private reasoning.
+45. With zero, one or two usable CLIs, persist the contribution and show waiting/blocked status; do not substitute a reduced-participant final answer or disable Chat.
+46. Exercise one revised draft, missing/stale/self reviews, contradictory interpretations and budget exhaustion; require exact final-draft reviews and truthful unresolved status.
+47. Restart or redeliver a completed turn: show one finalized reply; changed context invalidates stale drafts/reviews, and a later message cannot be mixed into an earlier turn.
+48. Pause or Stop while replies are pending: execute the authorized control immediately, show its actual outcome, and do not restart stopped sessions for discussion.
+49. Request a native Windows app: show independent input, full council with six critiques at material decision points, authorized plan synchronization to all three, individual task assignments and verified results.
+50. Reject cross-project responses, unauthorized attachment/provider context and attempts to turn conversational synthesis into work authorization or factual certification; show no Mayasaba model/provider settings page.
 
 ## 22. UX anti-patterns
 
