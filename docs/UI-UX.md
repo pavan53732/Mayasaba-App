@@ -205,8 +205,8 @@ Rules:
 |                                                                                      |
 |     Mayasaba works with three CLIs you install and sign into yourself:               |
 |       Hermes Agent CLI · Kilo Code CLI · Claude Code CLI                              |
-|     It never installs or changes them. A missing CLI only limits the work that       |
-|     needs it — Chat, folder selection and history stay available.                    |
+|     It never installs or changes them. A missing CLI never blocks opening your       |
+|     folder, and once it is open it never blocks Chat or your history.                |
 |                                                                                      |
 |     Next step: open the project folder you want to work in.                          |
 |                                                                                      |
