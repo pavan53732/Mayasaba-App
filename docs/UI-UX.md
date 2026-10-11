@@ -23,9 +23,10 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 
 ## 2. Product-wide interaction principles
 
-### 2.1 Chat is always available
+### 2.1 Chat opens with a bound project
 
-- Every application launch opens Chat immediately.
+- Every application launch opens Chat as soon as a project root is bound; a user without one sees the dismissible first-run onboarding sequence (see §5.2).
+- The project root is the only precondition for Chat. **CLI readiness never gates Chat** — with zero, one, two or three usable CLIs, the interface and its content behave identically apart from truthful status.
 - CLI discovery runs quietly in the background and never blocks the shell.
 - Local history and project recovery controls remain available when zero agents are usable.
 - A draft may be typed before a folder is selected; Send remains disabled until an authorized project root is bound.
@@ -41,6 +42,7 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 
 - Missing agents block completed three-agent Chat replies and may block FULL council, all-three plan synchronization, complete exploration/research, or tasks requiring that agent.
 - Missing agents do not block Chat, Open Folder, project creation, project switching, history, drafts, existing evidence, or recovery.
+- CLI readiness never gates Chat, folder selection, drafts, history or recovery; the only precondition for Chat is the bound project root.
 - A persisted message is not automatically shown as interpreted, approved, running, answered, or completed.
 
 ### 2.4 Show provenance and uncertainty
@@ -145,14 +147,14 @@ Use Windows theme resources and high-contrast overrides in implementation; these
 Render immediately:
 
 - the native application shell;
-- Chat welcome/empty state;
+- for a user with no bound project, the first-run onboarding sequence (§5.2) starting at screen 1; for a bound project, the Chat welcome/empty state;
 - an editable draft composer;
 - disabled Send with a clear "Open a folder to send" explanation; and
 - lower-left Open Folder in the Chat shell.
 
 Start bounded, non-mutating CLI checks in the background. The compact CLI status indicator renders in the Chat header as soon as each first observed result arrives; while a check is still running it shows that CLI as `CHECKING` (see §6.2).
 
-A user with no bound project is first offered the dismissible, skippable first-run onboarding sequence (see §5.2). It is never blocking: Chat, Open Folder, drafts and local recovery remain reachable from every screen through **Skip** or Escape.
+A user with no bound project is first shown the dismissible first-run onboarding sequence (see §5.2) and remains on it until a project root is bound: **Chat does not open without a bound project root**, while CLI readiness never gates anything.
 
 Do not show:
 
@@ -166,30 +168,30 @@ Do not show:
 
 ### 5.2 First-run onboarding
 
-A user with no bound project sees a dismissible, skippable three-screen introduction. It appears only until a project root is bound, is never re-shown afterwards, and introduces no route, state machine, record or owner. Every screen keeps the three-CLI status indicator visible in the header region.
+A user with no bound project sees a dismissible onboarding sequence — **screen 1 welcome** and **screen 2 open folder** — and remains on it until a project root is bound, at which point **Chat** opens. It is never re-shown after a root is bound, and introduces no route, state machine, record or owner. Every screen keeps the three-CLI status indicator visible in the header region.
 
 **Screen 1 — welcome.** Explains what Mayasaba is: a native Windows control plane that coordinates the coding CLIs already on the PC and verifies their work before anything is called done. It reminds the user that:
 
 - the three coding CLIs — **Hermes Agent CLI**, **Kilo Code CLI**, **Claude Code CLI** — are installed, authenticated and updated by the user outside Mayasaba;
 - Mayasaba never installs, updates or reconfigures a CLI, and holds no credentials or model picker;
-- a missing CLI only limits the operations that need it — Chat, folder selection, drafts and history stay available now and later;
+- a missing CLI only limits the operations that need it — it never blocks opening the project folder, and once a folder is open it never blocks Chat;
 - the header shows each CLI's current readiness, and problem cards offer **Locate executable** and **Recheck**.
 
-**Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing and consumes no model-provider usage.
+**Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing, consumes no model-provider usage, and **installs nothing** — the three CLIs stay machine-level tools the user installs and signs into outside Mayasaba, and Mayasaba never installs, updates or configures one, in the selected folder or elsewhere.
 
-**Screen 3 — Chat.** Chat's welcome view with the composer, the lower-left project control and the header indicator. This is the persistent route for every later launch.
+**Chat — the destination.** Binding a folder opens Chat's welcome view with the composer, the lower-left project control and the header indicator. This is the persistent route for every later launch.
 
 Controls:
 
-- **Next** — bottom-right of each screen; advances welcome → open folder → Chat.
+- **Next** — bottom-right of each screen; advances welcome → open folder, and open folder → Chat once a root is bound.
 - **Back** — bottom-left; returns to the previous screen.
-- **Skip** and **Escape** — reach Chat immediately at any point, with or without a bound folder or any installed CLI.
+- **Skip** and **Escape** — skip the explanation and advance to the mandatory open-folder screen. **There is no route to Chat without a bound project root.**
 
 Rules:
 
-- Nothing gates. No screen disables or gates Chat, Open Folder, Send after binding, drafts, history, recovery or project switching, and none gates on CLI readiness.
+- One mandatory precondition. No screen disables or gates folder selection, and CLI readiness never gates Chat, folder selection, drafts, history, recovery or project switching; the single required step is binding a project root, which is the same root every Send, task and publication already requires.
 - Presentation only. Onboarding progress is UI state; it creates no authoritative record, state machine, owner, route, goal-intake, brief or scope record.
-- No side effects. No installation, download, credential collection, model/provider change, working agent session, repository scan or provider usage results from these screens.
+- No side effects. No installation, download, credential collection, model/provider change, working agent session, repository scan, Git initialization or provider usage results from these screens, and nothing is installed into the selected folder.
 
 ```text
 +--------------------------------------------------------------------------------------+
@@ -871,11 +873,11 @@ At minimum, native automated and manual acceptance must cover:
 53. Deliver the plan to all three but withhold one context-application result, supply a wrong graph revision/digest, or replace a session: dependent leases remain withheld until the exact current baseline is applied.
 54. Ask and answer a necessary scope question, then change an authorized requirement during execution: retain source links, preserve unaffected work, and show affected invalidation plus successor-plan synchronization before resuming.
 55. Display one finalized conversational reply alongside later question, authorized-plan, progress and delivery cards; replay creates no duplicate reply, and current drafts/reviews preserve historical source attribution.
-56. First launch with no bound project: screen 1 explains Mayasaba and the user-owned CLIs with the truthful status indicator; **Skip** or Escape reaches Chat with no folder and no CLI, and **Next** reaches screen 2.
-57. Screen 2 with no folder bound: **Back** returns to screen 1, **Skip** still reaches Chat, and binding a native folder through **Open Folder** updates the header without launching any session, scan or usage; **Next** then reaches Chat's welcome view.
-58. Zero CLIs installed: onboarding completes to Chat with truthful waiting/blocked status; no installation prompt, credential form, model picker, version manager or blocked state appears, and Chat stays fully available.
+56. First launch with no bound project: screen 1 explains Mayasaba and the user-owned CLIs with the truthful status indicator; **Next** reaches screen 2, and **Skip** or Escape skip the explanation to screen 2 — no control reaches Chat without a bound project root.
+57. Screen 2 with no folder bound: **Back** returns to screen 1, **Open Folder** binds a native folder and updates the header without launching any session, scan, Git initialization or provider usage, and binding opens Chat's welcome view immediately.
+58. Relaunch and replay with no bound project: the sequence stays on screen 2 with no dead-end, fabricated state or duplicate introduction; no path, shortcut, deep link or replay opens Chat without a bound root.
 59. After a folder is bound, every later launch, restart and project switch opens directly at Chat; onboarding is never repeated and no duplicate introduction appears.
-60. During onboarding, verify keyboard focus moves to each screen's heading with **Next**/**Back**/**Escape** mapped, screen-reader announcement of the screen change, accessible names on all three status entries, high-contrast, DPI-scaling and reduced-motion rendering, and that no authoritative record, state machine or route is created.
+60. Zero CLIs installed: screen 2 still opens the folder, Chat opens on binding with truthful waiting/blocked status, and no installation prompt, credential form, model picker, version manager or blocked state appears — and nothing is installed into the selected folder. Keyboard focus moves to each screen's heading with **Next**/**Back**/**Escape** mapped, the screen change is announced to screen readers, all three status entries keep accessible names, and high-contrast, DPI-scaling and reduced-motion rendering hold. No authoritative record, state machine or route is created.
 
 ## 22. UX anti-patterns
 
