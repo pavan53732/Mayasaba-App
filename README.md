@@ -23,6 +23,9 @@ The agents supply the intelligence. Mayasaba supplies **state, authority, safety
 - [Verification: evidence decides "done"](#verification-evidence-decides-done)
 - [User experience: Chat is the only surface](#user-experience-chat-is-the-only-surface)
 - [Design principles](#design-principles)
+- [Technology stack](#technology-stack)
+- [Toolchain and build](#toolchain-and-build)
+- [Repository layout](#repository-layout)
 - [Documentation](#documentation)
 - [Working rules for contributors and agents](#working-rules-for-contributors-and-agents)
 
@@ -173,6 +176,69 @@ Evidence carries immutable provenance and content hashes. **A bare file path, an
 - **Isolation by default.** Agents work in isolated workspaces; only the controller publishes to the user's root, through a recoverable journal.
 - **Honest reporting.** Say `unknown`, `partial`, `stale`, `inconclusive`, or `blocked` when that is the observed state.
 - **Append-only history.** Supersede records explicitly; never rewrite history to simplify the current view.
+
+## Technology stack
+
+Mayasaba is a fully native Windows application: C++20 implements the controller and the interface, WinUI 3 (XAML, C++/WinRT) implements the Chat-only Control Room, and the deterministic core stays independent of the UI so it can be tested without creating a window.
+
+| Area | Baseline | Status |
+| --- | --- | --- |
+| Language | C++20 | Fixed |
+| UI | WinUI 3, XAML, C++/WinRT | Fixed |
+| Platform APIs | Win32 + Windows Runtime; Microsoft WIL for resource wrappers | Fixed approach |
+| Core build / test | CMake, CTest, GoogleTest / GoogleMock | Candidate — pin before build |
+| UI build | MSBuild, Windows SDK, Windows App SDK | Fixed; pin toolchain |
+| JSON | `nlohmann/json` | Candidate — pin and validate |
+| JSON Schema | `pboettch/json-schema-validator` (draft-07) | Candidate — pin and prove dialect coverage |
+| Canonical hashing | Windows CNG SHA-256 over a declared canonical byte profile | Fixed primitive; canonical profile must be vector-tested (never `dump()`) |
+| Persistence | Embedded SQLite C API, single serialized writer | Fixed; WAL / durability configuration requires local proof |
+| Process control | `CreateProcessW`, redirected streams, Job Objects, overlapped I/O / IOCP | Fixed primitives; per-CLI behavior requires proof |
+| Workspace isolation | Git worktrees for compatible repositories, or controller-owned isolated staging | Fixed model; confinement requires proof |
+| Packaging | WiX-authored MSI; unpackaged self-contained Windows App SDK payload candidate | MSI fixed; runtime layout prototype required |
+| UI verification | Windows UI Automation | Pin and prove discriminatory tests |
+
+**Deliberately absent:** no cloud service, remote database, hosted component, application account, managed .NET application runtime, embedded browser UI, or JavaScript application runtime. Verification is **local** — there is no hosted CI.
+
+Before implementation relies on this stack, exact third-party revisions, source hashes, licenses, and an offline-restorable dependency manifest must be pinned, and three local Windows prototypes must pass: a responsive Control Room under sustained CLI/event streaming; process launch, cancellation, and crash cleanup across an owned process tree; and enforceable workspace access with stale-write rejection for every admitted execution profile. **A successful build or an opened window does not satisfy these gates.**
+
+## Toolchain and build
+
+- **Native compilation:** MSVC with the Windows SDK. Toolchain and dependency versions are pinned and recorded with verification results.
+- **Core:** CMake and CTest build the WinUI-independent controller core and its tests (unit, integration, contract, fault), with GoogleTest / GoogleMock pinned by exact revision and the MSVC runtime configuration fixed explicitly.
+- **UI:** MSBuild with the Windows App SDK, C++/WinRT, and WIL, delivered through pinned NuGet packages.
+- **Native dependencies:** pinned through a reproducible manifest (for example, vcpkg manifest mode with a pinned baseline, or vendored pinned sources) recording revision, license, and hash so the build is offline-restorable. Listing a candidate never authorizes a download or install.
+- **Installer:** WiX v4 or later (the .NET tool / MSBuild SDK delivery) authors the required MSI. The proposed unpackaged, self-contained Windows App SDK runtime layout remains a prototype until install, launch, upgrade, repair, and uninstall pass on the declared Windows support matrix.
+- **Verification harness:** local fault injection covering child-process exit, pipe backpressure, cancellation, lease revocation, denied filesystem access, SQLite crash/recovery, and multi-file publication — plus static analysis, AddressSanitizer runs on supported targets, bounded parsers, and fuzzing of untrusted JSON and adapter streams. A clean run is not by itself a proof of memory safety.
+
+## Repository layout
+
+The specification fixes responsibilities, not final folder names. The proposed boundary layout is:
+
+```text
+/
+  app/                 # WinUI entry point, XAML, view models, UI composition
+  core/
+    application/       # Layer 2 services and typed command/query contracts
+    protocol/          # MCF-v2 envelopes, registries, codecs
+    council/           # FULL council domain logic
+    context/           # snapshots, manifests, invalidation
+    tasks/             # DAG, attempts, leases, scheduling
+    workspace/         # roots, views, integration, publication journal
+    execution/         # Win32 process supervision
+    validation/        # acceptance matrices, diagnostics, repair
+    evidence/          # provenance and artifact evidence
+    policy/            # authorization and denials
+    storage/           # SQLite implementation and migrations
+  adapters/
+    hermes/  kilo/  claude/
+  contracts/           # versioned schemas, registries, canonical test vectors
+  tests/
+    unit/  integration/  contract/  fault/  ui/
+  installer/           # WiX MSI sources and packaging verification
+  docs/
+```
+
+This is a boundary proposal, not a mandate for placeholder directories: whatever layout is chosen must make forbidden dependencies testable. Today the repository holds only the documents themselves (see below); the source tree above arrives with implementation.
 
 ## Documentation
 
