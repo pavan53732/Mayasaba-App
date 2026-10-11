@@ -184,8 +184,9 @@ A user with no bound project sees a dismissible onboarding sequence — **screen
 
 Controls:
 
-- **Next** — bottom-right of each screen; advances welcome → open folder, and open folder → Chat once a root is bound.
-- **Back** — bottom-left; returns to the previous screen.
+- **Next** — bottom-right on the welcome screen; advances to the mandatory open-folder screen.
+- **Open Folder** — the primary action on screen 2; a successful binding opens Chat immediately, without a second Next action.
+- **Back** — bottom-left on screen 2; returns to welcome.
 - **Skip** and **Escape** — skip the explanation and advance to the mandatory open-folder screen. **There is no route to Chat without a bound project root.**
 
 Rules:

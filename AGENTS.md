@@ -110,7 +110,7 @@ Readiness, request routing, exploration, research, and decision-validity status 
 
 ## 5. User-experience invariants
 
-- A bound project root is required before Chat opens; Chat is never gated on CLI readiness, but there is no route to Chat without an authorized root. The only permitted prelude is the first-run onboarding sequence shown to a user with no bound project until one is bound: screen 1 welcome (what Mayasaba is, the user-owned CLI reminder, live status indicator) and screen 2 open folder, then Chat. **Next** is bottom-right, **Back** bottom-left; **Skip** and Escape skip only the explanation and advance to the mandatory open-folder screen. The sequence is never re-shown after a project is bound, never gates folder selection, drafts, history, recovery, project switching or CLI readiness, installs nothing (never into the selected folder), collects no credentials, and introduces no route, state machine or record.
+- A bound project root is required before Chat opens; Chat is never gated on CLI readiness, but there is no route to Chat without an authorized root. The only permitted prelude is the first-run onboarding sequence shown to a user with no bound project until one is bound: screen 1 welcome (what Mayasaba is, the user-owned CLI reminder, live status indicator) and screen 2 open folder, then Chat. **Next** advances from welcome to open folder; **Back** returns to welcome; **Skip** and Escape skip only the explanation and advance to the mandatory open-folder screen. Binding the folder opens Chat immediately, so screen 2 has no separate Next-to-Chat action. The sequence is never re-shown after a project is bound, never gates folder selection, drafts, history, recovery, project switching or CLI readiness, installs nothing (never into the selected folder), collects no credentials, and introduces no route, state machine or record.
 - Chat is the only persistent user-facing workspace and the only top-level route. Do not add a project-navigation rail, tabs, dashboard, or standalone Council, Requirements, Decisions, Tasks, Files, Validation, Delivery, Settings, or Agents page.
 - `Open Folder` stays at the lower-left of the Chat shell and is distinct from `Attach files`.
 - Send is disabled only until an authorized project root is bound, and a closed project is the sole exception: every submission to a closed project additionally requires an explicit, authorized **Reopen Project** action, independent of CLI readiness. After binding, every Send attempts to persist exactly one immutable `UserContribution`, regardless of CLI readiness. If persistence fails, never represent the contribution as saved, accepted, interpreted, or answered: preserve the recoverable draft where possible, display the precise storage failure with an explicit recovery path, and reconcile any uncertain commit outcome through the existing idempotency identity before retrying to prevent duplicates.
@@ -168,7 +168,7 @@ Silence, an ACK, non-participation, a majority, or an agent's claim of agreement
 - Whole-repository exploration is separately authorized, strictly read-only, coverage-accounted, and performed independently by all three CLIs.
 - Implementation happens in controller-authorized isolated worktrees or staged copies, not through concurrent writes to the selected root.
 - Use Git worktrees only for compatible existing Git repositories. Never silently run `git init`.
-- A task lease is not a filesystem sandbox. Material writes must be mediated by the Workspace Manager's isolated staging and durable integration journal, or constrained by a locally proven operating-system boundary with effective revocation.
+- A task lease is not a filesystem sandbox. Agent implementation edits occur only in controller-authorized isolation and accepted results use the Workspace Manager's durable integration journal. Operation admission separately requires proven pre-effect mediation or a locally proven operating-system access boundary with effective revocation.
 - Reject stale-lease, out-of-scope, reparse-escape, conflicting, or unproven writes before the side effect.
 - Publish accepted changes through a durable integration journal, guarded file mutations, reconciliation, and post-publication checks. Never blindly overwrite or roll back newer user edits.
 
@@ -219,6 +219,8 @@ Silence, an ACK, non-participation, a majority, or an agent's claim of agreement
 
 Before editing:
 
+The [implementation-readiness ambiguity audit](./docs/IMPLEMENTATION-READINESS-AUDIT.md) records unresolved documentation decisions. This repository is still in the documentation stage. Do not treat an audit inventory or an unresolved alternative as permission to invent a transition, authority rule, or failure behavior.
+
 1. Read the authoritative system description and the relevant derived document.
 2. Inspect the current repository and local Windows toolchain; do not assume dependencies exist.
 3. Identify the owning layer/service and confirm that the change does not duplicate authority.
@@ -246,7 +248,7 @@ After editing:
 4. Distinguish compilation, process launch, runtime behavior, and acceptance. Do not collapse them into one success claim.
 5. Report changed files, verified behavior, failed or unavailable checks, remaining proof obligations, and the next coherent milestone.
 
-Do not commit, push, publish, or alter external accounts unless the user explicitly requests it.
+Do not commit, push, publish, or alter external accounts unless the user explicitly requests it. **Standing user instruction for this repository's documentation work (2026-10-12):** after completing and reviewing documentation edits, commit those changes on `main` with a descriptive subject and detailed commit body, then sync `main` to `origin/main`. Exclude unrelated changes; never force-push. Report the commit and sync result. This standing instruction does not authorize commits or external changes for non-documentation work.
 
 ## 13. Validation and definition of done
 
@@ -287,7 +289,7 @@ Do not claim the architecture is deployable until local Windows evidence exists 
 
 1. A responsive WinUI Control Room under sustained CLI/event streaming.
 2. Process launch, cancellation, and crash cleanup across an owned process tree.
-3. Enforceable workspace access and stale-write rejection for every admitted agent execution profile, proven via controller-mediated staging and integration journal verification, or verified OS sandbox boundary.
+3. Enforceable workspace access and stale-write rejection for every admitted agent execution profile, proven by pre-effect mediation or a tested effective operating-system access boundary for all prohibited reads, writes, network effects, and stale writes. Staging and integration-journal verification are separately required for controlled publication; they do not prove containment.
 
 A successful build or an opened window does not satisfy these gates.
 
