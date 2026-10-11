@@ -711,6 +711,18 @@ Use a consistent semantic vocabulary across messages, cards and temporary sheets
 
 Avoid using the same green check for persistence, ACK, process exit, passing one test, and final certification.
 
+### Recovery actions
+
+An `UNKNOWN` outcome is followed by contextual actions, never a generic Retry. Each action appears only when the owning service can demonstrate that it is permitted for that specific unknown:
+
+- **Recheck outcome** — re-observe the physical outcome from existing durable records;
+- **Inspect affected files** — read-only comparison of journal expectations against actual identities and hashes;
+- **Resolve conflict** — route a competing user version to a scoped conflict resolution;
+- **Retry safely** — available only after idempotency reconciliation has ruled out a duplicate; and
+- **Resume** — requires verified fencing and current lease/epoch validation.
+
+A generic Retry button MUST NOT appear for an unresolved material side effect. While reconciliation runs, the affected operation shows a bounded reconciling state that names the dependency. If no safe path is found, it becomes Blocked with its outcome explicitly unresolved and a precise reason — never styled as success, never as an ordinary retry, and never relabelled as a known failure — while unrelated work continues.
+
 ## 17. Empty, loading, error, and disconnected states
 
 Every card type and temporary sheet defines:

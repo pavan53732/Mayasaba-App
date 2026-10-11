@@ -129,7 +129,7 @@ flowchart TD
     Final --> Complete["Certify only with current evidence for every blocking criterion"]
 ```
 
-Arrows represent the eligible success path. Missing authority, failed checks, stale context, conflicts, or unknown outcomes stop the affected transition and enter the appropriate clarification, repair, or recovery path.
+Arrows represent the eligible success path. Missing authority, failed checks, stale context, conflicts, or unknown outcomes stop the affected transition and enter the appropriate clarification, repair, or recovery path. An unknown physical outcome is never blindly retried, rolled back or certified: it is reconciled within bounds and, when no safe path exists, ends blocked with its outcome explicitly unresolved and a precise reason while unrelated authorized work continues.
 
 Each `TaskContract` binds the work to its originating request, project, epoch, snapshot, approved scope, dependencies, allowed reads/writes, tools, time and resource bounds, expected artifacts, and acceptance criteria. Tasks retain their identity across retries; each execution is a separate attempt with a fenced lease and an attributed evidence bundle.
 

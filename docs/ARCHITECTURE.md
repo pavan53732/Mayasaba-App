@@ -420,6 +420,10 @@ Windows does not make a multi-file publication atomic. The journal records befor
 
 SQLite transaction success and filesystem publication success are separate facts.
 
+### Unknown outcomes and safe recovery
+
+Not every `UNKNOWN` means the same thing. For each unknown physical outcome — an uncertain SQLite commit, an interrupted CLI process, an interrupted multi-file publication, a user file changed during publication, missing or corrupted managed bytes, or an uncertain MCF delivery — the controller identifies the affected operation and authority boundary, preserves durable intent and evidence, performs bounded independent reconciliation, and permits only a demonstrably safe next action, following the [authoritative recovery mapping](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md). An uncertain material side effect is never blindly retried, rolled back, repeated or certified; when no safe path exists the operation becomes `BLOCKED` with its outcome explicitly unresolved and a precise reason. `UNKNOWN` is an evidence status and `BLOCKED` an operational disposition — an operation can be blocked because its outcome is unknown — so no thirteenth state machine exists. Contextual recovery actions are offered only when their owning service can demonstrate permission, and a generic Retry never appears for an unresolved material side effect.
+
 ## 15. Persistence architecture
 
 SQLite is embedded in Mayasaba-owned local application storage. The storage layer owns connections, prepared statements, migrations, transaction boundaries, backups, and integrity checks. Writes are serialized through one owner-mediated path.
