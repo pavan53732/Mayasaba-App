@@ -248,7 +248,7 @@ After editing:
 4. Distinguish compilation, process launch, runtime behavior, and acceptance. Do not collapse them into one success claim.
 5. Report changed files, verified behavior, failed or unavailable checks, remaining proof obligations, and the next coherent milestone.
 
-Do not commit, push, publish, or alter external accounts unless the user explicitly requests it. **Standing user instruction for this repository's documentation work (2026-10-12):** after completing and reviewing documentation edits, commit those changes on `main` with a descriptive subject and detailed commit body, then sync `main` to `origin/main`. Exclude unrelated changes; never force-push. Report the commit and sync result. This standing instruction does not authorize commits or external changes for non-documentation work.
+Do not commit, push, publish, or alter external accounts unless the user explicitly requests it. **Standing user authorization for this repository's documentation work (2026-10-12):** after completing documentation edits and the necessary diff/check review, immediately commit those changes on `main` with a descriptive subject and detailed commit body, then push `main` to `origin/main` **without asking the user for another approval or confirmation**. Exclude unrelated changes; never force-push. Report the commit and sync result. This standing authorization does not apply to non-documentation work or other external changes.
 
 ## 13. Validation and definition of done
 
