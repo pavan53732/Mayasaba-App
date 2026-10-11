@@ -113,7 +113,7 @@ The specified file-change path is:
 
 ```mermaid
 flowchart TD
-    Contribution["Persist the Chat contribution"] --> Inputs["Three independent interpretations on the same context"]
+    Attempt["Attempt to persist the Chat contribution"] --> Inputs["Three independent interpretations on the same context"]
     Inputs --> Request["Validate the scoped work request"]
     Request --> Decision{"Registered decision needed?"}
     Decision -- "Yes" --> Council["FULL council and required approval gates"]

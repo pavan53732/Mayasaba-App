@@ -810,7 +810,7 @@ At minimum, native automated and manual acceptance must cover:
 
 ### Chat and requests
 
-11. First and later messages persist through the identical contribution path.
+11. First and later messages attempt to persist through the identical contribution path.
 12. Missing agents do not prevent contribution persistence.
 13. Normal conversation does not create implementation tasks or a council.
 14. A multi-intent message yields distinct linked operation statuses.
