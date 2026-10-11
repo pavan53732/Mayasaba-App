@@ -244,7 +244,7 @@ sequenceDiagram
 
 The application-services participant represents the typed boundary and coordination within layer 2, not a new service owner. Project service is shown separately to make its exclusive folder-binding authority explicit; root validation and access authorization remain with Workspace Manager and Policy Engine.
 
-Opening a folder never scans files, initializes Git, installs or configures a CLI, launches model-backed sessions, or approves work. Mayasaba never installs the three CLIs anywhere — they are machine-level tools the user installs, authenticates and updates outside Mayasaba, and folder binding never installs, updates or configures one. Every enabled Send after folder binding uses the same command and creates one immutable contribution. If dependent agents are unavailable, the contribution remains persisted while the affected operation truthfully waits or blocks, and no CLI status ever gates Chat, folder selection, drafts, history or recovery.
+Opening a folder never scans files, initializes Git, installs or configures a CLI, launches model-backed sessions, or approves work. Mayasaba never installs the three CLIs anywhere — they are machine-level tools the user installs, authenticates and updates outside Mayasaba, and folder binding never installs, updates or configures one. Every enabled Send after folder binding uses the same command and attempts to persist one immutable contribution; a failed or uncertain persist is never represented as recorded. If dependent agents are unavailable, a successfully persisted contribution remains persisted while the affected operation truthfully waits or blocks, and no CLI status ever gates Chat, folder selection, drafts, history or recovery.
 
 ### Semantic interpretation
 
