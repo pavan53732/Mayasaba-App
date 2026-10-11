@@ -201,6 +201,8 @@ Routine controller traffic stays hidden. Cards are emitted for user-relevant cha
 
 ## 7. Startup, folder binding, and Chat flow
 
+With no bound project, the UI shows the first-run onboarding sequence — screen 1 welcome (what Mayasaba is, plus the reminder that the user installs, authenticates and updates the three CLIs themselves, with the truthful status indicator) and screen 2 open folder — and remains on it until a project root is bound. **Next** is bottom-right, **Back** bottom-left, and **Skip** or **Escape** skip only the explanation to the mandatory open-folder screen: there is no route to Chat without a bound project root. CLI readiness never gates any screen or Chat itself; the single precondition for Chat is the bound root. Onboarding is UI presentation state only — it creates no record, state machine, owner or route. Mayasaba installs nothing into the selected folder or anywhere else; folder binding never installs, updates or configures a CLI.
+
 ```mermaid
 sequenceDiagram
     participant User
@@ -211,10 +213,11 @@ sequenceDiagram
     participant Policy as Policy Engine
     participant Project as Project service
 
-    UI->>UI: Show Chat and Open Folder immediately
+    UI->>UI: Show onboarding screen 1 (welcome) when no project is bound
     App->>Agents: Start bounded non-mutating readiness probes
     UI->>App: Query readiness projection
-    App-->>UI: Current readiness projection without blocking Chat
+    App-->>UI: Current readiness projection without blocking onboarding
+    Note over UI: Skip/Escape advance to the mandatory open-folder screen
     User->>UI: Choose Windows folder
     UI->>App: Open folder command
     App->>Workspace: Validate canonical root and workspace boundary
@@ -225,6 +228,7 @@ sequenceDiagram
     App->>Project: Bind or restore project identity
     Project-->>App: Project projection or exact rejection
     App-->>UI: Folder command result
+    Note over UI: Chat opens with a bound root; CLI readiness never gates it
     Note over Project,Agents: Folder binding does not launch working sessions
     User->>UI: Send message
     UI->>App: SubmitUserContribution
@@ -240,7 +244,7 @@ sequenceDiagram
 
 The application-services participant represents the typed boundary and coordination within layer 2, not a new service owner. Project service is shown separately to make its exclusive folder-binding authority explicit; root validation and access authorization remain with Workspace Manager and Policy Engine.
 
-Opening a folder never scans files, initializes Git, launches model-backed sessions, or approves work. Every enabled Send after folder binding uses the same command and creates one immutable contribution. If dependent agents are unavailable, the contribution remains persisted while the affected operation truthfully waits or blocks.
+Opening a folder never scans files, initializes Git, installs or configures a CLI, launches model-backed sessions, or approves work. Mayasaba never installs the three CLIs anywhere — they are machine-level tools the user installs, authenticates and updates outside Mayasaba, and folder binding never installs, updates or configures one. Every enabled Send after folder binding uses the same command and creates one immutable contribution. If dependent agents are unavailable, the contribution remains persisted while the affected operation truthfully waits or blocks, and no CLI status ever gates Chat, folder selection, drafts, history or recovery.
 
 ### Semantic interpretation
 

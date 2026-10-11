@@ -29,7 +29,8 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 - The project root is the only precondition for Chat. **CLI readiness never gates Chat** — with zero, one, two or three usable CLIs, the interface and its content behave identically apart from truthful status.
 - CLI discovery runs quietly in the background and never blocks the shell.
 - Local history and project recovery controls remain available when zero agents are usable.
-- A draft may be typed before a folder is selected; Send remains disabled until an authorized project root is bound.
+- A draft may be typed on the open-folder screen; it is preserved when Chat opens and is never a submission before a root is bound.
+- Send remains disabled until an authorized project root is bound.
 
 ### 2.2 One composer, one contribution path
 
@@ -148,7 +149,7 @@ Render immediately:
 
 - the native application shell;
 - for a user with no bound project, the first-run onboarding sequence (§5.2) starting at screen 1; for a bound project, the Chat welcome/empty state;
-- an editable draft composer;
+- an editable draft composer on the open-folder screen and in Chat;
 - disabled Send with a clear "Open a folder to send" explanation; and
 - lower-left Open Folder in the Chat shell.
 
@@ -177,7 +178,7 @@ A user with no bound project sees a dismissible onboarding sequence — **screen
 - a missing CLI only limits the operations that need it — it never blocks opening the project folder, and once a folder is open it never blocks Chat;
 - the header shows each CLI's current readiness, and problem cards offer **Locate executable** and **Recheck**.
 
-**Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing, consumes no model-provider usage, and **installs nothing** — the three CLIs stay machine-level tools the user installs and signs into outside Mayasaba, and Mayasaba never installs, updates or configures one, in the selected folder or elsewhere.
+**Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing, consumes no model-provider usage, and **installs nothing** — the three CLIs stay machine-level tools the user installs and signs into outside Mayasaba, and Mayasaba never installs, updates or configures one, in the selected folder or elsewhere. The editable draft composer is available here; a draft typed on this screen is preserved when Chat opens and is never a submission before a root is bound.
 
 **Chat — the destination.** Binding a folder opens Chat's welcome view with the composer, the lower-left project control and the header indicator. This is the persistent route for every later launch.
 
