@@ -39,7 +39,7 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 
 ### 2.3 Gate operations, not the interface
 
-- Missing agents may block a FULL council, complete three-agent exploration/research, or the task assigned to that agent.
+- Missing agents block completed three-agent Chat replies and may block FULL council, all-three plan synchronization, complete exploration/research, or tasks requiring that agent.
 - Missing agents do not block Chat, Open Folder, project creation, project switching, history, drafts, existing evidence, or recovery.
 - A persisted message is not automatically shown as interpreted, approved, running, answered, or completed.
 
@@ -372,7 +372,7 @@ Every submitted message, including “Hi”, goes to all three authorized projec
 
 While collecting responses or reviews, show one source-linked turn status without a permanent healthy-agent panel or fabricated percentages. With any missing response/review, keep the contribution saved and explain what is waiting/blocked; never show a one-/two-agent reply as complete. Bound retries and draft revision, preserve reading position, and mark any displayed draft provisional. Finalization displays one primary answer; replay must not duplicate it, and corrections are explicit supersessions. A disagreement may be stated in the reviewed answer rather than hidden.
 
-Explicit Pause/Stop controls execute immediately without waiting for the three-agent exchange. Show the observed control outcome separately; do not restart stopped agents to obtain a conversational answer. Send, history, drafts and folder controls remain available with missing agents. A greeting grants no scan, web research or file-write authority. For an engineering request, distinguish the initial consolidated response, FULL-council plan review, required user choices, verified all-three plan synchronization, individually assigned background tasks and evidence-backed delivery. No model/provider settings page is added.
+Explicit Pause/Stop controls execute immediately without waiting for the three-agent exchange. Show the observed control outcome separately; do not restart stopped agents to obtain a conversational answer. Send, history, drafts and folder controls remain available with missing agents. A greeting grants no scan, web research or file-write authority. For an engineering request, distinguish independent input, FULL-council plan review, required user choices, verified all-three plan application, individually assigned background tasks and evidence-backed delivery. Do not require an extra finalized conversational reply before authorized planning can proceed. No model/provider settings page is added.
 
 ### 9.2 Repository exploration
 
@@ -394,17 +394,24 @@ Do not flood the main conversation with a raw file listing. If any agent is unav
 For requested implementation, show the source-linked request's progression:
 
 - recorded;
+- independent requirements, questions and proposed plans from all three;
 - clarification needed;
 - pending authorization;
 - authorized;
-- planning/council as applicable;
-- queued/leased;
+- FULL planning/council at registered material decision points;
+- authorized plan with source requirement/decision links;
+- synchronizing the exact plan to all three sessions;
+- queued/leased only after the required application barrier;
 - active;
 - integration/validation;
 - repair/recovery; and
 - evidence-backed completion.
 
-Ask only for details needed by the affected operation. A blocked request must not freeze unrelated Chat or authorized work.
+For **“Build a native Windows task manager app”**, follow the [six-step contract](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#engineering-request-six-step-contract). Show necessary clarification in Chat, including whether unresolved “task manager” scope means personal tasks or Windows processes. Show the reviewed plan as a concise source-linked card, with requirements, choices, task assignments, dependencies and acceptance checks in Show details. Label a proposed plan as proposed until its owning services authorize it; do not add a separate brief or approval page.
+
+Distinguish “plan delivered” from “plan applied by all three”. A pending application result names the affected agent without a permanent READY panel. No dependent implementation is displayed as started before that barrier passes. A replaced session or revised plan shows resynchronization; a stale delivery ACK cannot turn the card green.
+
+One finalized primary reply may summarize the plan. Necessary question batches, approved-plan updates, progress and delivery cards can follow throughout the same work request without becoming duplicate conversational answers. Each subsequent user answer remains a new contribution linked to the pending operation. Reply-review failure is shown on that reply; independently eligible work may continue. Ask only for details needed by the affected operation. A blocked request must not freeze unrelated Chat or authorized work.
 
 ### 9.4 Mid-project changes
 
@@ -785,6 +792,14 @@ At minimum, native automated and manual acceptance must cover:
 48. Pause or Stop while replies are pending: execute the authorized control immediately, show its actual outcome, and do not restart stopped sessions for discussion.
 49. Request a native Windows app: show independent input, full council with six critiques at material decision points, authorized plan synchronization to all three, individual task assignments and verified results.
 50. Reject cross-project responses, unauthorized attachment/provider context and attempts to turn conversational synthesis into work authorization or factual certification; show no Mayasaba model/provider settings page.
+
+### Engineering workflow and synchronization
+
+51. For the task-manager request, inspect three independent requirements/questions/plans and all six routed critiques, rebuttals and revisions; no direct CLI-to-CLI channel or material new-app council bypass is allowed.
+52. Delay a conversational reply review while authorized planning is eligible: planning proceeds and its status remains distinct; a missing mandatory council contribution still blocks its decision.
+53. Deliver the plan to all three but withhold one context-application result, supply a wrong graph revision/digest, or replace a session: dependent leases remain withheld until the exact current baseline is applied.
+54. Ask and answer a necessary scope question, then change an authorized requirement during execution: retain source links, preserve unaffected work, and show affected invalidation plus successor-plan synchronization before resuming.
+55. Display one finalized conversational reply alongside later question, authorized-plan, progress and delivery cards; replay creates no duplicate reply, and current drafts/reviews preserve historical source attribution.
 
 ## 22. UX anti-patterns
 

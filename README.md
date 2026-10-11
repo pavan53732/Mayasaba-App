@@ -96,18 +96,32 @@ A missing CLI or review leaves that turn saved and waiting/blocked, without a re
 
 ## From a request to verified files
 
+For **“Build a native Windows task manager app”**, the required sequence is:
+
+1. Send the request and the same authorized context to all three CLIs.
+2. Collect each agent's independent proposed requirements, questions and plan. Clarify material ambiguity, such as a to-do app versus a process-monitoring utility, in Chat.
+3. Route their proposals, all six directed peer critiques, rebuttals and revisions through Mayasaba.
+4. Complete the registered FULL councils for material product, architecture and plan choices; bring necessary questions or approvals back to the user. Existing services record approved requirements, binding decisions and the authorized task graph.
+5. Synchronize that exact plan/context to all three sessions and verify application-level results. A delivery ACK is insufficient.
+6. Grant scoped leases, assign individual tasks, coordinate isolated background work, verify it and integrate accepted results into the selected folder.
+
+All three share the reviewed plan; each implements its assigned tasks. They communicate through Mayasaba, and the user stays in one Chat. The [canonical six-step contract](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#engineering-request-six-step-contract) defines ownership, synchronization and recovery. A new app cannot skip its material FULL decisions using the “No new decision” branch. Mayasaba's own UI stack does not silently dictate the generated app's technology.
+
+Conversational finalization is separate from work authorization: planning need not wait for an extra finalized Chat answer. One reviewed primary reply can summarize the plan, while linked question, progress and delivery cards continue throughout the work. Missing required council contributions or plan-application results block dependent work; a missing conversational review alone blocks its reply. Changed plans and replaced sessions require current synchronization before affected work resumes.
+
 The specified file-change path is:
 
 ```mermaid
 flowchart TD
-    Contribution["Persist the Chat contribution"] --> Chat["Three independent responses and one reviewed reply"]
-    Chat --> Request["Validate the scoped work request"]
+    Contribution["Persist the Chat contribution"] --> Inputs["Three independent interpretations on the same context"]
+    Inputs --> Request["Validate the scoped work request"]
     Request --> Decision{"Registered decision needed?"}
     Decision -- "Yes" --> Council["FULL council and required approval gates"]
-    Council --> Plan["Authorized task contract and current lease"]
+    Council --> Plan["Authorized graph and task contracts"]
     Decision -- "No new decision" --> Plan
-    Plan --> Sync["Synchronize the authorized plan to all three CLIs"]
-    Sync --> Work["Assigned CLI works in an isolated workspace"]
+    Plan --> Sync["Verify all three applied the exact authorized plan"]
+    Sync --> Lease["Grant scoped task leases"]
+    Lease --> Work["Assigned CLI works in an isolated workspace"]
     Work --> Candidate["Check scope, freshness, provenance, and conflicts"]
     Candidate --> Validate["Run applicable checks on the integration candidate"]
     Validate --> Publish["Journal and publish accepted changes to the selected folder"]

@@ -231,8 +231,9 @@ sequenceDiagram
     Note over App: Message/Contribution service persists the immutable contribution
     App-->>UI: Contribution persistence result
     Note over App: Orchestrator schedules three independent Chat responses via MCF-v2
-    Note over App: One CLI drafts the combined reply; both peers review its exact digest
-    Note over App: Work-request authority service validates scoped interpretation/routing
+    Note over App: Work-request authority validates independent interpretations and scoped routing
+    Note over App: Eligible work proceeds through FULL/plan synchronization/lease gates
+    Note over App: Reply drafting and both peer reviews are separate from work admission
     App-->>UI: One consolidated reply or truthful waiting/blocked status
     App-->>UI: Separate authorized-work and control-result projections
 ```
@@ -254,6 +255,23 @@ The [authoritative Chat workflow](./Mayasaba%20%E2%80%94%20Complete%20System%20D
 The controller validates structural participation, authorization, freshness and evidence references; the selected CLI performs natural-language consolidation. There is no controller-owned model or new service. Reply reviews do not prove prose semantics, authorize work, or replace FULL-council critiques. Message/Contribution service commits at most one finalized primary reply per project/turn, with explicit supersession for corrections. The UI renders a consolidated reply and optional contribution details. Missing responses/reviews, exhausted budgets or stale context block finalization; durable records support bounded replay without duplicate replies. Progress is derived from existing delivery/session/context/task/validation machines, not a new authoritative conversation state machine.
 
 Chat and contribution persistence remain available when a participant is missing. Immediate authorized Pause/Stop controls are executed by their owner before any discussion; notifications to project sessions never restart stopped sessions solely for a reply. Conversational processing grants no source scan, web tool or write permission. Registered planning decisions use the full council; the authorized plan must then be synchronized to all three project sessions through the existing barrier before dependent tasks start. Individually leased implementation continues within its valid authority and dependencies; all-three understanding does not grant shared writes.
+
+### Engineering request coordination
+
+Follow the [canonical six-step contract](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#engineering-request-six-step-contract) for a new native Windows app: shared request/context to all three; independent requirements/questions/plans; FULL peer exchange; authorized reviewed plan; all-three context application; then individual leased execution, verification and publication. New-app material product, architecture and task-plan decisions cannot bypass FULL. Intake responses count as council proposals only when their point, frozen baseline, contract and pre-disclosure independence already satisfy the council rules; otherwise obtain fresh proposals.
+
+| Gate | Owner and required record | Reject or wait when |
+| --- | --- | --- |
+| Request intake | Message/Contribution persists one input; Work-request authority validates three source-linked interpretations | Scope or material intent is unresolved; reply completion is not this gate |
+| Deliberation | Council Engine records three proposals, six critiques, rebuttals/revisions and reviewed synthesis where used | A required contribution, evidence or choice is missing |
+| Authorized plan | Requirement service owns approvals; Decision service owns binding choices; Task/DAG owns the graph revision and contracts; Policy checks effects | A summary or council outcome is offered as permission |
+| Shared baseline | Context Synchronizer owns the snapshot and application results; Orchestrator owns the all-three barrier | Any required session returns only an ACK, stale digest, missing reference or different baseline |
+| Execution | Task/DAG grants current leases after the barrier; Workspace Manager supplies isolated views | Session/context, dependencies, paths or authority are stale or unproven |
+| Delivery | Validation/Evidence establish criteria; Workspace Manager journals guarded publication and reconciliation | Required current staged/published evidence is missing |
+
+An application result identifies project, session, epoch, graph revision, task-contract versions and snapshot digest and reports missing/rejected references. Keep the task contract's planning/source snapshot distinct from the distributed execution snapshot that references the finalized graph/contracts; bind the latter separately on execution envelopes and leases so hashes cannot become circular. It establishes observable application of the plan, not cognitive understanding. Register the versioned payloads/events under existing Context and synchronization machinery; do not introduce another plan owner or state machine. Replaced sessions reapply the current baseline. Material plan changes follow existing authorization and epoch rules, invalidate/reconcile affected work, and require a successor all-three barrier before affected leases resume.
+
+Reply finalization may proceed alongside authorized planning and summarize its current outcome; it is not a scheduling prerequisite. A missing reply review cannot block otherwise eligible work, but required interpretations, council contributions and plan-application results remain mandatory. Linked question/plan/progress/delivery cards are independent projections of their owners; the single-primary-reply rule does not suppress them. A later answer is a new contribution linked to the existing work. Keep historical source links; material baseline changes require fresh independent responses and current draft/reviews before finalization, without resetting the turn budget.
 
 ## 8. MCF-v2 communication fabric
 
@@ -343,7 +361,7 @@ A task is the stable unit of acceptance. An attempt is one execution of that tas
 
 Every actionable `TaskContract` includes:
 
-- task, project, work-request, contribution, epoch, and snapshot identity;
+- task, project, work-request, contribution, epoch, graph revision, and snapshot identity;
 - linked requirement and decision records;
 - objective and expected artifacts;
 - dependencies and assigned CLI;
@@ -355,6 +373,8 @@ Every actionable `TaskContract` includes:
 The scheduler respects dependencies and compares read/write sets. Overlapping, unknown, generated, aliased, or reparse-mediated writes are serialized or blocked until safe. Disjoint tasks may run concurrently in separate writable views. Discovered changes outside the contract are rejected rather than retroactively approved.
 
 Each attempt produces an immutable evidence bundle containing lease/session identity, baseline and result hashes, observed changes, process/tool outcomes, diagnostics, proposed criterion evidence, and omissions.
+
+Before a dependent implementation lease is granted, verify the all-three plan-application barrier for the authorized graph revision and contracts. A task attempt cannot substitute another session's result or treat a delivery ACK as context application. Recheck current session/context and authority at execution; serialize conversation/council and task prompts where concurrent use of one CLI session would mix independent inputs or corrupt its baseline.
 
 ## 13. Execution and containment
 
