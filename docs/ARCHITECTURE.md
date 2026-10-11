@@ -232,8 +232,8 @@ sequenceDiagram
     Note over Project,Agents: Folder binding does not launch working sessions
     User->>UI: Send message
     UI->>App: SubmitUserContribution
-    Note over App: Message/Contribution service persists the immutable contribution
-    App-->>UI: Contribution persistence result
+    Note over App: Message/Contribution service attempts to persist the immutable contribution; the result may be storage failure
+    App-->>UI: Contribution persistence result (saved, or precise storage failure)
     Note over App: Orchestrator schedules three independent Chat responses via MCF-v2
     Note over App: Work-request authority validates independent interpretations and scoped routing
     Note over App: Eligible work proceeds through FULL/plan synchronization/lease gates
