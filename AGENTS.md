@@ -1,6 +1,6 @@
 # Mayasaba Agent Instructions
 
-This file defines the repository-wide operating rules for any coding agent working on Mayasaba. It is an implementation guide derived from [Mayasaba — Complete System Description (for AI agents).md](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md).
+This file defines the repository-wide operating rules for any coding agent working on Mayasaba. It is an implementation guide derived from [Mayasaba — Complete System Description (for AI agents).md](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md).
 
 ## 1. Authority and precedence
 
@@ -9,7 +9,7 @@ Apply project guidance in this order:
 1. The user's current, explicit instruction.
 2. The complete system description linked above. It is the authoritative product and architecture specification.
 3. `AGENTS.md` for repository working rules.
-4. `ARCHITECTURE.md` and `UI-UX.md` as implementation-facing explanations of the authoritative specification.
+4. `docs/ARCHITECTURE.md` and `docs/UI-UX.md` as implementation-facing explanations of the authoritative specification.
 5. Existing code, tests, schemas, and comments.
 
 If derived documentation or implementation conflicts with the complete system description, follow the complete system description and report the conflict. Do not silently reconcile contradictory requirements or redefine established terms.
@@ -123,7 +123,7 @@ Readiness, request routing, exploration, research, and decision-validity status 
 - Never show an agent's private chain of thought, credentials, authentication tokens, or unrelated process output.
 - Preserve keyboard navigation, visible focus, screen-reader semantics, high contrast, DPI scaling, and reduced-motion behavior.
 
-See `UI-UX.md` before changing any user-facing flow.
+See `docs/UI-UX.md` before changing any user-facing flow.
 
 ## 6. Agent and model ownership
 

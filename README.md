@@ -244,10 +244,10 @@ This is a boundary proposal, not a mandate for placeholder directories: whatever
 
 | Document | Role |
 | --- | --- |
-| Mayasaba — Complete System Description (for AI agents).md | **Authoritative product and architecture specification.** If any other document conflicts with it, this one wins. |
+| docs/Mayasaba — Complete System Description (for AI agents).md | **Authoritative product and architecture specification.** If any other document conflicts with it, this one wins. |
 | AGENTS.md | Repository-wide operating rules for any coding agent working on Mayasaba. |
-| ARCHITECTURE.md | Implementation-facing architectural reference derived from the specification. |
-| UI-UX.md | Implementation-facing UI/UX, accessibility, and desktop-acceptance reference. |
+| docs/ARCHITECTURE.md | Implementation-facing architectural reference derived from the specification. |
+| docs/UI-UX.md | Implementation-facing UI/UX, accessibility, and desktop-acceptance reference. |
 | README.md | This file — product orientation and entry point. |
 
 ## Working rules for contributors and agents
