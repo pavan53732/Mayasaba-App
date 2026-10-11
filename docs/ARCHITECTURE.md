@@ -450,7 +450,9 @@ Valid criterion outcomes are:
 - `BLOCKED`: the check could not run safely or with required authority/dependencies; and
 - `NOT_APPLICABLE`: verified task-specific justification shows the criterion does not apply.
 
-Completion is a matrix gate. All blocking criteria must be `PASS` or validly `NOT_APPLICABLE`.
+Completion is a matrix gate. All blocking criteria must be `PASS` or validly `NOT_APPLICABLE`, with no blocking `FAIL`, `INCONCLUSIVE`, `BLOCKED` or unresolved material conflict.
+
+Before execution leases are granted — and whenever approved requirements or criteria materially change — the controller also checks for conflicting acceptance obligations: criteria whose satisfaction conditions are jointly unsatisfiable within the same scope, epoch and evidence rules, proven from the approved obligations, mutually exclusive required artifact states, or recorded oracle results. Difficulty, effort and agent assertion never establish a conflict, and a genuine scope distinction is an ambiguity for clarification rather than a contradiction. The Validation/Repair Engine records an evidence-linked `AcceptanceConflictAssessment` (a derived projection, not a new lock or state machine). An unresolved conflict is a matrix-level blocking condition that prevents completion certification, blocks only the affected work and its dependents, and is resolved only by the owning Requirement and Decision services through the existing authority, FULL-council and user-choice gates, with affected-work invalidation and matrix re-materialization. No agent or validator may silently weaken, discard, reinterpret or mark either criterion satisfied, and the five per-criterion verdicts remain closed.
 
 An `OracleAdequacyReview` must establish that an oracle measures the named requirement. A compile check cannot prove runtime behavior; process launch cannot prove functional correctness; an agent-authored passing test cannot prove its own relevance. Use positive, negative, boundary, regression, and controlled fault-injection cases when safe and applicable.
 

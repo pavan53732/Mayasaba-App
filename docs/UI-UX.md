@@ -519,6 +519,8 @@ An `escalated` council result presents:
 - a conflict matrix tied to requirement IDs; and
 - an advisory recommendation clearly labeled advisory.
 
+A conflicting-acceptance-criteria blocker presents the same packet from the blocking task's matrix: both obligations verbatim, the demonstrated contradiction with its evidence, the affected scope and work, and the resolution choices (narrow, re-scope, or supersede one criterion). It never silently resolves, never hides either obligation, and is never shown as a repair request. The card distinguishes an ambiguity that needs clarification from a proven contradiction.
+
 ### 10.3 Open factual question
 
 A `sealed with an open question` result requests missing facts or clarification, not a preference. Its response contract and labeling must differ from a choice packet.
@@ -885,6 +887,7 @@ At minimum, native automated and manual acceptance must cover:
 62. Persistence failure: simulate a failed or uncertain `UserContribution` commit (full device, SQLite failure, interrupted commit). Verify the message is never displayed as saved, accepted, interpreted or answered; the recoverable draft is preserved where possible; the precise storage failure and an explicit recovery path are shown; retry is reconciled through the existing idempotency identity so no duplicate contribution is created; and storage pressure never reports provider usage as Mayasaba budget state.
 63. Cleanup eligibility: create a managed blob, reference it from an authoritative record, then age it past every disposable schedule. Verify it is not deleted while referenced, and that no blob is deleted on age alone. Interrupt a cleanup run mid-plan and verify restart reconciliation records outcomes and never deletes active-lease, unresolved-operation, pending-journal, protected-evidence or recovery-dependency bytes. Attempt a concurrent new reference during the deletion window and verify transactional fencing prevents the eligibility race.
 64. Finite retention opt-in: enable an explicit per-project retention policy and verify immutable log segments, verified retention checkpoints, retained hash-chain boundary anchors and a durable deletion manifest; verify any historical claim referencing removed records discloses exactly what was removed, never presents the abbreviated chain as complete, and never treats expired evidence as independently verifiable. With no opt-in, verify preservation is absolute and nothing expires automatically.
+65. Conflicting acceptance criteria: approve two individually valid but jointly unsatisfiable criteria and verify the task is blocked before execution leasing with a truthful card that names both obligations and the demonstrated contradiction; verify unrelated authorized work continues, that the controller-verified clarification path is offered for a scope ambiguity, and that resolution requires a binding decision with re-materialized criteria. Attempt the agent-side escapes — editing or deleting the oracle or test, self-declaring a criterion `NOT_APPLICABLE`, or satisfying one criterion at the expense of the other — and verify every attempt fails to clear the blocking condition, with neither obligation weakened and no silent resolution.
 
 ## 22. UX anti-patterns
 

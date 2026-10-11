@@ -251,7 +251,13 @@ Every task requires an `AcceptanceEvidenceMatrix` or its implementation-stage eq
 - `BLOCKED`
 - `NOT_APPLICABLE`, with verified justification
 
-Completion requires all applicable blocking criteria to be `PASS` or validly `NOT_APPLICABLE`. A blocking `FAIL`, `INCONCLUSIVE`, or `BLOCKED` cannot be hidden by an aggregate score.
+Completion requires all applicable blocking criteria to be `PASS` or validly `NOT_APPLICABLE`. A blocking `FAIL`, `INCONCLUSIVE`, `BLOCKED` or **unresolved material conflict** cannot be hidden by an aggregate score.
+
+Before execution leasing, and whenever approved requirements or acceptance criteria materially change, check for conflicting acceptance obligations — criteria whose satisfaction conditions are jointly unsatisfiable within the same scope, epoch and evidence rules. An unresolved material conflict prevents completion certification and blocks only affected work; it is a matrix-level condition, not a sixth verdict.
+
+A conflict is proven from the approved obligations, mutually exclusive required artifact states, or recorded oracle results — never from difficulty, estimated effort, or an agent's assertion. Check scope first: a genuine distinction is an ambiguity for clarification, not a contradiction. The Validation/Repair Engine records an evidence-linked `AcceptanceConflictAssessment` (a derived projection, not a new lock or state machine).
+
+Only the owning Requirement and Decision services may resolve a conflict, through the existing authority, evidence, FULL-council and user-choice gates, with affected-work invalidation and matrix re-materialization. No agent or validator may silently weaken, discard, reinterpret, or mark either conflicting criterion satisfied — including by changing its oracle or test, self-declaring it `NOT_APPLICABLE`, or optimizing one at the expense of the other.
 
 Before a `PASS`, check oracle adequacy: the oracle must actually discriminate the requested property. Where safe and applicable, include positive, negative, boundary, regression, or controlled fault-injection cases. Agent-authored tests remain untrusted until their relevance and assertions are checked.
 
