@@ -190,7 +190,7 @@ Controls:
 
 Rules:
 
-- One mandatory precondition. No screen disables or gates folder selection, and CLI readiness never gates Chat, folder selection, drafts, history, recovery or project switching; the single required step is binding a project root, which is the same root every Send, task and publication already requires.
+- One mandatory precondition. No screen disables or gates folder selection, and CLI readiness never gates Chat, folder selection, drafts, history, recovery or project switching; the single required step is binding a project root, which is the same root every Send, task and publication already requires — with the sole exception of a closed project, which stays readable but requires explicit reopen authorization before any new submission.
 - Presentation only. Onboarding progress is UI state; it creates no authoritative record, state machine, owner, route, goal-intake, brief or scope record.
 - No side effects. No installation, download, credential collection, model/provider change, working agent session, repository scan, Git initialization or provider usage results from these screens, and nothing is installed into the selected folder.
 

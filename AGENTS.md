@@ -177,7 +177,7 @@ Silence, an ACK, non-participation, a majority, or an agent's claim of agreement
 - The Local Execution Kernel is the exclusive launch path for Mayasaba-issued processes and commands.
 - Use controlled Win32 process creation, restricted handle inheritance, redirected streams, and controller-owned Job Objects. Create controlled children suspended, assign them to the job, then resume; reject launch if assignment fails.
 - Job Objects provide deterministic lifecycle control, cancellation, and cleanup across the child process tree.
-- Filesystem safety is achieved either via controller-mediated staging (working directory isolation where all material modifications are held in staging and gated behind the durable integration journal) or via an operating-system boundary (restricted token or AppContainer) where proven natively compatible without breaking the CLI's legitimate runtime, tools, or authentication.
+- Staging is an integration mechanism, not filesystem containment. A staging working directory plus Job Object supervision holds material modifications outside the canonical root and gates publication through the durable integration journal, but it does **not** remove direct filesystem access. Filesystem safety independently requires proven pre-effect mediation or an effective access boundary — a tested restricted token, ACL/AppContainer profile, or controller-mediated writes — for every prohibited read/write/network effect, including stale writes. The staging-plus-publication-journal path must never be treated as containment.
 - Do not claim a CLI's internal tools or subprocesses were kernel-mediated merely because the parent CLI was launched by the kernel.
 - Admit an operation only if material effects are intercepted before execution or independently confined by a tested effective profile.
 - Default-deny task capabilities. Block the operation when required containment cannot be proven.
@@ -224,6 +224,7 @@ Before editing:
 3. Identify the owning layer/service and confirm that the change does not duplicate authority.
 4. State the affected requirements, paths, contracts, acceptance criteria, and validation method.
 5. Treat any material architecture replacement, new service owner, new state machine, frontend-stack change, or weakened safety boundary as a proposed architectural change, not routine implementation.
+6. Every normative implementation alternative must have a declared selection contract: default mechanism, eligible alternatives, selection authority, applicability conditions, required verification evidence, failure disposition, and binding point. An unpinned alternative must not be silently chosen by an implementation agent, and a failed alternative must never trigger an unverified fallback.
 
 While editing:
 

@@ -154,7 +154,7 @@ Mayasaba uses twelve independent state machines:
 11. validation; and
 12. repair.
 
-Each transition has a registered command and event. Compare-and-swap or equivalent transactional guards protect transitions. The Orchestrator reads these machines and derives overall project state; it does not flatten them into one mutable status field.
+Each transition has a registered command and event. Compare-and-swap guards protect transitions; any "equivalent" transactional guard must satisfy the declared selection contract for state-transition guards (atomic expected-version check and mutation, single-winner behavior, crash consistency, stale-write rejection). The Orchestrator reads these machines and derives overall project state; it does not flatten them into one mutable status field.
 
 Adapter readiness values (`CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, and `PROBE_FAILED`) are projections. Request routing, repository exploration, research assignments, and decision-validity assessments are workflows or projections. None is a new authoritative state machine.
 
@@ -395,7 +395,7 @@ Job Objects do not restrict filesystem or network access. For each CLI and execu
 
 The containment prototype must exercise forbidden writes, unapproved outside-root reads, reparse escapes, parent instruction injection, unmanaged tools, shared service attachment, lease revocation, and unapproved network/service effects. Required narrow runtime authentication/configuration reads must continue to work without becoming task-visible.
 
-If neither mediation nor confinement is proven, the operation is `UNSUPPORTED` or `BLOCKED`. Prompt instructions, worktrees, permission maps, event logs, and post-hoc hashes do not retroactively authorize an uncontrolled action.
+If neither mediation nor confinement is proven, the operation is denied: `UNSUPPORTED` when the CLI profile can never admit the required property, `BLOCKED` when the property is achievable but current conditions prevent it. Prompt instructions, worktrees, permission maps, event logs, and post-hoc hashes do not retroactively authorize an uncontrolled action.
 
 ## 14. Workspaces, integration, and publication
 
