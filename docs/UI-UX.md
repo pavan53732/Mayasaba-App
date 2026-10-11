@@ -861,7 +861,7 @@ At minimum, native automated and manual acceptance must cover:
 43. Send “Hi”: observe three independent responses, one rotating writer, both peer reviews of the final draft and one concise primary reply; no scan, work lease or FULL council starts.
 44. Inspect Show details for the three contributors, writer, both reviews, source/context references and preserved uncertainty without exposing private reasoning.
 45. With zero, one or two usable CLIs, persist the contribution and show waiting/blocked status; do not substitute a reduced-participant final answer or disable Chat.
-46. Exercise one revised draft, missing/stale/self reviews, contradictory interpretations and budget exhaustion; require exact final-draft reviews and truthful unresolved status.
+46. Exercise one revised draft, missing/stale/self reviews, contradictory interpretations and bound exhaustion; require both complete reviews delivered to the writer before any revision, exact final-draft reviews, a recorded `BLOCKED` outcome with precise reason and resumable recovery when bounds are exhausted, and truthful unresolved status rather than an indefinite spin or fabricated consensus.
 47. Restart or redeliver a completed turn: show one finalized reply; changed context invalidates stale drafts/reviews, and a later message cannot be mixed into an earlier turn.
 48. Pause or Stop while replies are pending: execute the authorized control immediately, show its actual outcome, and do not restart stopped sessions for discussion.
 49. Request a native Windows app: show independent input, full council with six critiques at material decision points, authorized plan synchronization to all three, individual task assignments and verified results.

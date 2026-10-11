@@ -92,7 +92,7 @@ All three CLIs independently propose source-linked `InterpretationCandidate` rec
 
 **One Chat message, three contributors, one reply.** Even “Hi” goes to all three CLIs against the same authorized context. After their independent responses, Mayasaba assigns a rotating CLI writer to draft one combined answer; both other CLIs review the exact final text. The controller validates participation, references, policy and freshness, then displays one consolidated reply with **Show details** for attribution and disagreements. The CLIs do the language work; Mayasaba adds no AI model or provider-settings page. Peer review does not certify factual claims or authorize actions.
 
-A missing CLI or review leaves that turn saved and waiting/blocked, without a reduced-participant answer. Explicit Pause/Stop controls act immediately without waiting for discussion. A greeting starts no repository scan, research or file changes. Consolidation has recorded finite budgets and at most one draft revision by default; it is not a reduced council mode. See the [complete Chat workflow](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#three-agent-chat-and-one-consolidated-reply).
+A missing CLI or review leaves that turn saved and waiting, and a turn that cannot complete within its declared finite time and byte bounds reaches a recorded blocked status with a precise reason and a controlled, resumable recovery path — never a reduced-participant answer and never an indefinite spin. Explicit Pause/Stop controls act immediately without waiting for discussion. A greeting starts no repository scan, research or file changes. Consolidation runs inside recorded finite time and byte bounds — provider token, cost and usage budgets remain yours, since you own each CLI's model, provider and account — with at most one draft revision by default; it is not a reduced council mode. See the [complete Chat workflow](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#three-agent-chat-and-one-consolidated-reply).
 
 ## From a request to verified files
 
@@ -131,7 +131,7 @@ flowchart TD
 
 Arrows represent the eligible success path. Missing authority, failed checks, stale context, conflicts, or unknown outcomes stop the affected transition and enter the appropriate clarification, repair, or recovery path.
 
-Each `TaskContract` binds the work to its originating request, project, epoch, snapshot, approved scope, dependencies, allowed reads/writes, tools, budgets, expected artifacts, and acceptance criteria. Tasks retain their identity across retries; each execution is a separate attempt with a fenced lease and an attributed evidence bundle.
+Each `TaskContract` binds the work to its originating request, project, epoch, snapshot, approved scope, dependencies, allowed reads/writes, tools, time and resource bounds, expected artifacts, and acceptance criteria. Tasks retain their identity across retries; each execution is a separate attempt with a fenced lease and an attributed evidence bundle.
 
 Agents work in isolated Git worktrees for compatible existing repositories, or controlled staged copies for other folders. The controller validates an integration candidate before publishing through a durable journal. Final checks bind the result to the actual published files. Opening an empty or non-Git folder never silently initializes Git.
 
