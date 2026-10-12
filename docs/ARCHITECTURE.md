@@ -24,6 +24,8 @@ The same control plane may execute software engineering, document, research, dat
 
 English is the sole Mayasaba product language. The UI and installer-owned text, accessibility output, agent-authored workflow content and replies, and published deliverables use English; no locale-dependent alternate presentation or localization system is admitted. The authorized source/evidence path may retain and read non-English material, but the presentation boundary must not reproduce its raw text in Mayasaba-generated output. English-only output is an acceptance condition before display or publication, without introducing a new model, owner, route or state machine. Exact verification and failure contracts remain part of the implementation-readiness work.
 
+The agent-stream presentation boundary withholds unverified text. A non-English reply from any required CLI cannot reach provisional Chat, Show details, notifications, accessibility output or history; the existing turn outcome reports an English blocker and controlled recovery without a translated substitute or reduced-participant reply. Diagnostic/evidence retention never makes raw traffic user-facing.
+
 ### System context
 
 ```mermaid

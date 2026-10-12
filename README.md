@@ -6,6 +6,8 @@ Mayasaba is a native Windows desktop control plane for **Hermes Agent CLI**, **K
 
 **English only:** Mayasaba's interface, accessibility text, agent-authored workflow content and replies, and generated deliverables use English. There is no localization or language selector. Authorized non-English source material may be read, but Mayasaba does not reproduce its raw text in generated presentation or deliverables.
 
+A non-English agent reply is never shown, including during streaming or in **Show details**. The affected turn shows an English blocker and controlled recovery; Mayasaba neither substitutes a translation nor presents the other agents as a complete reply.
+
 The agents provide intelligence. Mayasaba owns **state, authority, safety, orchestration, verification, and proof**.
 
 > **Project status: specification and architecture stage.** This repository currently contains five Markdown documents, an MIT license, and a Git ignore file. Application source code, machine-readable contracts, build targets, tests, and an MSI installer are not present. The behavior below describes the product specification, not a released or verified application.

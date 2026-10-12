@@ -40,13 +40,15 @@ No domain implementation should fill these gaps by inference. The required end p
 
 **Approved rule.** English is the sole language for Mayasaba-owned UI/UX, installer text, accessibility output, agent-authored workflow content and replies, and generated/published deliverables. No localization, language picker, multilingual UI or non-English output fallback is permitted. Authorized non-English source material may be read and retained under the existing scope and evidence rules, but its raw text is not reproduced in Mayasaba-generated presentation or deliverables. External CLI-owned and Windows-owned surfaces do not select Mayasaba's language. The authoritative specification and UI/UX acceptance scenario 72 carry this rule.
 
+**Binding agent-reply consequence.** A non-English reply from any of the three CLIs is never shown, even as provisional streaming, in the primary answer, Show details, notifications, accessibility output or history. The affected turn has an English blocker and controlled recovery; it cannot silently translate the response, omit that agent, or finalize with only the other two. Raw diagnostic/evidence bytes stay outside user-facing presentation.
+
 **Enforcement contract still open.** Before implementation, define a deterministic and testable English-only admission check for mixed-language prose, code, proper names, identifiers, file names, citations, images containing text, accessibility output and generated artifacts; name the owning boundary, evidence, error/result and recovery behavior. Specify how historic or user-authored non-English text is represented in the composer and immutable Chat history without altering its source bytes or falsely claiming an English rendering. A coding agent may not choose a heuristic, silently translate source, or claim the product is fully English solely because its static strings are English.
 
 **U2 documentation amendment evidence matrix** (scope: the approved language rule, not runtime acceptance):
 
 | Criterion | Verdict | Evidence or limit |
 | --- | --- | --- |
-| English-only authority covers UI, workflow text, replies and deliverables | `PASS` | The authoritative §3 rule names the surfaces and forbids localization or a non-English fallback. |
+| English-only authority covers UI, workflow text, all reply stages and deliverables | `PASS` | The authoritative §3 rule and agent-reply display gate cover provisional streams, primary replies, Show details and accessible output, with no localization or non-English fallback. |
 | Supporting UI/UX, architecture, README and agent instructions agree | `PASS` | Each document states English-only output; UI/UX replaces translated-text layout guidance and adds scenario 72. |
 | Authorized non-English sources are readable without raw generated display | `PASS` | The authoritative rule and attachment preview conditions distinguish retained source bytes from user-facing output. |
 | Complete language verification and historic/user-authored input contract exists | `BLOCKED` | The exact classifier, mixed-content boundary and own-input rendering rule require further contract/authority work before a full build. |
