@@ -335,7 +335,7 @@ A decision-reopening request can open a successor FULL point without changing th
 ### FULL round
 
 1. Confirm all three adapters and freeze one synchronized context.
-2. Assign chair and rotating duties before proposals by a fixed content-independent round-robin. The exact index formula remains an explicit D-01/D-02 decision until approved.
+2. Assign chair and rotating duties before proposals by the binding content-independent rule: zero-based, durably allocated store-wide decision-point ordinal `d`; one-based round `r`; `i = (d + r - 1) mod 3` in Hermes → Kilo Code → Claude Code order. Chair/proposer is `i`, skeptic `(i + 1) mod 3`, verifier `(i + 2) mod 3`; restart/replay preserves `d` and the assignments.
 3. Collect three independent proposals before disclosure.
 4. Freeze the proposal set and assign six directed peer critiques.
 5. Collect rebuttals and immutable revisions.
@@ -344,7 +344,7 @@ A decision-reopening request can open a successor FULL point without changing th
 
 Externally reported outcomes are `converged`, `synthesized`, `cap reached`, `escalated`, or `sealed with an open question`. `CONTINUE` is internal. A first stable round cannot prove convergence by itself; absent an accepted synthesis, a second comparable FULL round is required. The default five-round budget covers the entire decision point and does not reset after user input or context changes.
 
-A missing mandatory proposal, critique, rebuttal or synthesis review leaves the round incomplete, even if a bound expires. It cannot become a completed `cap reached` round. The complete D-03 tie-break order remains open; an implementation must not infer precedence from this outcome list.
+A missing mandatory proposal, critique, rebuttal or synthesis review leaves the round incomplete, even if a bound expires. It cannot become a completed `cap reached` round. Apply the authoritative D-03 table in priority order: immediate authorized Pause/Stop; invalid authority/safety; missing participation; completed-round missing user fact; user choice; insufficient evidence; eligible synthesis; eligible fixpoint convergence; completed unresolved cap; eligible registered `CONTINUE`, otherwise block. A material missing fact precedes a choice packet; pending user approval never becomes approval by timeout. The prose outcome list above has no independent precedence.
 
 User choice/trade-off and missing factual information use distinct typed answer contracts. Silence and timeout pause; they never authorize.
 

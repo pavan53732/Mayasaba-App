@@ -150,14 +150,14 @@ For each decision point, the controller requires:
 3. **Six actual directed cross-critiques:** each agent critiques both peers and never itself.
 4. Rebuttals and optional revisions with immutable predecessor links.
 5. Evidence grading, common evaluation criteria, and preservation of material disagreements.
-6. A pre-proposal, content-independent rotating chair/duty assignment, **both** non-chair agents' reviews of the exact synthesis revision, and a controller coverage check. The exact rotation index still awaits approval.
+6. A pre-proposal, content-independent rotating chair/duty assignment, **both** non-chair agents' reviews of the exact synthesis revision, and a controller coverage check. The binding index is `i = (d + r - 1) mod 3`, using a durable zero-based decision-point ordinal `d`, one-based round `r`, and Hermes → Kilo Code → Claude Code order; chair/proposer is `i`, skeptic `(i + 1) mod 3`, verifier `(i + 2) mod 3`.
 7. Controller and Decision-service gates before a resolution becomes a binding decision.
 
 The default **five-round cap applies to the whole decision point**. User answers and context changes do not reset it. Later rounds on the same baseline require explicit reaffirmation or revision; a material context change requires fresh independent proposals.
 
 `converged` requires two consecutive comparable completed FULL rounds with identical normalized surviving positions and all positive gates satisfied. An evidence-backed, fully reviewed synthesis may resolve the point earlier as `synthesized`. Other reported outcomes are `cap reached`, `escalated` for a user choice, and `sealed with an open question` for missing facts or clarification. `CONTINUE` is an internal transition and grants no approval.
 
-Missing mandatory council participation keeps a round incomplete, even when a time or round limit expires. The complete precedence among terminal outcomes remains an open documented decision; it cannot be inferred from the order of this list.
+Missing mandatory council participation keeps a round incomplete, even when a time or round limit expires. The authoritative D-03 table fixes the outcome order: authorized Pause/Stop, invalid authority/safety, missing participation, completed-round missing user fact, user choice, insufficient evidence, eligible synthesis, eligible two-round convergence, completed unresolved cap, then eligible `CONTINUE` or block. No timeout or silence grants approval.
 
 An absent agent or critique cannot count as participation. Silence, a transport acknowledgement, a majority, and stable agreement cannot substitute for authority or factual evidence. The Council Engine owns deliberation; **the Decision service owns binding decisions and locks**.
 

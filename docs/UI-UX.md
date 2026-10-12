@@ -550,7 +550,7 @@ For each decision point, show:
 - current epoch/context digest;
 - round budget and current round;
 - all three required participants;
-- deterministic chair and rotating duties;
+- deterministic pre-proposal chair and rotating duties from the recorded decision-point ordinal and round number;
 - independent proposals;
 - the six directed critique assignments and completion state;
 - rebuttals and revisions with predecessor links;
@@ -569,6 +569,8 @@ Visually communicate that:
 - repeated citations to one observation are one evidence source;
 - an absent critique is incomplete, not an abstention; and
 - stable agreement is deliberative stability, not proof of universal optimality.
+
+When the D-03 precedence blocks or pauses a round, show the highest-priority applicable reason, every missing mandatory contribution and the permitted recovery action. An incomplete round never displays `cap reached` as though it had completed; neither a timed-out choice packet nor pending approval displays an approved result.
 
 ## 12. Requirements and decision cards
 
