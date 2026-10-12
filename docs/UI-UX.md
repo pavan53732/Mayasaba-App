@@ -550,7 +550,7 @@ For each decision point, show:
 - current epoch/context digest;
 - round budget and current round;
 - all three required participants;
-- deterministic pre-proposal chair and rotating duties from the recorded decision-point ordinal and round number;
+- deterministic pre-proposal chair and rotating duties from the recorded project-local decision-point ordinal and round number;
 - independent proposals;
 - the six directed critique assignments and completion state;
 - rebuttals and revisions with predecessor links;

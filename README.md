@@ -150,8 +150,10 @@ For each decision point, the controller requires:
 3. **Six actual directed cross-critiques:** each agent critiques both peers and never itself.
 4. Rebuttals and optional revisions with immutable predecessor links.
 5. Evidence grading, common evaluation criteria, and preservation of material disagreements.
-6. A pre-proposal, content-independent rotating chair/duty assignment, **both** non-chair agents' reviews of the exact synthesis revision, and a controller coverage check. The binding index is `i = (d + r - 1) mod 3`, using a durable zero-based decision-point ordinal `d`, one-based round `r`, and Hermes → Kilo Code → Claude Code order; chair/proposer is `i`, skeptic `(i + 1) mod 3`, verifier `(i + 2) mod 3`.
+6. A pre-proposal, content-independent rotating chair/duty assignment, **both** non-chair agents' reviews of the exact synthesis revision, and a controller coverage check. The binding index is `i = (d + r - 1) mod 3`, using a durable zero-based **project-local** decision-point ordinal `d`, one-based round `r`, and Hermes → Kilo Code → Claude Code order; chair/proposer is `i`, skeptic `(i + 1) mod 3`, verifier `(i + 2) mod 3`.
 7. Controller and Decision-service gates before a resolution becomes a binding decision.
+
+Each project starts its own `d` sequence at 0; another project's council points cannot affect its role rotation. The Council Engine allocates ordinals atomically within the project, and restart, replay or reopening preserves an existing point's ordinal.
 
 The default **five-round cap applies to the whole decision point**. User answers and context changes do not reset it. Later rounds on the same baseline require explicit reaffirmation or revision; a material context change requires fresh independent proposals.
 

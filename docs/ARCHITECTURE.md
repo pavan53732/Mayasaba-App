@@ -335,7 +335,7 @@ A decision-reopening request can open a successor FULL point without changing th
 ### FULL round
 
 1. Confirm all three adapters and freeze one synchronized context.
-2. Assign chair and rotating duties before proposals by the binding content-independent rule: zero-based, durably allocated store-wide decision-point ordinal `d`; one-based round `r`; `i = (d + r - 1) mod 3` in Hermes → Kilo Code → Claude Code order. Chair/proposer is `i`, skeptic `(i + 1) mod 3`, verifier `(i + 2) mod 3`; restart/replay preserves `d` and the assignments.
+2. Assign chair and rotating duties before proposals by the binding content-independent rule: zero-based, durably and atomically allocated **project-local** decision-point ordinal `d` starting at 0 in each project; one-based round `r`; `i = (d + r - 1) mod 3` in Hermes → Kilo Code → Claude Code order. Chair/proposer is `i`, skeptic `(i + 1) mod 3`, verifier `(i + 2) mod 3`. Points in another project cannot advance `d`; concurrent creation within one project has one ordinal winner, and restart/replay/reopening preserves the existing ordinal and assignments.
 3. Collect three independent proposals before disclosure.
 4. Freeze the proposal set and assign six directed peer critiques.
 5. Collect rebuttals and immutable revisions.
