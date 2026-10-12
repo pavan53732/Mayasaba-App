@@ -60,6 +60,13 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 - Pending questions, approvals, and recovery actions link to their exact owning operation.
 - No timeout or silence becomes approval.
 
+### 2.6 English-only language
+
+- All Mayasaba-owned visible and spoken interface content is in English: onboarding, Chat controls, timeline cards, questions, approvals, errors, recovery actions, help, notifications, installer-owned text, accessible names and announcements.
+- Agent-authored workflow material (including proposals, critiques, plans, questions and narrative evidence), replies and generated deliverables must be in English. Do not offer a language picker, localization setting, translated string pack, multilingual interface, or non-English fallback; the Windows display language does not select Mayasaba's language.
+- Non-English source material may be read within the authorized project or attachment scope. Do not reproduce its raw text in generated replies, cards, previews, quotations, notifications, accessibility text, or deliverables. Show English descriptions and source locators while retaining the source bytes and provenance under the existing evidence rules. An unverifiable English-only output is blocked rather than shown as complete.
+- Native Windows surfaces and externally installed CLIs are separately owned. Their language does not change Mayasaba's own presentation rule.
+
 ## 3. Chat-only information architecture
 
 Chat is the only persistent route and fills the application workspace. There is no side rail, tab bar, dashboard, alternate project screen or permanent details pane. The shell has three persistent regions:
@@ -416,11 +423,11 @@ Users may select one or more local files with the native picker or drag them ont
 - size;
 - preparation state;
 - removal control;
-- image thumbnail when supported;
-- read-only text/document preview when supported; or
+- image thumbnail when supported and English-safe;
+- read-only text/document preview when supported and English-safe; or
 - explicit preview-unavailable fallback.
 
-Declare and enforce count, size, type, and parser limits. Place an actionable error beside the rejected file.
+Declare and enforce count, size, type, and parser limits. Place an actionable error beside the rejected file. If a preview, thumbnail, file name or accessible label would expose non-English source text, show English metadata and a preview-unavailable explanation instead; authorized processing may still read the original bytes.
 
 ### 8.2 Attachment lifecycle
 
@@ -777,7 +784,7 @@ Accessibility is a release requirement, not polish.
 - Maintain readable contrast over system materials.
 - Respect reduced-motion preferences.
 - Keep focus, selection, error, warning, and certification visually distinct.
-- Avoid dense fixed-size panels that clip translated or scaled text.
+- Avoid dense fixed-size panels that clip English text when system text scaling or DPI scaling is applied.
 
 ### Performance accessibility
 
@@ -915,6 +922,7 @@ At minimum, native automated and manual acceptance must cover:
 69. Questions, approvals and closure history: with an unanswered question and a pending approval, verify closure proceeds and preserves both in the closure summary; verify they are restored intact on reopening and do not block it. Verify closure never deletes or rewrites the folder and never implies unfinished work was certified.
 70. Retention clock and retirement: with an explicit opt-in, verify the clock starts at the later of the durable closure commit and the opt-in commit — including opt-in granted after closure, which must not trigger retroactive expiry — and that destructive retirement rechecks current closure and policy eligibility. Verify reopening before expiration suspends expiry, reopening during a cleanup run prevents further eligible cleanup, and reopening after lawful retirement discloses exactly what was removed without claiming recovered evidence.
 71. Closed-project Chat: verify a closed project's history, decisions and evidence remain readable with CLI readiness irrelevant, that every new submission requires explicit Reopen Project authorization regardless of CLI status, and that a Chat-requested closure follows the ordinary persisted-contribution rules while the Close control itself dispatches nothing to any CLI.
+72. English-only product language: inspect onboarding, Chat, cards, questions, approvals, errors, recovery, notifications, installer text and screen-reader output under multiple Windows display locales. Verify Mayasaba offers no language picker or translated resources and presents its own text in English. Supply a non-English CLI reply and non-English project/attachment source: Mayasaba must not surface raw non-English text in replies, previews, thumbnails, file labels, citations or accessible names; a required agent reply or deliverable that cannot satisfy English-only acceptance is blocked, with English-only reason and recovery. Verify authorized source bytes and provenance remain available to the owning evidence path without being mistaken for approved output.
 
 ## 22. UX anti-patterns
 
@@ -937,6 +945,7 @@ Do not introduce:
 - raw protocol traffic in ordinary Chat;
 - private chain-of-thought display;
 - false token counts or a credential/token display; or
-- a visual claim of full repository analysis without current per-file evidence.
+- a visual claim of full repository analysis without current per-file evidence; or
+- a language picker, translated Mayasaba resources, multilingual UI, non-English agent reply, or non-English generated deliverable.
 
 The best Mayasaba interface is not the one that makes automation look effortless. It is the one that makes the exact boundary between request, authority, execution, evidence, and completion easy to see.

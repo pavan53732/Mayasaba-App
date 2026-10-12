@@ -4,6 +4,8 @@
 
 Mayasaba is a native Windows desktop control plane for **Hermes Agent CLI**, **Kilo Code CLI**, and **Claude Code CLI**. You open a local folder and describe your work in Chat. The specified system coordinates the required agents, confines their work to authorized workspaces, and publishes accepted results into that same folder only after the applicable checks pass.
 
+**English only:** Mayasaba's interface, accessibility text, agent-authored workflow content and replies, and generated deliverables use English. There is no localization or language selector. Authorized non-English source material may be read, but Mayasaba does not reproduce its raw text in generated presentation or deliverables.
+
 The agents provide intelligence. Mayasaba owns **state, authority, safety, orchestration, verification, and proof**.
 
 > **Project status: specification and architecture stage.** This repository currently contains five Markdown documents, an MIT license, and a Git ignore file. Application source code, machine-readable contracts, build targets, tests, and an MSI installer are not present. The behavior below describes the product specification, not a released or verified application.

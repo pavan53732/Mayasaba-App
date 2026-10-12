@@ -36,6 +36,22 @@ The earlier P0/P1 audit remains substantially open. In particular, the repositor
 
 No domain implementation should fill these gaps by inference. The required end product is a **complete contract set**, with source links to approved requirements, not merely an inventory of planned schemas.
 
+## U2 — English-only product language
+
+**Approved rule.** English is the sole language for Mayasaba-owned UI/UX, installer text, accessibility output, agent-authored workflow content and replies, and generated/published deliverables. No localization, language picker, multilingual UI or non-English output fallback is permitted. Authorized non-English source material may be read and retained under the existing scope and evidence rules, but its raw text is not reproduced in Mayasaba-generated presentation or deliverables. External CLI-owned and Windows-owned surfaces do not select Mayasaba's language. The authoritative specification and UI/UX acceptance scenario 72 carry this rule.
+
+**Enforcement contract still open.** Before implementation, define a deterministic and testable English-only admission check for mixed-language prose, code, proper names, identifiers, file names, citations, images containing text, accessibility output and generated artifacts; name the owning boundary, evidence, error/result and recovery behavior. Specify how historic or user-authored non-English text is represented in the composer and immutable Chat history without altering its source bytes or falsely claiming an English rendering. A coding agent may not choose a heuristic, silently translate source, or claim the product is fully English solely because its static strings are English.
+
+**U2 documentation amendment evidence matrix** (scope: the approved language rule, not runtime acceptance):
+
+| Criterion | Verdict | Evidence or limit |
+| --- | --- | --- |
+| English-only authority covers UI, workflow text, replies and deliverables | `PASS` | The authoritative §3 rule names the surfaces and forbids localization or a non-English fallback. |
+| Supporting UI/UX, architecture, README and agent instructions agree | `PASS` | Each document states English-only output; UI/UX replaces translated-text layout guidance and adds scenario 72. |
+| Authorized non-English sources are readable without raw generated display | `PASS` | The authoritative rule and attachment preview conditions distinguish retained source bytes from user-facing output. |
+| Complete language verification and historic/user-authored input contract exists | `BLOCKED` | The exact classifier, mixed-content boundary and own-input rendering rule require further contract/authority work before a full build. |
+| Windows and installed-CLI language behavior has been proved | `NOT_APPLICABLE` | This change edits documentation only and makes no runtime proof claim. |
+
 ## Direct corrections propagated in this documentation batch
 
 The authoritative specification and relevant derived text now state: (1) a question answer attempts persistence and only a confirmed contribution can be dispatched or interpreted; (2) architecture dispatch has the same gate; (3) restoring a known folder differs from authorized Reopen Project; (4) the closed-project exception applies to Send and its test; (5) an explicitly authorized whole-repository inspection follows the mandatory three-CLI read-only workflow or reports a blocker; (6) Project service owns a durable, idempotent closure-admission intent tied to `ProjectClosure`; (7) B1–B10 show all seven required selection fields with unpinned evidence/binding details identified; (8) a CLI research capability observation `UNAVAILABLE` can lead to a `BLOCKED` assignment; (9) expiry applies only to disposable queue housekeeping, never a queued material operation; and (10) pending questions/approvals protect the records and bytes needed to resume them. These corrections establish direction, not complete P0-08/P0-09 schemas or the whole implementation contract set.

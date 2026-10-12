@@ -22,6 +22,8 @@ Agents provide reasoning and implementation proposals. They do not own project t
 
 The same control plane may execute software engineering, document, research, data, and refactoring work. Lifecycle stages and validation oracles are task-applicable: non-software work is not forced through meaningless build or runtime gates.
 
+English is the sole Mayasaba product language. The UI and installer-owned text, accessibility output, agent-authored workflow content and replies, and published deliverables use English; no locale-dependent alternate presentation or localization system is admitted. The authorized source/evidence path may retain and read non-English material, but the presentation boundary must not reproduce its raw text in Mayasaba-generated output. English-only output is an acceptance condition before display or publication, without introducing a new model, owner, route or state machine. Exact verification and failure contracts remain part of the implementation-readiness work.
+
 ### System context
 
 ```mermaid
