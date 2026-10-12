@@ -123,7 +123,7 @@ Readiness, request routing, exploration, research, and decision-validity status 
 - Every controller card that has additional inspectable information uses an explicit **Show details** action; it must not navigate to a standalone page.
 - Gate agent-dependent operations, not Chat, project selection, history, drafts, or recovery controls.
 - Never show an agent's private chain of thought, credentials, authentication tokens, or unrelated process output.
-- Preserve keyboard navigation, visible focus, screen-reader semantics, high contrast, DPI scaling, and reduced-motion behavior.
+- Follow the current Windows light/dark app setting on launch and live changes; Windows high contrast overrides both standard palettes. Keep every Chat and onboarding surface readable in dark mode and preserve the project, draft, scroll position, focus and controller state on a theme change. Preserve keyboard navigation, visible focus, screen-reader semantics, DPI scaling, and reduced-motion behavior.
 
 See `docs/UI-UX.md` before changing any user-facing flow.
 

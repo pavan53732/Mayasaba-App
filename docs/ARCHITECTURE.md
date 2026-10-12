@@ -26,6 +26,8 @@ English is the sole Mayasaba product language. The UI and installer-owned text, 
 
 The agent-stream presentation boundary withholds unverified text. A non-English reply from any required CLI cannot reach provisional Chat, Show details, notifications, accessibility output or history; the existing turn outcome reports an English blocker and controlled recovery without a translated substitute or reduced-participant reply. Diagnostic/evidence retention never makes raw traffic user-facing.
 
+The WinUI presentation layer follows the current Windows light/dark app setting at launch and reacts while open. High contrast overrides both standard palettes. The theme is UI presentation state, not a controller state transition; switching it cannot discard a draft, change the selected project, reset the timeline, move focus unexpectedly or affect authorization. The native shell, cards and details surfaces must remain readable in either mode.
+
 ### System context
 
 ```mermaid

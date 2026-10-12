@@ -56,6 +56,17 @@ No domain implementation should fill these gaps by inference. The required end p
 
 ## Direct corrections propagated in this documentation batch
 
+### Native light/dark theme correction
+
+The former UI/UX §4 specified only a light reference palette. The approved presentation rule now follows the Windows light/dark app setting at launch and on live changes; Windows high contrast takes precedence. UI/UX §4 supplies a dark reference palette, and desktop scenario 36 plus the authoritative specification test the full shell, status and details surfaces, readable contrast, and preservation of draft/focus/reading position. Theme selection is presentation state and cannot alter project or controller authority. This closes the missing dark-theme instruction in prose; actual WinUI rendering still requires local Windows proof.
+
+| Criterion | Verdict | Evidence or limit |
+| --- | --- | --- |
+| Authoritative light/dark and high-contrast precedence stated | `PASS` | Spec §3 feedback/accessibility and §8 presentation name launch, live changes and high-contrast override. |
+| UI/UX dark palette and affected surfaces specified | `PASS` | UI/UX §4 includes dark tokens and the complete shell/details coverage. |
+| Desktop acceptance distinguishes dark and live switching | `PASS` | UI/UX scenario 36 and the authoritative native-theme test cover readability and state preservation. |
+| Windows/WinUI runtime behavior verified | `NOT_APPLICABLE` | This is a documentation amendment; no application code or local Windows theme test exists yet. |
+
 The authoritative specification and relevant derived text now state: (1) a question answer attempts persistence and only a confirmed contribution can be dispatched or interpreted; (2) architecture dispatch has the same gate; (3) restoring a known folder differs from authorized Reopen Project; (4) the closed-project exception applies to Send and its test; (5) an explicitly authorized whole-repository inspection follows the mandatory three-CLI read-only workflow or reports a blocker; (6) Project service owns a durable, idempotent closure-admission intent tied to `ProjectClosure`; (7) B1–B10 show all seven required selection fields with unpinned evidence/binding details identified; (8) a CLI research capability observation `UNAVAILABLE` can lead to a `BLOCKED` assignment; (9) expiry applies only to disposable queue housekeeping, never a queued material operation; and (10) pending questions/approvals protect the records and bytes needed to resume them. These corrections establish direction, not complete P0-08/P0-09 schemas or the whole implementation contract set.
 
 ## Additional findings from the deeper cross-document pass

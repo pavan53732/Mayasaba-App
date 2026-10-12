@@ -124,7 +124,7 @@ Routine heartbeats, queue operations, protocol envelopes and low-value progress 
 
 ## 4. Visual direction
 
-The visual idea is a **quiet conversation with an evidence spine**. Ordinary messages remain light and spacious. Controller cards carry a narrow semantic edge and precise status text, so authority and proof are recognizable without turning Chat into a grid of equal boxes.
+The visual idea is a **quiet conversation with an evidence spine**. Ordinary messages remain spacious in both light and dark themes. Controller cards carry a narrow semantic edge and precise status text, so authority and proof are recognizable without turning Chat into a grid of equal boxes. Follow the current Windows app light/dark setting on launch and update the open window when that setting changes. Windows high contrast takes precedence over both palettes. Theme changes affect presentation only: they do not reset Chat, drafts, scroll position, focus, project binding, or controller state.
 
 ### Default light-theme tokens
 
@@ -139,6 +139,20 @@ The visual idea is a **quiet conversation with an evidence spine**. Ordinary mes
 | `Critical` | `#B4232C` | Blocking failure and destructive-stop emphasis |
 
 Use Windows theme resources and high-contrast overrides in implementation; these values define the intended default-light relationships, not hard-coded inaccessible colors. Certification uses a distinct success semantic token but never color alone.
+
+### Default dark-theme tokens
+
+| Token | Value | Role |
+| --- | --- | --- |
+| `Canvas` | `#111318` | Application and timeline background |
+| `Surface` | `#1B1D22` | Composer, cards and temporary sheets |
+| `Ink` | `#F2F3F5` | Primary text |
+| `Muted` | `#B3B8C2` | Secondary metadata |
+| `Authority` | `#A9B7FF` | Controller provenance and active controls |
+| `Attention` | `#F4C477` | Waiting, warning and unresolved state |
+| `Critical` | `#FF8E95` | Blocking failure and destructive-stop emphasis |
+
+These are reference relationships for the native dark palette, not literal colors to impose in high contrast. Status, error, selection, focus and certification remain distinguishable by text/semantics as well as color. Foreground/background pairs must retain readable contrast across Chat, cards, inline expansions, temporary sheets, onboarding and native controls; never leave a light-only surface or dark text in the dark theme.
 
 ### Typography and shape
 
@@ -781,7 +795,7 @@ Accessibility is a release requirement, not polish.
 
 ### Visual accessibility
 
-- Support system text scaling, DPI scaling, high contrast, and color themes.
+- Support system text scaling, DPI scaling, the current Windows light/dark setting and live changes to it; Windows high contrast overrides both standard palettes.
 - Maintain readable contrast over system materials.
 - Respect reduced-motion preferences.
 - Keep focus, selection, error, warning, and certification visually distinct.
@@ -878,7 +892,7 @@ At minimum, native automated and manual acceptance must cover:
 
 34. Complete critical flows using keyboard only.
 35. Verify screen-reader names, roles, states, reading order, and useful announcements.
-36. Verify high contrast, text/DPI scaling, reduced motion, and non-color status cues.
+36. Verify Windows light and dark themes, a live system-theme change with Chat open, high-contrast override, text/DPI scaling, reduced motion, and non-color status cues; preserve draft, scroll position, focus and truthful status during a theme change.
 37. Sustain large Chat, task, council, and evidence streams without UI-thread stalls or reading-position loss.
 38. Verify there is no project-navigation rail, tab bar, dashboard or standalone project page at any window size.
 39. Verify every background domain is reachable through a relevant Chat card, direct Chat query or temporary details sheet without creating another route.
