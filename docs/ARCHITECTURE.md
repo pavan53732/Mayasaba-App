@@ -164,6 +164,8 @@ Each transition has a registered command and event. Compare-and-swap guards prot
 
 Adapter readiness values (`CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, and `PROBE_FAILED`) are projections. Request routing, repository exploration, research assignments, and decision-validity assessments are workflows or projections. None is a new authoritative state machine.
 
+**Handoff (#9) is session replacement.** The Orchestrator durably holds dependent scheduling while a project-scoped CLI source session is fenced and its attributable effects are shown ceased or effectively revoked. Agent Gateway then identifies a distinct, probed successor for that same CLI and project; Context Synchronizer verifies current context/plan application and any affected all-three barrier; the Orchestrator releases the hold only after rechecking current authority and Task/DAG lease status. Handoff does not own session health, leases, snapshots, the project epoch, or a second synchronization barrier. Failure, uncertainty or an expired bound leaves the hold and recovery obligations recorded. The authoritative [transition table](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#handoff-machine-9-replacement-of-a-project-scoped-cli-session) controls implementation.
+
 ### Project lifecycle
 
 The canonical software lifecycle is:
@@ -502,6 +504,7 @@ Findings distinguish search snippets from fetched pages and include query, URL, 
 | Workspace isolation | Git worktrees or controlled staging | Fixed model; confinement requires proof |
 | Packaging | WiX-authored MSI | Fixed |
 | Runtime layout | Unpackaged, self-contained Windows App SDK payload candidate | Packaging prototype required |
+| Initial supported target | Windows 11 version 25H2, build 26200, native x64 Home/Pro/Education/Enterprise outside S mode | Selected; release proof required |
 | UI verification | Windows UI Automation | Pin and prove discriminatory tests |
 
 Third-party revisions, source hashes, licenses, schema dialect, and an offline-restorable dependency manifest must be fixed before implementation relies on them. Listing a candidate does not authorize a download or installation.

@@ -205,6 +205,8 @@ There are **exactly twelve authoritative state machines**:
 
 Readiness, request routing, exploration, research, and decision validity are projections or workflows over these machines. They introduce no additional state owner or authoritative state machine.
 
+Handoff #9 means replacing a project-scoped CLI session under an Orchestrator-owned scheduling hold. The source must be fenced and its attributable effects resolved, and the distinct successor must prove current context/plan application before dependent work resumes. It does not move an old lease or replace the Agent Session or Synchronization Barrier machines. The [authoritative transition table](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#handoff-machine-9-replacement-of-a-project-scoped-cli-session) states the failure and recovery path.
+
 ## Safety, privacy, and recovery
 
 - **Scoped filesystem access.** The selected Windows folder is the canonical project root and final destination. Validate path identity, permissions, aliases, junctions, reparse points, and changes between checking a path and using it. Access to a folder or attachment never implies access to its neighbors.
@@ -254,10 +256,11 @@ These are specification choices and candidates, not a claim that the dependencie
 | Workspaces | Git worktrees for compatible repositories or controller-owned staging; effective confinement must be proven |
 | Desktop checks | Windows UI Automation, accessibility, responsiveness, and fault-injection checks |
 | Distribution | Mandatory WiX-authored MSI; proposed unpackaged, self-contained Windows App SDK payload requires a packaging prototype |
+| Initial support matrix | Windows 11 version 25H2 (build 26200), native x64 Home/Pro/Education/Enterprise outside S mode; release proof required |
 
 Build and validate the product **locally on Windows**. There is no hosted CI or cloud runner. A Linux-only result cannot satisfy a Windows acceptance gate. Keep blocking I/O and agent activity off the UI thread; use bounded queues, cancellation, explicit boundary errors, and reproducible recovery.
 
-There are **no runnable build or installation instructions yet** because this checkout has no application or build definitions. Exact dependency revisions, licenses, hashes, toolchain versions, and supported Windows versions/processor architectures must be declared and verified before relying on them. A candidate in the specification is not authorization to download or install it.
+There are **no runnable build or installation instructions yet** because this checkout has no application or build definitions. The initial Windows release and architecture target is selected above; exact dependency revisions, licenses, hashes and toolchain versions, plus actual install/CLI/containment proof on that target, remain required before relying on it. Other Windows releases and architectures require an explicit support-matrix amendment and their own proof. A candidate in the specification is not authorization to download or install it.
 
 The intended build setup uses pinned NuGet packages for Windows App SDK, C++/WinRT, and WIL, plus an offline-restorable native dependency manifest recording revisions, licenses, and hashes. A pinned vcpkg baseline or pinned vendored sources are possible delivery approaches. Record the MSVC runtime configuration with the toolchain. The installer toolchain is WiX v4 or later, with the exact revision to be pinned and verified. Local verification also covers static analysis, supported AddressSanitizer targets, parser fuzzing, and process/storage/publication fault injection.
 

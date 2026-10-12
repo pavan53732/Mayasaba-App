@@ -31,6 +31,7 @@ The central invariant is: **one controller-owned project reality, three separate
 ## 3. Required development environment
 
 - Build and validate the product on Windows.
+- The initial product target is Windows 11 version 25H2 (build 26200), native x64 Home, Pro, Education and Enterprise desktop editions outside S mode. Windows 10, other Windows 11 releases, Server, x86 and ARM64 are outside the initial matrix until the authoritative spec is explicitly amended and local proof passes. The MSI must reject unsupported OS/build/edition/mode/architecture before partial installation. Do not infer product support from Windows App SDK compatibility or x64 emulation.
 - Use MSVC, the Windows SDK, MSBuild, Windows App SDK, C++/WinRT, CMake, and CTest as applicable.
 - Use WinUI 3 and native XAML for the product interface. Do not replace it with Electron, a webview, HTML/JavaScript UI, .NET UI, or another cross-platform frontend without an explicitly authorized architectural change.
 - Use WiX for the mandatory MSI installer.
@@ -99,6 +100,8 @@ The authoritative state machines are:
 12. Repair
 
 Readiness, request routing, exploration, research, and decision-validity status are projections or workflows over these machines. Do not promote them into additional authoritative state machines.
+
+Handoff machine #9 is the Orchestrator-owned, durable scheduling hold and transfer for replacement of one project-scoped CLI session by a distinct successor for the same CLI/project. It first fences affected old leases and verifies source effect cessation or revocation, then admits a probed successor, verifies current context/plan application and any affected all-three barrier, and only then releases dependent scheduling. It never transfers a lease, retargets a live session, mutates the project epoch or substitutes for Agent Session or Synchronization Barrier ownership. Follow the authoritative [Handoff transition table](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#handoff-machine-9-replacement-of-a-project-scoped-cli-session); missing proof or expired bounds blocks the handoff and preserves the hold.
 
 ### 4.4 Deterministic authority
 
