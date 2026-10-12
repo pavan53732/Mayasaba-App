@@ -2,7 +2,7 @@
 
 ## Status and purpose
 
-**Documentation is not yet sufficient for an AI agent to build Mayasaba end to end without making product or architecture decisions.** This audit covers the five repository documents at `main` commit `3d51d9a5b3e2ccbe9fea45ad43f72751d2e40692`, plus the local documentation corrections made during this audit. It is a documentation deliverable, not application code, a generated contract registry, or a claim that any Windows behavior has been proved.
+**Documentation is not yet sufficient for an AI agent to build Mayasaba end to end without making product or architecture decisions.** The original audit baseline was `main` commit `3d51d9a5b3e2ccbe9fea45ad43f72751d2e40692`; this file now tracks later approved documentation decisions and the still-open gaps against the current repository documents. It is a documentation deliverable, not application code, a generated contract registry, or a claim that any Windows behavior has been proved.
 
 The [complete system description](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) is authoritative. [AGENTS.md](../AGENTS.md), [ARCHITECTURE.md](./ARCHITECTURE.md), [UI-UX.md](./UI-UX.md), and [README.md](../README.md) must not weaken it. This audit records where the authoritative text itself leaves two implementations possible, where derived text diverges, and where a named contract still lacks its actual definition. An item remains open until the rule is written into the authoritative description, propagated where relevant, and exercised by a discriminating scenario. A list of names or empty schemas cannot close it.
 
@@ -29,12 +29,16 @@ The earlier P0/P1 audit remains substantially open. In particular, the repositor
 | P0-03/04 | Typed application boundary and cross-service transaction/outbox protocol. | One implementation can acknowledge a command before owner state and outbound event are durable; another can acknowledge after. |
 | P0-05 | Local user/control authority and scoped approval identity. | A stale or cross-project approval may be accepted differently by two implementations. |
 | P0-06 | Per-CLI probes, normalized streams, launch/session/cancellation results, task confinement acceptance. | Adapter authors must invent what `READY`, completion, cancellation and unsafe capability mean. |
-| P0-08 | Project-owned closure-admission intent/event schema, idempotency and restart effects. | A crash between fencing admission and closure commit may reopen admission in one implementation. |
-| P0-09 | Seven required selection fields for B1–B10, including design-time versus per-operation binding. | The current five-column summary does not identify when or on what evidence a fallback becomes lawful. |
+| P0-08 | Project-owned closure-admission intent/event schema, idempotency and restart effects. The authoritative spec now fixes ownership, purpose, fencing and unknown-commit direction; typed fields/atomic boundary are still missing. | A crash between fencing admission and closure commit may reopen admission in one implementation unless the remaining contract is completed. |
+| P0-09 | The seven selection fields are now explicit for B1–B10, including design-time versus per-operation binding, but several exact evidence procedures, defaults and limits are marked `OPEN`. | An implementation cannot lawfully select an open alternative merely because the table has seven columns. |
 | P1-02–P1-09 | Full MCF, effect idempotency, council equality, interpretation, oracle, publication, context and limits algorithms. | “Safe,” “sufficient,” “relevant,” and “bounded” remain subjective implementation choices. |
 | P1-11/12 | Draft storage/privacy/recovery and retention protection for pending questions/approvals. | Restart and lawful retirement can lose user input or make reopening claims differ. |
 
 No domain implementation should fill these gaps by inference. The required end product is a **complete contract set**, with source links to approved requirements, not merely an inventory of planned schemas.
+
+## Direct corrections propagated in this documentation batch
+
+The authoritative specification and relevant derived text now state: (1) a question answer attempts persistence and only a confirmed contribution can be dispatched or interpreted; (2) architecture dispatch has the same gate; (3) restoring a known folder differs from authorized Reopen Project; (4) the closed-project exception applies to Send and its test; (5) an explicitly authorized whole-repository inspection follows the mandatory three-CLI read-only workflow or reports a blocker; (6) Project service owns a durable, idempotent closure-admission intent tied to `ProjectClosure`; (7) B1–B10 show all seven required selection fields with unpinned evidence/binding details identified; (8) a CLI research capability observation `UNAVAILABLE` can lead to a `BLOCKED` assignment; (9) expiry applies only to disposable queue housekeeping, never a queued material operation; and (10) pending questions/approvals protect the records and bytes needed to resume them. These corrections establish direction, not complete P0-08/P0-09 schemas or the whole implementation contract set.
 
 ## Additional findings from the deeper cross-document pass
 
@@ -63,11 +67,42 @@ No domain implementation should fill these gaps by inference. The required end p
 | D-19 | Spec §5 reopens an existing decision with a Project-service epoch advance **before** a successor point; a Chat-originated material scope change advances the epoch **after** council and approval. The conditions separating these orderings are not specified. | A proposed reopening can invalidate current work immediately in one path but only after approval in another. | Explicit pre-council versus post-approval epoch rule, old-work effect and rollback/refusal behavior; specification decision. |
 | D-20 | Spec §5 derives `DecisionValidityAssessment` on stale evidence but does not define the exact dependency traversal or when unaffected leases remain valid. | One controller fences every task; another lets a task rely on a stale lock. | Dependency/invalidation algorithm and conservative unknown-edge outcome; contract detail. |
 
+### Status after the 2026-10-12 product-direction review
+
+`APPROVED DIRECTION` means the user settled the product rule, while the stated typed/algorithmic work can remain. `DERIVABLE` means an existing invariant fixes the safety direction but still needs a discriminating contract. `OPEN DECISION` means at least one behavior or parameter still requires explicit product authority. None of these labels asserts that the complete executable contract or Windows proof exists.
+
+| Finding | Status | Fixed direction or exact remaining obligation |
+| --- | --- | --- |
+| D-01 | APPROVED DIRECTION; exact formula OPEN DECISION | Assign duties before proposals from a content-independent fixed rotation. The proposed zero-/one-based formula below is not yet binding. |
+| D-02 | APPROVED DIRECTION; index OPEN DECISION | Both non-chair agents review the exact synthesis revision; either missing/stale review prevents a positive synthesis. Chair index awaits D-01 approval. |
+| D-03 | OPEN DECISION | Incomplete participation cannot become a completed `cap reached` round. Full outcome precedence and two tie-breakers await explicit approval; see proposal below. |
+| D-04 | OPEN DECISION | Exact trigger registry, materiality predicate, duplicate key and phase map remain unspecified. |
+| D-05 | APPROVED DIRECTION; typed contract OPEN | `SOFT_DECISION` is approved scoped revisable authority, subordinate to hard locks/safety; `ASSUMPTION`/`OPEN` do not authorize. Persisted disposition/supersession table remains. |
+| D-06 | DERIVABLE; contract OPEN | Unsupported agent interpretations cannot become authority; exact structural checks and disagreement routing remain. |
+| D-07 | APPROVED DIRECTION; limits/contract OPEN | One Send identity, complete attachment set, bounded verification, preserved draft, no duplicate or silent omission; exact limits and recovery table remain. |
+| D-08 | DERIVABLE; contract OPEN | Canonical identity and safe alias/reparse handling are mandatory; exact rebinding algorithm remains. |
+| D-09 | APPROVED DIRECTION; admission contract OPEN | Switch while isolated old work safely continues; otherwise controlled pause/recovery and no live retarget. Exact proof/blocked-switch cases remain. |
+| D-10 | DERIVABLE; contract OPEN | Unsafe or stale session reuse fails closed; compatibility tuple and stop/expiry proof remain. |
+| D-11 | OPEN DECISION | Discovery precedence among multiple eligible executables and path-change binding still need a selection contract. |
+| D-12 | DERIVABLE; contract OPEN | Three CLIs receive one authorized project-context snapshot; exact filtered byte set and digest remain. |
+| D-13 | DERIVABLE; contract OPEN | Capability observation and assignment disposition are separate; full readiness/result matrix remains. |
+| D-14 | DERIVABLE; contract OPEN | No overwrite of newer user edits or blind retry; exhaustive per-file recovery table remains. |
+| D-15 | OPEN DECISION | Criterion-specific oracle adequacy and applicability remain subjective without an approved table. |
+| D-16 | APPROVED DIRECTION; parameters OPEN DECISION | 30-day diagnostics, 7-day staging/unreferenced-blob grace, three verified backups and opt-in-only 365-day historical policy are initial defaults. Storage ceiling/reserve, schedules, draft/attachment limits and privacy/deletion remain. |
+| D-17 | DERIVABLE; contract/proof OPEN | Only authorized probed native read-only web tools; exact per-tool test matrix and local observation remain. |
+| D-18 | DERIVABLE; contract OPEN | Durable at-least-once delivery and disposable-only expiry are fixed; full payload, ordering, fairness and replay tables remain. |
+| D-19 | APPROVED DIRECTION; invalidation contract OPEN | Review request alone leaves approved epoch unchanged; Project service advances it only after material successor authorization, with unsafe affected work quarantined. |
+| D-20 | DERIVABLE; contract OPEN | Preserve demonstrably unaffected work and fence affected unsafe work; dependency traversal/unknown-edge table remains. |
+
+**Proposed D-01/D-02 index, not yet binding.** For a recorded zero-based decision-point creation ordinal `d` and one-based round number `r`, use `i = (d + r - 1) mod 3` over Hermes, Kilo Code, Claude Code. Chair and proposer duty use `i`, skeptic `(i + 1) mod 3`, verifier `(i + 2) mod 3`. All three still propose and each critiques both peers. Approval must state that the ordinal is a durable, globally defined creation ordinal with one winner under concurrent creation and survives replay.
+
+**Proposed D-03 precedence, not yet binding.** The user proposed this order: (1) execute authorized emergency Pause/Stop immediately and preserve actual progress; (2) block invalid authority, stale epoch, unsafe physical effect or non-overridable policy failure; (3) keep missing proposals, critiques, required rebuttals or synthesis reviews incomplete until a declared bound, then record the missing obligations and block/pause without calling the round complete; (4) for a complete round, request a material missing user fact as `sealed with an open question`; (5) route an unresolved user preference/choice as `escalated`; (6) investigate insufficient evidence only within authorization and bounds, otherwise record its blocker; (7) accept a fully reviewed, eligible synthesis as `synthesized`; (8) accept a comparable two-round fixpoint as `converged` only absent an already accepted synthesis; (9) report `cap reached` for a completed unresolved round with exhausted allowance; (10) otherwise `CONTINUE` only with a registered cause and remaining authority/bounds. A missing fact that could change offered choices precedes the trade-off packet; pending user approval never turns into approval by timeout. This entire ordering remains proposed until explicitly approved and reconciled with the round transition table.
+
 The onboarding control inconsistency found during this pass was resolved from the already authoritative “binding opens Chat immediately” rule and propagated into the relevant documents. It is not an open item.
 
-## Selection contracts that still need seven fields
+## Selection contracts that still need exact evidence and binding mechanics
 
-The ten alternatives in spec §9 currently have a default, some eligibility text, an authority label and a failure note. Each still needs **applicability, required evidence and binding point made exact**, with a design-time or runtime selection classification. Examples that matter most:
+The ten alternatives in spec §9 now explicitly show all seven required fields and distinguish design-time from per-operation selection. An `OPEN` entry is not resolved by having a column: its exact applicability observation, evidence procedure, limit, transaction or binding event still needs a contract. Examples that matter most:
 
 | Selection | Missing decision that can change the shipped program |
 | --- | --- |
@@ -84,22 +119,36 @@ The ten alternatives in spec §9 currently have a default, some eligibility text
 
 These contracts are documentation work. Actual CLI compatibility, Windows containment and MSI behavior will still require local evidence later; the documentation must already specify the tests, accepted results and fail-closed disposition so an agent cannot improvise them.
 
+## Open product-policy parameters
+
+The approved retention periods and draft-recovery direction do not authorize an implementation agent to select these remaining product defaults. Each row needs a versioned value/rule, selection authority, failure result and test before the affected feature is implementable.
+
+| Policy | Required decision before implementation |
+| --- | --- |
+| Local application storage | Default ceiling or sizing rule, safety reserve, measurement boundary and permitted user override. |
+| Cleanup execution | Trigger/cadence, batch/stop limit, exact start of the unreferenced-blob grace, interrupted-plan reconciliation and behavior when protected bytes remain over ceiling. |
+| Backup creation | Cadence, capacity ceiling, coordinated database/managed-byte snapshot boundary and verification/restore schedule; three retained verified copies alone do not answer these. |
+| Draft privacy | Windows-user-profile protection, local draft-byte and selected attachment-copy handling, and visibility when switching projects/users. |
+| Draft deletion | Explicit Discard effects, whether unsent drafts survive Close Project and when abandoned drafts expire; no expiration may silently remove a pending submission with uncertain persistence. |
+| Attachment preparation | Maximum count, per-file and aggregate byte limits, parser/type limits, finite preparation deadline and behavior after a changed source file. |
+| Optional historical retention | User-visible opt-in/withdrawal contract for the initial 365-day period and exact protection of still-required authority/recovery evidence. No default opt-in. |
+
 ## Divergence scenarios the completed documents must settle
 
-For each scenario, write initial durable records and observed facts, then the **one allowed controller action**, owner command, event, user projection and recovery result. Replay it against the full contract set. The following cases currently expose unresolved choices:
+For each scenario, write initial durable records and observed facts, then the **one allowed controller action**, owner command, event, user projection and recovery result. Replay it against the full contract set. Some cases now have an approved safety direction while their exact typed traces remain incomplete:
 
 1. Lease cancellation, expiry, late CLI response and successor issuance race in one project epoch.
 2. A user presses Stop while a Chat contribution commit is uncertain and a prior task remains leased.
-3. Council round five has a missing critique, a user factual question and an exhausted time bound.
-4. The chair writes a synthesis after both non-chair agents disagree; identify the exact reviewer and outcome.
+3. Council round five has a missing critique, a user factual question and an exhausted time bound. The round stays incomplete; D-03 still needs the exact precedence for any later completed round.
+4. The chair writes a synthesis after both non-chair agents disagree; both must review the exact revision. The positive/negative outcome still needs evidence, coverage and D-03 precedence checks.
 5. Folder alias binds an existing project, then its reparse target changes before Send.
-6. An outside-root attachment changes after consent but before Send; the copy finishes after Send.
-7. Switching projects while a CLI-owned shared service and publication journal remain active.
+6. An outside-root attachment changes after consent but before Send; the copy finishes after Send. One submission identity/draft remains, no incomplete contribution is persisted; the byte-identity and deadline table is still open.
+7. Switching projects while a CLI-owned shared service and publication journal remain active. Continue only with proven isolation/supervision, otherwise pause/reconcile before switching; the proof and failure table is still open.
 8. Publication crashes between two files; the user edits the first file before restart.
 9. The database reports an uncertain contribution commit while the draft and managed attachment copy exist.
 10. A CLI update changes the executable while a session and plan-application result are cached.
 11. A research tool returns a search snippet, a fetched page and a forbidden upload-capable tool event.
-12. A closed project with retention opt-in has a pending approval linked to history approaching expiration.
+12. A closed project with retention opt-in has a pending approval linked to history approaching expiration. Protect required linked records/bytes; the exact reference-eligibility table remains open.
 
 Where current approved rules cannot determine the action, the fixture must remain **unresolved** and the affected implementation path blocked until an authorized specification decision is recorded. A test that asserts an invented answer would conceal the ambiguity.
 

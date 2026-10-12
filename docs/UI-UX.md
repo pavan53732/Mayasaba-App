@@ -253,10 +253,10 @@ The current-project control offers Open Folder or Switch Folder. Switching uses 
 - preserve each project's independent Chat and state;
 - never retarget an active CLI session to the new root;
 - never merge projects or rebind tasks;
-- require controlled pause/recovery when active work makes switching unsafe; and
+- allow previously authorized old-project work to continue only when project-scoped session/workspace isolation and safe supervision remain proven after the switch; otherwise hold the view change until affected activity reaches controlled pause/recovery, with an exact blocker if safe pause cannot be established; and
 - restore the selected project's projections after binding succeeds.
 
-**Closing and reopening are separate, explicit actions.** `Close Project` and `Reopen Project` live in the same project control area and are never triggered by switching, inactivity or closing the application. Closing requires safe quiescence: the composer explains exactly which operations block closure — active leases, running processes, a pending publication journal, an unresolved outcome or an in-flight council round — and offers only the permitted recovery or stop actions. When closure proceeds, a summary card states what closure does and does not do: it preserves the folder, history, decisions and evidence; it does not delete, rewrite, certify unfinished work, or cancel anything silently; and outstanding questions and approvals are listed and restored on reopening. A closed project remains readable — its history, decisions and evidence stay inspectable and CLI readiness is irrelevant to reading — while every new submission explicitly requires reopen authorization. Reopening is blocked from silently resuming work: it restores the same project identity and, where history was lawfully retired under an opt-in policy, discloses exactly what was removed rather than claiming recovered evidence.
+**Closing and reopening are separate, explicit actions.** `Close Project` and `Reopen Project` live in the same project control area and are never triggered by switching, inactivity or closing the application. Opening an already known folder restores its identity and existing open/closed condition; it is not a Reopen Project action. Closing requires safe quiescence: the composer explains exactly which operations block closure — active leases, running processes, a pending publication journal, an unresolved outcome or an in-flight council round — and offers only the permitted recovery or stop actions. When closure proceeds, a summary card states what closure does and does not do: it preserves the folder, retained history, decisions and evidence; it does not delete, rewrite, certify unfinished work, or cancel anything silently; and outstanding questions and approvals and their required references remain protected and listed for reopening. A closed project remains readable — its retained records stay inspectable and CLI readiness is irrelevant to reading — while every new submission explicitly requires reopen authorization. Reopening is blocked from silently resuming work and, where unrelated history was lawfully retired under an opt-in policy, discloses exactly what was removed rather than claiming recovered evidence.
 
 ## 6. Agent readiness UX
 
@@ -367,7 +367,9 @@ Draft rules:
 - selecting files does not submit the draft;
 - attachment rejection does not discard valid selections;
 - project switching must not accidentally send a draft to another project; and
-- application restart restores a draft only according to an explicit local draft policy, never as a submitted contribution.
+- application restart restores unsent text as a local draft under the originating project, never as a submitted contribution; a pre-binding draft remains unbound until folder selection, and selected attachments follow a still-to-be-approved recovery policy rather than silently becoming ready.
+
+The restored draft is never automatically submitted, interpreted or shown in contribution history. A project switch cannot send or merge drafts across projects. Windows-profile protection, copied attachment-byte handling, explicit Discard semantics, closure behavior and abandonment expiry remain open product-policy parameters in the implementation-readiness audit; no implementation agent may silently choose them.
 
 ### 7.3 Message and request states
 
@@ -432,6 +434,8 @@ Visually distinguish:
 6. included in a particular context snapshot.
 
 A file displayed in Chat is not automatically reported as read, synchronized to every agent, accepted as a requirement, or verified as evidence.
+
+Pressing Send retains one submission identity and the complete draft while any selected attachment is still preparing. Preparation and immutable byte verification have a declared finite bound; changed, rejected, timed-out or unverified attachments prevent persistence of an incomplete contribution and show a precise actionable reason. No selected attachment is silently omitted, and retry uses the same identity after any uncertain commit is reconciled. Only a confirmed persisted `UserContribution` may appear as submitted or be dispatched. The count, byte and preparation-time limits remain open in the operational-limits policy; the UI must not invent them or spin indefinitely.
 
 Submitted attachments appear with the originating contribution. Expanding the attachment card shows provenance, digest, supported preview, and context-inclusion status without opening a Files page.
 
@@ -552,7 +556,7 @@ For each decision point, show:
 - rebuttals and revisions with predecessor links;
 - evidence grades and source links;
 - surviving material disagreements;
-- synthesis plus non-chair review and coverage result;
+- synthesis plus both non-chair reviews of its exact revision and the coverage result;
 - round outcome and continuation reason; and
 - linked user question, choice packet, or binding decision.
 
