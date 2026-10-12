@@ -33,8 +33,20 @@ The earlier P0/P1 audit remains substantially open. In particular, the repositor
 | P0-09 | The seven selection fields are now explicit for B1–B10, including design-time versus per-operation binding, but several exact evidence procedures, defaults and limits are marked `OPEN`. | An implementation cannot lawfully select an open alternative merely because the table has seven columns. |
 | P1-02–P1-09 | Full MCF, effect idempotency, council equality, interpretation, oracle, publication, context and limits algorithms. | “Safe,” “sufficient,” “relevant,” and “bounded” remain subjective implementation choices. |
 | P1-11/12 | Draft storage/privacy/recovery and retention protection for pending questions/approvals. | Restart and lawful retirement can lose user input or make reopening claims differ. |
+| H-01 | Handoff is listed as authoritative state machine 9 but has no stated owner, purpose, states, commands, guards, events, failure/recovery behavior or relationship to the other eleven machines. | Two agents can construct different handoff authorities and transitions while both claiming to implement the named machine. The product meaning must be decided before its typed contract can be written. |
+| W-01 | The Windows deployment/support matrix is required but no minimum Windows releases/builds or processor architectures are selected. | Packaging and validation agents can choose different install targets and call different Windows/architecture test sets complete. The supported matrix requires explicit authority and local proof. |
 
 No domain implementation should fill these gaps by inference. The required end product is a **complete contract set**, with source links to approved requirements, not merely an inventory of planned schemas.
+
+**Control-only turn exception.** The writer ordinal and first-writer rule are now explicit across the five implementation documents. A control-only Chat contribution attempts persistence without creating a turn or advancing writer rotation; immediate authorized control execution does not await contribution persistence, while failed/uncertain persistence cannot notify a CLI. The precise control-only recognition predicate, mixed-intent treatment and versioned command/error contract remain open under P0-01/03 and P1-05. Do not turn this prose exception into an agent-chosen classifier.
+
+| Documentation amendment criterion | Verdict | Evidence or limit |
+| --- | --- | --- |
+| Writer order, zero ordinal and separate council counter agree across implementation guides | `PASS` | Authoritative Chat and council procedures, AGENTS, README, architecture and UI/UX name Hermes → Kilo Code → Claude Code and independent counters. |
+| Control-only turn exception and persistence/notification boundary are consistent | `PASS` | Broad three-agent Chat statements now exclude control-only contributions; immediate controller action, no turn/ordinal, and no CLI notification after failed/uncertain persistence are stated in the spec and derived guides. |
+| Governance and discriminating first-turn scenario recorded | `PASS` | The dated control-only refinement and UI/UX scenario 43 distinguish a preceding control-only submission from the first Hermes-written reply-eligible turn. |
+| Handoff purpose/transitions and Windows support matrix selected | `NOT_APPLICABLE` | This writer/control wording amendment does not choose either decision; H-01 and W-01 remain global build-readiness blockers. |
+| Runtime writer/control behavior proved | `NOT_APPLICABLE` | Documentation-only change; no application implementation or Windows test exists. |
 
 ## U2 — English-only product language
 
