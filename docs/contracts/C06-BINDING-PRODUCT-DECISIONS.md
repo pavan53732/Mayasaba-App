@@ -61,7 +61,7 @@ The pin contains CLI identity, canonical path, stable Windows file identity when
 
 Cleanup is evaluated at application startup, once per changed 24-hour period, and after crossing 80% capacity. One batch processes at most 500 eligible objects or 30 seconds, whichever comes first, then yields. It uses the existing transactional plan, reference recheck and restart reconciliation rules.
 
-A coordinated backup is requested before each schema migration and at most once per changed 24-hour period. The database and every referenced managed byte form one recorded snapshot boundary. Keep three recent verified restorable backups. Backup bytes count toward the ceiling. If three verified copies cannot coexist while preserving protected data and the reserve, block the migration or other operation that requires a new backup and explain the required capacity action; never silently discard the last required verified set.
+A coordinated backup is **required before each schema migration** and **once in every changed 24-hour period** for the authoritative application store. The routine 24-hour cadence never suppresses a required pre-migration backup, and an unattempted, failed, or unverified backup does not satisfy either obligation. The database and every referenced managed byte form one recorded snapshot boundary. Keep three recent verified restorable backups. Backup bytes count toward the ceiling. If three verified copies cannot coexist while preserving protected data and the reserve, block the migration or other operation that requires a new backup and explain the required capacity action; never silently discard the last required verified set.
 
 ### Drafts and attachments
 
