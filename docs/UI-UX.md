@@ -187,10 +187,11 @@ These are reference relationships for the native dark palette, not literal color
 Render immediately:
 
 - the native application shell;
-- for a user with no bound project, the first-run onboarding sequence (§5.2) starting at screen 1; for a bound project, the Chat welcome/empty state;
-- an editable draft composer on the open-folder screen and in Chat;
-- disabled Send with a clear "Open a folder to send" explanation; and
-- no folder control in bound-project Chat.
+- with no bound project, the first-run onboarding sequence (§5.2) starts at screen 1 (welcome), which has **no composer**; screen 2 (open folder) provides a draft composer with disabled Send;
+- with an already bound open project, Chat renders the centered empty state only when there is no confirmed persisted conversation, and otherwise restores its chronological history and docked composer;
+- with an already bound **closed** project, Chat restores retained readable history but keeps Send gated until an explicit authorized Reopen Project action;
+- the composer exists on screen 2 and in bound-project Chat, never on screen 1, and pre-binding Send remains disabled with the "Open a folder to send" explanation; and
+- bound-project Chat never contains a folder control.
 
 Start bounded, non-mutating CLI checks in the background and refresh all three after a folder is bound. The compact CLI readiness indicator renders in the Chat header as soon as each first observed result arrives; while a check is still running it shows that CLI as `CHECKING` (see §6.2). Detection does not initialize a working session.
 
@@ -286,7 +287,7 @@ Success behavior:
 
 - update the persistent header;
 - show the folder/project name and an inspectable canonical path in the Chat header;
-- enable Send;
+- enable Send **only if the restored/bound project is open**; a known closed project remains readable and requires explicit authorized Reopen Project before any submission;
 - restore Chat plus the authoritative background requirements, decisions, tasks and evidence needed to reconstruct its cards; and
 - retain any pre-selection draft.
 
@@ -976,7 +977,7 @@ At minimum, native automated and manual acceptance must cover:
 55. Display one finalized conversational reply alongside later question, authorized-plan, progress and delivery cards; replay creates no duplicate reply, and current drafts/reviews preserve historical source attribution.
 56. First launch with no bound project: screen 1 explains Mayasaba and the user-owned CLIs with the truthful status indicator; **Next** reaches screen 2, and **Skip** or Escape skip the explanation to screen 2 — no control reaches Chat without a bound project root.
 57. Screen 2 with no folder bound: **Back** returns to screen 1, **Open Folder** binds a native folder and updates the header without launching any session, scan, Git initialization or provider usage, and binding opens Chat's welcome view immediately.
-58. Relaunch and replay with no bound project: the sequence stays on screen 2 with no dead-end, fabricated state or duplicate introduction; no path, shortcut, deep link or replay opens Chat without a bound root.
+58. Relaunch and replay with no bound project: begin at screen 1 welcome, as on every launch without a previously bound root; Next, Skip or Escape reaches mandatory screen 2. Only Back may return to welcome, and no path, shortcut, deep link, restored screen-state or replay opens Chat without a bound root. Restart may restore an unsent screen-2 draft under its own draft-recovery rule but never submits it or skips the folder gate.
 59. After a folder is bound, every later launch, restart and project switch opens directly at Chat; onboarding is never repeated and no duplicate introduction appears.
 60. Zero CLIs installed: screen 2 still opens the folder, Chat opens on binding with truthful waiting/blocked status, and no installation prompt, credential form, model picker, version manager or blocked state appears — and nothing is installed into the selected folder. Keyboard focus moves to each screen's heading with **Next**/**Back**/**Escape** mapped, the screen change is announced to screen readers, all three status entries keep accessible names, and high-contrast, DPI-scaling and reduced-motion rendering hold. No authoritative record, state machine or route is created.
 61. Storage pressure: fill local application storage to the declared ceiling. Verify disposable data is reclaimed first while Chat stays usable; when protected data still exceeds capacity a precise storage blocker appears naming what is full, what was reclaimed, what remains protected and the recovery/cleanup controls; the database is not corrupted and the user's project files are untouched. Verify unrelated conversation and work stay available wherever their own persistence and resource requirements can still be met, and that an operation whose own write would fail is blocked with its precise reason rather than falsely attempted.
