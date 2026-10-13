@@ -1,0 +1,217 @@
+<Window
+    x:Class="Mayasaba.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- File is a native WinUI MenuBar outside Chat content. Never put a folder control in Chat. -->
+        <MenuBar x:Name="NativeFileMenu" Visibility="Collapsed" Grid.Row="0"
+                 Background="{ThemeResource MayasabaPanelBrush}"
+                 HorizontalAlignment="Stretch" Padding="12,2">
+            <MenuBarItem Title="File">
+                <MenuFlyoutItem Text="Switch Project" Click="OnSwitchProject"/>
+            </MenuBarItem>
+        </MenuBar>
+
+        <Grid Grid.Row="1">
+            <!-- Screen 1: presentation only. Intentionally NO composer. -->
+            <ScrollViewer x:Name="WelcomeScreen" VerticalScrollBarVisibility="Auto">
+                <Grid MinHeight="620" Padding="46">
+                    <StackPanel MaxWidth="820" HorizontalAlignment="Center"
+                                VerticalAlignment="Center" Spacing="17">
+                        <StackPanel.ChildrenTransitions>
+                            <TransitionCollection><EntranceThemeTransition FromVerticalOffset="30"/></TransitionCollection>
+                        </StackPanel.ChildrenTransitions>
+                        <Border Width="92" Height="92" HorizontalAlignment="Left"
+                                Background="{ThemeResource MayasabaAccentBrush}" CornerRadius="27">
+                            <Viewbox Margin="13">
+                                <Canvas Width="72" Height="72">
+                                    <Path Data="M14,48 L14,25 C14,17 20,15 26,19 L36,26 L46,19 C52,15 58,17 58,25 L58,48"
+                                          Stroke="White" StrokeThickness="7" StrokeLineJoin="Round"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                    <Ellipse Width="10" Height="10" Canvas.Left="11" Canvas.Top="48" Fill="White"/>
+                                    <Ellipse Width="10" Height="10" Canvas.Left="31" Canvas.Top="29" Fill="White"/>
+                                    <Ellipse Width="10" Height="10" Canvas.Left="51" Canvas.Top="48" Fill="White"/>
+                                </Canvas>
+                            </Viewbox>
+                        </Border>
+                        <TextBlock Text="THREE PERSPECTIVES · ONE CLEAR DIRECTION"
+                                   FontSize="12" FontWeight="SemiBold"
+                                   Foreground="{ThemeResource MayasabaAccentBrush}"/>
+                        <TextBlock x:Name="WelcomeHeading" Text="Welcome to Mayasaba"
+                                   FontSize="49" FontWeight="SemiBold" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource MayasabaInkBrush}"/>
+                        <TextBlock FontSize="18" Foreground="{ThemeResource MayasabaMutedBrush}"
+                                   TextWrapping="Wrap" MaxWidth="700"
+                                   Text="A calm Windows control room for Hermes Agent, Kilo Code and Claude Code. Inspect their work, preserve evidence and stay in control of every material action."/>
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Border Background="{ThemeResource MayasabaSecondaryBrush}" CornerRadius="14" Padding="15,10">
+                                <TextBlock Text="Hermes Agent · UNSUPPORTED" FontSize="12"/>
+                            </Border>
+                            <Border Background="{ThemeResource MayasabaSecondaryBrush}" CornerRadius="14" Padding="15,10">
+                                <TextBlock Text="Kilo Code · UNSUPPORTED" FontSize="12"/>
+                            </Border>
+                            <Border Background="{ThemeResource MayasabaSecondaryBrush}" CornerRadius="14" Padding="15,10">
+                                <TextBlock Text="Claude Code · UNSUPPORTED" FontSize="12"/>
+                            </Border>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,23,0,0">
+                            <Button x:Name="NextButton" Click="OnWelcomeNext" Padding="23,13"
+                                    Background="{ThemeResource MayasabaAccentBrush}" Foreground="White"
+                                    Content="Next →"/>
+                            <Button Click="OnWelcomeNext" Content="Skip introduction" Padding="20,13"/>
+                        </StackPanel>
+                        <TextBlock MaxWidth="720" TextWrapping="Wrap"
+                                   Foreground="{ThemeResource MayasabaMutedBrush}" FontSize="12"
+                                   Text="You install, authenticate, configure and update the CLIs yourself. Mayasaba never installs a model, changes your provider or starts a CLI merely because you opened a folder."/>
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+
+            <!-- Screen 2: draft is editable, Send is disabled until a root is bound. -->
+            <ScrollViewer x:Name="FolderScreen" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
+                <Grid MinHeight="620" Padding="44">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                                MaxWidth="760" Spacing="14">
+                        <StackPanel.ChildrenTransitions>
+                            <TransitionCollection><EntranceThemeTransition FromVerticalOffset="25"/></TransitionCollection>
+                        </StackPanel.ChildrenTransitions>
+                        <FontIcon Glyph="&#xE8B7;" FontFamily="Segoe Fluent Icons"
+                                  FontSize="64" Foreground="{ThemeResource MayasabaAccentBrush}"/>
+                        <TextBlock x:Name="FolderHeading" Text="Open a project folder"
+                                   FontSize="43" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                        <TextBlock Text="Choose a local Windows project folder. We will validate its identity and open Chat. No CLI launches, repository scan, Git initialization or provider activity occurs here."
+                                   FontSize="17" TextWrapping="Wrap" Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                        <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,9,0,14">
+                            <Button Click="OnWelcomeBack" Content="← Back" Padding="18,12"/>
+                            <Button x:Name="ChooseFolderButton" Click="OnChooseFolder" Content="Open Folder"
+                                    Padding="22,12" Background="{ThemeResource MayasabaAccentBrush}" Foreground="White"/>
+                        </StackPanel>
+                        <Border BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
+                                Background="{ThemeResource MayasabaPanelBrush}" CornerRadius="17" Padding="18">
+                            <StackPanel Spacing="10">
+                                <TextBlock Text="Draft a message before choosing a folder"
+                                           FontSize="12" Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                                <TextBox x:Name="PrebindDraftBox" PlaceholderText="Message Mayasaba..."
+                                         AcceptsReturn="True" TextWrapping="Wrap" MinHeight="100"
+                                         TextChanged="OnPrebindDraftChanged"/>
+                                <Button Content="Send · choose a folder first" IsEnabled="False"
+                                        HorizontalAlignment="Right"/>
+                            </StackPanel>
+                        </Border>
+                        <TextBlock FontSize="12" Foreground="{ThemeResource MayasabaMutedBrush}"
+                                   Text="CLI readiness does not gate folder selection."/>
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+
+            <!-- Screen 3: only persistent work surface. All other information is in Chat cards. -->
+            <Grid x:Name="ChatScreen" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Background="{ThemeResource MayasabaPanelBrush}"
+                        BorderBrush="{ThemeResource MayasabaBorderBrush}"
+                        BorderThickness="0,0,0,1" Padding="22,16">
+                    <Grid ColumnSpacing="14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Spacing="4">
+                            <TextBlock x:Name="ProjectHeading" FontSize="20" FontWeight="SemiBold"
+                                       Foreground="{ThemeResource MayasabaInkBrush}" Text="Project"/>
+                            <TextBlock x:Name="ProjectPathLabel" FontSize="11" TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource MayasabaMutedBrush}" Text="C:\Projects"/>
+                            <TextBlock x:Name="ProjectCondition" FontSize="11" Text="Not started"
+                                       Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="7" HorizontalAlignment="Right">
+                            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                                <Button x:Name="StartButton" Content="Start" Click="OnStart" Padding="15,7"/>
+                                <Button x:Name="PauseButton" Content="Pause" Click="OnPause" Padding="15,7"/>
+                                <Button x:Name="StopButton" Content="Stop" Click="OnStop" Padding="15,7"/>
+                                <Button x:Name="ReopenButton" Content="Reopen Project" Click="OnReopen"
+                                        Visibility="Collapsed"/>
+                                <Button Content="•••" AutomationProperties.Name="More project actions">
+                                    <Button.Flyout>
+                                        <MenuFlyout>
+                                            <MenuFlyoutItem Text="CLI diagnostics" Click="OnDiagnostics"/>
+                                            <MenuFlyoutItem Text="Close Project" Click="OnCloseProject"/>
+                                        </MenuFlyout>
+                                    </Button.Flyout>
+                                </Button>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Spacing="13" HorizontalAlignment="Right">
+                                <TextBlock x:Name="HermesStatus" FontSize="11"
+                                           Text="● Hermes · UNSUPPORTED"/>
+                                <TextBlock x:Name="KiloStatus" FontSize="11"
+                                           Text="● Kilo · UNSUPPORTED"/>
+                                <TextBlock x:Name="ClaudeStatus" FontSize="11"
+                                           Text="● Claude · UNSUPPORTED"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <StackPanel x:Name="EmptyChatPanel" Grid.Row="1" HorizontalAlignment="Center"
+                            VerticalAlignment="Center" Spacing="13" Margin="20,0,20,190">
+                    <FontIcon Glyph="&#xE8F2;" FontFamily="Segoe Fluent Icons" FontSize="46"
+                              Foreground="{ThemeResource MayasabaAccentBrush}"/>
+                    <TextBlock Text="What would you like to work on?"
+                               FontSize="29" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap"/>
+                    <TextBlock Text="Every saved message is independent of CLI readiness."
+                               TextAlignment="Center" Foreground="{ThemeResource MayasabaMutedBrush}"
+                               FontSize="13" TextWrapping="Wrap"/>
+                </StackPanel>
+
+                <ScrollViewer x:Name="HistoryScroller" Grid.Row="1" Visibility="Collapsed"
+                              HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="HistoryList" MaxWidth="780" HorizontalAlignment="Center"
+                                Spacing="16" Padding="20,24" />
+                </ScrollViewer>
+
+                <!-- The ONE Chat composer moves from centered Row 1 to docked Row 2 after confirmed storage. -->
+                <Border x:Name="ComposerPanel" Grid.Row="1" Width="720" MaxWidth="720"
+                        HorizontalAlignment="Center" VerticalAlignment="Center" Margin="18,135,18,0"
+                        Padding="13" CornerRadius="17" Background="{ThemeResource MayasabaPanelBrush}"
+                        BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1">
+                    <StackPanel Spacing="9">
+                        <TextBox x:Name="ComposerBox" AcceptsReturn="True" TextWrapping="Wrap"
+                                 MinHeight="80" MaxHeight="200"
+                                 PlaceholderText="Message Mayasaba..." TextChanged="OnDraftChanged"
+                                 KeyDown="OnComposerKeyDown"/>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
+                                <Button x:Name="AttachButton" Content="Attach files" IsEnabled="False"
+                                        AutomationProperties.HelpText="Attachments require verified byte preparation and are not yet available."/>
+                                <TextBlock Text="Enter to send · Shift+Enter for newline"
+                                           VerticalAlignment="Center" FontSize="11"
+                                           Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                            </StackPanel>
+                            <Button x:Name="SendButton" Grid.Column="1" Content="Send →"
+                                    Background="{ThemeResource MayasabaAccentBrush}" Foreground="White"
+                                    Click="OnSend" Padding="17,9"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Grid>
+        <InfoBar x:Name="Notice" Grid.Row="2" IsOpen="False" IsClosable="True"
+                 Severity="Informational" Margin="18,5,18,10"/>
+    </Grid>
+</Window>
