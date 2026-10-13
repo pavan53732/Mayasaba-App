@@ -110,6 +110,7 @@ namespace mayasaba
                  "submission_id TEXT NOT NULL UNIQUE, body TEXT NOT NULL,"
                  "created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));");
             Exec("CREATE INDEX IF NOT EXISTS contribution_project ON contributions(project_id,row_id);");
+            Exec("CREATE TABLE IF NOT EXISTS pending_submissions(project_id TEXT PRIMARY KEY REFERENCES projects(id),submission_id TEXT UNIQUE NOT NULL,body TEXT NOT NULL);");
             Exec("CREATE TABLE IF NOT EXISTS ui_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),"
                  "last_project TEXT NOT NULL);");
         }
@@ -171,6 +172,54 @@ namespace mayasaba
         Check(sqlite3_step(q.value),db_);
         if (sqlite3_changes(db_)!=1) throw std::runtime_error("Draft project not found");
     }
+    std::optional<PendingSubmission> Storage::Pending(std::string const& id)
+    {
+        std::lock_guard lock(mutex_);
+        Statement q(db_, "SELECT submission_id,body FROM pending_submissions WHERE project_id=?1;");
+        Bind(q.value,1,id);
+        if(sqlite3_step(q.value)!=SQLITE_ROW) return std::nullopt;
+        return PendingSubmission{Text(q.value,0),Text(q.value,1)};
+    }
+    std::string Storage::StageSubmission(std::string const& id, std::string const& proposed, std::string const& body)
+    {
+        if(id.empty()||proposed.empty()||body.empty()) throw std::runtime_error("Invalid submission");
+        std::lock_guard lock(mutex_);
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            Statement project(db_, "SELECT closed FROM projects WHERE id=?1;");
+            Bind(project.value,1,id);
+            if(sqlite3_step(project.value)!=SQLITE_ROW||sqlite3_column_int(project.value,0))
+                throw std::runtime_error("Closed or missing project");
+            std::string winner=proposed;
+            {
+                Statement q(db_, "SELECT submission_id,body FROM pending_submissions WHERE project_id=?1;");
+                Bind(q.value,1,id);
+                if(sqlite3_step(q.value)==SQLITE_ROW)
+                {
+                    if(Text(q.value,1)!=body)
+                        throw std::runtime_error("Different source text while prior submission is unresolved");
+                    winner=Text(q.value,0);
+                }
+                else
+                {
+                    Statement add(db_, "INSERT INTO pending_submissions(project_id,submission_id,body) VALUES(?1,?2,?3);");
+                    Bind(add.value,1,id);Bind(add.value,2,proposed);Bind(add.value,3,body);
+                    Check(sqlite3_step(add.value),db_);
+                    Statement draft(db_, "UPDATE projects SET draft=?2 WHERE id=?1;");
+                    Bind(draft.value,1,id);Bind(draft.value,2,body);
+                    Check(sqlite3_step(draft.value),db_);
+                }
+            }
+            Exec("COMMIT;");
+            return winner;
+        }
+        catch(...)
+        {
+            sqlite3_exec(db_,"ROLLBACK;",nullptr,nullptr,nullptr);
+            throw;
+        }
+    }
     bool Storage::SetClosure(std::string const& id, int version, bool closed)
     {
         std::lock_guard lock(mutex_);
@@ -197,6 +246,25 @@ namespace mayasaba
                     Exec("ROLLBACK;");return SaveDisposition::RejectedClosed;
                 }
             }
+            // A fresh command cannot replace an unresolved project-local submission.
+            {
+                Statement pending(db_, "SELECT submission_id,body FROM pending_submissions WHERE project_id=?1;");
+                Bind(pending.value,1,id);
+                if(sqlite3_step(pending.value)==SQLITE_ROW)
+                {
+                    if(Text(pending.value,0)!=submission||Text(pending.value,1)!=body)
+                    { Exec("ROLLBACK;"); return SaveDisposition::Conflict; }
+                }
+                else
+                {
+                    // Pending retired only by a successful commit; identical replay is allowed.
+                    Statement stored(db_, "SELECT project_id,body FROM contributions WHERE submission_id=?1;");
+                    Bind(stored.value,1,submission);
+                    if(sqlite3_step(stored.value)!=SQLITE_ROW ||
+                        Text(stored.value,0)!=id||Text(stored.value,1)!=body)
+                    { Exec("ROLLBACK;"); return SaveDisposition::Conflict; }
+                }
+            }
             bool duplicate=false;
             {
                 Statement p(db_, "SELECT project_id,body FROM contributions WHERE submission_id=?1;");
@@ -217,6 +285,10 @@ namespace mayasaba
             {
                 Statement p(db_, "UPDATE projects SET draft='' WHERE id=?1;");
                 Bind(p.value,1,id);Check(sqlite3_step(p.value),db_);
+            }
+            {
+                Statement cleared(db_, "DELETE FROM pending_submissions WHERE project_id=?1 AND submission_id=?2;");
+                Bind(cleared.value,1,id);Bind(cleared.value,2,submission);Check(sqlite3_step(cleared.value),db_);
             }
             Exec("COMMIT;");
             return duplicate?SaveDisposition::Duplicate:SaveDisposition::Saved;

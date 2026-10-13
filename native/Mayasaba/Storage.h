@@ -30,9 +30,10 @@ namespace mayasaba
         std::string createdAt;
     };
     enum class SaveDisposition { Saved, Duplicate, Conflict, RejectedClosed, Unknown };
+    struct PendingSubmission { std::string id; std::string body; };
 
     // One owning connection and an OS-visible writer mutex, not a domain authority service.
-    // ALL public calls are serialized. SQLITE_FULLMUTEX is defense in depth.
+    // ALL public calls are serialized on the owning connection.
     class Storage final
     {
     public:
@@ -45,6 +46,9 @@ namespace mayasaba
         void BindProject(std::string const& id, std::string const& name, std::string const& canonicalPath);
         std::optional<ProjectRecord> Project(std::string const& id);
         void SaveDraft(std::string const& projectId, std::string const& body);
+        // One durable pending ID per project until the contribution outcome is known.
+        std::string StageSubmission(std::string const& projectId, std::string const& proposedId, std::string const& body);
+        std::optional<PendingSubmission> Pending(std::string const& projectId);
         bool SetClosure(std::string const& projectId, int expectedVersion, bool closed);
         SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body);
         std::vector<Contribution> Contributions(std::string const& projectId);

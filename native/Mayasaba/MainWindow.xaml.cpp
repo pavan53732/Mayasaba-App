@@ -239,7 +239,8 @@ namespace winrt::Mayasaba::implementation
         try
         {
             PersistDraft();
-            std::string submission = SubmissionId();
+            // Persist one ID and exact payload before attempting owner commit.
+            std::string submission = storage_->StageSubmission(activeProject_, SubmissionId(), Utf8(text));
             auto result = storage_->SaveContribution(activeProject_, submission, Utf8(text));
             if (result == mayasaba::SaveDisposition::Saved ||
                 result == mayasaba::SaveDisposition::Duplicate)
