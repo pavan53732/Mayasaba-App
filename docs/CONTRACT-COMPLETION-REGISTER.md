@@ -40,6 +40,45 @@ These are **not defaults** or silent engineering discretion: D-04 trigger/materi
 | X3 — Reused-session council independence | A CLI saw peer proposals from the previous context, then a changed baseline demands fresh independent proposals | Prior disclosure must not be mistaken for independent new analysis | Session/context contamination exclusion and application proof — Z-08 |
 | X4 — Valid truncated evidence chain | Remaining chain links hash correctly but the expected durable head or historical boundary is absent | Internal hash consistency alone is not whole-history completeness | Expected head, retained checkpoint/anchor and verification result — Z-01/Z-12 |
 
+## F01–F30 discriminating source-level trace register
+
+This register derives the **safe outcome already required** by the authoritative specification for each adversarial ordering and explicitly identifies the **missing executable contract**. These are documentation scenarios, not executed tests, typed schemas or proof that any installed CLI behaves safely. An unresolved outcome stays an implementation blocker; the listed owner is the existing owner, never a new state machine.
+
+| ID | Initial observation | Existing owner(s) | Already required result | Open schema, trace or native proof |
+| --- | --- | --- | --- | --- |
+| F01 | Two Sends reuse an identity but bytes differ | Contribution/Storage | No overwrite and no duplicate contribution | Collision error and payload identity |
+| F02 | Contribution committed; response/ACK lost | Contribution/Storage | Reconcile original Send ID; do not dispatch or save twice | Durable commit/outbox/result boundary |
+| F03 | MCF duplicate arrives after later sequence | MCF/recipient | No repeat effect; record ordering gap | Sequence scope and gap release |
+| F04 | Inbox/outbox commit is uncertain | MCF/Storage | Keep unknown until durable observation resolves it | Unknown-commit/replay transaction |
+| F05 | Replayed dead letter may already have effected work | MCF/effect owner | New delivery cannot create duplicate material effect | Replay-to-original effect-ID mapping |
+| F06 | Cross-project correlation or stale epoch | Policy/recipient | Refuse and preserve project isolation | Exact versioned error and audit event |
+| F07 | Lease expiry, late response and reassign race | Task/DAG/Workspace | Reject stale effect; successor must use new fence | CAS/result/successor total ordering |
+| F08 | Cancellation receipt but child still writes | Kernel/Gateway/Policy | Never report physical cessation or unsafe reuse | Descendant/service cessation proof |
+| F09 | Revoked session with unresolved effect | Task/DAG/Gateway | Reconcile; block affected resumption while UNKNOWN | Owner-specific effect identity/timeout result |
+| F10 | Handoff source not conclusively fenced | Orchestrator | ConfirmSourceFenced fails; hold persists | Typed command/guard/event transaction |
+| F11 | Successor has only ACK and stale digest | Orchestrator/Context | Withhold READY_TO_RELEASE | Applied-baseline evidence schema |
+| F12 | Missing required plan-application result | Orchestrator/Task/DAG | Withhold dependent lease | Barrier atomic release/replay |
+| F13 | FULL round lacks mandatory critique at bound | Council Engine | Incomplete/BLOCKED; never cap-completed | Missing-obligation and seal events |
+| F14 | Approval references stale point/wrong project | Decision/Requirement/Policy | Reject mismatched approval | Exact identity/scope/revocation grammar |
+| F15 | Agent consensus/exit zero offered as approval/PASS | Decision/Validation | Reject that authority or certification claim | Objective oracle/result evidence |
+| F16 | Malformed, duplicate or non-English response | Gateway/Contribution | No counterfeit participation or disallowed output | Parser, dedup and mixed-language error mapping |
+| F17 | CLI native helper attempts forbidden read/write | Policy/Kernel | Prevent before effect or refuse whole profile | Proven per-CLI mediation/confinement |
+| F18 | Root/reparse target changes after validation | Workspace/Policy | Refuse stale path/object authority | Identity and TOCTOU guard |
+| F19 | Crash between publication mutations | Workspace/Storage | Journal/inspect; no false complete claim | Per-operation restart decision table |
+| F20 | User-edited file matches neither journal digest | Workspace/Evidence | Preserve competing edit; no blind restore | Conflict/UNKNOWN disposition |
+| F21 | Material effect remains physically UNKNOWN | Effect owner/Orchestrator | Operational BLOCKED with UNKNOWN evidence | Safe release/reconciliation predicate |
+| F22 | Artifact differs from certified digest | Evidence/Validation | Invalidate stale evidence | Version-bound invalidation event |
+| F23 | Build passes, runtime criterion untested | Validation/Evidence | No complete/PASS claim for runtime | Criterion-class evidence matrix |
+| F24 | Test passes but does not test requirement | Validation/Evidence | Refuse unsupported adequacy claim | Independent oracle adequacy vectors |
+| F25 | Stale or inconclusive criterion at delivery | Validation/Evidence | Refuse certification | Current per-criterion matrix transaction |
+| F26 | Installer invoked on excluded Windows platform | Installer/Policy | Refuse before partial installation | Real platform observation and MSI evidence |
+| F27 | Closure admission fenced; commit uncertain | Project/Storage | Keep admission fenced; reconcile commit | Project intent/CAS atomic protocol |
+| F28 | Restart with pending approval and unsent draft | Contribution/UI/Storage | Protect references; recover draft, do not submit | Draft privacy/expiry/backup policy |
+| F29 | Switch while old CLI isolation unproven | Project/Orchestrator | Keep old view/draft; candidate unbound | Isolation/effect cessation proof |
+| F30 | Non-English stream headed for Chat/a11y | Gateway/UI/Contribution | Withhold output, English blocker; no reduced-agent reply | Deterministic language admission policy |
+
+A complete fixture must record the original immutable input, exact project/root/epoch, current approved source records, expected version and lease, relevant byte/object digests, which physical effects are independently observed, the controlling typed command and owner, one committed/refused transaction plus events/outbox, precise Chat projection, and the permitted recovery action. Repeat each material case with duplicate delivery, stale agent/session, interrupted commit and competing user edit where relevant. **No scenario passes merely because the required safe outcome is written here.**
+
 ## Executable-contract acceptance template
 
 For each owned command or material external effect, the versioned contract must state **all** of the following:

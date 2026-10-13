@@ -195,7 +195,7 @@ Render immediately:
 
 Start bounded, non-mutating CLI checks in the background and refresh all three after a folder is bound. The compact CLI readiness indicator renders in the Chat header as soon as each first observed result arrives; while a check is still running it shows that CLI as `CHECKING` (see §6.2). Detection does not initialize a working session.
 
-A user with no bound project is first shown the dismissible first-run onboarding sequence (see §5.2) and remains on it until a project root is bound: **Chat does not open without a bound project root**, while CLI readiness never gates anything.
+A user with no bound project is first shown the dismissible first-run onboarding sequence (see §5.2), starting at screen 1 on launch, and remains on it until a project root is bound: **Chat does not open without a bound project root**, while CLI readiness never gates anything.
 
 Do not show:
 
@@ -220,7 +220,7 @@ A user with no bound project sees a dismissible onboarding sequence — **screen
 
 **Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing, consumes no model-provider usage, and **installs nothing** — the three CLIs stay machine-level tools the user installs and signs into outside Mayasaba, and Mayasaba never installs, updates or configures one, in the selected folder or elsewhere. The editable draft composer is available here; a draft typed on this screen is preserved when Chat opens and is never a submission before a root is bound.
 
-**Screen 3 — Chat, the destination.** Binding a folder opens Chat's welcome view with the composer and a refreshed observed result for each of the three CLI readiness checks. It has visible **Start**, **Pause**, and **Stop** controls. Selecting Start requests controller-owned initialization of all three project-scoped sessions and shows each actual session result in a concise Chat card. No folder control appears in Chat or its overflow menu. This is the persistent route for every later launch.
+**Screen 3 — Chat, the destination.** Binding a folder opens Chat immediately: a new/empty project displays the centered welcome composer, while a known project with retained history restores its timeline and docked composer; a closed project remains readable without enabling Send. Each of the three CLI readiness checks is refreshed independently. It has visible **Start**, **Pause**, and **Stop** controls. Selecting Start requests controller-owned initialization of all three project-scoped sessions and shows each actual session result in a concise Chat card. No folder control appears in Chat or its overflow menu. This is the persistent route for every later launch.
 
 An empty bound project's composer is centered in the conversation area. A project restored with retained conversation opens with that same composer docked below its timeline. The first confirmed persisted user contribution moves the centered composer to the bottom for the continuing conversation; this visual transition never changes the submission command or CLI-readiness rules.
 
@@ -901,7 +901,7 @@ At minimum, native automated and manual acceptance must cover:
 
 ### Folder and project identity
 
-6. Draft before folder selection; Send is disabled for root absence only.
+6. Draft before folder selection; Send is disabled for root absence and, after binding, for a closed project until explicit authorized Reopen Project; CLI readiness never disables Send for an open bound project.
 7. Valid empty and populated folders create/restore projects.
 8. Invalid, denied, aliased, and reparse-escape roots fail with exact feedback.
 9. Opening a folder launches no working agent and performs no implicit scan.
@@ -976,7 +976,7 @@ At minimum, native automated and manual acceptance must cover:
 54. Ask and answer a necessary scope question, then change an authorized requirement during execution: retain source links, preserve unaffected work, and show affected invalidation plus successor-plan synchronization before resuming.
 55. Display one finalized conversational reply alongside later question, authorized-plan, progress and delivery cards; replay creates no duplicate reply, and current drafts/reviews preserve historical source attribution.
 56. First launch with no bound project: screen 1 explains Mayasaba and the user-owned CLIs with the truthful status indicator; **Next** reaches screen 2, and **Skip** or Escape skip the explanation to screen 2 — no control reaches Chat without a bound project root.
-57. Screen 2 with no folder bound: **Back** returns to screen 1, **Open Folder** binds a native folder and updates the header without launching any session, scan, Git initialization or provider usage, and binding opens Chat's welcome view immediately.
+57. Screen 2 with no folder bound: **Back** returns to screen 1, **Open Folder** binds a native folder and updates the header without launching any session, scan, Git initialization or provider usage, and binding opens Chat immediately — centered empty conversation for a new/no-history project, or restored history and a docked composer for a known project. A known closed project opens read-only until explicit Reopen Project.
 58. Relaunch and replay with no bound project: begin at screen 1 welcome, as on every launch without a previously bound root; Next, Skip or Escape reaches mandatory screen 2. Only Back may return to welcome, and no path, shortcut, deep link, restored screen-state or replay opens Chat without a bound root. Restart may restore an unsent screen-2 draft under its own draft-recovery rule but never submits it or skips the folder gate.
 59. After a folder is bound, every later launch, restart and project switch opens directly at Chat; onboarding is never repeated and no duplicate introduction appears.
 60. Zero CLIs installed: screen 2 still opens the folder, Chat opens on binding with truthful waiting/blocked status, and no installation prompt, credential form, model picker, version manager or blocked state appears — and nothing is installed into the selected folder. Keyboard focus moves to each screen's heading with **Next**/**Back**/**Escape** mapped, the screen change is announced to screen readers, all three status entries keep accessible names, and high-contrast, DPI-scaling and reduced-motion rendering hold. No authoritative record, state machine or route is created.
@@ -1000,6 +1000,8 @@ At minimum, native automated and manual acceptance must cover:
 77. Bounded self-recovery: interrupt a project-scoped CLI with a material effect that cannot yet be independently resolved. The UI stays responsive, preserves durable intent, current Start/Stop authority and an explicit `UNKNOWN` effect, and shows bounded reconciliation rather than a fabricated restart or duplicate task. Verify Handoff #9 cannot release a successor before source fencing, and that `BLOCKED` with unresolved physical evidence does not look complete. Relaunch restores history without automatically starting sessions or resuming material work before a fresh Start.
 78. Bounded self-repair: repeat a failing oracle on the same unchanged signature; require a linked `FailureDiagnostic`, one fenced/evidenced attempt per permitted retry, adequate oracle and regression rechecks, then `BLOCKED` with the exact attempted hypotheses when the declared limit is reached. No test weakening, new scope or infinite retry is allowed; unrelated work remains usable.
 79. User-governed self-improvement: accumulate repeated diagnostic evidence for a proposed Mayasaba adapter/workflow/code improvement. Verify the proposal remains advisory, discloses its source evidence, risks and required authority, and cannot open an unapproved task, bypass material FULL council or user approval, silently change policy/model/provider configuration, or install/activate a modified Mayasaba executable. Approved candidate work remains separately leased, isolated and validated.
+
+80. Startup and restored closed project: with no bound root, welcome screen 1 contains no composer, while screen 2 supports an unsent draft with disabled Send. Relaunch without a root begins at welcome and still requires Open Folder before Chat. Rebind a known open project with retained history: restore the timeline and docked composer, not an empty welcome. Rebind a known closed project with retained history: display it read-only, keep Send disabled pending explicit authorized Reopen Project, and do not auto-Start CLIs, re-submit drafts or reauthorize work. Verify the same behavior on project switch and after relaunch.
 
 ## 22. UX anti-patterns
 
