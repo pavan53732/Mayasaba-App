@@ -1,0 +1,43 @@
+name: Native WinUI x64
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'native/**'
+      - '.github/workflows/native-winui.yml'
+  pull_request:
+    paths:
+      - 'native/**'
+      - '.github/workflows/native-winui.yml'
+  workflow_dispatch:
+jobs:
+  build-native:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: microsoft/setup-msbuild@v2
+      - name: Check native project XML
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-ChildItem native/Mayasaba -Include *.xaml,*.vcxproj,*.idl -File -Recurse |
+            Where-Object {$_.Extension -in '.xaml','.vcxproj'} |
+            ForEach-Object { $xml=New-Object System.Xml.XmlDocument; $xml.Load($_.FullName); Write-Host "Parsed $($_.Name)" }
+      - name: Restore and build WinUI 3 (Release x64)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          msbuild native/Mayasaba/Mayasaba.vcxproj /restore /m:1 /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /v:minimal
+      - name: Check expected executable
+        shell: pwsh
+        run: |
+          $exe=Get-ChildItem native/Mayasaba -Recurse -Filter Mayasaba.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $exe) { throw "Native Mayasaba.exe was not produced." }
+          Write-Host "Compiled binary: $($exe.FullName)"
+      - name: Retain native build logs
+        if: failure()
+        shell: pwsh
+        run: |
+          Get-ChildItem native/Mayasaba -Recurse -Include '*.log','*.tlog' -ErrorAction SilentlyContinue |
+            Select-Object -First 20 | ForEach-Object { Write-Host $_.FullName }
