@@ -78,8 +78,9 @@
     <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>
     <ClCompile Include="App.xaml.cpp"><DependentUpon>App.xaml</DependentUpon></ClCompile>
     <ClCompile Include="MainWindow.xaml.cpp"><DependentUpon>MainWindow.xaml</DependentUpon></ClCompile>
-    <ClCompile Include="Storage.cpp" />
-    <ClCompile Include="ProjectRoot.cpp" />
+    <!-- Portable storage and direct Win32 root helper do not include pch.h. -->
+    <ClCompile Include="Storage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="ProjectRoot.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
