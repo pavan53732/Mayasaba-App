@@ -143,7 +143,7 @@ NATIVE APP MENU, OUTSIDE CHAT: [File] -> [Switch Project]
        and draft stay     blocker/recovery          Chat, history, draft
 ```
 
-The menu is keyboard accessible and adds no screen or route. Project service applies the existing root validation and safe-switching rules. Active old-project work continues only with proven isolation and supervision; otherwise the view switch waits for controlled pause and reconciliation. Nothing silently stops work, retargets a live CLI, merges histories, closes or reopens a project, or transfers Start permission. Selecting a folder does not start sessions. A known closed project remains closed until explicit **Reopen Project**.
+The menu is keyboard accessible and adds no screen or route. Project service applies the existing root validation and safe-switching rules. Active old-project work continues only with proven isolation and supervision. If that proof is unknown, the selected folder remains an unbound candidate: the old project, view and draft stay active while Chat names the missing observation and shows bounded pause/reconciliation. Exhausting that bound produces a precise blocked-switch card with only demonstrated recovery actions. Nothing silently stops work, retargets a live CLI, merges histories, closes or reopens a project, or transfers Start permission. Selecting a folder does not start sessions. A known closed project remains closed until explicit **Reopen Project**.
 
 ```text
 CHAT HEADER OVERFLOW [•••]
