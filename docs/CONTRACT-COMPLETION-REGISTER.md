@@ -1,108 +1,100 @@
-# Mayasaba — Contract Completion and Implementation Entry Register
+# Mayasaba — contract completion register
 
-> **Status:** Documentation planning and acceptance criteria only. Governing product behavior remains in [the authoritative system description](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md); the current [readiness audit](./IMPLEMENTATION-READINESS-AUDIT.md) is the issue register. This document authorizes no application implementation, unsupported Windows proof, unapproved product selection, or new architecture owner.
+**Status: DOCUMENTATION CONTRACT SET COMPLETE; IMPLEMENTATION GATES PENDING.**
 
-## Decision boundary
+This register records where the completed product choices and deterministic contracts live. It is subordinate to the authoritative system description and does not claim a working Windows application.
 
-Mayasaba is currently **not ready for an unrestricted autonomous whole-product implementation**. The thirteen layers, twelve state machines, three user-managed CLIs, FULL council, D1/D2/D3, project switching, scoped Start/Stop, and three governed loops are binding. Missing command schemas or native confinement proof must never be construed as permission to weaken them.
+## Contract set
 
-Classify every resolution as **P** (propagate settled rule), **C** (complete a contract with its authorized owner), **D** (record a genuinely new user/product choice), or **V** (obtain actual implementation-time proof). One item may require several types. Record the source authority and selected binding point before declaring a choice fixed. An audit fixture is not executable contract evidence; a documented acceptance test is not proof it passed.
+| Contract | Scope | Documentation result |
+| --- | --- | --- |
+| [C01](./contracts/C01-CHAT-SUBMISSION-CONTROLS.md) | Contribution persistence, immediate controls and turn admission | Normative trace |
+| [C02](./contracts/C02-FULL-COUNCIL-D1-D3.md) | FULL council rotation, reviews and outcome precedence | Normative trace |
+| [C03](./contracts/C03-HANDOFF-RECOVERY.md) | Handoff #9, Start/Stop and bounded recovery | Normative trace; native proof pending |
+| [C04](./contracts/C04-TYPED-BOUNDARY-INVENTORY.md) | Owner records, commands and evidence boundaries | Normative semantic inventory |
+| [C05](./contracts/C05-DURABLE-TRANSACTION-RACES.md) | T01–T22 crash, ACK, replay and concurrency traces | Normative adversarial matrix |
+| [C06](./contracts/C06-BINDING-PRODUCT-DECISIONS.md) | Final ten approved product decisions | Binding product authority |
+| [C07](./contracts/C07-VERSIONED-CONTRACT-REGISTRY.md) | Shared schemas, identities, receipts, errors and compatibility | Normative representation contract |
+| [C08](./contracts/C08-TWELVE-STATE-MACHINES.md) | Exactly twelve state machines and transitions | Normative behavior contract |
+| [C09](./contracts/C09-SELECTION-TRANSACTION-RECOVERY.md) | B1–B10, owner transactions, delivery and recovery | Normative algorithm contract |
+| [C10](./contracts/C10-IMPLEMENTATION-ENTRY-GATE.md) | Documentation closure and I0–I8 implementation gates | Normative entry gate |
 
-## Dependency-ordered blocker register
+The [`schemas/v1`](./contracts/schemas/v1/README.md) registry contains the shared machine-readable representation and fixture indexes. Enabled implementation slices extend the registry with closed command-specific payload schemas under C07.
 
-| Order | ID | Minimum output before affected implementation | Classification and guard |
+## Closed documentation decisions
+
+The following are no longer implementation-agent choices: explicit approval/control identity, D-04 materiality/deduplication, D-11 executable precedence, D-15 evidence classes, D-16 limits/privacy/deletion, English technical-token handling, B4 bytes, keyboard Send behavior, operational bounds and Mayasaba update activation. The three safety clarifications are binding:
+
+1. storage pressure blocks unsafe new storage after safe reclaim and never deletes protected history, drafts, pending data or required evidence;
+2. Stop deadline expiry never turns an unknown physical effect into a confirmed stop; and
+3. exact technical tokens do not authorize unrestricted non-English agent prose or deliverables.
+
+## Adversarial fixture coverage
+
+### C05 transaction fixtures
+
+| Fixtures | Governed behavior |
+| --- | --- |
+| T01–T05 | Contribution/control lost receipts, altered duplicates and Stop races |
+| T06–T08 | At-most-once material effects, replay authority and delivery gaps |
+| T09–T12 | Dependency fencing, successor cessation, handoff replay and barrier application |
+| T13–T16 | Publication recovery, user-edit conflict, closure/admission race and second-instance exclusion |
+| T17–T22 | Suspend clocks, council independence, event-chain retention, late results, evidence adequacy and repair exhaustion |
+
+Each T fixture uses C07 boundary results, C08 machine transitions and C09 transaction/recovery rules. Physical-effect fixtures remain blocked until C10 native evidence passes.
+
+### Cross-cutting F01–F30 fixtures
+
+| IDs | Initial condition | Required disposition | Governing contract |
 | --- | --- | --- | --- |
-| 1 | Z-03 | Approval identity, exact user control recognition, revocation and condition/negation routing; deterministic refusal/clarification vectors | P/C; D only for unresolved policy; never infer consent |
-| 1 | Z-07 | Registered D-04 materiality/trigger keys, phase map, normalized surviving-position equality, positive/negative D3 vectors | P/C/D; keep FULL and D1/D2/D3 |
-| 1 | Z-09 | D-11 CLI path/PATH precedence, pinned executable identity, per-CLI probe and native event mapping | C/D/V; do not silently switch binaries |
-| 1 | Z-10 | D-15 criterion-type/oracle adequacy and required evidence/subjective acceptance table | C/D/V; build cannot certify runtime |
-| 1 | Z-11 | Versioned timeouts, monotonic/wall clock use, sleep/relaunch behavior, escalation, Pause/Resume, retry budget | C/D; no arbitrary endless retry |
-| 1 | Z-12 | D-16 approved storage, backup, draft, deletion and attachment limits; snapshot/restore/reference fencing | P/C/D/V; keep existing retention defaults |
-| 1 | Z-13 | U2 deterministic output admission for mixed-language code, names, source citations and history | C/D; preserve original source bytes |
-| 2 | Z-01 | Versioned record/reference/command/query/event/error schemas and canonical bytes B4, with invalid-input vectors | C/D; a list of fields is not a schema |
-| 3 | Z-02 | All twelve state-transition tables, guarded owner transactions, durable outbox causality, instance exclusion, crash/replay | P/C; single owner/controller, no new machine |
-| 3 | Z-06 | MCF delivery class registry, sequence scope, replay/effect identity, expiry and dead-letter outcomes | C; never expire material obligation silently |
-| 3 | Z-08 | Exact permitted context bytes, per-recipient filtering, digest/application receipt, invalidation and fresh independence | C; matching ACK cannot establish context equality |
-| 4 | Z-04 | Per-CLI and per-operation pre-effect denial, credential exception, descendant/shared-service revocation and local Windows evidence | C/V; never treat staging/Job Objects as confinement |
-| 4 | Z-05 | Exhaustive create/update/delete/rename publication journal/identity/hash recovery table with concurrent edits | P/C/V; preserve user edits and UNKNOWN |
-| 4 | Z-14 | Pinned dependency/license/hash/SDK choices, native prototypes, MSI and explicitly authorized executable update path | C/D/V; native release remains unproven |
+| F01–F03 | Altered duplicate Send, lost contribution receipt, delivery gap | Reject collision or reconcile the original identity; hold dependent delivery without duplicate effect | C01, C07, C09 B5 |
+| F04–F06 | Unknown commit, replay after effect, cross-project command | Preserve `UNKNOWN`, link the original effect, and reject the mismatched project identity | C07, C09 owner transaction/B5 |
+| F07–F09 | Stale lease, cancellation uncertainty, session effect uncertainty | Reject stale effect and block resumption until cessation/outcome proof | C08 lease/execution/session |
+| F10–F12 | Restarted handoff, ACK without application, missing barrier application | Preserve hold; ACK never releases it; dependent lease remains blocked | C08 handoff/barrier |
+| F13–F16 | Incomplete council, stale authority, inadequate evidence, non-English generated output | Block or refuse without manufacturing completion, approval, evidence adequacy or an admissible reply | C06 D4/D6, C08 council, C09 approval routing |
+| F17–F20 | Unproved confinement, unsafe path identity, interrupted publication, conflicting user edit | Refuse effect or reconcile through B6; never overwrite newer user data | C09 B6/B7 |
+| F21–F25 | Unknown physical result, stale validation, runtime claim without proof, inadequate oracle, certification request | Preserve `UNKNOWN`/`BLOCKED` or `INCONCLUSIVE`; refuse certification | C06 D4, C08 validation/common rules |
+| F26–F30 | Unsupported installer target, closure race, protected draft/reference, unsafe switch, non-English output | Refuse preflight/closure/switch/output as applicable while preserving protected data | C06 D5/D6, C08 project, C09 B10, C10 |
 
-## Explicitly outstanding product selections
+The machine-readable [`trace-fixtures.json`](./contracts/schemas/v1/trace-fixtures.json) indexes T01–T22 and F01–F30 to the expected result label and governing contract. The governing C07–C09 branch supplies the separate boundary result, physical outcome and operational disposition; a fixture label never collapses those dimensions.
 
-These are **not defaults** or silent engineering discretion: D-04 trigger/materiality, D-11 executable selection, D-15 acceptance sufficiency, D-16 quantitative storage/privacy/deletion/attachment policy, U2 mixed-content display, B4 canonical byte profile, initial keyboard Send behavior, and operational clock/deadline/attempt allowances where not derivable. Every decision records alternatives, scope, approving authority, timestamp/version, applicable evidence, failure result and binding point. Do not reopen previously approved retention periods, platform target, council membership/formula or Start-return permission.
+## Documentation closure checks
 
-## Four newly isolated adversarial subcases
+| Check | Evidence recorded for this documentation change |
+| --- | --- |
+| C06 decisions propagated | **PASS** — authoritative specification, AGENTS, architecture, UI/UX, screens, README and C01–C10 contain the ten decisions and three safety clarifications without a conflicting open choice |
+| JSON registry | **PASS** — all eight v1 JSON files parse; five schemas pass Draft 2020-12 meta-validation; local references resolve; ten accepted hashes and eleven required rejections pass |
+| Fixed ownership | **PASS** — exactly one registered owner validates for each of 115 commands, 122 events and 56 record types; the manifest records counts, pointers and all twelve machine owners |
+| Twelve machines | **PASS** — C08 contains exactly twelve consecutively numbered authoritative machines and no new state owner |
+| B1–B10 | **PASS** — C09 contains one selected documentation mechanism, evidence requirement and fail-closed rule for each alternative |
+| Fixture mapping | **PASS** — T01–T22 and F01–F30 form 52 unique, schema-valid fixtures with separate boundary, physical and operational results |
+| UX scenarios | **PASS** — 85 numbered desktop scenarios are consecutive |
+| Links and tables | **PASS** — 178 Markdown links, including 136 local targets and 49 local anchors, resolve; 70 Markdown tables are structurally consistent |
+| Preview syntax | **PASS** — the illustrative HTML preview's JavaScript parses successfully |
+| Reader test | **PASS** — independent fresh-context reviews found the requested UI, authority, language, storage, Stop and proof boundaries deterministic after their reported issues were corrected |
 
-| Case | Initial facts | Required safe principle | Missing executable trace |
-| --- | --- | --- | --- |
-| X1 — Competing app instances | Two controllers address the same SQLite/application store and project with independent leases | Only one admitted controller reality; never issue competing writes, effects or leases | Store/instance exclusion transaction, restart/abandonment and second-instance user result — Z-02 |
-| X2 — Clock discontinuity | Operation deadline is active when Windows sleeps, wall time shifts, or the app restarts | No sleep or time change grants fresh effects, consent or unlimited retries | Durable budget basis, clock observation, resume and retry accounting — Z-11 |
-| X3 — Reused-session council independence | A CLI saw peer proposals from the previous context, then a changed baseline demands fresh independent proposals | Prior disclosure must not be mistaken for independent new analysis | Session/context contamination exclusion and application proof — Z-08 |
-| X4 — Valid truncated evidence chain | Remaining chain links hash correctly but the expected durable head or historical boundary is absent | Internal hash consistency alone is not whole-history completeness | Expected head, retained checkpoint/anchor and verification result — Z-01/Z-12 |
+These are documentation checks over the committed sources and fixtures. They do not substitute for any C10 implementation or native-evidence gate.
 
-## F01–F30 discriminating source-level trace register
+## Implementation gates
 
-This register derives the **safe outcome already required** by the authoritative specification for each adversarial ordering and explicitly identifies the **missing executable contract**. These are documentation scenarios, not executed tests, typed schemas or proof that any installed CLI behaves safely. An unresolved outcome stays an implementation blocker; the listed owner is the existing owner, never a new state machine.
+| Gate | Scope | Current status |
+| --- | --- | --- |
+| I0 | Documentation contracts and consistency | Passed by this documentation closure change |
+| I1 | Core schemas, canonical bytes, SQLite, replay | Not implemented |
+| I2 | Native WinUI shell and responsiveness | Not implemented |
+| I3 | Per-CLI process and containment proof | Not implemented |
+| I4 | First vertical owner workflow | Not implemented |
+| I5 | Three-CLI Chat, FULL council, barrier and handoff | Not implemented |
+| I6 | Lease, workspace, validation, publication and recovery | Not implemented |
+| I7 | Storage, backup, retention, closure and MSI update | Not implemented |
+| I8 | Supported Windows release certification | Not implemented |
 
-| ID | Initial observation | Existing owner(s) | Already required result | Open schema, trace or native proof |
-| --- | --- | --- | --- | --- |
-| F01 | Two Sends reuse an identity but bytes differ | Contribution/Storage | No overwrite and no duplicate contribution | Collision error and payload identity |
-| F02 | Contribution committed; response/ACK lost | Contribution/Storage | Reconcile original Send ID; do not dispatch or save twice | Durable commit/outbox/result boundary |
-| F03 | MCF duplicate arrives after later sequence | MCF/recipient | No repeat effect; record ordering gap | Sequence scope and gap release |
-| F04 | Inbox/outbox commit is uncertain | MCF/Storage | Keep unknown until durable observation resolves it | Unknown-commit/replay transaction |
-| F05 | Replayed dead letter may already have effected work | MCF/effect owner | New delivery cannot create duplicate material effect | Replay-to-original effect-ID mapping |
-| F06 | Cross-project correlation or stale epoch | Policy/recipient | Refuse and preserve project isolation | Exact versioned error and audit event |
-| F07 | Lease expiry, late response and reassign race | Task/DAG/Workspace | Reject stale effect; successor must use new fence | CAS/result/successor total ordering |
-| F08 | Cancellation receipt but child still writes | Kernel/Gateway/Policy | Never report physical cessation or unsafe reuse | Descendant/service cessation proof |
-| F09 | Revoked session with unresolved effect | Task/DAG/Gateway | Reconcile; block affected resumption while UNKNOWN | Owner-specific effect identity/timeout result |
-| F10 | Handoff source not conclusively fenced | Orchestrator | ConfirmSourceFenced fails; hold persists | Typed command/guard/event transaction |
-| F11 | Successor has only ACK and stale digest | Orchestrator/Context | Withhold READY_TO_RELEASE | Applied-baseline evidence schema |
-| F12 | Missing required plan-application result | Orchestrator/Task/DAG | Withhold dependent lease | Barrier atomic release/replay |
-| F13 | FULL round lacks mandatory critique at bound | Council Engine | Incomplete/BLOCKED; never cap-completed | Missing-obligation and seal events |
-| F14 | Approval references stale point/wrong project | Decision/Requirement/Policy | Reject mismatched approval | Exact identity/scope/revocation grammar |
-| F15 | Agent consensus/exit zero offered as approval/PASS | Decision/Validation | Reject that authority or certification claim | Objective oracle/result evidence |
-| F16 | Malformed, duplicate or non-English response | Gateway/Contribution | No counterfeit participation or disallowed output | Parser, dedup and mixed-language error mapping |
-| F17 | CLI native helper attempts forbidden read/write | Policy/Kernel | Prevent before effect or refuse whole profile | Proven per-CLI mediation/confinement |
-| F18 | Root/reparse target changes after validation | Workspace/Policy | Refuse stale path/object authority | Identity and TOCTOU guard |
-| F19 | Crash between publication mutations | Workspace/Storage | Journal/inspect; no false complete claim | Per-operation restart decision table |
-| F20 | User-edited file matches neither journal digest | Workspace/Evidence | Preserve competing edit; no blind restore | Conflict/UNKNOWN disposition |
-| F21 | Material effect remains physically UNKNOWN | Effect owner/Orchestrator | Operational BLOCKED with UNKNOWN evidence | Safe release/reconciliation predicate |
-| F22 | Artifact differs from certified digest | Evidence/Validation | Invalidate stale evidence | Version-bound invalidation event |
-| F23 | Build passes, runtime criterion untested | Validation/Evidence | No complete/PASS claim for runtime | Criterion-class evidence matrix |
-| F24 | Test passes but does not test requirement | Validation/Evidence | Refuse unsupported adequacy claim | Independent oracle adequacy vectors |
-| F25 | Stale or inconclusive criterion at delivery | Validation/Evidence | Refuse certification | Current per-criterion matrix transaction |
-| F26 | Installer invoked on excluded Windows platform | Installer/Policy | Refuse before partial installation | Real platform observation and MSI evidence |
-| F27 | Closure admission fenced; commit uncertain | Project/Storage | Keep admission fenced; reconcile commit | Project intent/CAS atomic protocol |
-| F28 | Restart with pending approval and unsent draft | Contribution/UI/Storage | Protect references; recover draft, do not submit | Draft privacy/expiry/backup policy |
-| F29 | Switch while old CLI isolation unproven | Project/Orchestrator | Keep old view/draft; candidate unbound | Isolation/effect cessation proof |
-| F30 | Non-English stream headed for Chat/a11y | Gateway/UI/Contribution | Withhold output, English blocker; no reduced-agent reply | Deterministic language admission policy |
+Only [C10](./contracts/C10-IMPLEMENTATION-ENTRY-GATE.md) defines advancement. Documentation closure permits implementation planning and staged work; it grants no runtime capability claim.
 
-A complete fixture must record the original immutable input, exact project/root/epoch, current approved source records, expected version and lease, relevant byte/object digests, which physical effects are independently observed, the controlling typed command and owner, one committed/refused transaction plus events/outbox, precise Chat projection, and the permitted recovery action. Repeat each material case with duplicate delivery, stale agent/session, interrupted commit and competing user edit where relevant. **No scenario passes merely because the required safe outcome is written here.**
+## Final classification
 
-## First bounded contract trace tranche
+- **Closed:** remaining product choices, shared representation, twelve machine behavior, B1–B10 selection, owner transaction ordering, bounded recovery and acceptance-oracle classes.
+- **Controlled per slice:** command-specific payload schemas, SQL layout, source organization and dependency revisions within C07/C10 constraints.
+- **Pending evidence:** application code, native CLI compatibility/confinement, Windows UI, storage/publication recovery, MSI lifecycle and release certification.
 
-The [derived C01–C03 trace corpus](./contracts/README.md) records source-based allowed/refused cases for Chat persistence and immediate Stop, project-local FULL council D1–D3, and Handoff #9 physical effect/restart gates. **This is progress on deterministic prose cases, not completed machine-readable schemas, tests, or Windows/CLI safety proof.** Keep Z-01/Z-02/Z-03/Z-04/Z-07/Z-11 and all affected D-/B- executable obligations OPEN. Do not select D-04 materiality, D-15 oracle adequacy, or numeric/identity policy defaults by inference.
-
-### Second documentation tranche: typed meanings and transaction evidence
-
-The [C04 owner-boundary inventory](./contracts/C04-TYPED-BOUNDARY-INVENTORY.md) records which existing domain records, source-derived references, owner commands and observable facts must survive into typed contracts. The [C05 durable transaction matrix](./contracts/C05-DURABLE-TRANSACTION-RACES.md) tests the already-approved prohibition on premature ACK, separation of intent/receipt/physical effect, and 22 adversarial crash/race outcomes. **These are Markdown inventories and expected-result traces**, not JSON Schemas, implemented atomic transactions, verified Windows confinement or new user-approved numeric/algorithmic defaults. Retain Z-01/Z-02/Z-03/Z-06 and all other implicated D/B/P0 blockers as OPEN.
-
-## Executable-contract acceptance template
-
-For each owned command or material external effect, the versioned contract must state **all** of the following:
-
-1. Source requirement, owner, operation, user authority and scope; stable project/epoch/attempt/session identities.
-2. Typed command/query/event/error definitions with requiredness, validation, compatibility, idempotency and forbidden inputs.
-3. Preconditions, expected version/fence, legal state transitions, atomic storage/owner/outbox boundaries and exact illegal-command results.
-4. Physical effect admission proof and observable before/after identity; cancellation, stale/revoked actor behavior and `UNKNOWN` classification.
-5. Deadline, heartbeat, bounded retry, queue and cancellation escalation with clock semantics and crash/restart reconciliation.
-6. One unique result for each competing-command, duplicate, stale-context, lost-ACK, interrupted-effect and altered-file trace.
-7. User-visible projection and adequacy-checked acceptance oracle bound to real evidence. An unexecuted fixture remains `NOT VERIFIED`.
-
-**Done for one scoped slice** requires two independent trace readers deriving the same owner command, permit/deny result, durable effect and recovery from the same initial records; coverage of its participating machines and applicable B1–B10; and actual native proof for any admitted physical CLI effects. **Done for unrestricted whole-product build** requires all twelve machine contracts and every relevant open product choice settled. This is stricter than a schema stub and narrower than demanding an entire MSI before writing documents.
-
-## Documentation readiness status
-
-- **Completed now:** Q-01/Q-02 correction propagation on `main`; a dependency-ordered Z-01–Z-14 register; explicit four novel subcases and acceptance template. These are documentation artifacts only.
-- **Not complete:** open product choices, typed schemas, full state tables, transaction protocols, B-contract algorithms, per-CLI safety profiles, actual Windows proofs and native application implementation.
-- **No false closure:** retain open D/B/P0/P1 entries until their required evidence exists; do not label planned tests as passed or an advisory product proposal as approved.
+This classification prevents both failure modes: coding agents cannot invent product behavior, and documentation cannot be mistaken for executed proof.

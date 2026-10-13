@@ -254,7 +254,7 @@ An `UNSUPPORTED` or `PROBE_FAILED` card names its own exact cause and operation 
 | [other file · rejected: exact reason] [Remove]                           |
 ```
 
-Selected files show name or English-safe metadata, detected type, size, preparation state, and a removal action. A supported English-safe preview is read-only; otherwise show an English preview-unavailable explanation. Selecting a file never submits it. When Send occurs while a selected file is preparing, keep the same complete draft and submission identity through bounded verification. A changed, rejected, timed-out, or unverified file prevents a partial contribution; no selected file is silently omitted. After persistence, the message links each submitted attachment to provenance and its separate context-inclusion status. An outside-root file needs explicit authorization for that file and managed copy only. Exact count, byte, type, and preparation-time limits remain to be decided.
+Selected files show name or English-safe metadata, detected type, size, preparation state, and a removal action. A supported English-safe preview is read-only; otherwise show an English preview-unavailable explanation. Selecting a file never submits it. One submission accepts at most 20 files, 100 MiB per file, 500 MiB aggregate, with 120 active seconds for preparation. Archives remain opaque unless a separately authorized operation performs bounded extraction. When Send occurs while a selected file is preparing, keep the same complete draft and submission identity through bounded verification. A changed, rejected, timed-out, or unverified file prevents a partial contribution; no selected file is silently omitted. After persistence, the message links each submitted attachment to provenance and its separate context-inclusion status. An outside-root file needs explicit authorization for that file and managed copy only.
 
 ### Failed or uncertain persistence
 
@@ -295,6 +295,8 @@ A factual question asks for missing information; a choice packet asks which elig
                      ├── observed effect: status card names the result
                      └── uncertain effect: status card names the blocker
 
+A standalone /start, /pause, /resume, or /stop is a control-only message.
+Plain-language or mixed text is never converted into a control by keywords.
 A separately submitted control-only message is saved as one contribution
 when persistence succeeds; it creates no conversational turn or writer step.
 After Stop, sessions do not silently restart on a later Send; [Start]
@@ -407,9 +409,11 @@ Closing is explicit and never follows from switching folders, inactivity, applic
 | Loading or unavailable data | Existing readable state stays visible; a bounded status names the dependency and next action. |
 | Corrupted or missing managed evidence | An integrity or availability failure; that evidence cannot support a passing criterion. |
 | Restart after interrupted work | Persisted history returns; uncertain physical effects show reconciling or unknown until checked. |
-| Full local application storage | Precise storage blocker and permitted cleanup/recovery controls; no false “saved” message. |
+| Full local application storage | At 10 GiB or below the 5 GiB free-space reserve, reclaim only eligible disposable bytes and block unsafe new storage; never delete protected history, drafts, pending data, or required evidence. |
 | Light, dark, and Windows high contrast | Readable surfaces and status text; changing theme preserves project, draft, focus, and scroll position. |
 | Keyboard and screen reader | Logical focus, visible focus ring, named controls and states, meaningful announcements, and return focus from details. |
-| Privacy and English-only output | No credentials, tokens, private reasoning, unrelated process output, or unverified non-English agent text. Required non-English output is blocked with an English explanation. |
+| Privacy and English-only output | No credentials, tokens, private reasoning, unrelated process output, or unverified non-English agent prose. Required non-English generated prose is blocked with an English explanation. The user's own submitted contribution remains exact only in its user-message/history view with English labels; generated output does not repeat it. The smallest exact technical-identity token may remain unchanged when correctness requires it, with English labels and provenance. |
+
+The permanent Chat-header controls are **Start**, **Pause**, and **Stop**. After Pause, the paused-status card exposes a contextual **Resume** action; exact standalone `/start`, `/pause`, `/resume`, and `/stop` aliases follow the same controller path. The default composer shortcut is **Enter to send** and **Shift+Enter for a new line**. An accessibility preference changes this to **Enter for a new line** and **Ctrl+Enter to send** without changing or submitting the current draft. If Stop cannot prove physical cessation after its 20-second reconciliation window, the UI keeps the affected outcome `UNKNOWN` and operation `BLOCKED`; it never shows a confirmed stop merely because the deadline elapsed.
 
 All cards with more inspectable information expose `Show details`. Dense content uses a temporary sheet over Chat and returns to the invoking control. No illustration here authorizes new filesystem access, provider changes, credentials, a fourth agent, a separate top-level route, or a shortcut around approval and evidence requirements.

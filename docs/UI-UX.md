@@ -67,7 +67,7 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 - All Mayasaba-owned visible and spoken interface content is in English: onboarding, Chat controls, timeline cards, questions, approvals, errors, recovery actions, help, notifications, installer-owned text, accessible names and announcements.
 - Agent-authored workflow material (including proposals, critiques, plans, questions and narrative evidence), replies and generated deliverables must be in English. Do not offer a language picker, localization setting, translated string pack, multilingual interface, or non-English fallback; the Windows display language does not select Mayasaba's language.
 - Never display a non-English AI-agent reply, even provisionally or inside Show details, notifications, screen-reader announcements or history. Withhold unverified stream text; if a required response is non-English, show an English blocker and controlled recovery, without a translated substitute or a two-agent completion claim.
-- Non-English source material may be read within the authorized project or attachment scope. Do not reproduce its raw text in generated replies, cards, previews, quotations, notifications, accessibility text, or deliverables. Show English descriptions and source locators while retaining the source bytes and provenance under the existing evidence rules. An unverifiable English-only output is blocked rather than shown as complete.
+- Non-English source material may be read within authorized scope. Exact technical identities may remain unchanged only where alteration would break identity or executable correctness: the smallest necessary code identifier/literal, canonical path/filename, URL, hash, CLI/product name, assigned source/legal identifier or user proper name. Show an English label and provenance. Other non-English prose uses an English source label/type/ordinal/digest while raw bytes stay protected. The user's own submitted Chat contribution remains byte-faithfully visible only in its user-message bubble and history/detail view, with English labels/status/accessibility text; generated summaries, notifications, replies and deliverables do not repeat its non-English prose. The exception never admits unrestricted non-English agent prose or deliverables; unverifiable generated output is blocked.
 - Native Windows surfaces and externally installed CLIs are separately owned. Their language does not change Mayasaba's own presentation rule.
 
 ## 3. Chat-only information architecture
@@ -426,7 +426,7 @@ The single native composer is centered in an empty bound project's conversation 
 The composer provides:
 
 - multiline text;
-- configurable keyboard send behavior;
+- default **Enter sends / Shift+Enter inserts newline**, with a per-Windows-user accessibility preference for **Enter newline / Ctrl+Enter sends**;
 - Attach files;
 - drag-and-drop;
 - removable attachment chips/cards;
@@ -441,9 +441,9 @@ Draft rules:
 - selecting files does not submit the draft;
 - attachment rejection does not discard valid selections;
 - project switching must not accidentally send a draft to another project; and
-- application restart restores unsent text as a local draft under the originating project, never as a submitted contribution; a pre-binding draft remains unbound until folder selection, and selected attachments follow a still-to-be-approved recovery policy rather than silently becoming ready.
+- application restart restores unsent text and selected attachment state as a Windows-user-protected local draft under the originating project, never as a submitted contribution; a pre-binding draft remains unbound until folder selection.
 
-The restored draft is never automatically submitted, interpreted or shown in contribution history. A project switch cannot send or merge drafts across projects. Windows-profile protection, copied attachment-byte handling, explicit Discard semantics, closure behavior and abandonment expiry remain open product-policy parameters in the implementation-readiness audit; no implementation agent may silently choose them.
+The restored draft is never automatically submitted, interpreted or shown in contribution history. A project switch cannot send or merge drafts across projects. Drafts survive switch, restart and Project Close until successful Send or explicit **Discard draft**; there is no automatic draft deletion. Discard first reconciles uncertain persistence and then removes only that draft's controller-managed bytes.
 
 ### 7.3 Message and request states
 
@@ -494,7 +494,7 @@ Users may select one or more local files with the native picker or drag them ont
 - read-only text/document preview when supported and English-safe; or
 - explicit preview-unavailable fallback.
 
-Declare and enforce count, size, type, and parser limits. Place an actionable error beside the rejected file. If a preview, thumbnail, file name or accessible label would expose non-English source text, show English metadata and a preview-unavailable explanation instead; authorized processing may still read the original bytes.
+Enforce 20 files, 100 MiB per file, 500 MiB aggregate and 120 active seconds preparation. Archives remain opaque unless a separately authorized operation permits bounded extraction. Place an actionable error beside the rejected file. An exact technical filename may be shown unchanged with an English label; non-English prose previews remain unavailable and use English source metadata while authorized processing retains the original bytes.
 
 ### 8.2 Attachment lifecycle
 
@@ -509,7 +509,7 @@ Visually distinguish:
 
 A file displayed in Chat is not automatically reported as read, synchronized to every agent, accepted as a requirement, or verified as evidence.
 
-Pressing Send retains one submission identity and the complete draft while any selected attachment is still preparing. Preparation and immutable byte verification have a declared finite bound; changed, rejected, timed-out or unverified attachments prevent persistence of an incomplete contribution and show a precise actionable reason. No selected attachment is silently omitted, and retry uses the same identity after any uncertain commit is reconciled. Only a confirmed persisted `UserContribution` may appear as submitted or be dispatched. The count, byte and preparation-time limits remain open in the operational-limits policy; the UI must not invent them or spin indefinitely.
+Pressing Send retains one submission identity and the complete draft while any selected attachment is still preparing. Changed identity/length/write observation, rejection, 120-second timeout or failed verification prevents persistence of the entire incomplete contribution and shows **Reselect** or **Remove**. No selected attachment is silently omitted, and retry uses the same identity after any uncertain commit is reconciled. Only a confirmed persisted `UserContribution` may appear as submitted or be dispatched.
 
 Submitted attachments appear with the originating contribution. Expanding the attachment card shows provenance, digest, supported preview, and context-inclusion status without opening a Files page.
 
@@ -608,9 +608,11 @@ A `sealed with an open question` result requests missing facts or clarification,
 
 ### 10.4 Approval semantics
 
-- Approval controls name the exact proposed effect.
+- Approval controls name the exact proposed effect and bind project, epoch, source record, target revision, scope and expiry/revocation state.
 - A response is linked to the exact question/operation/decision point.
 - Silence, timeout, an unrelated "yes," or an agent recommendation is never approval.
+- Free-form text may request a material action but produces an exact confirmation card; it cannot silently approve, close/reopen, opt into retention, discard protected data or activate an update.
+- The permanent visible header controls are **Start**, **Pause**, and **Stop**; **Resume** appears as the contextual primary action on the paused-status card. Only complete trimmed case-insensitive `/start`, `/pause`, `/resume`, `/stop` aliases are control-only messages; keyword matching and mixed text never create a control.
 - After a material answer changes project truth, show that a new context/epoch is being prepared and affected agents must resynchronize.
 
 ## 11. Council cards and details
@@ -754,7 +756,7 @@ Do not collapse these into one green state:
 
 Show the failure class, failing criterion, observed signature, current hypothesis, bounded repair scope, responsible task/agent, attempt history, targeted rerun, and regression outcome.
 
-When the same failure repeats without progress, explain that the strategy stopped and new evidence or a new hypothesis is required. Toolchain, provider, policy, and external-environment failures must not look like application-code defects.
+When the same failure signature repeats without objective progress three times, explain that the strategy stopped and new evidence or a new hypothesis is required. Toolchain, provider, policy, and external-environment failures must not look like application-code defects.
 
 ### 15.4 Publication and recovery
 
@@ -837,7 +839,7 @@ Accessibility is a release requirement, not polish.
 - Visible focus is always present.
 - Chat, cards, inline details, question batches, tables, temporary sheets and dialogs have predictable focus entry/return.
 - Start, Pause and Stop remain keyboard reachable during streaming.
-- Configurable Send behavior avoids trapping multiline entry users.
+- Default Enter sends and Shift+Enter inserts a newline. The accessibility preference changes this to Enter newline and Ctrl+Enter send; accessible help always announces the active mode, and changing it never submits the draft.
 
 ### Screen readers and semantics
 
@@ -874,6 +876,8 @@ The ordinary interface may show authorized source files, submitted attachments, 
 - unrestricted CLI logs;
 - sensitive internal database/protocol records without redaction; or
 - data from another project or session.
+
+Unsent drafts and temporary attachment copies are protected to the current Windows user and isolated by project. Storage-pressure UI names measured Mayasaba-managed usage, the 10 GiB ceiling and 5 GiB reserve, eligible cleanup and user capacity controls. It never offers deletion of protected history, pending/uncertain submissions, drafts or required evidence as automatic cleanup.
 
 When a provider or research tool may receive project context, the user-facing flow must preserve the governing authorization and provider policy. A UI preview or evidence link never widens access.
 
@@ -1002,6 +1006,16 @@ At minimum, native automated and manual acceptance must cover:
 79. User-governed self-improvement: accumulate repeated diagnostic evidence for a proposed Mayasaba adapter/workflow/code improvement. Verify the proposal remains advisory, discloses its source evidence, risks and required authority, and cannot open an unapproved task, bypass material FULL council or user approval, silently change policy/model/provider configuration, or install/activate a modified Mayasaba executable. Approved candidate work remains separately leased, isolated and validated.
 
 80. Startup and restored closed project: with no bound root, welcome screen 1 contains no composer, while screen 2 supports an unsent draft with disabled Send. Relaunch without a root begins at welcome and still requires Open Folder before Chat. Rebind a known open project with retained history: restore the timeline and docked composer, not an empty welcome. Rebind a known closed project with retained history: display it read-only, keep Send disabled pending explicit authorized Reopen Project, and do not auto-Start CLIs, re-submit drafts or reauthorize work. Verify the same behavior on project switch and after relaunch.
+
+81. Explicit authority and controls: verify material approval, Close/Reopen, retention, destructive retirement and update activation require the exact version-bound labeled action. Plain “yes,” quoted/negated/conditional text and agent recommendations do nothing. Verify visible controls and standalone `/start`, `/pause`, `/resume`, `/stop`; mixed or keyword-containing prose is persisted normally and cannot trigger a control.
+
+82. Storage, draft and attachment policy: exercise 10 GiB capacity, 5 GiB reserve and 80% cleanup threshold. Verify only eligible disposable data is reclaimed and protected history, pending/uncertain contributions, drafts and required evidence remain. Restore a Windows-user-protected draft across switch/restart/Close, then explicitly discard it. Test 20 files, 100 MiB/file, 500 MiB aggregate, 120-second preparation and a source changed during copy; no incomplete contribution is persisted.
+
+83. Keyboard and mixed content: verify default Enter/Shift+Enter behavior and the persisted accessibility Ctrl+Enter mode without accidental submission. Preserve a user's submitted non-English text byte-faithfully only in that contribution's own user-message, history and details presentation with English metadata. Show exact necessary technical identifiers with English labels/provenance while blocking surrounding non-English agent prose and generated deliverables. Ambiguous generated-language admission withholds output and preserves source bytes.
+
+84. Operational bounds and Stop truthfulness: exercise probe/start/delivery/stall/Chat/council/task/recovery/repair bounds from C06 D9 across suspend and restart. Expire Stop's 20-second reconciliation while an attributable helper remains unobserved; the UI must show physical `UNKNOWN` and affected `BLOCKED`, never confirmed stopped or a generic Retry.
+
+85. Governed Mayasaba update: show an evidence-linked improvement proposal without activation. Require material FULL/user approval and the separate exact signed/hash-bound **Install approved Mayasaba update** action. Failed or uncertain MSI activation never claims rollback or success without proof and never replaces the running application automatically.
 
 ## 22. UX anti-patterns
 
