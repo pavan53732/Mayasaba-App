@@ -283,7 +283,7 @@
   </div>
 
   <nav class="native-menu-bar" id="nativeMenuBar" aria-label="Native application menu preview" hidden><button type="button" id="fileMenuButton" aria-haspopup="true" aria-expanded="false" aria-controls="nativeFileMenu">File</button><div class="native-file-menu" id="nativeFileMenu" hidden><button type="button" id="switchProject">Switch Project</button></div></nav>
-  <dialog class="picker-preview" id="pickerPreview" aria-labelledby="pickerTitle"><h2 id="pickerTitle">Folder picker preview</h2><p>The Windows app opens the native folder picker here. These sample choices illustrate the view change only; no real folder is opened.</p><button type="button" data-picker-project="Sample project">C:\Projects\SampleProject</button><button type="button" data-picker-project="Other sample project">C:\Projects\OtherSampleProject</button><button type="button" id="cancelPicker">Cancel</button></dialog>
+  <dialog class="picker-preview" id="pickerPreview" aria-labelledby="pickerTitle"><h2 id="pickerTitle">Folder picker preview</h2><p>The Windows app opens the native folder picker here. These sample choices illustrate the view change only; no real folder is opened. Returning to a sample project restores its per-project Start state for this preview run.</p><button type="button" data-picker-project="Sample project">C:\Projects\SampleProject</button><button type="button" data-picker-project="Other sample project">C:\Projects\OtherSampleProject</button><button type="button" id="cancelPicker">Cancel</button></dialog>
 
   <main class="app" id="app" data-screen="welcome" aria-label="Mayasaba interface preview">
     <header class="header">
@@ -608,10 +608,11 @@
         pickerPreview.close();
         const name = button.dataset.pickerProject;
         if (name !== currentProject) {
+          const returningToStartedProject = projectStates.get(name)?.startRequested === true;
           saveProjectPreview();
           restoreProjectPreview(name);
+          showToast(returningToStartedProject ? 'Returned to this sample project with its Start state retained for this preview run.' : 'Sample switch only. This project did not inherit another project’s Start state.');
         } else fileMenuButton.focus();
-        showToast('Sample switch only. The native app validates isolation, pause and recovery before changing projects.');
       });
     });
     more.addEventListener('click', () => {
