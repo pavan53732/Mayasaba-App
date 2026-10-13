@@ -10,7 +10,7 @@ A non-English agent reply is never shown, including during streaming or in **Sho
 
 The agents provide intelligence. Mayasaba owns **state, authority, safety, orchestration, verification, and proof**.
 
-> **Project status: documentation stage complete; implementation has not started.** This repository contains the authoritative specification, normative C01–C10 contracts, a versioned v1 shared schema registry, acceptance fixtures, and a standalone Chat layout preview. The HTML preview demonstrates placement with sample data; it is not the native application. Application source code, build targets, executed tests, native Windows evidence, and an MSI installer are not present. The behavior below describes the product specification, not a released or verified application.
+> **Project status: native implementation has begun; whole-product integration is INCOMPLETE and UNVERIFIED.** The specification, normative C01–C10 contracts and v1 schemas remain authoritative. The repository now also contains a [real unpackaged C++20 / WinUI 3 native application starting slice](./native/README.md): Welcome → native Open Folder → SQLite-backed Chat with per-project drafts/history, plus explicitly blocked CLI controls. The animated [HTML experience preview](./docs/CHAT-INTERFACE-PREVIEW.html) is separate. Real three-CLI adapters, FULL council, safe effect containment, publication/recovery, complete accessibility checks, MSI packaging and native Windows proof are **not complete**. Do not treat source presence or an unexecuted CI workflow as a working/released application.
 
 ## Contents
 

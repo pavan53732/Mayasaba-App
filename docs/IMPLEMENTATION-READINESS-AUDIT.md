@@ -114,4 +114,4 @@ Follow [C10 — Documentation closure and implementation entry gate](./contracts
 
 ## Verdict
 
-The Mayasaba documentation stage is complete when the mechanical and fresh-reader checks in this change pass. Application implementation and Windows certification remain separate work and must advance through C10 Gates I1–I8. No application code or native verification is claimed by this audit.
+The Mayasaba documentation stage was recorded as closed under C10's mechanical and fresh-reader rules. Since then, a **partial native C++20 / WinUI 3 source slice** has been added under [native/](../native/README.md), with project root validation, local SQLite contribution/draft persistence and three native screen definitions. The slice has **not** completed I1–I8 and no Windows certification is asserted. The first GitHub Actions attempts for Windows and portable storage exited without runner assignment or steps; no compiler or test verdict was obtained. This audit remains an implementation gate, not an assertion that Mayasaba is operational end to end.
