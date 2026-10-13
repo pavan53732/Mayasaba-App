@@ -48,6 +48,18 @@
     }
     .preview-controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     .preview-controls button[aria-current="step"] { border-color: var(--authority); color: var(--authority); font-weight: 650; }
+    .native-menu-bar { position: relative; z-index: 8; flex: 0 0 auto; width: min(1180px, calc(100vw - 32px)); margin: 0 auto; padding: 5px 12px; border: 1px solid var(--line); border-bottom: 0; border-radius: 8px 8px 0 0; background: var(--surface); font-size: 13px; }
+    .native-menu-bar[hidden], .native-file-menu[hidden] { display: none; }
+    .native-menu-bar button { padding: 5px 9px; border: 0; background: transparent; color: var(--ink); }
+    .native-menu-bar button:hover { background: var(--authority-quiet); }
+    .native-file-menu { position: absolute; top: 32px; left: 10px; min-width: 185px; padding: 5px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); box-shadow: 0 6px 18px rgba(0,0,0,.14); }
+    .native-file-menu button { width: 100%; text-align: left; }
+    .picker-preview { max-width: min(440px, calc(100vw - 30px)); border: 1px solid var(--line); border-radius: 8px; padding: 22px; background: var(--surface); color: var(--ink); box-shadow: 0 14px 36px rgba(0,0,0,.2); }
+    .picker-preview::backdrop { background: rgba(20,24,32,.55); }
+    .picker-preview h2 { margin: 0 0 8px; font-size: 18px; }
+    .picker-preview p { color: var(--muted); font-size: 13px; }
+    .picker-preview button { display: block; width: 100%; margin-top: 9px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--canvas); color: var(--ink); text-align: left; }
+    .picker-preview button:hover { border-color: var(--authority); }
 
     .app {
       position: relative;
@@ -59,7 +71,7 @@
       overflow: hidden;
       background: var(--canvas);
       border: 1px solid var(--line);
-      border-radius: 9px;
+      border-radius: 0 0 9px 9px;
       box-shadow: 0 10px 38px rgba(29, 37, 54, .08);
     }
     .header {
@@ -204,6 +216,7 @@
 
     @media (max-width: 860px) {
       .app { width: calc(100vw - 16px); }
+      .native-menu-bar { width: calc(100vw - 16px); }
       .header { padding: 15px 17px; gap: 9px; flex-direction: column; min-height: 161px; }
       .header-right { width: 100%; justify-content: space-between; }
       .readiness { gap: 3px; }
@@ -265,15 +278,18 @@
 </head>
 <body>
   <div class="preview-bar">
-    <span><strong>Mayasaba interface preview</strong> · Open Folder and Start are simulated. No CLI runs; nothing is sent or saved.</span>
+    <span><strong>Mayasaba interface preview</strong> · Folder selection, switching and Start are simulated. No CLI runs; nothing is sent or saved.</span>
     <div class="preview-controls" aria-label="Preview screens"><button type="button" data-preview-screen="welcome" aria-current="step">1 Welcome</button><button type="button" data-preview-screen="folder">2 Open Folder</button><button type="button" data-preview-screen="chat">3 Chat</button><button type="button" id="sample">Show conversation</button><button type="button" id="reset">Reset</button></div>
   </div>
+
+  <nav class="native-menu-bar" id="nativeMenuBar" aria-label="Native application menu preview" hidden><button type="button" id="fileMenuButton" aria-haspopup="true" aria-expanded="false" aria-controls="nativeFileMenu">File</button><div class="native-file-menu" id="nativeFileMenu" hidden><button type="button" id="switchProject">Switch Project</button></div></nav>
+  <dialog class="picker-preview" id="pickerPreview" aria-labelledby="pickerTitle"><h2 id="pickerTitle">Folder picker preview</h2><p>The Windows app opens the native folder picker here. These sample choices illustrate the view change only; no real folder is opened.</p><button type="button" data-picker-project="Sample project">C:\Projects\SampleProject</button><button type="button" data-picker-project="Other sample project">C:\Projects\OtherSampleProject</button><button type="button" id="cancelPicker">Cancel</button></dialog>
 
   <main class="app" id="app" data-screen="welcome" aria-label="Mayasaba interface preview">
     <header class="header">
       <div>
         <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Mayasaba</span></div>
-        <div class="project">Sample project · <code>C:\Projects\SampleProject</code></div>
+        <div class="project"><span id="projectName">Sample project</span> · <code id="projectPath">C:\Projects\SampleProject</code></div>
         <div class="project-state">Open project · Ready for Chat</div>
       </div>
       <div class="header-right">
@@ -325,11 +341,49 @@
     const toast = document.getElementById('toast');
     const sessionCard = document.getElementById('sessionCard');
     let detectionTimer;
-    let startTimer;
+    const startTimers = new Map();
     let startRequested = false;
     let sessionReady = false;
     const waitingReplies = [];
     let toastTimer;
+    let currentProject = 'Sample project';
+    const projectStates = new Map();
+    const projectPaths = { 'Sample project': 'C:\\Projects\\SampleProject', 'Other sample project': 'C:\\Projects\\OtherSampleProject' };
+
+    function saveProjectPreview() {
+      projectStates.set(currentProject, {
+        nodes: [...timeline.children].filter(node => node !== sessionCard),
+        draft: message.value,
+        hasMessages: app.classList.contains('has-messages'),
+        startRequested,
+        sessionReady,
+        waiting: [...waitingReplies],
+        session: sessionCard.hidden ? null : {
+          title: document.getElementById('sessionTitle').textContent,
+          note: document.getElementById('sessionNote').textContent,
+          value: document.querySelector('[data-session]').textContent
+        },
+        scrollTop: timeline.scrollTop
+      });
+    }
+
+    function restoreProjectPreview(name) {
+      currentProject = name;
+      const state = projectStates.get(name);
+      timeline.replaceChildren(sessionCard, ...(state?.nodes ?? []));
+      message.value = state?.draft ?? '';
+      startRequested = state?.startRequested ?? false;
+      sessionReady = state?.sessionReady ?? false;
+      waitingReplies.splice(0, waitingReplies.length, ...(state?.waiting ?? []));
+      app.classList.toggle('has-messages', state?.hasMessages ?? false);
+      if (state?.session) setSessionStatus(state.session.title, state.session.note, state.session.value);
+      else sessionCard.hidden = true;
+      document.getElementById('projectName').textContent = name;
+      document.getElementById('projectPath').textContent = projectPaths[name];
+      send.disabled = !message.value.trim();
+      timeline.scrollTop = state?.scrollTop ?? 0;
+      message.focus();
+    }
 
     function setReadiness(value) {
       document.querySelectorAll('.readiness-row').forEach(row => {
@@ -408,6 +462,9 @@
 
     function setScreen(screen, focus = true) {
       app.dataset.screen = screen;
+      document.getElementById('nativeMenuBar').hidden = screen !== 'chat';
+      document.getElementById('nativeFileMenu').hidden = true;
+      document.getElementById('fileMenuButton').setAttribute('aria-expanded', 'false');
       document.getElementById('chatMenu').hidden = true;
       document.getElementById('more').setAttribute('aria-expanded', 'false');
       send.disabled = screen !== 'chat' || !message.value.trim();
@@ -436,25 +493,51 @@
     });
     document.getElementById('startSessions').addEventListener('click', () => {
       if (app.dataset.screen !== 'chat') return;
+      if (startRequested && sessionReady) { showToast('These sample sessions are already ready.'); return; }
+      if (startTimers.has(currentProject)) { showToast('These sample sessions are already starting.'); return; }
       startRequested = true;
       sessionReady = false;
-      clearTimeout(startTimer);
       setSessionStatus('Three CLI sessions · starting', 'Simulated startup after Start. No CLI process is launched.', 'STARTING');
-      startTimer = setTimeout(() => {
+      const attemptProject = currentProject;
+      startTimers.set(attemptProject, setTimeout(() => {
+        startTimers.delete(attemptProject);
+        if (currentProject !== attemptProject) {
+          const saved = projectStates.get(attemptProject);
+          if (saved) {
+            saved.startRequested = true;
+            saved.sessionReady = true;
+            saved.session = { title: 'Three CLI sessions · ready', note: 'All three sample sessions are ready for authorized work.', value: 'READY / IDLE' };
+            for (const reply of saved.waiting.splice(0)) {
+              reply.title.textContent = 'Mayasaba · sample reply';
+              reply.text.textContent = 'This is where the reviewed answer would appear after all three sessions participate. The composer stays at the bottom.';
+              reply.detailContent.textContent = 'In the product, this area can show the three independent responses, the writer, and both peer reviews. This preview does not contact any CLI.';
+            }
+          }
+          return;
+        }
         sessionReady = true;
         setSessionStatus('Three CLI sessions · ready', 'All three sample sessions are ready for authorized work.', 'READY / IDLE');
         completeWaitingReplies();
-      }, 900);
+      }, 900));
     });
     document.getElementById('stopSessions').addEventListener('click', () => {
       if (app.dataset.screen !== 'chat') return;
       startRequested = false;
       sessionReady = false;
-      clearTimeout(startTimer);
+      clearTimeout(startTimers.get(currentProject));
+      startTimers.delete(currentProject);
       setSessionStatus('Three CLI sessions · stopped', 'A later Send will not restart these sample sessions; select Start again.', 'STOPPED');
     });
     document.addEventListener('keydown', event => {
       if (event.key !== 'Escape') return;
+      if (document.getElementById('pickerPreview').open) return;
+      const fileMenu = document.getElementById('nativeFileMenu');
+      if (!fileMenu.hidden) {
+        fileMenu.hidden = true;
+        document.getElementById('fileMenuButton').setAttribute('aria-expanded', 'false');
+        document.getElementById('fileMenuButton').focus();
+        return;
+      }
       const menu = document.getElementById('chatMenu');
       if (!menu.hidden) {
         menu.hidden = true;
@@ -481,7 +564,12 @@
     });
     document.getElementById('reset').addEventListener('click', () => {
       clearTimeout(detectionTimer);
-      clearTimeout(startTimer);
+      for (const timer of startTimers.values()) clearTimeout(timer);
+      startTimers.clear();
+      projectStates.clear();
+      currentProject = 'Sample project';
+      document.getElementById('projectName').textContent = currentProject;
+      document.getElementById('projectPath').textContent = projectPaths[currentProject];
       startRequested = false;
       sessionReady = false;
       waitingReplies.length = 0;
@@ -502,6 +590,30 @@
     });
     const more = document.getElementById('more');
     const chatMenu = document.getElementById('chatMenu');
+    const fileMenuButton = document.getElementById('fileMenuButton');
+    const nativeFileMenu = document.getElementById('nativeFileMenu');
+    const pickerPreview = document.getElementById('pickerPreview');
+    fileMenuButton.addEventListener('click', () => {
+      nativeFileMenu.hidden = !nativeFileMenu.hidden;
+      fileMenuButton.setAttribute('aria-expanded', String(!nativeFileMenu.hidden));
+    });
+    document.getElementById('switchProject').addEventListener('click', () => {
+      nativeFileMenu.hidden = true;
+      fileMenuButton.setAttribute('aria-expanded', 'false');
+      pickerPreview.showModal();
+    });
+    document.getElementById('cancelPicker').addEventListener('click', () => { pickerPreview.close(); fileMenuButton.focus(); });
+    document.querySelectorAll('[data-picker-project]').forEach(button => {
+      button.addEventListener('click', () => {
+        pickerPreview.close();
+        const name = button.dataset.pickerProject;
+        if (name !== currentProject) {
+          saveProjectPreview();
+          restoreProjectPreview(name);
+        } else fileMenuButton.focus();
+        showToast('Sample switch only. The native app validates isolation, pause and recovery before changing projects.');
+      });
+    });
     more.addEventListener('click', () => {
       chatMenu.hidden = !chatMenu.hidden;
       more.setAttribute('aria-expanded', String(!chatMenu.hidden));

@@ -33,6 +33,8 @@ OTHER LAUNCHES WITH A BOUND PROJECT ─────────> Screen 3 Chat
 
 Opening a folder refreshes bounded, non-mutating detection of all three CLIs and shows their individual readiness on screen 3. It does not start working agent sessions, scan files, initialize Git, or approve work. The readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. Once a project is bound, later launches open its Chat directly.
 
+The native Windows application menu is outside all three screen content areas. Once a project is bound, **File → Switch Project** opens the native folder picker. It changes the active Chat only after Project service validates the chosen root and the existing safe-switching guards pass. Chat itself has no folder control.
+
 ## Screen 1 — Welcome
 
 ```text
@@ -100,6 +102,9 @@ A rejected selection must name the path or authorization problem and retain the 
 ## Screen 3 — Chat, empty bound project
 
 ```text
+NATIVE WINDOWS APPLICATION MENU (outside Chat)
+[File] -> [Switch Project]
+
 +--------------------------------------------------------------------------+
 | Mayasaba · Project name + inspectable path                               |
 | Phase + condition                Hermes Agent CLI  ● READY               |
@@ -119,6 +124,26 @@ A rejected selection must name the path or authorization problem and retain the 
 ```
 
 The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, visible Start/Pause/Stop controls, and exactly one truthful readiness entry per required CLI. `READY` detection does not mean a project session is active. There is no setup banner when all CLIs are ready.
+
+### Switching projects from the native application menu
+
+```text
+NATIVE APP MENU, OUTSIDE CHAT: [File] -> [Switch Project]
+                                   |
+                         native Windows folder picker
+                                   |
+             +---------------------+----------------------+
+             |                     |                      |
+          Cancel             Invalid root          Authorized root
+             |               or unsafe switch            |
+             |                     |                 Project service
+             |                     |                 binds/restores
+             v                     v                      v
+       Current Chat       Current Chat + exact       Selected project's
+       and draft stay     blocker/recovery          Chat, history, draft
+```
+
+The menu is keyboard accessible and adds no screen or route. Project service applies the existing root validation and safe-switching rules. Active old-project work continues only with proven isolation and supervision; otherwise the view switch waits for controlled pause and reconciliation. Nothing silently stops work, retargets a live CLI, merges histories, closes or reopens a project, or transfers Start permission. Selecting a folder does not start sessions. A known closed project remains closed until explicit **Reopen Project**.
 
 ```text
 CHAT HEADER OVERFLOW [•••]
@@ -150,6 +175,8 @@ Claude Code CLI   READY           Controller attempts all three
 ```
 
 This is a Chat status card, not another screen. It updates each CLI independently from actual session observations; a failed startup shows the named CLI and exact reason rather than claiming all three started. Start does not send the draft or authorize a scan, council, task, research, or file write. The readiness indicator stays separate from session activity. Before Start, a Send can still save a contribution, but its agent-dependent processing waits for Start. After explicit Stop, a new Send can be saved but agent-dependent work waits until a later Start.
+
+Repeated Start while startup is in progress or all three sessions are healthy shows the existing status without launching duplicates. After a completed partial failure, a later Start may retry only known failed or missing sessions after revalidation. An uncertain start or stop outcome blocks affected restart until reconciled. On application relaunch, Chat and history return, but sessions are not automatically started; the user must select Start again after prior effects are reconciled. A fresh Start never replays earlier material work by itself.
 
 ### First Send and composer movement
 
@@ -369,7 +396,7 @@ Closure summary card: retained history,          Retained Chat is readable;
 questions, approvals, and protected evidence.    new Send waits for reopen.
 ```
 
-Closing is explicit and never follows from switching folders, inactivity, application exit, or a lifecycle label. A closed project's retained Chat remains readable. `Reopen Project` requires explicit authorization before any new submission and never silently resumes earlier work. The UI discloses any history lawfully retired under an opt-in retention policy. Project switching still requires an entry point outside Chat, but its **placement is unresolved**; these diagrams deliberately do not invent one. The native picker and project isolation rules continue to apply whenever that entry point is defined.
+Closing is explicit and never follows from switching folders, inactivity, application exit, or a lifecycle label. A closed project's retained Chat remains readable. `Reopen Project` requires explicit authorization before any new submission and never silently resumes earlier work. The UI discloses any history lawfully retired under an opt-in retention policy. **File → Switch Project** remains available in the native application menu outside Chat and follows the picker and project-isolation flow above.
 
 ## Shared behavior on every visible surface
 
