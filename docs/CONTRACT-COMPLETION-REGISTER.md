@@ -79,6 +79,10 @@ This register derives the **safe outcome already required** by the authoritative
 
 A complete fixture must record the original immutable input, exact project/root/epoch, current approved source records, expected version and lease, relevant byte/object digests, which physical effects are independently observed, the controlling typed command and owner, one committed/refused transaction plus events/outbox, precise Chat projection, and the permitted recovery action. Repeat each material case with duplicate delivery, stale agent/session, interrupted commit and competing user edit where relevant. **No scenario passes merely because the required safe outcome is written here.**
 
+## First bounded contract trace tranche
+
+The [derived C01–C03 trace corpus](./contracts/README.md) records source-based allowed/refused cases for Chat persistence and immediate Stop, project-local FULL council D1–D3, and Handoff #9 physical effect/restart gates. **This is progress on deterministic prose cases, not completed machine-readable schemas, tests, or Windows/CLI safety proof.** Keep Z-01/Z-02/Z-03/Z-04/Z-07/Z-11 and all affected D-/B- executable obligations OPEN. Do not select D-04 materiality, D-15 oracle adequacy, or numeric/identity policy defaults by inference.
+
 ## Executable-contract acceptance template
 
 For each owned command or material external effect, the versioned contract must state **all** of the following:

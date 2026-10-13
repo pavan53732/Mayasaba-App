@@ -53,4 +53,4 @@ For zero-based **project-local reply-eligible turn ordinal** t, writer = t mod 3
 
 ## Implementation-readiness boundary
 
-**Still OPEN:** P0-01/02/03/05, D-06/D-07, Z-01/Z-02/Z-03/Z-06/Z-11; control-only recognition predicate, true schema/record and error definitions, idempotency key construction, owner transaction/ACK replay, attachment size/count/deadline rules and Windows CLI effective fencing. This document is a **source-based expected trace**, **not executable JSON Schema**, **not a test result**, and **not authorization to implement a missing choice.
+**Still OPEN:** P0-01/02/03/05, D-06/D-07, Z-01/Z-02/Z-03/Z-06/Z-11; control-only recognition predicate, true schema/record and error definitions, idempotency key construction, owner transaction/ACK replay, attachment size/count/deadline rules and Windows CLI effective fencing. This document is a **source-based expected trace**, **not executable JSON Schema**, **not a test result**, and **not authorization to implement a missing choice**.

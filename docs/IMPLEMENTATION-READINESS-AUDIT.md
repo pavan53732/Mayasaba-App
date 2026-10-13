@@ -23,6 +23,10 @@ These corrections remove contradictions; they do **not** complete their typed co
 
 The dependency-ordered [contract completion and implementation entry register](./CONTRACT-COMPLETION-REGISTER.md) maps the current Z-01–Z-14 blocker families, genuinely open decisions, four additional adversarial subcases and the minimum executable owner-command/evidence template. It records **planning and acceptance requirements, not completed schemas or tested Windows capabilities**. The original D/B/P0/P1 inventory below remains open until its individual closure proof is supplied.
 
+## Derived contract trace tranche (2026-10-13)
+
+The [C01–C03 source-linked trace corpus](./contracts/README.md) supplements the authoritative rules with adversarial cases for persistence/Stop independence, FULL council completeness and Handoff #9 source-fencing/restart. It remains **documentation-only**: no JSON Schema registry, typed error catalog, atomic cross-owner protocol, numerical limit, containment test or native Windows implementation has been completed. The historical ambiguity inventory remains historical; the D-/B-/P0/Z implementation contracts stay OPEN until actual closure evidence exists.
+
 ## Existing blocking contract gaps
 
 The earlier P0/P1 audit remains substantially open. In particular, the repository still has no complete versioned machine-readable definitions for authoritative records, typed UI/application commands and queries, domain events, MCF payloads and errors, nor complete transition tables for the **twelve** state machines. The prose naming those objects is not their schema. The following are the most consequential missing chains:
