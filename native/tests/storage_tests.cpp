@@ -22,7 +22,15 @@ int main()
             store.SaveDraft("project-A","draft before switching");
             assert(store.Project("project-A")->draft=="draft before switching");
             assert(store.Project("project-B")->draft.empty());
+            assert(store.StageSubmission("project-A","submit-0001","Hello")=="submit-0001");
+            assert(store.Pending("project-A")->id=="submit-0001");
+            assert(store.StageSubmission("project-A","ignored-new-id","Hello")=="submit-0001");
+            bool blockedOtherBody=false;
+            try { store.StageSubmission("project-A","another","Different"); }
+            catch(std::exception const&) {blockedOtherBody=true;}
+            assert(blockedOtherBody);
             assert(store.SaveContribution("project-A","submit-0001","Hello") == SaveDisposition::Saved);
+            assert(!store.Pending("project-A"));
             assert(store.SaveContribution("project-A","submit-0001","Hello") == SaveDisposition::Duplicate);
             assert(store.SaveContribution("project-A","submit-0001","Altered") == SaveDisposition::Conflict);
             assert(store.SaveContribution("project-B","submit-0001","Hello") == SaveDisposition::Conflict);
@@ -37,6 +45,7 @@ int main()
             auto closed=store.Project("project-A");
             assert(closed && closed->closed);
             assert(store.SetClosure("project-A",closed->version,false)); // explicit caller action
+            assert(store.StageSubmission("project-A","submit-0002","after reopen")=="submit-0002");
             assert(store.SaveContribution("project-A","submit-0002","after reopen")==SaveDisposition::Saved);
             assert(store.Contributions("project-A").size()==2);
         }
@@ -48,6 +57,15 @@ int main()
             assert(reopened.LastBoundProject()==std::optional<std::string>{"project-B"});
             reopened.SaveDraft("project-A","recoverable");
             assert(reopened.Project("project-A")->draft=="recoverable");
+            assert(reopened.StageSubmission("project-A","submit-0003","pending after restart")=="submit-0003");
+        }
+        {
+            mayasaba::Storage afterRestart(folder/"project.db");
+            auto pending=afterRestart.Pending("project-A");
+            assert(pending && pending->id=="submit-0003");
+            assert(afterRestart.StageSubmission("project-A","new-id-rejected","pending after restart")=="submit-0003");
+            assert(afterRestart.SaveContribution("project-A","submit-0003","pending after restart")==SaveDisposition::Saved);
+            assert(afterRestart.Contributions("project-A").size()==3);
         }
         fs::remove_all(folder);
         std::cout<<"PASS: native store durable contribution IDs, conflict refusal, project isolation, closure and reopen\n";
