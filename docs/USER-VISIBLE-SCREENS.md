@@ -368,6 +368,8 @@ The sheet is opened by a relevant `Show details` action and returns to the same 
 
 The card offers only actions currently proven safe for its operation. `Retry safely` appears only after reconciliation rules out duplication; unresolved material effects never get a generic Retry. A blocked outcome can remain physically unknown. Validation distinguishes schema checks, build, tests, process launch, runtime behavior, accessibility, publication, and final certification. A clean process exit or one passing check is never shown as final proof. Repair cards show the failing criterion, observed signature, current hypothesis, bounded attempt, and rerun result. User edits that conflict with publication remain visible and are never silently overwritten.
 
+**Loop-specific recovery and improvement projections.** A hung CLI or stalled effect shows actual observed liveness, cancellation/fence status, affected operation and bounded reconciliation; uncertain effects stay `UNKNOWN` and cannot support a green result. A failed repair shows the real failing criterion, current hypothesis and finite attempt/exhaustion reason, never an endless animated spinner. Repeated evidence may produce a nonbinding **Proposed Mayasaba improvement** card with Show details and required user approval; it cannot secretly modify the installed application, policy or the user's CLI configuration. All appear within the existing Chat timeline, not a new screen. Explicit Stop and fresh Start after relaunch remain binding.
+
 ## Chat state — certified delivery
 
 ```text

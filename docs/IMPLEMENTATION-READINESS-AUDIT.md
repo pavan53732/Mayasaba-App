@@ -226,6 +226,10 @@ For each scenario, write initial durable records and observed facts, then the **
 11. A research tool returns a search snippet, a fetched page and a forbidden upload-capable tool event.
 12. A closed project with retention opt-in has a pending approval linked to history approaching expiration. Protect required linked records/bytes; the exact reference-eligibility table remains open.
 
+13. An unresponsive CLI has no heartbeat but may have launched an effect-capable helper and has an outstanding lease. Record a bounded stall, refuse to infer cessation, fence and reconcile through Handoff #9; no successor launch/lease from timeout alone, and Stop/relaunch gates still apply.
+14. A repair attempt fails with the identical criterion failure signature and no objective improvement. Preserve diagnostic and attempt evidence; stop the repeated strategy at the declared bound, show `BLOCKED` and do not modify the check to claim `PASS`.
+15. Repeated observed adapter failures produce a proposed change to Mayasaba's code or process. Record only a nonbinding proposal unless approved; material change follows FULL council and user approval, and candidate code/executable cannot silently replace or activate the installed Mayasaba application.
+
 Where current approved rules cannot determine the action, the fixture must remain **unresolved** and the affected implementation path blocked until an authorized specification decision is recorded. A test that asserts an invented answer would conceal the ambiguity.
 
 ## Documentation completion standard
