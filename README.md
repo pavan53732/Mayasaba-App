@@ -10,7 +10,7 @@ A non-English agent reply is never shown, including during streaming or in **Sho
 
 The agents provide intelligence. Mayasaba owns **state, authority, safety, orchestration, verification, and proof**.
 
-> **Project status: specification and architecture stage.** This repository currently contains five Markdown documents, an MIT license, and a Git ignore file. Application source code, machine-readable contracts, build targets, tests, and an MSI installer are not present. The behavior below describes the product specification, not a released or verified application.
+> **Project status: specification and architecture stage.** This repository contains the specification documents and a standalone Chat layout preview. The HTML preview demonstrates placement with sample data; it is not the native application. Application source code, machine-readable contracts, build targets, tests, and an MSI installer are not present. The behavior below describes the product specification, not a released or verified application.
 
 ## Contents
 
@@ -56,6 +56,7 @@ The repository is organized around the specification. Start with this README for
 | [Complete system description](./docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) | The authoritative product definition: lifecycle, ownership, council rules, agent controls, contracts, and verification |
 | [Architecture](./docs/ARCHITECTURE.md) | Service boundaries, communication, execution, storage, integration, and required proof |
 | [UI and UX](./docs/UI-UX.md) | The native Chat experience, accessibility, attachments, details sheets, and desktop acceptance scenarios |
+| [Chat interface preview](./docs/CHAT-INTERFACE-PREVIEW.html) | A standalone interactive layout sample: Send moves the one composer from the center to the bottom; no message is sent or saved |
 | [Agent instructions](./AGENTS.md) | Repository working rules, scope, development workflow, validation, and prohibited shortcuts |
 | [README](./README.md) | The project overview and entry point you are reading |
 | [Implementation-readiness audit](./docs/IMPLEMENTATION-READINESS-AUDIT.md) | The open documentation decisions and contract gaps tracked against the current documents |

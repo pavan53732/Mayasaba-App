@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Mayasaba Chat interface preview</title>
+  <style>
+    :root {
+      font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
+      color-scheme: light dark;
+      --canvas: #f7f8fa;
+      --surface: #ffffff;
+      --ink: #202124;
+      --muted: #62666d;
+      --line: #dce0e6;
+      --authority: #4057c8;
+      --authority-quiet: #eef0ff;
+      --good: #25724c;
+      --attention: #a65d00;
+      --page: #e9ecf2;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--page); color: var(--ink); }
+    button, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, textarea:focus-visible { outline: 2px solid var(--authority); outline-offset: 3px; }
+
+    .preview-bar {
+      min-height: 48px;
+      padding: 10px max(22px, calc((100vw - 1180px) / 2));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .preview-bar strong { color: var(--ink); font-weight: 650; }
+    .preview-bar button {
+      padding: 6px 12px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--surface);
+      color: var(--ink);
+    }
+    .preview-controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+    .app {
+      position: relative;
+      width: min(1180px, calc(100vw - 32px));
+      height: min(750px, calc(100dvh - 72px));
+      min-height: 540px;
+      margin: 0 auto 16px;
+      overflow: hidden;
+      background: var(--canvas);
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      box-shadow: 0 10px 38px rgba(29, 37, 54, .08);
+    }
+    .header {
+      position: relative;
+      z-index: 2;
+      min-height: 118px;
+      padding: 21px 30px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { display: flex; align-items: center; gap: 11px; font-size: 19px; font-weight: 650; letter-spacing: -.02em; }
+    .brand-mark { width: 25px; height: 25px; border-left: 4px solid var(--authority); border-bottom: 4px solid var(--authority); transform: skew(-12deg); }
+    .project { margin: 8px 0 0 36px; font-size: 13px; color: var(--muted); }
+    .project code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+    .project-state { margin: 5px 0 0 36px; font-size: 12px; color: var(--muted); }
+    .header-right { display: flex; align-items: flex-start; gap: 22px; }
+    .readiness { min-width: 225px; display: grid; gap: 5px; font-size: 12px; }
+    .readiness-row { display: grid; grid-template-columns: minmax(116px, 1fr) 8px 48px; gap: 8px; align-items: center; white-space: nowrap; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+    .readiness strong { font-size: 11px; font-weight: 650; }
+    .header-actions { display: flex; gap: 7px; }
+    .header-actions button {
+      padding: 7px 9px;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: var(--surface);
+      color: var(--ink);
+      font-size: 12px;
+    }
+
+    .timeline {
+      position: absolute;
+      inset: 118px 0 55px;
+      overflow-y: auto;
+      padding: 42px max(28px, calc((100% - 680px) / 2)) 28px;
+    }
+    .app.has-messages .timeline { bottom: 206px; }
+    .empty-prompt {
+      position: absolute;
+      top: calc(50% - 137px);
+      left: 50%;
+      width: min(640px, calc(100% - 52px));
+      transform: translate(-50%, -50%);
+      text-align: center;
+      pointer-events: none;
+    }
+    .empty-prompt h1 { margin: 0; font-size: clamp(23px, 3vw, 30px); font-weight: 600; letter-spacing: -.035em; }
+    .empty-prompt p { margin: 9px 0 0; color: var(--muted); font-size: 14px; }
+    .has-messages .empty-prompt { display: none; }
+    .message { margin-bottom: 21px; }
+    .message.user { display: flex; justify-content: flex-end; }
+    .bubble {
+      max-width: min(540px, 100%);
+      padding: 12px 16px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: var(--surface);
+      line-height: 1.48;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .message.user .bubble { background: var(--authority-quiet); border-color: transparent; }
+    .message-meta { margin-top: 6px; font-size: 11px; color: var(--muted); }
+    .message.user .message-meta { text-align: right; }
+    .reply { margin-top: 28px; line-height: 1.5; }
+    .reply-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; font-size: 13px; font-weight: 650; }
+    .reply-heading .rule { width: 3px; height: 18px; border-radius: 2px; background: var(--authority); }
+    .reply p { margin: 0 0 12px 12px; max-width: 590px; }
+    .detail-button { margin-left: 12px; padding: 0; border: 0; background: none; color: var(--authority); font-size: 12px; font-weight: 650; }
+    .detail { margin: 12px 0 0 12px; padding: 10px 13px; border-left: 3px solid var(--authority); background: var(--surface); font-size: 12px; color: var(--muted); }
+
+    .composer {
+      position: absolute;
+      z-index: 3;
+      left: 50%;
+      top: 55%;
+      width: min(640px, calc(100% - 52px));
+      transform: translate(-50%, -50%);
+      padding: 9px 10px 9px 16px;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: end;
+      gap: 8px 10px;
+      border: 1px solid #c9ceda;
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: 0 5px 22px rgba(32, 33, 36, .08);
+      transition: top .42s ease, transform .42s ease;
+    }
+    .has-messages .composer { top: calc(100% - 134px); transform: translate(-50%, -50%); }
+    .composer textarea { width: 100%; min-height: 46px; max-height: 120px; resize: vertical; padding: 10px 2px 4px; border: 0; outline: none; background: transparent; color: var(--ink); line-height: 1.4; }
+    .composer textarea::placeholder { color: var(--muted); }
+    .composer-tools { grid-column: 1; display: flex; align-items: center; gap: 10px; }
+    .attach { padding: 6px 0; border: 0; background: none; color: var(--authority); font-size: 12px; font-weight: 600; }
+    .attachment-note { color: var(--muted); font-size: 11px; }
+    .send { grid-column: 2; grid-row: 2; padding: 8px 17px; border: 1px solid var(--authority); border-radius: 6px; background: var(--authority); color: white; font-size: 12px; font-weight: 650; }
+    .send:disabled { opacity: .48; cursor: default; }
+
+    .footer { position: absolute; inset: auto 0 0; height: 55px; display: flex; align-items: center; padding: 0 28px; border-top: 1px solid var(--line); background: var(--surface); }
+    .folder { padding: 8px 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-size: 12px; }
+    .toast { position: absolute; z-index: 5; right: 20px; bottom: 61px; max-width: 260px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-size: 12px; box-shadow: 0 3px 12px rgba(0,0,0,.08); }
+    .toast[hidden] { display: none; }
+
+    @media (max-width: 860px) {
+      .app { width: calc(100vw - 16px); height: calc(100dvh - 68px); min-height: 520px; }
+      .header { padding: 15px 17px; gap: 9px; flex-direction: column; min-height: 161px; }
+      .header-right { width: 100%; justify-content: space-between; }
+      .readiness { gap: 3px; }
+      .timeline { top: 161px; padding: 24px 24px 30px; }
+      .app.has-messages .timeline { bottom: 206px; }
+      .empty-prompt { top: calc(50% - 129px); }
+      .composer { width: calc(100% - 32px); }
+      .footer { padding: 0 16px; }
+    }
+    @media (max-width: 540px) {
+      .preview-bar { align-items: flex-start; }
+      .preview-bar span { max-width: 270px; }
+      .header { min-height: 193px; }
+      .header-right { gap: 9px; }
+      .header-actions { flex-direction: column; }
+      .header-actions button { padding: 4px 7px; }
+      .readiness { min-width: 0; }
+      .readiness-row { grid-template-columns: minmax(105px, 1fr) 8px 50px; gap: 5px; }
+      .timeline { top: 193px; }
+      .empty-prompt { top: calc(50% - 118px); }
+      .empty-prompt p { font-size: 12px; }
+      .composer { top: 59%; }
+      .has-messages .composer { top: calc(100% - 134px); }
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --canvas: #111318;
+        --surface: #1b1d22;
+        --ink: #f2f3f5;
+        --muted: #b3b8c2;
+        --line: #383d46;
+        --authority: #a9b7ff;
+        --authority-quiet: #262d4b;
+        --good: #7fd2a4;
+        --attention: #f4c477;
+        --page: #0c0e12;
+      }
+      .composer { border-color: var(--line); box-shadow: none; }
+      .send { color: #151a32; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+    @media (forced-colors: active) {
+      .dot, .reply-heading .rule { forced-color-adjust: none; background: Highlight; }
+      .message.user .bubble, .composer, .detail { border: 1px solid CanvasText; }
+    }
+  </style>
+</head>
+<body>
+  <div class="preview-bar">
+    <span><strong>Mayasaba Chat preview</strong> · Sample project and status. Nothing is sent or saved.</span>
+    <div class="preview-controls"><button type="button" id="sample">Show conversation</button><button type="button" id="reset">Reset preview</button></div>
+  </div>
+
+  <main class="app" id="app" aria-label="Mayasaba Chat layout preview">
+    <header class="header">
+      <div>
+        <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Mayasaba</span></div>
+        <div class="project">Sample project · <code>C:\Projects\SampleProject</code></div>
+        <div class="project-state">Open project · Ready for Chat</div>
+      </div>
+      <div class="header-right">
+        <div class="readiness" aria-label="Sample CLI readiness">
+          <div class="readiness-row"><span>Hermes Agent CLI</span><span class="dot" aria-hidden="true"></span><strong>READY</strong></div>
+          <div class="readiness-row"><span>Kilo Code CLI</span><span class="dot" aria-hidden="true"></span><strong>READY</strong></div>
+          <div class="readiness-row"><span>Claude Code CLI</span><span class="dot" aria-hidden="true"></span><strong>READY</strong></div>
+        </div>
+        <div class="header-actions"><button type="button" data-preview-only="Pause">Pause</button><button type="button" data-preview-only="Stop">Stop</button></div>
+      </div>
+    </header>
+
+    <section class="timeline" id="timeline" aria-label="Conversation" aria-live="polite"></section>
+    <div class="empty-prompt" id="emptyPrompt"><h1>What would you like to work on?</h1><p>Start a conversation about the open project.</p></div>
+
+    <form class="composer" id="composer" aria-label="Message composer">
+      <textarea id="message" rows="2" aria-label="Message Mayasaba" placeholder="Message Mayasaba..."></textarea>
+      <div class="composer-tools"><button type="button" class="attach" data-preview-only="Attach files">＋ Attach files</button><span class="attachment-note">Enter to send · Shift+Enter for a new line</span></div>
+      <button type="submit" class="send" id="send" disabled>Send</button>
+    </form>
+
+    <footer class="footer"><button type="button" class="folder" data-preview-only="Open Folder">Open Folder / Sample project ▾</button></footer>
+    <div class="toast" id="toast" role="status" hidden></div>
+  </main>
+
+  <script>
+    const app = document.getElementById('app');
+    const timeline = document.getElementById('timeline');
+    const composer = document.getElementById('composer');
+    const message = document.getElementById('message');
+    const send = document.getElementById('send');
+    const toast = document.getElementById('toast');
+    let toastTimer;
+
+    function showToast(text) {
+      toast.textContent = text;
+      toast.hidden = false;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toast.hidden = true; }, 3500);
+    }
+
+    function addMessage(value) {
+      const user = document.createElement('div');
+      user.className = 'message user';
+      const userContent = document.createElement('div');
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      bubble.textContent = value;
+      const meta = document.createElement('div');
+      meta.className = 'message-meta';
+      meta.textContent = 'Sample user message';
+      userContent.append(bubble, meta);
+      user.append(userContent);
+
+      const reply = document.createElement('div');
+      reply.className = 'reply message';
+      const heading = document.createElement('div');
+      heading.className = 'reply-heading';
+      const rule = document.createElement('span');
+      rule.className = 'rule';
+      rule.setAttribute('aria-hidden', 'true');
+      const title = document.createElement('span');
+      title.textContent = 'Mayasaba · sample reply';
+      heading.append(rule, title);
+      const text = document.createElement('p');
+      text.textContent = 'This is where the reviewed answer would appear. The composer now stays at the bottom as the conversation grows.';
+      const details = document.createElement('button');
+      details.type = 'button';
+      details.className = 'detail-button';
+      details.textContent = 'Show details';
+      details.setAttribute('aria-expanded', 'false');
+      const detailContent = document.createElement('div');
+      detailContent.className = 'detail';
+      detailContent.hidden = true;
+      detailContent.textContent = 'In the product, this area can show the three independent responses, the writer, and both peer reviews. This preview does not contact any CLI.';
+      details.addEventListener('click', () => {
+        detailContent.hidden = !detailContent.hidden;
+        details.setAttribute('aria-expanded', String(!detailContent.hidden));
+        details.textContent = detailContent.hidden ? 'Show details' : 'Hide details';
+      });
+      reply.append(heading, text, details, detailContent);
+      timeline.append(user, reply);
+      app.classList.add('has-messages');
+      timeline.scrollTop = timeline.scrollHeight;
+    }
+
+    message.addEventListener('input', () => { send.disabled = !message.value.trim(); });
+    message.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        if (!send.disabled) composer.requestSubmit();
+      }
+    });
+    composer.addEventListener('submit', event => {
+      event.preventDefault();
+      const value = message.value.trim();
+      if (!value) return;
+      addMessage(value);
+      message.value = '';
+      send.disabled = true;
+      message.focus();
+    });
+    document.getElementById('reset').addEventListener('click', () => {
+      timeline.replaceChildren();
+      app.classList.remove('has-messages');
+      message.value = '';
+      send.disabled = true;
+      message.focus();
+    });
+    document.getElementById('sample').addEventListener('click', () => {
+      if (!app.classList.contains('has-messages')) addMessage('Help me understand what this project needs next.');
+    });
+    document.querySelectorAll('[data-preview-only]').forEach(button => {
+      button.addEventListener('click', () => showToast(button.dataset.previewOnly + ' is shown for layout only in this preview.'));
+    });
+    if (new URLSearchParams(location.search).get('state') === 'conversation') {
+      addMessage('Help me understand what this project needs next.');
+    }
+  </script>
+</body>
+</html>
