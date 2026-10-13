@@ -1,0 +1,278 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mayasaba.local/contracts/v1/boundaries.schema.json",
+  "title": "Mayasaba v1 owner-boundary contracts",
+  "oneOf": [
+    { "$ref": "#/$defs/BoundaryCommand" },
+    { "$ref": "#/$defs/DomainEvent" },
+    { "$ref": "#/$defs/McfEnvelope" },
+    { "$ref": "#/$defs/OwnerRecord" },
+    { "$ref": "#/$defs/AcceptanceEvidence" },
+    { "$ref": "#/$defs/QueryRequest" },
+    { "$ref": "#/$defs/QueryResult" }
+  ],
+  "$defs": {
+    "Owner": {
+      "enum": [
+        "PROJECT_SERVICE", "REQUIREMENT_SERVICE", "MESSAGE_CONTRIBUTION_SERVICE", "WORK_REQUEST_AUTHORITY_SERVICE", "DECISION_SERVICE", "ORCHESTRATOR", "COUNCIL_ENGINE", "MCF_V2", "AGENT_GATEWAY", "CONTEXT_SYNCHRONIZER", "TASK_DAG_ENGINE", "WORKSPACE_MANAGER", "LOCAL_EXECUTION_KERNEL", "VALIDATION_REPAIR_ENGINE", "EVIDENCE_ENGINE", "POLICY_ENGINE", "SQLITE_STORAGE"
+      ]
+    },
+    "BoundaryCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "command_id",
+        "command_type",
+        "owner",
+        "operation",
+        "expected_record_version",
+        "authority",
+        "payload",
+        "payload_digest"
+      ],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "command_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "command_type": {
+          "enum": [
+            "BindProjectRoot", "AdvanceProjectPhase", "ReturnProjectPhase", "CommitProjectEpoch", "PauseProject", "ResumeProject", "StopProject", "StartProjectSessions", "BeginProjectRecovery", "RecordProjectBlock", "BeginCloseProject", "CommitProjectClosure", "AbortProjectClosure", "ReopenProject",
+            "SubmitUserContribution", "DiscardDraft", "ApproveBoundAction", "RevokeBoundAction",
+            "StartAgentSession", "RecordSessionStarted", "AssignSessionOperation", "RecordSessionIdle", "PauseAgentSession", "ConfirmSessionPaused", "ResumeAgentSession", "StopAgentSession", "ConfirmSessionStopped", "RecordSessionFailure", "RecordSessionUnknown", "RetireAgentSession",
+            "EnqueueEnvelope", "BeginDelivery", "PersistInboxReceipt", "AcknowledgeReceipt", "RecordDeliveryTimeout", "ExhaustDelivery", "ExpireDisposable", "ReplayEnvelope",
+            "RequestContextSnapshot", "BeginContextBuild", "SealContextSnapshot", "RecordPartialContext", "RecordContextFailure", "BeginContextApplication", "ConfirmContextApplied", "InvalidateContext", "RebuildContext", "BlockContext",
+            "CreateTask", "AuthorizeTask", "EvaluateTaskDependencies", "StartTaskAttempt", "BeginTaskVerification", "CompleteTask", "RecordTaskFailure", "BlockTask", "CancelTask", "InvalidateTask",
+            "RequestLease", "GrantLease", "RenewLease", "BeginLeaseExpiry", "ConfirmLeaseExpired", "RevokeLease", "ConfirmLeaseRevoked", "ReleaseLease", "RecordLeaseUnknown", "BlockLease",
+            "CreateCouncilPoint", "BeginProposalCollection", "FreezeProposals", "BeginCritiques", "CloseCritiques", "CloseRebuttals", "SubmitSynthesis", "SealCouncilRound", "PauseCouncilRound", "ResumeCouncilRound", "BlockCouncilRound",
+            "CreateSynchronizationBarrier", "OpenSynchronizationBarrier", "RecordBarrierApplication", "SatisfySynchronizationBarrier", "ReleaseSynchronizationBarrier", "InvalidateSynchronizationBarrier", "BlockSynchronizationBarrier",
+            "BeginSessionHandoff", "ConfirmSourceFenced", "AttachSuccessor", "ConfirmSuccessorApplied", "CompleteSessionHandoff", "BlockSessionHandoff", "ResumeSessionHandoff",
+            "RequestExecution", "AdmitExecution", "BeginExecution", "RecordExecutionStartFailure", "ConfirmExecutionRunning", "RequestExecutionCancellation", "ConfirmExecutionCancelled", "RecordExecutionExit", "RecordExecutionUnknown", "ReconcileExecution",
+            "CreateValidationCheck", "RunValidationCheck", "RecordValidationResult", "InvalidateValidation", "RerunValidation",
+            "CreateFailureDiagnostic", "PlanRepair", "AuthorizeRepair", "StartRepairAttempt", "BeginRepairRevalidation", "CompleteRepair", "RecordRepairFailure", "BlockRepair", "CancelRepair",
+            "PreparePublication", "RecordPublicationObservation", "ReconcilePublication", "CreateBackup", "RunCleanupPlan", "InstallApprovedUpdate"
+          ]
+        },
+        "owner": { "$ref": "#/$defs/Owner" },
+        "operation": { "$ref": "core.schema.json#/$defs/OperationIdentity" },
+        "expected_record_version": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+        "authority": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "core.schema.json#/$defs/AuthorityReference" }
+        },
+        "payload": { "type": "object", "maxProperties": 256 },
+        "payload_digest": { "$ref": "core.schema.json#/$defs/Sha256" }
+      },
+      "allOf": [
+        { "if": { "properties": { "command_type": { "enum": ["BindProjectRoot", "AdvanceProjectPhase", "ReturnProjectPhase", "CommitProjectEpoch", "PauseProject", "ResumeProject", "StopProject", "BeginProjectRecovery", "RecordProjectBlock", "BeginCloseProject", "CommitProjectClosure", "AbortProjectClosure", "ReopenProject"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "PROJECT_SERVICE" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["SubmitUserContribution", "DiscardDraft"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "MESSAGE_CONTRIBUTION_SERVICE" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["ApproveBoundAction", "RevokeBoundAction"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "POLICY_ENGINE" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["StartProjectSessions", "CreateSynchronizationBarrier", "OpenSynchronizationBarrier", "RecordBarrierApplication", "SatisfySynchronizationBarrier", "ReleaseSynchronizationBarrier", "InvalidateSynchronizationBarrier", "BlockSynchronizationBarrier", "BeginSessionHandoff", "ConfirmSourceFenced", "AttachSuccessor", "ConfirmSuccessorApplied", "CompleteSessionHandoff", "BlockSessionHandoff", "ResumeSessionHandoff", "InstallApprovedUpdate"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "ORCHESTRATOR" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["StartAgentSession", "RecordSessionStarted", "AssignSessionOperation", "RecordSessionIdle", "PauseAgentSession", "ConfirmSessionPaused", "ResumeAgentSession", "StopAgentSession", "ConfirmSessionStopped", "RecordSessionFailure", "RecordSessionUnknown", "RetireAgentSession"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "AGENT_GATEWAY" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["EnqueueEnvelope", "BeginDelivery", "PersistInboxReceipt", "AcknowledgeReceipt", "RecordDeliveryTimeout", "ExhaustDelivery", "ExpireDisposable", "ReplayEnvelope"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "MCF_V2" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["RequestContextSnapshot", "BeginContextBuild", "SealContextSnapshot", "RecordPartialContext", "RecordContextFailure", "BeginContextApplication", "ConfirmContextApplied", "InvalidateContext", "RebuildContext", "BlockContext"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "CONTEXT_SYNCHRONIZER" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["CreateTask", "AuthorizeTask", "EvaluateTaskDependencies", "StartTaskAttempt", "BeginTaskVerification", "CompleteTask", "RecordTaskFailure", "BlockTask", "CancelTask", "InvalidateTask", "RequestLease", "GrantLease", "RenewLease", "BeginLeaseExpiry", "ConfirmLeaseExpired", "RevokeLease", "ConfirmLeaseRevoked", "ReleaseLease", "RecordLeaseUnknown", "BlockLease"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "TASK_DAG_ENGINE" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["CreateCouncilPoint", "BeginProposalCollection", "FreezeProposals", "BeginCritiques", "CloseCritiques", "CloseRebuttals", "SubmitSynthesis", "SealCouncilRound", "PauseCouncilRound", "ResumeCouncilRound", "BlockCouncilRound"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "COUNCIL_ENGINE" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["RequestExecution", "AdmitExecution", "BeginExecution", "RecordExecutionStartFailure", "ConfirmExecutionRunning", "RequestExecutionCancellation", "ConfirmExecutionCancelled", "RecordExecutionExit", "RecordExecutionUnknown", "ReconcileExecution"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "LOCAL_EXECUTION_KERNEL" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["CreateValidationCheck", "RunValidationCheck", "RecordValidationResult", "InvalidateValidation", "RerunValidation", "CreateFailureDiagnostic", "PlanRepair", "AuthorizeRepair", "StartRepairAttempt", "BeginRepairRevalidation", "CompleteRepair", "RecordRepairFailure", "BlockRepair", "CancelRepair"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "VALIDATION_REPAIR_ENGINE" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["PreparePublication", "RecordPublicationObservation", "ReconcilePublication"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "WORKSPACE_MANAGER" } } } },
+        { "if": { "properties": { "command_type": { "enum": ["CreateBackup", "RunCleanupPlan"] } }, "required": ["command_type"] }, "then": { "properties": { "owner": { "const": "SQLITE_STORAGE" } } } }
+      ]
+    },
+    "DomainEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "event_id", "event_type", "owner", "record", "operation_id", "payload_digest", "previous_chain_hash", "chain_hash", "canonical_profile", "recorded_at_utc"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "event_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "event_type": {
+          "enum": [
+            "ProjectBound", "ProjectPhaseAdvanced", "ProjectPhaseReturned", "ProjectEpochAdvanced", "ProjectPaused", "ProjectResumed", "ProjectStopRequested", "ProjectClosureAdmissionStarted", "ProjectClosureAborted", "ProjectClosed", "ProjectReopened", "ProjectBlocked", "ProjectRecoveryStarted",
+            "UserContributionCommitted", "DraftDiscarded", "BoundActionApproved", "BoundActionRevoked",
+            "AgentSessionStartRequested", "AgentSessionStarted", "AgentSessionBusy", "AgentSessionIdle", "AgentSessionPauseRequested", "AgentSessionPaused", "AgentSessionResumed", "AgentSessionStopRequested", "AgentSessionStopped", "AgentSessionFailed", "AgentSessionOutcomeUnknown", "AgentSessionRetired",
+            "EnvelopeQueued", "EnvelopeDeliveryStarted", "EnvelopeReceived", "EnvelopeAcknowledged", "EnvelopeRetryScheduled", "EnvelopeDeadLettered", "DisposableEnvelopeExpired", "EnvelopeReplayed",
+            "ContextRequested", "ContextBuildStarted", "ContextSnapshotReady", "ContextPartial", "ContextFailed", "ContextApplicationStarted", "ContextApplied", "ContextInvalidated", "ContextBlocked",
+            "TaskProposed", "TaskAuthorized", "TaskDependenciesEvaluated", "TaskAttemptStarted", "TaskVerificationStarted", "TaskCompleted", "TaskFailed", "TaskBlocked", "TaskCancelled", "TaskInvalidated",
+            "LeaseRequested", "LeaseGranted", "LeaseRenewed", "LeaseExpiryStarted", "LeaseExpired", "LeaseRevocationRequested", "LeaseRevoked", "LeaseReleased", "LeaseOutcomeUnknown", "LeaseBlocked",
+            "CouncilPointCreated", "CouncilProposalCollectionStarted", "CouncilProposalsFrozen", "CouncilCritiquesAssigned", "CouncilCritiquesCompleted", "CouncilRebuttalsCompleted", "CouncilSynthesisSubmitted", "CouncilRoundSealed", "CouncilRoundPaused", "CouncilRoundResumed", "CouncilRoundBlockedIncomplete",
+            "SynchronizationBarrierCreated", "SynchronizationBarrierOpened", "BarrierApplicationRecorded", "SynchronizationBarrierSatisfied", "SynchronizationBarrierReleased", "SynchronizationBarrierInvalidated", "SynchronizationBarrierBlocked",
+            "HandoffStarted", "HandoffSourceFenced", "HandoffSuccessorAttached", "HandoffSuccessorSynchronized", "HandoffCompleted", "HandoffBlocked", "HandoffResumed",
+            "ExecutionRequested", "ExecutionAdmitted", "ExecutionStartRequested", "ExecutionFailedToStart", "ExecutionRunning", "ExecutionCancellationRequested", "ExecutionCancelled", "ExecutionExited", "ExecutionOutcomeUnknown",
+            "ValidationCheckCreated", "ValidationStarted", "ValidationResultRecorded", "ValidationInvalidated", "FailureDiagnosed", "RepairPlanned", "RepairAuthorized", "RepairAttemptStarted", "RepairRevalidationStarted", "RepairSucceeded", "RepairFailed", "RepairBlocked", "RepairCancelled",
+            "PublicationPrepared", "PublicationObservationRecorded", "PublicationReconciled", "EvidenceRecorded", "BackupCreated", "CleanupPlanRun", "UpdateActivationRequested",
+            "RequirementRecorded", "RequirementSuperseded", "DecisionRecorded", "DecisionSuperseded", "WorkRequestAuthorized"
+          ]
+        },
+        "owner": { "$ref": "#/$defs/Owner" },
+        "record": { "$ref": "core.schema.json#/$defs/RecordIdentity" },
+        "operation_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "payload_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "previous_chain_hash": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "chain_hash": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "canonical_profile": { "$ref": "core.schema.json#/$defs/CanonicalProfile" },
+        "recorded_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" }
+      },
+      "allOf": [
+        { "if": { "properties": { "event_type": { "pattern": "^Project" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "PROJECT_SERVICE" } } } },
+        { "if": { "properties": { "event_type": { "enum": ["UserContributionCommitted", "DraftDiscarded"] } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "MESSAGE_CONTRIBUTION_SERVICE" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^BoundAction" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "POLICY_ENGINE" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^AgentSession" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "AGENT_GATEWAY" } } } },
+        { "if": { "properties": { "event_type": { "enum": ["EnvelopeQueued", "EnvelopeDeliveryStarted", "EnvelopeReceived", "EnvelopeAcknowledged", "EnvelopeRetryScheduled", "EnvelopeDeadLettered", "DisposableEnvelopeExpired", "EnvelopeReplayed"] } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "MCF_V2" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^Context" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "CONTEXT_SYNCHRONIZER" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^(Task|Lease)" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "TASK_DAG_ENGINE" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^Council" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "COUNCIL_ENGINE" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^(SynchronizationBarrier|BarrierApplication|Handoff|UpdateActivation)" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "ORCHESTRATOR" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^Execution" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "LOCAL_EXECUTION_KERNEL" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^(Validation|Failure|Repair)" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "VALIDATION_REPAIR_ENGINE" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^Publication" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "WORKSPACE_MANAGER" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^Evidence" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "EVIDENCE_ENGINE" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^(Backup|Cleanup)" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "SQLITE_STORAGE" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^Requirement" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "REQUIREMENT_SERVICE" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^Decision" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "DECISION_SERVICE" } } } },
+        { "if": { "properties": { "event_type": { "pattern": "^WorkRequest" } }, "required": ["event_type"] }, "then": { "properties": { "owner": { "const": "WORK_REQUEST_AUTHORITY_SERVICE" } } } }
+      ]
+    },
+    "McfEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "envelope_id", "message_class", "sender", "recipients", "project_id", "approved_epoch", "operation_id", "effect_id", "ordering_scope", "sequence", "correlation_id", "payload_type", "payload_digest", "created_at_utc", "ack_required"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "envelope_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "original_envelope_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "message_class": { "enum": ["EMERGENCY_CONTROL", "SYNCHRONIZATION", "TASK_CONTROL", "RECOVERY", "COUNCIL", "PROGRESS", "HEARTBEAT_DISPOSABLE", "BULK"] },
+        "sender": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recipients": { "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "project_id": { "$ref": "core.schema.json#/$defs/ProjectId" },
+        "approved_epoch": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+        "session_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "operation_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "effect_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "ordering_scope": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "sequence": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+        "correlation_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "payload_type": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "payload_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "payload": { "type": "object", "maxProperties": 256 },
+        "managed_payload": { "$ref": "core.schema.json#/$defs/ArtifactIdentity" },
+        "created_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" },
+        "ack_required": { "type": "boolean" }
+      },
+      "oneOf": [
+        { "required": ["payload"], "not": { "required": ["managed_payload"] } },
+        { "required": ["managed_payload"], "not": { "required": ["payload"] } }
+      ]
+    },
+    "OwnerRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "record_type", "owner", "identity", "approved_epoch", "created_at_utc", "updated_at_utc", "canonical_profile", "body_digest", "body"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "record_type": {
+          "enum": ["Project", "ProjectClosure", "UserContribution", "Draft", "ChatTurn", "AgentChatResponse", "ChatReplyDraft", "ChatReplyReview", "ConsolidatedChatReply", "InterpretationCandidate", "WorkRequest", "PendingChangeProposal", "WorkRequestAuthorization", "ResearchAssignment", "Requirement", "RequirementAmendment", "RequirementApproval", "Decision", "DecisionLock", "DecisionDisposition", "CouncilPoint", "CouncilRound", "CouncilPosition", "CouncilCritique", "CouncilSynthesis", "McfInbox", "McfOutbox", "AgentSession", "ContextSnapshot", "ContextApplicationReceipt", "Task", "TaskAttempt", "Lease", "SynchronizationBarrier", "Handoff", "Execution", "RepositoryManifest", "PublicationJournal", "AcceptanceEvidenceMatrix", "ValidationCheck", "FailureDiagnostic", "RepairAttempt", "ExplorationAssignment", "ExplorationFinding", "FileCoverage", "ExplorationReport", "ResearchFinding", "ResearchReport", "Evidence", "Artifact", "EventChainHead", "RetentionCheckpoint", "PolicyResult", "Backup", "CleanupPlan", "UpdateActivation"]
+        },
+        "owner": { "$ref": "#/$defs/Owner" },
+        "identity": { "$ref": "core.schema.json#/$defs/RecordIdentity" },
+        "approved_epoch": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+        "created_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" },
+        "updated_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" },
+        "canonical_profile": { "$ref": "core.schema.json#/$defs/CanonicalProfile" },
+        "body_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "body": { "type": "object", "maxProperties": 512 }
+      },
+      "allOf": [
+        { "if": { "properties": { "record_type": { "enum": ["Project", "ProjectClosure"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "PROJECT_SERVICE" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["UserContribution", "Draft", "ChatTurn", "AgentChatResponse", "ChatReplyDraft", "ChatReplyReview", "ConsolidatedChatReply"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "MESSAGE_CONTRIBUTION_SERVICE" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["InterpretationCandidate", "WorkRequest", "PendingChangeProposal", "WorkRequestAuthorization", "ResearchAssignment"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "WORK_REQUEST_AUTHORITY_SERVICE" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["Requirement", "RequirementAmendment", "RequirementApproval"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "REQUIREMENT_SERVICE" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["Decision", "DecisionLock", "DecisionDisposition"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "DECISION_SERVICE" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["CouncilPoint", "CouncilRound", "CouncilPosition", "CouncilCritique", "CouncilSynthesis"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "COUNCIL_ENGINE" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["McfInbox", "McfOutbox"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "MCF_V2" } } } },
+        { "if": { "properties": { "record_type": { "const": "AgentSession" } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "AGENT_GATEWAY" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["ContextSnapshot", "ContextApplicationReceipt"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "CONTEXT_SYNCHRONIZER" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["Task", "TaskAttempt", "Lease"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "TASK_DAG_ENGINE" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["SynchronizationBarrier", "Handoff", "UpdateActivation"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "ORCHESTRATOR" } } } },
+        { "if": { "properties": { "record_type": { "const": "Execution" } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "LOCAL_EXECUTION_KERNEL" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["RepositoryManifest", "PublicationJournal"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "WORKSPACE_MANAGER" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["AcceptanceEvidenceMatrix", "ValidationCheck", "FailureDiagnostic", "RepairAttempt"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "VALIDATION_REPAIR_ENGINE" } } } },
+        { "if": { "properties": { "record_type": { "const": "ExplorationAssignment" } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "ORCHESTRATOR" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["ExplorationFinding", "FileCoverage", "ExplorationReport", "ResearchFinding", "ResearchReport", "Evidence", "Artifact", "EventChainHead", "RetentionCheckpoint"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "EVIDENCE_ENGINE" } } } },
+        { "if": { "properties": { "record_type": { "const": "PolicyResult" } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "POLICY_ENGINE" } } } },
+        { "if": { "properties": { "record_type": { "enum": ["Backup", "CleanupPlan"] } }, "required": ["record_type"] }, "then": { "properties": { "owner": { "const": "SQLITE_STORAGE" } } } }
+      ]
+    },
+    "AcceptanceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "evidence_id", "criterion_id", "claim_class", "verdict", "oracle_id", "oracle_version", "adequacy_result", "artifact_ids", "environment_digest", "observation_ids", "recorded_at_utc"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "evidence_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "criterion_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "claim_class": { "enum": ["COMPILE", "DETERMINISTIC_LOGIC", "NATIVE_RUNTIME", "WINUI_ACCESSIBILITY", "CONFINEMENT_SECURITY", "PUBLICATION_RECOVERY", "MSI_LIFECYCLE", "SUBJECTIVE_USER_ACCEPTANCE"] },
+        "verdict": { "$ref": "core.schema.json#/$defs/AcceptanceVerdict" },
+        "oracle_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "oracle_version": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+        "adequacy_result": { "enum": ["ADEQUATE", "INADEQUATE", "NOT_EVALUATED"] },
+        "artifact_ids": { "type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": { "$ref": "core.schema.json#/$defs/Uuid" } },
+        "environment_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "observation_ids": { "type": "array", "minItems": 1, "maxItems": 256, "uniqueItems": true, "items": { "$ref": "core.schema.json#/$defs/Uuid" } },
+        "user_action_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "recorded_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "verdict": { "enum": ["PASS", "FAIL", "NOT_APPLICABLE"] } }, "required": ["verdict"] },
+          "then": { "properties": { "adequacy_result": { "const": "ADEQUATE" } } }
+        },
+        {
+          "if": { "properties": { "claim_class": { "const": "SUBJECTIVE_USER_ACCEPTANCE" }, "verdict": { "const": "PASS" } }, "required": ["claim_class", "verdict"] },
+          "then": { "required": ["user_action_id"] }
+        }
+      ]
+    },
+    "QueryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "query_id", "project_id", "projection", "snapshot_consistency_token", "page_size"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "query_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "project_id": { "$ref": "core.schema.json#/$defs/ProjectId" },
+        "projection": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,127}$" },
+        "snapshot_consistency_token": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "page_size": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "continuation_token": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "QueryResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "query_id", "project_id", "projection_time_utc", "completeness", "owner_record_versions"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "query_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "project_id": { "$ref": "core.schema.json#/$defs/ProjectId" },
+        "projection_time_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" },
+        "completeness": { "enum": ["COMPLETE", "PARTIAL", "STALE"] },
+        "owner_record_versions": { "type": "array", "minItems": 1, "maxItems": 1024, "uniqueItems": true, "items": { "$ref": "core.schema.json#/$defs/RecordIdentity" } },
+        "items": { "type": "array", "maxItems": 200, "items": { "type": "object", "maxProperties": 256 } },
+        "next_continuation_token": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "error": { "$ref": "core.schema.json#/$defs/BoundaryError" }
+      },
+      "oneOf": [
+        { "required": ["items"], "not": { "required": ["error"] } },
+        {
+          "required": ["error"],
+          "properties": {
+            "items": false,
+            "next_continuation_token": false
+          }
+        }
+      ]
+    }
+  }
+}

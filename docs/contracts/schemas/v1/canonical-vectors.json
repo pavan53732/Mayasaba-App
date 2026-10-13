@@ -1,0 +1,79 @@
+{
+  "contract_version": "1.0.0",
+  "canonical_profile": "mayasaba-jcs-1",
+  "accepted": [
+    {
+      "id": "empty-object",
+      "value": {},
+      "canonical_utf8": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "id": "ordered-keys",
+      "value": { "z": 1, "a": 2 },
+      "canonical_utf8": "{\"a\":2,\"z\":1}",
+      "sha256": "c2985c5ba6f7d2a55e768f92490ca09388e95bc4cccb9fdf11b15f4d42f93e73"
+    },
+    {
+      "id": "exact-unicode-no-normalization",
+      "value": { "s": "é" },
+      "canonical_utf8": "{\"s\":\"é\"}",
+      "sha256": "86028b41ba792eaf82aa26a45b218f6734f7f1096a86f1746c8296e088a0ccb4"
+    },
+    {
+      "id": "decomposed-unicode-remains-decomposed",
+      "value": { "s": "é" },
+      "canonical_utf8": "{\"s\":\"é\"}",
+      "sha256": "1fc0bd7cc93fca8092a2041d7d01842876422aa7e2838acf42c14578e9f2be05"
+    },
+    {
+      "id": "json-string-escapes",
+      "value": { "s": "\"\b\f\n\r\t" },
+      "canonical_utf8": "{\"s\":\"\\\"\\b\\f\\n\\r\\t\"}",
+      "sha256": "9d2cbb745ae9a7d4d6be14f0db0d483617dbd27dfbdce5ccba8c9ca21c8fff6f"
+    },
+    {
+      "id": "jcs-number-rounding",
+      "value": { "n": 333333333.33333329 },
+      "canonical_utf8": "{\"n\":333333333.3333333}",
+      "sha256": "8e1aa496328ac7acbd045b34464ae11d72d8b525c355b85099382ffcb499143b"
+    },
+    {
+      "id": "utf16-property-order",
+      "value": { "": 2, "😀": 1 },
+      "canonical_utf8": "{\"😀\":1,\"\":2}",
+      "sha256": "04208f6cdb854e2ab1b07dd3633a39dec854344fe72824cf7f2fdb4e2e33129e"
+    },
+    {
+      "id": "ecmascript-exponent-thresholds",
+      "value": { "a": 0.000001, "b": 1e-7, "c": 1e20, "d": 1e21 },
+      "canonical_utf8": "{\"a\":0.000001,\"b\":1e-7,\"c\":100000000000000000000,\"d\":1e+21}",
+      "sha256": "ad1cd8d51f5d5c836670d10a8de7289744eaccdb0ad1bafa7b8e6227536e2e87"
+    },
+    {
+      "id": "canonical-large-integer-string",
+      "value": { "record_version": "9007199254740992" },
+      "canonical_utf8": "{\"record_version\":\"9007199254740992\"}",
+      "sha256": "58e5760fbbeae5d03226a3b027ae4d9a71186e5ad7241a7c5a58102eeeac8c87"
+    },
+    {
+      "id": "utc-millisecond",
+      "value": { "at": "2026-10-13T12:34:56.789Z" },
+      "canonical_utf8": "{\"at\":\"2026-10-13T12:34:56.789Z\"}",
+      "sha256": "c39a667adab6d6d7fdd0585cc6002c82ac5dd8b5a05987e5903f000535b358d2"
+    }
+  ],
+  "rejected": [
+    { "id": "duplicate-key", "json_text": "{\"a\":1,\"a\":2}", "validation_target": "RAW_JSON_PARSE", "error_code": "DUPLICATE_KEY" },
+    { "id": "nan", "json_text": "{\"n\":NaN}", "validation_target": "RAW_JSON_PARSE", "error_code": "NON_I_JSON_NUMBER" },
+    { "id": "infinity", "json_text": "{\"n\":Infinity}", "validation_target": "RAW_JSON_PARSE", "error_code": "NON_I_JSON_NUMBER" },
+    { "id": "negative-zero", "json_text": "{\"n\":-0}", "validation_target": "MAYASABA_JCS_1_CANONICALIZE", "error_code": "NEGATIVE_ZERO" },
+    { "id": "unpaired-surrogate", "json_text": "{\"s\":\"\\ud800\"}", "validation_target": "RAW_JSON_PARSE", "error_code": "INVALID_UNICODE" },
+    { "id": "utf8-bom", "input_hex": "efbbbf7b7d", "validation_target": "RAW_UTF8_PARSE", "error_code": "UTF8_BOM_FORBIDDEN" },
+    { "id": "invalid-utf8", "input_hex": "c328", "validation_target": "RAW_UTF8_PARSE", "error_code": "INVALID_UTF8" },
+    { "id": "unsafe-numeric-counter", "json_text": "9007199254740992", "schema_ref": "core.schema.json#/$defs/CanonicalUnsignedInteger", "error_code": "SCHEMA_INVALID" },
+    { "id": "noncanonical-uuid", "json_text": "\"550E8400-E29B-41D4-A716-446655440000\"", "schema_ref": "core.schema.json#/$defs/Uuid", "error_code": "SCHEMA_INVALID" },
+    { "id": "timestamp-without-milliseconds", "json_text": "\"2026-10-13T12:34:56Z\"", "schema_ref": "core.schema.json#/$defs/UtcTimestamp", "error_code": "SCHEMA_INVALID" },
+    { "id": "invalid-calendar-date", "json_text": "\"2026-02-31T00:00:00.000Z\"", "schema_ref": "core.schema.json#/$defs/UtcTimestamp", "error_code": "SCHEMA_INVALID" }
+  ]
+}

@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mayasaba.local/contracts/v1/core.schema.json",
+  "title": "Mayasaba v1 core contract types",
+  "type": "object",
+  "not": {},
+  "$defs": {
+    "ContractVersion": {
+      "const": "1.0.0"
+    },
+    "Uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "UtcTimestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$",
+      "oneOf": [
+        { "pattern": "^[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))T" },
+        { "pattern": "^(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)-02-29T" }
+      ]
+    },
+    "CanonicalUnsignedInteger": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)$",
+      "maxLength": 40
+    },
+    "CanonicalSignedInteger": {
+      "type": "string",
+      "pattern": "^(0|-?[1-9][0-9]*)$",
+      "maxLength": 41
+    },
+    "Sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "CanonicalProfile": {
+      "const": "mayasaba-jcs-1"
+    },
+    "ProjectId": {
+      "$ref": "#/$defs/Uuid"
+    },
+    "OperationIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "idempotency_key",
+        "project_id",
+        "approved_epoch",
+        "issued_at_utc",
+        "active_deadline_ms"
+      ],
+      "properties": {
+        "operation_id": { "$ref": "#/$defs/Uuid" },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        },
+        "project_id": { "$ref": "#/$defs/ProjectId" },
+        "approved_epoch": { "$ref": "#/$defs/CanonicalUnsignedInteger" },
+        "issued_at_utc": { "$ref": "#/$defs/UtcTimestamp" },
+        "active_deadline_ms": { "$ref": "#/$defs/CanonicalUnsignedInteger" },
+        "wall_reauthorization_at_utc": { "$ref": "#/$defs/UtcTimestamp" }
+      }
+    },
+    "RecordIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["record_id", "project_id", "record_version"],
+      "properties": {
+        "record_id": { "$ref": "#/$defs/Uuid" },
+        "project_id": { "$ref": "#/$defs/ProjectId" },
+        "record_version": { "$ref": "#/$defs/CanonicalUnsignedInteger" },
+        "predecessor_record_id": { "$ref": "#/$defs/Uuid" }
+      }
+    },
+    "AuthorityReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_type", "authority_id", "authority_revision", "scope_digest"],
+      "properties": {
+        "authority_type": {
+          "enum": [
+            "USER_ACTION",
+            "REQUIREMENT_APPROVAL",
+            "BINDING_DECISION",
+            "WORK_REQUEST_AUTHORIZATION",
+            "POLICY_PERMISSION",
+            "TASK_CONTRACT",
+            "LEASE"
+          ]
+        },
+        "authority_id": { "$ref": "#/$defs/Uuid" },
+        "authority_revision": { "$ref": "#/$defs/CanonicalUnsignedInteger" },
+        "scope_digest": { "$ref": "#/$defs/Sha256" },
+        "expires_at_utc": { "$ref": "#/$defs/UtcTimestamp" },
+        "revoked_at_utc": { "$ref": "#/$defs/UtcTimestamp" }
+      }
+    },
+    "ArtifactIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_id", "sha256", "byte_length", "media_type", "provenance_id"],
+      "properties": {
+        "artifact_id": { "$ref": "#/$defs/Uuid" },
+        "sha256": { "$ref": "#/$defs/Sha256" },
+        "byte_length": { "$ref": "#/$defs/CanonicalUnsignedInteger" },
+        "media_type": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "provenance_id": { "$ref": "#/$defs/Uuid" },
+        "canonical_profile": { "$ref": "#/$defs/CanonicalProfile" }
+      }
+    },
+    "CliId": {
+      "enum": ["HERMES_AGENT", "KILO_CODE", "CLAUDE_CODE"]
+    },
+    "PhysicalOutcome": {
+      "enum": ["NOT_STARTED", "KNOWN_SUCCEEDED", "KNOWN_FAILED", "UNKNOWN"]
+    },
+    "OperationalDisposition": {
+      "enum": ["ACTIVE", "WAITING", "PAUSED", "STOPPED", "BLOCKED", "RECOVERING", "COMPLETED"]
+    },
+    "AcceptanceVerdict": {
+      "enum": ["PASS", "FAIL", "INCONCLUSIVE", "BLOCKED", "NOT_APPLICABLE"]
+    },
+    "ErrorCode": {
+      "enum": [
+        "SCHEMA_INVALID",
+        "CONTRACT_VERSION_UNSUPPORTED",
+        "PARSER_LIMIT_EXCEEDED",
+        "AUTHORITY_MISSING",
+        "AUTHORITY_STALE",
+        "AUTHORITY_REVOKED",
+        "POLICY_DENIED",
+        "PROJECT_MISMATCH",
+        "EPOCH_MISMATCH",
+        "STALE_VERSION",
+        "ILLEGAL_STATE",
+        "PRECONDITION_FAILED",
+        "IDEMPOTENCY_CONFLICT",
+        "DUPLICATE_IDENTICAL",
+        "COMMIT_OUTCOME_UNKNOWN",
+        "DEADLINE_EXPIRED",
+        "CONFINEMENT_UNPROVEN",
+        "PHYSICAL_OUTCOME_UNKNOWN",
+        "INTEGRITY_FAILURE",
+        "PATH_IDENTITY_UNSAFE",
+        "CAPABILITY_UNAVAILABLE",
+        "EVIDENCE_INADEQUATE",
+        "STORAGE_CAPACITY_BLOCKED",
+        "LANGUAGE_ADMISSION_BLOCKED",
+        "DELIVERY_GAP",
+        "GUARD_UNPROVEN",
+        "CONFLICTING_USER_EDIT",
+        "INSTANCE_OWNERSHIP_CONFLICT",
+        "INTERNAL_ERROR"
+      ]
+    },
+    "BoundaryError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error_code", "message_en", "retry_kind", "source_owner"],
+      "properties": {
+        "error_code": { "$ref": "#/$defs/ErrorCode" },
+        "message_en": { "type": "string", "minLength": 1, "maxLength": 2048 },
+        "retry_kind": { "enum": ["NEVER", "AFTER_USER_ACTION", "AFTER_RECONCILIATION", "SAFE_IDENTICAL_REPLAY"] },
+        "source_owner": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "missing_evidence_ids": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/Uuid" }
+        },
+        "physical_outcome": { "$ref": "#/$defs/PhysicalOutcome" }
+      }
+    },
+    "CommandReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "receipt_id",
+        "command_id",
+        "operation_id",
+        "result_kind",
+        "owner",
+        "recorded_at_utc"
+      ],
+      "properties": {
+        "contract_version": { "$ref": "#/$defs/ContractVersion" },
+        "receipt_id": { "$ref": "#/$defs/Uuid" },
+        "command_id": { "$ref": "#/$defs/Uuid" },
+        "operation_id": { "$ref": "#/$defs/Uuid" },
+        "result_kind": { "enum": ["COMMITTED", "REFUSED", "DUPLICATE", "UNKNOWN"] },
+        "owner": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "result_record_id": { "$ref": "#/$defs/Uuid" },
+        "result_record_version": { "$ref": "#/$defs/CanonicalUnsignedInteger" },
+        "event_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/Uuid" }
+        },
+        "error": { "$ref": "#/$defs/BoundaryError" },
+        "original_receipt_id": { "$ref": "#/$defs/Uuid" },
+        "original_receipt_digest": { "$ref": "#/$defs/Sha256" },
+        "physical_outcome": { "$ref": "#/$defs/PhysicalOutcome" },
+        "recorded_at_utc": { "$ref": "#/$defs/UtcTimestamp" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "result_kind": { "const": "COMMITTED" } }, "required": ["result_kind"] },
+          "then": {
+            "required": ["result_record_id", "result_record_version", "event_ids", "physical_outcome"],
+            "properties": { "error": false, "original_receipt_id": false, "original_receipt_digest": false }
+          }
+        },
+        {
+          "if": { "properties": { "result_kind": { "const": "REFUSED" } }, "required": ["result_kind"] },
+          "then": {
+            "required": ["error", "physical_outcome"],
+            "properties": { "result_record_id": false, "result_record_version": false, "event_ids": false, "original_receipt_id": false, "original_receipt_digest": false }
+          }
+        },
+        {
+          "if": { "properties": { "result_kind": { "const": "DUPLICATE" } }, "required": ["result_kind"] },
+          "then": {
+            "required": ["original_receipt_id", "original_receipt_digest", "physical_outcome"],
+            "properties": { "result_record_id": false, "result_record_version": false, "event_ids": false, "error": false }
+          }
+        },
+        {
+          "if": { "properties": { "result_kind": { "const": "UNKNOWN" } }, "required": ["result_kind"] },
+          "then": {
+            "required": ["error", "physical_outcome"],
+            "properties": { "result_record_id": false, "result_record_version": false, "event_ids": false, "original_receipt_id": false, "original_receipt_digest": false }
+          }
+        }
+      ]
+    }
+  }
+}

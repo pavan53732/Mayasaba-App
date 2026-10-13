@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mayasaba.local/contracts/v1/policy.schema.json",
+  "title": "Mayasaba v1 bound product-policy records",
+  "oneOf": [
+    { "$ref": "#/$defs/StoragePolicy" },
+    { "$ref": "#/$defs/OperationalBounds" },
+    { "$ref": "#/$defs/ExecutablePin" },
+    { "$ref": "#/$defs/BoundUserAction" },
+    { "$ref": "#/$defs/LanguagePolicy" },
+    { "$ref": "#/$defs/ComposerPolicy" },
+    { "$ref": "#/$defs/GovernedUpdatePolicy" }
+  ],
+  "$defs": {
+    "StoragePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "policy_id", "default_ceiling_bytes", "minimum_ceiling_bytes", "maximum_ceiling_bytes", "effective_ceiling_bytes", "free_reserve_bytes", "cleanup_threshold_percent", "cleanup_on_startup", "cleanup_interval_active_ms", "cleanup_batch_items", "cleanup_batch_active_ms", "backup_before_migration", "backup_interval_active_ms", "backup_retained_verified_count", "completed_log_diagnostic_retention_days", "staging_grace_after_verified_publication_days", "unreferenced_blob_grace_days", "unreferenced_blob_requires_verified_scan", "attachment_max_count", "attachment_max_file_bytes", "attachment_max_aggregate_bytes", "attachment_prepare_active_ms", "draft_protection", "draft_auto_expiry", "history_retention_default", "history_retention_optional_days", "retirement_warning_days"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "policy_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "default_ceiling_bytes": { "const": "10737418240" },
+        "minimum_ceiling_bytes": { "const": "2147483648" },
+        "maximum_ceiling_bytes": { "const": "107374182400" },
+        "effective_ceiling_bytes": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger", "description": "Semantic validation requires a value from minimum_ceiling_bytes through maximum_ceiling_bytes." },
+        "free_reserve_bytes": { "const": "5368709120" },
+        "cleanup_threshold_percent": { "const": 80 },
+        "cleanup_on_startup": { "const": true },
+        "cleanup_interval_active_ms": { "const": "86400000" },
+        "cleanup_batch_items": { "const": 500 },
+        "cleanup_batch_active_ms": { "const": "30000" },
+        "backup_before_migration": { "const": true },
+        "backup_interval_active_ms": { "const": "86400000" },
+        "backup_retained_verified_count": { "const": 3 },
+        "completed_log_diagnostic_retention_days": { "const": 30 },
+        "staging_grace_after_verified_publication_days": { "const": 7 },
+        "unreferenced_blob_grace_days": { "const": 7 },
+        "unreferenced_blob_requires_verified_scan": { "const": true },
+        "attachment_max_count": { "const": 20 },
+        "attachment_max_file_bytes": { "const": "104857600" },
+        "attachment_max_aggregate_bytes": { "const": "524288000" },
+        "attachment_prepare_active_ms": { "const": "120000" },
+        "draft_protection": { "const": "WINDOWS_USER_BOUND" },
+        "draft_auto_expiry": { "const": false },
+        "history_retention_default": { "const": "PRESERVE" },
+        "history_retention_optional_days": { "const": 365 },
+        "retirement_warning_days": { "type": "array", "const": [30, 7] }
+      }
+    },
+    "OperationalBounds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "policy_id", "probe_active_ms", "probe_max_attempts", "session_start_active_ms", "session_start_max_attempts", "delivery_ack_active_ms", "delivery_retry_delays_active_ms", "delivery_max_redeliveries", "disposable_expiry_active_ms", "stall_active_ms", "liveness_observation_gap_active_ms", "liveness_required_observations", "stop_grace_active_ms", "stop_reconcile_active_ms", "agent_chat_active_ms", "chat_turn_active_ms", "council_round_active_ms", "task_default_active_ms", "task_max_active_ms", "recovery_active_ms", "recovery_max_attempts", "same_signature_repair_attempts", "wall_reauthorization_ms", "suspend_consumes_active_time"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "policy_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "probe_active_ms": { "const": "30000" },
+        "probe_max_attempts": { "const": 2 },
+        "session_start_active_ms": { "const": "120000" },
+        "session_start_max_attempts": { "const": 2 },
+        "delivery_ack_active_ms": { "const": "15000" },
+        "delivery_retry_delays_active_ms": { "type": "array", "const": ["2000", "5000", "15000"] },
+        "delivery_max_redeliveries": { "const": 3 },
+        "disposable_expiry_active_ms": { "const": "300000" },
+        "stall_active_ms": { "const": "60000" },
+        "liveness_observation_gap_active_ms": { "const": "15000" },
+        "liveness_required_observations": { "const": 2 },
+        "stop_grace_active_ms": { "const": "10000" },
+        "stop_reconcile_active_ms": { "const": "20000" },
+        "agent_chat_active_ms": { "const": "600000" },
+        "chat_turn_active_ms": { "const": "1800000" },
+        "council_round_active_ms": { "const": "1800000" },
+        "task_default_active_ms": { "const": "3600000" },
+        "task_max_active_ms": { "const": "28800000" },
+        "recovery_active_ms": { "const": "600000" },
+        "recovery_max_attempts": { "const": 3 },
+        "same_signature_repair_attempts": { "const": 3 },
+        "wall_reauthorization_ms": { "const": "86400000" },
+        "suspend_consumes_active_time": { "const": false }
+      }
+    },
+    "ExecutablePin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "pin_id", "cli_id", "canonical_path", "sha256", "selection_source", "probe_profile_version", "probe_result", "observed_at_utc"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "pin_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "cli_id": { "$ref": "core.schema.json#/$defs/CliId" },
+        "canonical_path": { "type": "string", "minLength": 3, "maxLength": 32767 },
+        "windows_file_identity": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "sha256": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "signer_observation": { "type": "string", "maxLength": 2048 },
+        "selection_source": { "enum": ["USER_SELECTED", "UNAMBIGUOUS_DISCOVERY"] },
+        "probe_profile_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "probe_result": { "enum": ["READY", "UNSUPPORTED", "PROBE_FAILED"] },
+        "observed_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" }
+      }
+    },
+    "BoundUserAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "action_id", "action_type", "project_id", "approved_epoch", "target_record_id", "target_revision", "source_control_id", "scope_digest", "acted_at_utc"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "action_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "action_type": { "enum": ["APPROVE", "REJECT", "REQUEST_CHANGES", "CLOSE_PROJECT", "REOPEN_PROJECT", "OPT_IN_RETENTION", "WITHDRAW_RETENTION", "RETIRE_ELIGIBLE_DATA", "DISCARD_DRAFT", "INSTALL_APPROVED_UPDATE", "ACCEPT_SUBJECTIVE_CRITERION"] },
+        "project_id": { "$ref": "core.schema.json#/$defs/ProjectId" },
+        "approved_epoch": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+        "target_record_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "target_revision": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+        "source_control_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "windows_user_sid_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "scope_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+        "acted_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" },
+        "expires_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" },
+        "revoked_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" }
+      }
+    },
+    "LanguagePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "policy_id", "product_language", "translation_substitution_allowed", "technical_identity_exception", "user_contribution_display", "uncertain_output_disposition"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "policy_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "product_language": { "const": "en" },
+        "translation_substitution_allowed": { "const": false },
+        "technical_identity_exception": {
+          "type": "array",
+          "const": ["SOURCE_CODE_TOKEN", "CANONICAL_PATH_OR_FILENAME", "URL", "HASH", "CLI_OR_PRODUCT_NAME", "EXTERNAL_LEGAL_OR_SOURCE_ID", "USER_PROVIDED_PROPER_NAME"]
+        },
+        "user_contribution_display": { "const": "EXACT_ONLY_IN_OWN_MESSAGE_HISTORY_WITH_ENGLISH_METADATA" },
+        "uncertain_output_disposition": { "const": "LANGUAGE_ADMISSION_BLOCKED" }
+      }
+    },
+    "ComposerPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "policy_id", "default_send_chord", "default_newline_chord", "accessible_send_chord", "accessible_newline_chord"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "policy_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "default_send_chord": { "const": "ENTER" },
+        "default_newline_chord": { "const": "SHIFT+ENTER" },
+        "accessible_send_chord": { "const": "CTRL+ENTER" },
+        "accessible_newline_chord": { "const": "ENTER" }
+      }
+    },
+    "GovernedUpdatePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "policy_id", "autonomous_update", "activation_action", "artifact_requirements", "unknown_result"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "policy_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "autonomous_update": { "const": false },
+        "activation_action": { "const": "INSTALL_APPROVED_UPDATE" },
+        "artifact_requirements": { "type": "array", "const": ["SIGNED_MSI_IDENTITY", "SHA256", "APPROVED_CHANGE_DECISION", "SUPPORTED_PLATFORM_PREFLIGHT", "VERIFIED_BACKUP", "ACCEPTANCE_MATRIX"] },
+        "unknown_result": { "const": "BLOCKED_WITH_PHYSICAL_UNKNOWN" }
+      }
+    }
+  }
+}

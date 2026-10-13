@@ -1,0 +1,358 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mayasaba.local/contracts/v1/state-machines.schema.json",
+  "title": "Mayasaba v1 authoritative state-machine records",
+  "oneOf": [
+    { "$ref": "#/$defs/ProjectLifecycleState" },
+    { "$ref": "#/$defs/AgentSessionState" },
+    { "$ref": "#/$defs/MessageDeliveryState" },
+    { "$ref": "#/$defs/ContextState" },
+    { "$ref": "#/$defs/TaskState" },
+    { "$ref": "#/$defs/LeaseState" },
+    { "$ref": "#/$defs/CouncilRoundState" },
+    { "$ref": "#/$defs/SynchronizationBarrierState" },
+    { "$ref": "#/$defs/HandoffState" },
+    { "$ref": "#/$defs/ExecutionState" },
+    { "$ref": "#/$defs/ValidationState" },
+    { "$ref": "#/$defs/RepairState" }
+  ],
+  "$defs": {
+    "SessionParticipant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cli_id", "session_id"],
+      "properties": {
+        "cli_id": { "$ref": "core.schema.json#/$defs/CliId" },
+        "session_id": { "$ref": "core.schema.json#/$defs/Uuid" }
+      }
+    },
+    "AllThreeParticipants": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/SessionParticipant" },
+      "allOf": [
+        { "contains": { "properties": { "cli_id": { "const": "HERMES_AGENT" } }, "required": ["cli_id"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "cli_id": { "const": "KILO_CODE" } }, "required": ["cli_id"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "cli_id": { "const": "CLAUDE_CODE" } }, "required": ["cli_id"] }, "minContains": 1, "maxContains": 1 }
+      ]
+    },
+    "BarrierParticipant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cli_id", "session_id"],
+      "properties": {
+        "cli_id": { "$ref": "core.schema.json#/$defs/CliId" },
+        "session_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "application_receipt_id": { "$ref": "core.schema.json#/$defs/Uuid" }
+      }
+    },
+    "AllThreeBarrierParticipants": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/BarrierParticipant" },
+      "allOf": [
+        { "contains": { "properties": { "cli_id": { "const": "HERMES_AGENT" } }, "required": ["cli_id"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "cli_id": { "const": "KILO_CODE" } }, "required": ["cli_id"] }, "minContains": 1, "maxContains": 1 },
+        { "contains": { "properties": { "cli_id": { "const": "CLAUDE_CODE" } }, "required": ["cli_id"] }, "minContains": 1, "maxContains": 1 }
+      ]
+    },
+    "BaseState": {
+      "type": "object",
+      "required": ["contract_version", "machine_id", "machine_type", "project_id", "approved_epoch", "record_version", "state", "operational_disposition", "updated_at_utc", "last_command_id", "last_event_id"],
+      "properties": {
+        "contract_version": { "$ref": "core.schema.json#/$defs/ContractVersion" },
+        "machine_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "machine_type": { "type": "string" },
+        "project_id": { "$ref": "core.schema.json#/$defs/ProjectId" },
+        "approved_epoch": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+        "record_version": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+        "state": { "type": "string" },
+        "operational_disposition": { "$ref": "core.schema.json#/$defs/OperationalDisposition" },
+        "physical_outcome": { "$ref": "core.schema.json#/$defs/PhysicalOutcome" },
+        "updated_at_utc": { "$ref": "core.schema.json#/$defs/UtcTimestamp" },
+        "last_command_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "last_event_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+        "blocked_reason": { "$ref": "core.schema.json#/$defs/BoundaryError" }
+      }
+    },
+    "ProjectLifecycleState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["closure_status", "admission_fence_generation"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "PROJECT_LIFECYCLE" },
+            "state": { "enum": ["PROJECT_CREATED", "DISCOVERY", "INDEPENDENT_ANALYSIS", "PROPOSALS", "CROSS_CRITIQUE", "REBUTTAL_AND_REVISION", "DISAGREEMENT_RESOLUTION", "USER_INTERVIEW", "PRODUCT_AND_UX_DESIGN", "TECH_STACK_DEBATE", "ARCHITECTURE_REVIEW", "ARCHITECTURE_LOCKED", "TASK_PLANNING", "IMPLEMENTATION", "INTEGRATION", "BUILD", "TEST", "E2E", "CROSS_AGENT_REVIEW", "REPAIR", "FINAL_VALIDATION", "PACKAGE", "COMPLETE"] },
+            "closure_status": { "enum": ["OPEN", "CLOSING", "CLOSED", "REOPENING"] },
+            "admission_fence_generation": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" }
+          }
+        }
+      ]
+    },
+    "AgentSessionState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cli_id", "session_id", "application_run_id", "executable_pin_digest"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "AGENT_SESSION" },
+            "state": { "enum": ["ABSENT", "STARTING", "IDLE", "BUSY", "PAUSING", "PAUSED", "STOPPING", "STOPPED", "FAILED", "UNKNOWN", "RETIRED"] },
+            "cli_id": { "$ref": "core.schema.json#/$defs/CliId" },
+            "session_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "application_run_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "executable_pin_digest": { "$ref": "core.schema.json#/$defs/Sha256" }
+          }
+        }
+      ]
+    },
+    "MessageDeliveryState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["envelope_id", "message_class", "attempt_count"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "MESSAGE_DELIVERY" },
+            "state": { "enum": ["QUEUED", "SENDING", "RECEIVED", "ACKNOWLEDGED", "RETRY_WAIT", "DEAD_LETTERED", "EXPIRED_DISPOSABLE", "BLOCKED"] },
+            "envelope_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "message_class": { "enum": ["EMERGENCY_CONTROL", "SYNCHRONIZATION", "TASK_CONTROL", "RECOVERY", "COUNCIL", "PROGRESS", "HEARTBEAT_DISPOSABLE", "BULK"] },
+            "attempt_count": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" }
+          }
+        }
+      ]
+    },
+    "ContextState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["snapshot_id", "coverage_result"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "CONTEXT" },
+            "state": { "enum": ["REQUESTED", "BUILDING", "PARTIAL", "READY", "APPLYING", "APPLIED", "STALE", "FAILED", "BLOCKED"] },
+            "snapshot_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "snapshot_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+            "coverage_result": { "enum": ["COMPLETE", "PARTIAL", "UNKNOWN"] }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "state": { "enum": ["PARTIAL", "READY", "APPLYING", "APPLIED", "STALE"] } }, "required": ["state"] },
+              "then": { "required": ["snapshot_digest"] }
+            }
+          ]
+        }
+      ]
+    },
+    "TaskState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["task_id", "graph_revision", "task_contract_digest"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "TASK" },
+            "state": { "enum": ["PROPOSED", "AUTHORIZED", "WAITING_DEPENDENCY", "READY", "RUNNING", "VERIFYING", "COMPLETED", "FAILED", "BLOCKED", "CANCELLED", "INVALIDATED"] },
+            "task_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "graph_revision": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+            "task_contract_digest": { "$ref": "core.schema.json#/$defs/Sha256" }
+          }
+        }
+      ]
+    },
+    "LeaseState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lease_id", "task_id", "attempt_id", "fencing_version", "consumed_active_ms"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "LEASE" },
+            "state": { "enum": ["REQUESTED", "ACTIVE", "EXPIRING", "EXPIRED", "REVOKING", "REVOKED", "RELEASED", "UNKNOWN", "BLOCKED"] },
+            "lease_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "task_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "attempt_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "fencing_version": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+            "consumed_active_ms": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" }
+          }
+        }
+      ]
+    },
+    "CouncilRoundState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["decision_point_id", "project_point_ordinal", "round_number", "assignment_digest", "completed_obligation_count"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "COUNCIL_ROUND" },
+            "state": { "enum": ["ALLOCATED", "COLLECTING_PROPOSALS", "PROPOSALS_FROZEN", "COLLECTING_CRITIQUES", "COLLECTING_REBUTTALS", "SYNTHESIZING", "AWAITING_SYNTHESIS_REVIEWS", "COMPLETE", "BLOCKED", "PAUSED"] },
+            "decision_point_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "project_point_ordinal": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+            "round_number": { "type": "integer", "minimum": 1, "maximum": 5 },
+            "assignment_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+            "completed_obligation_count": { "type": "integer", "minimum": 0, "maximum": 16 }
+          }
+        }
+      ]
+    },
+    "SynchronizationBarrierState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["barrier_id", "graph_revision", "snapshot_digest", "participants"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "SYNCHRONIZATION_BARRIER" },
+            "state": { "enum": ["CREATED", "WAITING", "SATISFIED", "INVALIDATED", "BLOCKED", "RELEASED"] },
+            "barrier_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "graph_revision": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+            "snapshot_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+            "participants": { "$ref": "#/$defs/AllThreeBarrierParticipants" }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "state": { "enum": ["SATISFIED", "RELEASED"] } }, "required": ["state"] },
+              "then": {
+                "properties": {
+                  "participants": {
+                    "type": "array",
+                    "items": {
+                      "allOf": [
+                        { "$ref": "#/$defs/BarrierParticipant" },
+                        { "required": ["application_receipt_id"] }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "HandoffState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["handoff_id", "cli_id", "source_session_id", "hold_active", "affected_operation_ids"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "HANDOFF" },
+            "state": { "enum": ["FENCING_SOURCE", "AWAITING_SUCCESSOR", "SYNCHRONIZING", "READY_TO_RELEASE", "COMPLETED", "BLOCKED"] },
+            "handoff_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "cli_id": { "$ref": "core.schema.json#/$defs/CliId" },
+            "source_session_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "successor_session_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "hold_active": { "type": "boolean" },
+            "affected_operation_ids": { "type": "array", "maxItems": 1024, "uniqueItems": true, "items": { "$ref": "core.schema.json#/$defs/Uuid" } }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "state": { "enum": ["SYNCHRONIZING", "READY_TO_RELEASE", "COMPLETED"] } }, "required": ["state"] },
+              "then": { "required": ["successor_session_id"] }
+            },
+            {
+              "if": { "properties": { "state": { "const": "COMPLETED" } }, "required": ["state"] },
+              "then": { "properties": { "hold_active": { "const": false } } }
+            },
+            {
+              "if": { "properties": { "state": { "enum": ["FENCING_SOURCE", "AWAITING_SUCCESSOR", "SYNCHRONIZING", "READY_TO_RELEASE", "BLOCKED"] } }, "required": ["state"] },
+              "then": { "properties": { "hold_active": { "const": true } } }
+            }
+          ]
+        }
+      ]
+    },
+    "ExecutionState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["execution_id", "task_id", "attempt_id", "lease_id", "fencing_version", "profile_digest"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "EXECUTION" },
+            "state": { "enum": ["REQUESTED", "ADMITTED", "STARTING", "RUNNING", "CANCELLING", "EXITED", "FAILED_TO_START", "UNKNOWN", "BLOCKED"] },
+            "execution_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "task_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "attempt_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "lease_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "fencing_version": { "$ref": "core.schema.json#/$defs/CanonicalUnsignedInteger" },
+            "profile_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+            "process_identity": { "type": "string", "minLength": 1, "maxLength": 256 }
+          }
+        }
+      ]
+    },
+    "ValidationState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["validation_id", "criterion_id", "claim_class", "artifact_digest"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "VALIDATION" },
+            "state": { "enum": ["PENDING", "RUNNING", "PASS", "FAIL", "INCONCLUSIVE", "BLOCKED", "NOT_APPLICABLE", "STALE"] },
+            "validation_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "criterion_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "claim_class": { "enum": ["COMPILE", "DETERMINISTIC_LOGIC", "NATIVE_RUNTIME", "WINUI_ACCESSIBILITY", "CONFINEMENT_SECURITY", "PUBLICATION_RECOVERY", "MSI_LIFECYCLE", "SUBJECTIVE_USER_ACCEPTANCE"] },
+            "artifact_digest": { "$ref": "core.schema.json#/$defs/Sha256" }
+          }
+        }
+      ]
+    },
+    "RepairState": {
+      "allOf": [
+        { "$ref": "#/$defs/BaseState" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repair_id", "criterion_id", "failure_signature", "same_signature_attempt_count"],
+          "properties": {
+            "contract_version": true, "machine_id": true, "project_id": true, "approved_epoch": true, "record_version": true, "operational_disposition": true, "physical_outcome": true, "updated_at_utc": true, "last_command_id": true, "last_event_id": true, "blocked_reason": true,
+            "machine_type": { "const": "REPAIR" },
+            "state": { "enum": ["DIAGNOSED", "PLANNED", "AUTHORIZED", "RUNNING", "REVALIDATING", "SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED"] },
+            "repair_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "criterion_id": { "$ref": "core.schema.json#/$defs/Uuid" },
+            "failure_signature": { "$ref": "core.schema.json#/$defs/Sha256" },
+            "strategy_digest": { "$ref": "core.schema.json#/$defs/Sha256" },
+            "same_signature_attempt_count": { "type": "integer", "minimum": 0, "maximum": 3 }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "state": { "enum": ["PLANNED", "AUTHORIZED", "RUNNING", "REVALIDATING", "SUCCEEDED", "FAILED"] } }, "required": ["state"] },
+              "then": { "required": ["strategy_digest"] }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "contract_version": "1.0.0",
+  "status": "NORMATIVE_DOCUMENTATION_REGISTRY",
+  "canonical_profile": "mayasaba-jcs-1",
+  "artifacts": [
+    { "file": "core.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/core.schema.json", "sha256": "7907b2306258e21b738763bab13625adc3f4a13d4bf8e20a5e3a81322e575d49" },
+    { "file": "boundaries.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/boundaries.schema.json", "sha256": "f053d2eb4f2ac4d6cc46e5a271eb24628f50ef722bbebe2ea1eee43e81c0021a" },
+    { "file": "state-machines.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/state-machines.schema.json", "sha256": "fa2fc5572ef71fc3c75d1f2a37f034e329fbdb36add8f74c6d09f0a9d62d3b70" },
+    { "file": "policy.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/policy.schema.json", "sha256": "48637022f890c2a148f7cbc6221d414fa7f76f090a9f26c10b7c1b8ab3abc178" },
+    { "file": "trace-fixtures.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/trace-fixtures.schema.json", "sha256": "601d094fd452c4b845d49a2ff81588165bafd090ee77f98d5b8bd271ed309783" },
+    { "file": "canonical-vectors.json", "sha256": "a72424d85b7332c585a6df349bb03c61423b12fb1f2d1c1cc5040ebbbf8c8432" },
+    { "file": "trace-fixtures.json", "sha256": "502555a3dcec51c294229a033194804e1facbe3a794612cf4541783db094333e" }
+  ],
+  "owner_registries": {
+    "commands": {
+      "file": "boundaries.schema.json",
+      "type_enum_pointer": "/$defs/BoundaryCommand/properties/command_type/enum",
+      "owner_enum_pointer": "/$defs/Owner/enum",
+      "mapping_rules_pointer": "/$defs/BoundaryCommand/allOf",
+      "type_count": 115,
+      "required_validation": "EXACTLY_ONE_OWNER_PER_TYPE"
+    },
+    "events": {
+      "file": "boundaries.schema.json",
+      "type_enum_pointer": "/$defs/DomainEvent/properties/event_type/enum",
+      "owner_enum_pointer": "/$defs/Owner/enum",
+      "mapping_rules_pointer": "/$defs/DomainEvent/allOf",
+      "type_count": 122,
+      "required_validation": "EXACTLY_ONE_OWNER_PER_TYPE"
+    },
+    "records": {
+      "file": "boundaries.schema.json",
+      "type_enum_pointer": "/$defs/OwnerRecord/properties/record_type/enum",
+      "owner_enum_pointer": "/$defs/Owner/enum",
+      "mapping_rules_pointer": "/$defs/OwnerRecord/allOf",
+      "type_count": 56,
+      "required_validation": "EXACTLY_ONE_OWNER_PER_TYPE"
+    }
+  },
+  "machine_owners": {
+    "PROJECT_LIFECYCLE": "PROJECT_SERVICE",
+    "AGENT_SESSION": "AGENT_GATEWAY",
+    "MESSAGE_DELIVERY": "MCF_V2",
+    "CONTEXT": "CONTEXT_SYNCHRONIZER",
+    "TASK": "TASK_DAG_ENGINE",
+    "LEASE": "TASK_DAG_ENGINE",
+    "COUNCIL_ROUND": "COUNCIL_ENGINE",
+    "SYNCHRONIZATION_BARRIER": "ORCHESTRATOR",
+    "HANDOFF": "ORCHESTRATOR",
+    "EXECUTION": "LOCAL_EXECUTION_KERNEL",
+    "VALIDATION": "VALIDATION_REPAIR_ENGINE",
+    "REPAIR": "VALIDATION_REPAIR_ENGINE"
+  },
+  "fixture_sets": [
+    { "file": "trace-fixtures.json", "schema": "trace-fixtures.schema.json", "id_range": "T01-T22", "count": 22 },
+    { "file": "trace-fixtures.json", "schema": "trace-fixtures.schema.json", "id_range": "F01-F30", "count": 30 }
+  ]
+}
