@@ -27,6 +27,10 @@ The dependency-ordered [contract completion and implementation entry register](.
 
 The [C01–C03 source-linked trace corpus](./contracts/README.md) supplements the authoritative rules with adversarial cases for persistence/Stop independence, FULL council completeness and Handoff #9 source-fencing/restart. It remains **documentation-only**: no JSON Schema registry, typed error catalog, atomic cross-owner protocol, numerical limit, containment test or native Windows implementation has been completed. The historical ambiguity inventory remains historical; the D-/B-/P0/Z implementation contracts stay OPEN until actual closure evidence exists.
 
+### C04–C05 derived registry and ACK/race coverage (documentation only)
+
+The [C04 typed owner-boundary inventory](./contracts/C04-TYPED-BOUNDARY-INVENTORY.md) and [C05 durable ordering and race matrix](./contracts/C05-DURABLE-TRANSACTION-RACES.md) record existing ownership, authority/receipt/effect distinctions and source-derived cases. Exact serialized keys/types, result codes, atomic owner/outbox transactions, material idempotency identity, clock/timeout selections and per-CLI Windows effect confinement are **NOT PROVIDED or VERIFIED** by these tables. No P0, D/B or Z item is closed; these are documentation artifacts, not an executable contract registry or runtime tests.
+
 ## Existing blocking contract gaps
 
 The earlier P0/P1 audit remains substantially open. In particular, the repository still has no complete versioned machine-readable definitions for authoritative records, typed UI/application commands and queries, domain events, MCF payloads and errors, nor complete transition tables for the **twelve** state machines. The prose naming those objects is not their schema. The following are the most consequential missing chains:

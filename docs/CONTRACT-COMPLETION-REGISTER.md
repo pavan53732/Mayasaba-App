@@ -83,6 +83,10 @@ A complete fixture must record the original immutable input, exact project/root/
 
 The [derived C01–C03 trace corpus](./contracts/README.md) records source-based allowed/refused cases for Chat persistence and immediate Stop, project-local FULL council D1–D3, and Handoff #9 physical effect/restart gates. **This is progress on deterministic prose cases, not completed machine-readable schemas, tests, or Windows/CLI safety proof.** Keep Z-01/Z-02/Z-03/Z-04/Z-07/Z-11 and all affected D-/B- executable obligations OPEN. Do not select D-04 materiality, D-15 oracle adequacy, or numeric/identity policy defaults by inference.
 
+### Second documentation tranche: typed meanings and transaction evidence
+
+The [C04 owner-boundary inventory](./contracts/C04-TYPED-BOUNDARY-INVENTORY.md) records which existing domain records, source-derived references, owner commands and observable facts must survive into typed contracts. The [C05 durable transaction matrix](./contracts/C05-DURABLE-TRANSACTION-RACES.md) tests the already-approved prohibition on premature ACK, separation of intent/receipt/physical effect, and 22 adversarial crash/race outcomes. **These are Markdown inventories and expected-result traces**, not JSON Schemas, implemented atomic transactions, verified Windows confinement or new user-approved numeric/algorithmic defaults. Retain Z-01/Z-02/Z-03/Z-06 and all other implicated D/B/P0 blockers as OPEN.
+
 ## Executable-contract acceptance template
 
 For each owned command or material external effect, the versioned contract must state **all** of the following:

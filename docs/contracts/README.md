@@ -7,6 +7,8 @@
 | [C01 — Chat submission and immediate controls](./C01-CHAT-SUBMISSION-CONTROLS.md) | Persist-before-dispatch, one Send identity, mixed Stop + request, control-only turn and three-agent reply gate | Versioned schemas, control-recognition predicates, SQLite/outbox transaction and bounds |
 | [C02 — FULL council D1–D3](./C02-FULL-COUNCIL-D1-D3.md) | Project-local D1 rotation, six critiques, both nonchair reviews and ten-level D3 precedence | D-04 triggers/materiality, round machine transaction, normalized position equality |
 | [C03 — Handoff #9 recovery](./C03-HANDOFF-RECOVERY.md) | Source fencing, successor proof, Stop/relaunch and safe project switching | Per-CLI effective isolation, session compatibility, physical cessation, timing and guard schemas |
+| [C04 — typed owner-boundary inventory](./C04-TYPED-BOUNDARY-INVENTORY.md) | Existing records, owner commands and distinguishable result evidence | JSON Schema definitions, field encodings, typed errors, canonical bytes and actual proof |
+| [C05 — durable transactions and race handling](./C05-DURABLE-TRANSACTION-RACES.md) | Already-binding persist/ACK ordering and 22 crash/concurrency/replay outcomes | Atomic protocol, idempotency conflict types, clocks and native confinement proof |
 
 ## Interpretation and completion rules
 
