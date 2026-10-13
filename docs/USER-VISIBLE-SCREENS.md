@@ -18,6 +18,9 @@ FIRST LAUNCH, NO BOUND PROJECT
                                                     ▼
 OTHER LAUNCHES WITH A BOUND PROJECT ─────────> Screen 3 Chat
                                                     │
+                                    [Start] initializes three sessions;
+                                    each observed status is shown
+                                                    │
                                          first confirmed saved message
                                                     ▼
                                       Chat with bottom composer
@@ -28,7 +31,7 @@ OTHER LAUNCHES WITH A BOUND PROJECT ─────────> Screen 3 Chat
                                     certified delivery or stated blocker
 ```
 
-Opening a folder does not start agents, scan files, initialize Git, or approve work. The three CLI readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. Once a project is bound, later launches open its Chat directly.
+Opening a folder refreshes bounded, non-mutating detection of all three CLIs and shows their individual readiness on screen 3. It does not start working agent sessions, scan files, initialize Git, or approve work. The readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. Once a project is bound, later launches open its Chat directly.
 
 ## Screen 1 — Welcome
 
@@ -75,7 +78,7 @@ Opening a folder does not start agents, scan files, initialize Git, or approve w
 +--------------------------------------------------------------------------+
 ```
 
-`Back` returns to Welcome. `Open Folder` opens the native directory picker. A valid selection opens Chat immediately and carries the unsent text draft forward. Send stays disabled until a root is authorized. No project folder selection installs a CLI or uses a provider account.
+`Back` returns to Welcome. `Open Folder` opens the native directory picker. A valid selection opens Chat immediately, carries the unsent text draft forward, and refreshes detection of Hermes Agent CLI, Kilo Code CLI and Claude Code CLI. Send stays disabled until a root is authorized. No project folder selection installs a CLI, starts a working session, or uses a provider account.
 
 ### Native picker and rejected folder
 
@@ -100,7 +103,7 @@ A rejected selection must name the path or authorization problem and retain the 
 +--------------------------------------------------------------------------+
 | Mayasaba · Project name + inspectable path                               |
 | Phase + condition                Hermes Agent CLI  ● READY               |
-| [Pause] [Stop] [•••]             Kilo Code CLI     ● READY               |
+| [Start] [Pause] [Stop] [•••]     Kilo Code CLI     ● READY               |
 |                                 Claude Code CLI   ● READY                |
 +--------------------------------------------------------------------------+
 |                                                                          |
@@ -115,7 +118,7 @@ A rejected selection must name the path or authorization problem and retain the 
 +--------------------------------------------------------------------------+
 ```
 
-The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, immediate Pause/Stop controls, and exactly one truthful status entry per required CLI. There is no setup banner when all CLIs are ready.
+The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, visible Start/Pause/Stop controls, and exactly one truthful readiness entry per required CLI. `READY` detection does not mean a project session is active. There is no setup banner when all CLIs are ready.
 
 ```text
 CHAT HEADER OVERFLOW [•••]
@@ -124,6 +127,29 @@ CHAT HEADER OVERFLOW [•••]
   [Reopen Project]      when the project is closed
   No Open Folder or Switch Folder action
 ```
+
+### Start all three sessions and show their status
+
+```text
+FOLDER BOUND: READINESS DETECTED       USER CLICKS [Start]
+Hermes Agent CLI  READY                    │
+Kilo Code CLI     READY                    ▼
+Claude Code CLI   READY           Controller attempts all three
+                                            │
+                                            ▼
+| Three CLI sessions · starting                    [Show details]          |
+| Hermes Agent CLI  STARTING                                                |
+| Kilo Code CLI     STARTING                                                |
+| Claude Code CLI   STARTING                                                |
+                                            │
+                                            ▼
+| Three CLI sessions · observed result             [Show details]          |
+| Hermes Agent CLI  READY / IDLE                                           |
+| Kilo Code CLI     READY / IDLE                                           |
+| Claude Code CLI   READY / IDLE                                           |
+```
+
+This is a Chat status card, not another screen. It updates each CLI independently from actual session observations; a failed startup shows the named CLI and exact reason rather than claiming all three started. Start does not send the draft or authorize a scan, council, task, research, or file write. The readiness indicator stays separate from session activity. Before Start, a Send can still save a contribution, but its agent-dependent processing waits for Start. After explicit Stop, a new Send can be saved but agent-dependent work waits until a later Start.
 
 ### First Send and composer movement
 
@@ -149,7 +175,7 @@ CLI readiness and problem cards do not move the composer. A restored project wit
 +--------------------------------------------------------------------------+
 | Mayasaba · Project name + inspectable path                               |
 | Phase + condition                Hermes Agent CLI  ● READY               |
-| [Pause] [Stop] [•••]             Kilo Code CLI     ● READY               |
+| [Start] [Pause] [Stop] [•••]     Kilo Code CLI     ● READY               |
 |                                 Claude Code CLI   ● READY                |
 +--------------------------------------------------------------------------+
 | You · 10:42 · Saved                                                      |
@@ -244,6 +270,8 @@ A factual question asks for missing information; a choice packet asks which elig
 
 A separately submitted control-only message is saved as one contribution
 when persistence succeeds; it creates no conversational turn or writer step.
+After Stop, sessions do not silently restart on a later Send; [Start]
+requests fresh validation and three project-scoped session starts.
 ```
 
 ## Chat state — exploration, plan, tasks, and evidence

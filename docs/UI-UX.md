@@ -58,7 +58,7 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 
 ### 2.5 Keep control visible
 
-- Pause and Stop remain visible while work is active.
+- Start, Pause and Stop remain visible in bound-project Chat; Stop remains reachable while work is active.
 - Pending questions, approvals, and recovery actions link to their exact owning operation.
 - No timeout or silence becomes approval.
 
@@ -74,7 +74,7 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 
 Chat is the only persistent route and fills the application workspace. There is no side rail, tab bar, dashboard, alternate project screen or permanent details pane. The shell has a compact header and conversation area; a composer dock appears below the timeline after the first confirmed persisted contribution:
 
-1. **Compact Chat header** — project identity, inspectable canonical path, lifecycle phase, operational condition, the compact three-CLI status indicator at its top right, Pause/Stop and a small overflow menu without any folder action.
+1. **Compact Chat header** — project identity, inspectable canonical path, lifecycle phase, operational condition, the compact three-CLI readiness indicator at its top right, visible Start/Pause/Stop and a small overflow menu without any folder action.
 2. **Conversation area** — the chronological timeline of user messages, agent responses and controller-owned contextual cards. In an empty bound project, the one composer is centered here until the first user contribution is confirmed persisted.
 3. **Composer dock** — after the first confirmed persisted contribution, the same composer, pending attachments and Send sit beneath the timeline. The empty bound-project Chat has no separate footer control.
 
@@ -88,7 +88,7 @@ EMPTY BOUND PROJECT
 +--------------------------------------------------------------------------+
 | Mayasaba · Project + path         Hermes Agent CLI  ● READY              |
 | Phase + condition                Kilo Code CLI     ● READY               |
-| [Pause] [Stop] [•••]             Claude Code CLI   ● READY               |
+| [Start] [Pause] [Stop] [•••]     Claude Code CLI   ● READY               |
 +--------------------------------------------------------------------------+
 |                                                                          |
 |                 [ Message Mayasaba...                     ]              |
@@ -100,7 +100,7 @@ AFTER THE FIRST CONFIRMED PERSISTED MESSAGE
 +--------------------------------------------------------------------------+
 | Mayasaba · Project + path         Hermes Agent CLI  ● READY              |
 | Phase + condition                Kilo Code CLI     ● READY               |
-| [Pause] [Stop] [•••]             Claude Code CLI   ● READY               |
+| [Start] [Pause] [Stop] [•••]     Claude Code CLI   ● READY               |
 +--------------------------------------------------------------------------+
 | User message · Saved                                                     |
 |                                                                          |
@@ -136,7 +136,7 @@ Routine heartbeats, queue operations, protocol envelopes and low-value progress 
 - Medium: expand details inline when readable; otherwise use a modal sheet.
 - Narrow: cards become single-column and the details sheet becomes full-width but remains dismissible back to the same Chat position.
 - Keep the empty Chat composer centered in the available conversation area and dock the same composer below the timeline after the first confirmed persisted contribution; neither placement may obscure cards or Send at narrow widths.
-- Keep Pause/Stop reachable while work is active.
+- Keep Start/Pause/Stop reachable, especially Stop while work is active.
 - Restore scroll position, selected card and keyboard/screen-reader focus after closing details.
 
 ## 4. Visual direction
@@ -192,7 +192,7 @@ Render immediately:
 - disabled Send with a clear "Open a folder to send" explanation; and
 - no folder control in bound-project Chat.
 
-Start bounded, non-mutating CLI checks in the background. The compact CLI status indicator renders in the Chat header as soon as each first observed result arrives; while a check is still running it shows that CLI as `CHECKING` (see §6.2).
+Start bounded, non-mutating CLI checks in the background and refresh all three after a folder is bound. The compact CLI readiness indicator renders in the Chat header as soon as each first observed result arrives; while a check is still running it shows that CLI as `CHECKING` (see §6.2). Detection does not initialize a working session.
 
 A user with no bound project is first shown the dismissible first-run onboarding sequence (see §5.2) and remains on it until a project root is bound: **Chat does not open without a bound project root**, while CLI readiness never gates anything.
 
@@ -219,7 +219,7 @@ A user with no bound project sees a dismissible onboarding sequence — **screen
 
 **Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing, consumes no model-provider usage, and **installs nothing** — the three CLIs stay machine-level tools the user installs and signs into outside Mayasaba, and Mayasaba never installs, updates or configures one, in the selected folder or elsewhere. The editable draft composer is available here; a draft typed on this screen is preserved when Chat opens and is never a submission before a root is bound.
 
-**Screen 3 — Chat, the destination.** Binding a folder opens Chat's welcome view with the composer and header indicator. No folder control appears in Chat or its overflow menu. This is the persistent route for every later launch.
+**Screen 3 — Chat, the destination.** Binding a folder opens Chat's welcome view with the composer and a refreshed observed result for each of the three CLI readiness checks. It has visible **Start**, **Pause**, and **Stop** controls. Selecting Start requests controller-owned initialization of all three project-scoped sessions and shows each actual session result in a concise Chat card. No folder control appears in Chat or its overflow menu. This is the persistent route for every later launch.
 
 An empty bound project's composer is centered in the conversation area. A project restored with retained conversation opens with that same composer docked below its timeline. The first confirmed persisted user contribution moves the centered composer to the bottom for the continuing conversation; this visual transition never changes the submission command or CLI-readiness rules.
 
@@ -289,6 +289,8 @@ Success behavior:
 - enable Send;
 - restore Chat plus the authoritative background requirements, decisions, tasks and evidence needed to reconstruct its cards; and
 - retain any pre-selection draft.
+
+After binding, refresh bounded detection of Hermes Agent CLI, Kilo Code CLI, and Claude Code CLI and show each observed readiness in Chat. Folder binding itself does not launch a working session. Start is the separate explicit action for initializing all three sessions.
 
 Rejection behavior:
 
@@ -385,6 +387,12 @@ Active work shows attributed session state in contextual Chat cards and their de
 - stopped.
 
 Installation health and task/session activity are different concepts and should not share a misleading badge.
+
+### 6.5 Start and Stop of the three project sessions
+
+The bound-project Chat header has visible **Start**, **Pause**, and **Stop** controls. Start is a typed controller command, not a UI-to-agent call. It explicitly initializes Hermes Agent CLI, Kilo Code CLI, and Claude Code CLI for the bound project through their existing adapters and the Local Execution Kernel. It is available without sending a Chat message. A source-linked Chat status card shows each CLI's actual session progression (for example starting, ready/idle, failed, or stopped) and an exact reason for any failure. This activity display is separate from the always-visible readiness indicator: `READY` detection does not imply an active session, and a startup attempt is not success. The card has **Show details** for inspectable outcomes and does not fabricate a three-agent result when one startup fails.
+
+Start alone authorizes no repository scan, research, council, task, file write, or reply. Chat and Send remain available before Start, but a saved message's agent-dependent processing waits for Start. Previously saved turns may proceed after Start only when their own authorization and context remain current. Controller-owned sessions may then resume as needed for separately authorized operations. An explicit Stop acts immediately and prevents on-demand restart of those project sessions until a later explicit Start; messages sent meanwhile may be saved but show waiting/blocked agent work. Start after Stop revalidates the current project, CLI identities, context, permissions, and any dependent operation before resuming. Pause remains distinct from Stop. These are projections of the existing Agent Session and execution records, not a new UI route or state machine.
 
 ## 7. Chat experience
 
@@ -823,7 +831,7 @@ Accessibility is a release requirement, not polish.
 - Every interactive element is reachable in a logical order.
 - Visible focus is always present.
 - Chat, cards, inline details, question batches, tables, temporary sheets and dialogs have predictable focus entry/return.
-- Pause and Stop remain keyboard reachable during streaming.
+- Start, Pause and Stop remain keyboard reachable during streaming.
 - Configurable Send behavior avoids trapping multiline entry users.
 
 ### Screen readers and semantics
@@ -982,6 +990,7 @@ At minimum, native automated and manual acceptance must cover:
 73. CLI session replacement: while one project has dependent work, replace one of its CLI sessions. Show the linked handoff and source-fencing status without presenting an old lease or ACK as successor readiness. Withhold dependent work and show an English blocker if the source effect outcome is unknown or the successor has stale context. Release the hold only after current application and barrier evidence; preserve Chat, unrelated work and the user's reading position throughout. Replaying the handoff must not duplicate a reply or task attempt.
 74. Initial Windows support: on Windows 11 25H2 native x64 outside S mode, a missing CLI does not block MSI admission or Chat after installation; show its normal readiness/problem card. On Windows 10, Windows 11 24H2/26H2, ARM64 with x64 emulation, x86, Server or S mode, the MSI refuses before partial installation with an English unsupported-platform reason. Do not show these platforms as supported merely because Windows App SDK can run on them.
 75. Three-screen flow and composer placement: screen 1 shows welcome and truthful CLI status; Next, Skip or Escape reach mandatory screen 2, where Back returns to welcome and Open Folder binds the root before Chat opens. Screen 3 Chat has no folder control, visible or hidden. In an empty bound project, verify the one composer is centered; a confirmed persisted first contribution docks it below the timeline, later messages appear above it, and retained conversation opens docked. A failed or uncertain first Send preserves the centered draft and precise recovery action without a false saved message or layout change; CLI problem cards alone do not dock it. Verify attachments, focus, screen-reader reading order, narrow windows, theme changes, reduced motion and reading position without another input path or route. Project switching entry placement remains to be decided before native implementation.
+76. Detect, Start and Stop three CLIs: after a successful screen-2 folder binding, refresh bounded non-mutating detection for Hermes Agent CLI, Kilo Code CLI, and Claude Code CLI; screen 3 shows each observed readiness even before Start. Verify that binding alone launches no working session. Send before Start must attempt to save one contribution and show waiting for Start, without CLI dispatch. Select the visible Start control and verify three separately attributable project-scoped session attempts and observed starting/ready-or-idle/failure states in a Chat status card, distinct from readiness. Inject one startup failure: name the CLI and cause, never claim an all-three reply or replace it with two agents. Start alone performs no scan, research, council, task, file write, or message submission. Select Stop during activity: it acts immediately, fences/cancels the affected work, reports its observed outcome and prevents a subsequent Send from silently restarting those sessions; Send still attempts to save the contribution. A later Start revalidates current authority before eligible dependent work resumes. Verify keyboard access, accessible status text, no terminal windows, and no extra route or state machine.
 
 ## 22. UX anti-patterns
 

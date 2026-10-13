@@ -83,6 +83,7 @@
     .readiness { min-width: 225px; display: grid; gap: 5px; font-size: 12px; }
     .readiness-row { display: grid; grid-template-columns: minmax(116px, 1fr) 8px 48px; gap: 8px; align-items: center; white-space: nowrap; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); }
+    .readiness-row[data-readiness="CHECKING"] .dot { background: var(--attention); }
     .readiness strong { font-size: 11px; font-weight: 650; }
     .header-actions { display: flex; gap: 7px; }
     .header-actions button {
@@ -132,6 +133,11 @@
       padding: 42px max(28px, calc((100% - 680px) / 2)) 28px;
     }
     .app.has-messages .timeline { bottom: 150px; }
+    .session-card { max-width: 640px; margin: 0 auto 20px; padding: 14px 16px; border: 1px solid var(--line); border-left: 3px solid var(--authority); border-radius: 6px; background: var(--surface); font-size: 12px; }
+    .session-card[hidden] { display: none; }
+    .session-card h2 { margin: 0 0 8px; font-size: 13px; }
+    .session-card p { margin: 0 0 8px; color: var(--muted); }
+    .session-card ul { margin: 0; padding-left: 18px; line-height: 1.6; }
     .empty-prompt {
       position: absolute;
       top: calc(50% - 137px);
@@ -259,7 +265,7 @@
 </head>
 <body>
   <div class="preview-bar">
-    <span><strong>Mayasaba interface preview</strong> · Open Folder uses a sample project. Nothing is sent or saved.</span>
+    <span><strong>Mayasaba interface preview</strong> · Open Folder and Start are simulated. No CLI runs; nothing is sent or saved.</span>
     <div class="preview-controls" aria-label="Preview screens"><button type="button" data-preview-screen="welcome" aria-current="step">1 Welcome</button><button type="button" data-preview-screen="folder">2 Open Folder</button><button type="button" data-preview-screen="chat">3 Chat</button><button type="button" id="sample">Show conversation</button><button type="button" id="reset">Reset</button></div>
   </div>
 
@@ -276,7 +282,7 @@
           <div class="readiness-row"><span>Kilo Code CLI</span><span class="dot" aria-hidden="true"></span><strong>READY</strong></div>
           <div class="readiness-row"><span>Claude Code CLI</span><span class="dot" aria-hidden="true"></span><strong>READY</strong></div>
         </div>
-        <div class="header-actions"><button type="button" data-preview-only="Pause">Pause</button><button type="button" data-preview-only="Stop">Stop</button><button type="button" id="more" aria-label="More options" aria-expanded="false" aria-controls="chatMenu">•••</button></div>
+        <div class="header-actions"><button type="button" id="startSessions">Start</button><button type="button" data-preview-only="Pause">Pause</button><button type="button" id="stopSessions">Stop</button><button type="button" id="more" aria-label="More options" aria-expanded="false" aria-controls="chatMenu">•••</button></div>
       </div>
     </header>
 
@@ -297,7 +303,7 @@
       <p class="draft-note">You can draft a message below. Send becomes available after a folder is open.</p>
     </section>
 
-    <section class="timeline" id="timeline" aria-label="Conversation" aria-live="polite"></section>
+    <section class="timeline" id="timeline" aria-label="Conversation" aria-live="polite"><div class="session-card" id="sessionCard" hidden><h2><span id="sessionTitle">Three CLI sessions</span><button type="button" class="detail-button" data-preview-only="Session details">Show details</button></h2><p id="sessionNote">Sample session status only.</p><ul><li>Hermes Agent CLI: <strong data-session="hermes">NOT STARTED</strong></li><li>Kilo Code CLI: <strong data-session="kilo">NOT STARTED</strong></li><li>Claude Code CLI: <strong data-session="claude">NOT STARTED</strong></li></ul></div></section>
     <div class="empty-prompt" id="emptyPrompt"><h1>What would you like to work on?</h1><p>Start a conversation about the open project.</p></div>
 
     <form class="composer" id="composer" aria-label="Message composer">
@@ -317,7 +323,27 @@
     const message = document.getElementById('message');
     const send = document.getElementById('send');
     const toast = document.getElementById('toast');
+    const sessionCard = document.getElementById('sessionCard');
+    let detectionTimer;
+    let startTimer;
+    let startRequested = false;
+    let sessionReady = false;
+    const waitingReplies = [];
     let toastTimer;
+
+    function setReadiness(value) {
+      document.querySelectorAll('.readiness-row').forEach(row => {
+        row.dataset.readiness = value;
+        row.querySelector('strong').textContent = value;
+      });
+    }
+
+    function setSessionStatus(title, note, value) {
+      sessionCard.hidden = false;
+      document.getElementById('sessionTitle').textContent = title;
+      document.getElementById('sessionNote').textContent = note;
+      document.querySelectorAll('[data-session]').forEach(status => { status.textContent = value; });
+    }
 
     function showToast(text) {
       toast.textContent = text;
@@ -347,10 +373,10 @@
       rule.className = 'rule';
       rule.setAttribute('aria-hidden', 'true');
       const title = document.createElement('span');
-      title.textContent = 'Mayasaba · sample reply';
+      title.textContent = sessionReady ? 'Mayasaba · sample reply' : (startRequested ? 'Mayasaba · waiting for sessions' : 'Mayasaba · waiting for Start');
       heading.append(rule, title);
       const text = document.createElement('p');
-      text.textContent = 'This is where the reviewed answer would appear. The composer now stays at the bottom as the conversation grows.';
+      text.textContent = sessionReady ? 'This is where the reviewed answer would appear. The composer now stays at the bottom as the conversation grows.' : 'The sample message is shown as saved. Agent-dependent processing waits until all three sessions start.';
       const details = document.createElement('button');
       details.type = 'button';
       details.className = 'detail-button';
@@ -359,7 +385,7 @@
       const detailContent = document.createElement('div');
       detailContent.className = 'detail';
       detailContent.hidden = true;
-      detailContent.textContent = 'In the product, this area can show the three independent responses, the writer, and both peer reviews. This preview does not contact any CLI.';
+      detailContent.textContent = sessionReady ? 'In the product, this area can show the three independent responses, the writer, and both peer reviews. This preview does not contact any CLI.' : 'A saved contribution remains in Chat while agent-dependent processing waits for Start and all three required sessions.';
       details.addEventListener('click', () => {
         detailContent.hidden = !detailContent.hidden;
         details.setAttribute('aria-expanded', String(!detailContent.hidden));
@@ -367,8 +393,17 @@
       });
       reply.append(heading, text, details, detailContent);
       timeline.append(user, reply);
+      if (!sessionReady) waitingReplies.push({ title, text, detailContent });
       app.classList.add('has-messages');
       timeline.scrollTop = timeline.scrollHeight;
+    }
+
+    function completeWaitingReplies() {
+      for (const reply of waitingReplies.splice(0)) {
+        reply.title.textContent = 'Mayasaba · sample reply';
+        reply.text.textContent = 'This is where the reviewed answer would appear after all three sessions participate. The composer stays at the bottom.';
+        reply.detailContent.textContent = 'In the product, this area can show the three independent responses, the writer, and both peer reviews. This preview does not contact any CLI.';
+      }
     }
 
     function setScreen(screen, focus = true) {
@@ -393,7 +428,31 @@
     document.getElementById('next').addEventListener('click', () => setScreen('folder'));
     document.getElementById('skip').addEventListener('click', () => setScreen('folder'));
     document.getElementById('back').addEventListener('click', () => setScreen('welcome'));
-    document.getElementById('openFolder').addEventListener('click', () => setScreen('chat'));
+    document.getElementById('openFolder').addEventListener('click', () => {
+      setScreen('chat');
+      clearTimeout(detectionTimer);
+      setReadiness('CHECKING');
+      detectionTimer = setTimeout(() => setReadiness('READY'), 700);
+    });
+    document.getElementById('startSessions').addEventListener('click', () => {
+      if (app.dataset.screen !== 'chat') return;
+      startRequested = true;
+      sessionReady = false;
+      clearTimeout(startTimer);
+      setSessionStatus('Three CLI sessions · starting', 'Simulated startup after Start. No CLI process is launched.', 'STARTING');
+      startTimer = setTimeout(() => {
+        sessionReady = true;
+        setSessionStatus('Three CLI sessions · ready', 'All three sample sessions are ready for authorized work.', 'READY / IDLE');
+        completeWaitingReplies();
+      }, 900);
+    });
+    document.getElementById('stopSessions').addEventListener('click', () => {
+      if (app.dataset.screen !== 'chat') return;
+      startRequested = false;
+      sessionReady = false;
+      clearTimeout(startTimer);
+      setSessionStatus('Three CLI sessions · stopped', 'A later Send will not restart these sample sessions; select Start again.', 'STOPPED');
+    });
     document.addEventListener('keydown', event => {
       if (event.key !== 'Escape') return;
       const menu = document.getElementById('chatMenu');
@@ -421,7 +480,14 @@
       message.focus();
     });
     document.getElementById('reset').addEventListener('click', () => {
-      timeline.replaceChildren();
+      clearTimeout(detectionTimer);
+      clearTimeout(startTimer);
+      startRequested = false;
+      sessionReady = false;
+      waitingReplies.length = 0;
+      setReadiness('READY');
+      timeline.replaceChildren(sessionCard);
+      sessionCard.hidden = true;
       app.classList.remove('has-messages');
       message.value = '';
       send.disabled = true;
@@ -429,6 +495,9 @@
     });
     document.getElementById('sample').addEventListener('click', () => {
       setScreen('chat');
+      startRequested = true;
+      sessionReady = true;
+      setSessionStatus('Three CLI sessions · ready', 'Sample conversation state. No CLI process is launched.', 'READY / IDLE');
       if (!app.classList.contains('has-messages')) addMessage('Help me understand what this project needs next.');
     });
     const more = document.getElementById('more');
@@ -447,6 +516,9 @@
     const params = new URLSearchParams(location.search);
     if (params.get('state') === 'conversation') {
       setScreen('chat', false);
+      startRequested = true;
+      sessionReady = true;
+      setSessionStatus('Three CLI sessions · ready', 'Sample conversation state. No CLI process is launched.', 'READY / IDLE');
       addMessage('Help me understand what this project needs next.');
     } else if (params.get('screen') === 'folder' || params.get('screen') === 'chat') {
       setScreen(params.get('screen'), false);

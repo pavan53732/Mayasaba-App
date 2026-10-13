@@ -196,7 +196,7 @@ Important command flows include:
 - submit a `UserContribution`;
 - attach or remove a pending file;
 - answer a linked question or decision request;
-- request pause, stop, retry, reassignment, or reopening;
+- request Start of the three project-scoped CLI sessions, pause, stop, retry, reassignment, or reopening;
 - query Chat, project, council, task, artifact, evidence, validation, and readiness projections for rendering inside Chat cards, the compact header CLI status indicator or temporary detail sheets.
 
 The UI owns unsent drafts, pending attachment selections, card expansion, temporary-sheet state, focus/scroll restoration, and presentation state only. Domain owners validate and persist all authoritative effects. Current scope is a read-only application query over approved requirements and binding decisions, retaining their versions, project epoch, and originating contribution/approval links. It has no separate durable record, version sequence, editor, approval flow, or service owner. No approved build requirements are needed for conversation or separately authorized exploration; a derived view cannot authorize work.
@@ -244,11 +244,19 @@ sequenceDiagram
     App-->>UI: Folder command result
     Note over UI: Chat opens with a bound root; CLI readiness never gates it
     Note over Project,Agents: Folder binding does not launch working sessions
+    App->>Agents: Refresh bounded detection of all three CLIs
+    Agents-->>App: Three observed readiness results
+    App-->>UI: Show each CLI readiness in the Chat header
+    User->>UI: Start three CLI sessions
+    UI->>App: Typed Start command for bound project
+    Note over App,Agents: Controller-owned launch through adapters and Local Execution Kernel
+    App-->>UI: Per-CLI session starting/ready-or-idle/failure card
     User->>UI: Send message
     UI->>App: SubmitUserContribution
     Note over App: Message/Contribution service attempts to persist the immutable contribution; the result may be storage failure
     App-->>UI: Contribution persistence result (saved, or precise storage failure)
-    Note over App: Orchestrator schedules three independent Chat responses via MCF-v2
+    Note over App: If Start has not succeeded, saved turn waits; no CLI dispatch
+    Note over App: After Start, Orchestrator schedules three independent Chat responses via MCF-v2
     Note over App: Work-request authority validates independent interpretations and scoped routing
     Note over App: Eligible work proceeds through FULL/plan synchronization/lease gates
     Note over App: Reply drafting and both peer reviews are separate from work admission
@@ -258,11 +266,11 @@ sequenceDiagram
 
 The application-services participant represents the typed boundary and coordination within layer 2, not a new service owner. Project service is shown separately to make its exclusive folder-binding authority explicit; root validation and access authorization remain with Workspace Manager and Policy Engine.
 
-Opening a folder never scans files, initializes Git, installs or configures a CLI, launches model-backed sessions, or approves work. Mayasaba never installs the three CLIs anywhere — they are machine-level tools the user installs, authenticates and updates outside Mayasaba, and folder binding never installs, updates or configures one. Every enabled Send after folder binding uses the same command and attempts to persist one immutable contribution; a failed or uncertain persist is never represented as recorded. If dependent agents are unavailable, a successfully persisted contribution remains persisted while the affected operation truthfully waits or blocks, and no CLI status ever gates Chat, folder selection, drafts, history or recovery.
+Opening a folder never scans files, initializes Git, installs or configures a CLI, launches model-backed sessions, or approves work. It does refresh bounded, non-mutating detection of all three named CLIs and shows their separate observed readiness in Chat. The visible Start control is a separate typed application command; Controller Application Services coordinate all three project-scoped session initialization attempts through Agent Gateway/adapters and the Local Execution Kernel, then project each actual outcome into a source-linked Chat card. Start itself grants no scan, research, council, task, write, or reply authority. Stop immediately invokes existing cancellation/fencing and prevents an on-demand restart until a later Start; it does not change the readiness projection. Mayasaba never installs the CLIs — they are machine-level tools the user installs, authenticates and updates outside Mayasaba. Every enabled Send after folder binding uses the same command and attempts to persist one immutable contribution; a failed or uncertain persist is never represented as recorded. If dependent agents are unavailable or explicitly stopped, a successfully persisted contribution truthfully waits or blocks, and no CLI status gates Chat, folder selection, drafts, history or recovery.
 
 ### Semantic interpretation
 
-Every **confirmed persisted** conversational turn is dispatched independently to all three currently authorized project-scoped CLIs. A failed or uncertain contribution persist grants no dispatch, interpretation or derived work authority. When semantic interpretation is needed, each CLI supplies a bounded, read-only `InterpretationCandidate` before peer disclosure. The candidate contains source-text spans, operation proposals, constraints, referenced records, affected scope, missing details, and suggested acceptance criteria.
+Every **confirmed persisted** conversational turn is dispatched independently to all three currently authorized project-scoped CLIs **after explicit Start**. Before Start, the saved turn waits with a precise visible reason; a failed or uncertain contribution persist grants no dispatch, interpretation or derived work authority. When semantic interpretation is needed, each CLI supplies a bounded, read-only `InterpretationCandidate` before peer disclosure. The candidate contains source-text spans, operation proposals, constraints, referenced records, affected scope, missing details, and suggested acceptance criteria.
 
 The candidates are advisory. Work-request authority verifies each against the exact contribution, approved records, policy, and allowed vocabulary. Unsupported assumptions stay assumptions. Multi-intent turns are split into source-linked operations. Negation and sequencing such as "analyze first; implement only after approval" must be preserved.
 
