@@ -805,6 +805,8 @@ An `UNKNOWN` outcome is followed by contextual actions, never a generic Retry. E
 
 A generic Retry button MUST NOT appear for an unresolved material side effect. While reconciliation runs, the affected operation shows a bounded reconciling state that names the dependency. If no safe path is found, it becomes Blocked with its outcome explicitly unresolved and a precise reason — never styled as success, never as an ordinary retry, and never relabelled as a known failure — while unrelated work continues.
 
+**Bounded recovery, repair and improvement are existing Chat projections, not new screens.** A stalled or crashed CLI, affected queue or interrupted file/SQLite effect shows a source-linked recovery card with observed liveness/deadline evidence, affected operation, cancellation/fencing and bounded reconciliation; a timeout never proves cessation or bypasses explicit Stop and relaunch's fresh Start. A repair card names the failed criterion, falsifiable hypothesis, finite attempt count, oracle/regression results and `BLOCKED` reason on exhaustion. Repeated evidence may produce a nonbinding **Mayasaba improvement proposal** card with scope, evidence, risks and an explicit approval route. The card itself cannot start tasks, open FULL council without its registered trigger, activate an executable update or alter policy. Show details exposes owned records, not invented confidence. Chat and unrelated authorized work remain usable while affected operations reconcile, subject to actual storage and resource availability.
+
 ## 17. Empty, loading, error, and disconnected states
 
 Every card type and temporary sheet defines:

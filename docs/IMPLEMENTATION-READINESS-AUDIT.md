@@ -209,6 +209,12 @@ The approved retention periods and draft-recovery direction do not authorize an 
 | Attachment preparation | Maximum count, per-file and aggregate byte limits, parser/type limits, finite preparation deadline and behavior after a changed source file. |
 | Optional historical retention | User-visible opt-in/withdrawal contract for the initial 365-day period and exact protection of still-required authority/recovery evidence. No default opt-in. |
 
+## Three-loop documentation direction and open operational contracts (2026-10-13)
+
+**Approved behavior, not an implemented self-updater.** The user specified three bounded loops: **self-recovery** of previously approved work through detection, fencing, independent effect reconciliation and safe resumption; **self-repair** of failing acceptance criteria through evidence-linked diagnoses, falsifiable limited attempts and rechecking; and **user-governed self-improvement** through evidence-linked proposals, FULL council and explicit approval for material changes, with no silent alteration or activation of Mayasaba's executable, policy or authority. The authoritative §9 governs these through existing Orchestrator, Kernel, Gateway, Handoff #9, Task/DAG, Workspace, SQLite, Validation/Repair, Evidence and Policy services, adding no state machine or service owner.
+
+**Still OPEN at contract level:** Exact versioned per-operation deadlines and heartbeat/stall criteria, observable independent CLI/child/service liveness, finite retry and recovery bounds, cancellation escalation, idempotency keys, reconciliation proof for source effect cessation, cross-service command/event/error identities, routing between recovery and repair, improvement-proposal triggers/deduplication, and the separately user-authorized Mayasaba release/update verification and activation procedure. These are not coding-agent defaults. Existing P0/P1 chains and D-09/D-10/D-14/D-15/D-18 remain open. The three-loop names and scenarios below cannot substitute for schemas, exhaustive traces or local Windows proof.
+
 ## Divergence scenarios the completed documents must settle
 
 For each scenario, write initial durable records and observed facts, then the **one allowed controller action**, owner command, event, user projection and recovery result. Replay it against the full contract set. Some cases now have an approved safety direction while their exact typed traces remain incomplete:
