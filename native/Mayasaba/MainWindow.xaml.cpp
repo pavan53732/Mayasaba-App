@@ -109,11 +109,17 @@ namespace winrt::Mayasaba::implementation
         StartButton().IsEnabled(!project->closed);
         PauseButton().IsEnabled(!project->closed);
         StopButton().IsEnabled(!project->closed);
+        auto pending = storage_->Pending(activeProject_);
+        pendingAttemptId_ = pending ? pending->id : "";
+        pendingAttemptProject_ = pending ? activeProject_ : "";
+        pendingAttemptBody_ = pending ? pending->body : "";
         suppressDraft_ = true;
-        ComposerBox().Text(Utf16(project->draft));
+        ComposerBox().Text(Utf16(pending ? pending->body : project->draft));
         suppressDraft_ = false;
-        ComposerBox().IsReadOnly(project->closed);
-        SendButton().IsEnabled(!project->closed && !project->draft.empty());
+        ComposerBox().IsReadOnly(project->closed || pending.has_value());
+        SendButton().Content(pending ? L"Reconcile Send" : L"Send →");
+        SendButton().IsEnabled(!project->closed && (pending.has_value() || !project->draft.empty()));
+        if (pending) ShowNotice(L"A previous Send is unresolved. Its exact text and submission identity are locked; use Reconcile Send.");
         RenderHistory();
         ComposerBox().Focus(FocusState::Programmatic);
     }
@@ -174,7 +180,10 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::PersistDraft()
     {
         if (suppressDraft_ || activeProject_.empty() || !storage_) return;
-        try { storage_->SaveDraft(activeProject_, Utf8(ComposerBox().Text().c_str())); }
+        try
+        {
+            if (storage_->Pending(activeProject_)) return; // protect staged immutable text
+            storage_->SaveDraft(activeProject_, Utf8(ComposerBox().Text().c_str())); }
         catch (std::exception const& e)
         { ShowNotice(L"Draft not confirmed saved: " + Utf16(e.what()), true); }
     }
@@ -239,23 +248,47 @@ namespace winrt::Mayasaba::implementation
         try
         {
             PersistDraft();
-            // Persist one ID and exact payload before attempting owner commit.
-            std::string submission = storage_->StageSubmission(activeProject_, SubmissionId(), Utf8(text));
-            auto result = storage_->SaveContribution(activeProject_, submission, Utf8(text));
+            // Preserve the original ID even if COMMIT succeeded but its receipt was lost.
+            // The Store stages and reuses the exact pending bytes across restart.
+            std::string const payload = Utf8(text);
+            std::string submission;
+            if (pendingAttemptProject_ == activeProject_ && !pendingAttemptId_.empty())
+            {
+                if (pendingAttemptBody_ != payload)
+                    throw std::runtime_error("A different payload cannot replace an unresolved submission");
+                submission = pendingAttemptId_;
+            }
+            else
+            {
+                submission = storage_->StageSubmission(activeProject_, SubmissionId(), payload);
+                pendingAttemptId_ = submission;
+                pendingAttemptProject_ = activeProject_;
+                pendingAttemptBody_ = payload;
+            }
+            auto result = storage_->SaveContribution(activeProject_, submission, payload);
             if (result == mayasaba::SaveDisposition::Saved ||
                 result == mayasaba::SaveDisposition::Duplicate)
             {
+                pendingAttemptId_.clear();
+                pendingAttemptProject_.clear();
+                pendingAttemptBody_.clear();
                 suppressDraft_ = true;
                 ComposerBox().Text(L"");
                 suppressDraft_ = false;
+                ComposerBox().IsReadOnly(false);
+                SendButton().Content(L"Send →");
                 SendButton().IsEnabled(false);
                 RenderHistory();
                 ShowNotice(L"Message durably saved. CLI interpretation/replies are not yet implemented.");
             }
             else
+            {
+                ComposerBox().IsReadOnly(true);
+                SendButton().Content(L"Reconcile Send");
                 ShowNotice(result == mayasaba::SaveDisposition::Unknown ?
-                    L"Commit result UNKNOWN. Draft retained; do not retry until original submission reconciles." :
-                    L"Submission rejected without changing the draft.", true);
+                    L"Commit UNKNOWN. Reconcile with the exact stored submission identity; no new ID or payload is allowed." :
+                    L"Submission blocked. The original pending identity and draft were preserved.", true);
+            }
         }
         catch (std::exception const& e)
         { ShowNotice(L"Submission not confirmed: " + Utf16(e.what()), true); }

@@ -32,6 +32,9 @@ namespace winrt::Mayasaba::implementation
         std::wstring prebindingDraft_;
         bool suppressDraft_{false};
         bool busy_{false};
+        std::string pendingAttemptId_;
+        std::string pendingAttemptProject_;
+        std::string pendingAttemptBody_;
         Microsoft::UI::Xaml::DispatcherTimer draftTimer_{nullptr};
 
         void ShowWelcome();
