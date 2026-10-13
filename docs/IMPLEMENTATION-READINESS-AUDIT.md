@@ -19,6 +19,10 @@ These corrections remove contradictions; they do **not** complete their typed co
 | Configuration precedence | Safety invariants and approved authority outrank layered Mayasaba settings; unspecified project/user overrides cannot widen task policy or process access. | A per-setting type, default, merge, allowed-layer, and rejection contract. |
 | Onboarding | A successful folder binding opens Chat immediately. **Next** advances only from welcome to open folder; screen 2 has no second Next-to-Chat action. | Remaining first-run UI contract details and scenario review. |
 
+## Contract-completion execution register (documentation only)
+
+The dependency-ordered [contract completion and implementation entry register](./CONTRACT-COMPLETION-REGISTER.md) maps the current Z-01–Z-14 blocker families, genuinely open decisions, four additional adversarial subcases and the minimum executable owner-command/evidence template. It records **planning and acceptance requirements, not completed schemas or tested Windows capabilities**. The original D/B/P0/P1 inventory below remains open until its individual closure proof is supplied.
+
 ## Existing blocking contract gaps
 
 The earlier P0/P1 audit remains substantially open. In particular, the repository still has no complete versioned machine-readable definitions for authoritative records, typed UI/application commands and queries, domain events, MCF payloads and errors, nor complete transition tables for the **twelve** state machines. The prose naming those objects is not their schema. The following are the most consequential missing chains:
