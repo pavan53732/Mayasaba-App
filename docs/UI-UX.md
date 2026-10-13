@@ -72,7 +72,7 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 
 Chat is the only persistent route and fills the application workspace. There is no side rail, tab bar, dashboard, alternate project screen or permanent details pane. The shell has a compact header and conversation area; a composer dock appears below the timeline after the first confirmed persisted contribution:
 
-1. **Compact Chat header** — project identity, inspectable canonical path, lifecycle phase, operational condition, the compact three-CLI status indicator at its top right, Pause/Stop and a small overflow menu containing **Switch Folder**.
+1. **Compact Chat header** — project identity, inspectable canonical path, lifecycle phase, operational condition, the compact three-CLI status indicator at its top right, Pause/Stop and a small overflow menu without any folder action.
 2. **Conversation area** — the chronological timeline of user messages, agent responses and controller-owned contextual cards. In an empty bound project, the one composer is centered here until the first user contribution is confirmed persisted.
 3. **Composer dock** — after the first confirmed persisted contribution, the same composer, pending attachments and Send sit beneath the timeline. The empty bound-project Chat has no separate footer control.
 
@@ -81,6 +81,7 @@ Council, requirements, decisions, tasks, files/evidence, validation/repair, deli
 ### Desktop layout
 
 ```text
+SCREEN 3 — CHAT
 EMPTY BOUND PROJECT
 +--------------------------------------------------------------------------+
 | Mayasaba · Project + path         Hermes Agent CLI  ● READY              |
@@ -114,7 +115,7 @@ AFTER THE FIRST CONFIRMED PERSISTED MESSAGE
 
 The readiness values are illustrative; each actual indicator entry uses its CLI's current observed status. In both layouts it remains in the header's top-right region. A failed or uncertain first Send preserves the centered draft and shows its precise error without displaying a saved contribution or moving the composer. CLI problem cards can appear before the first user message without docking it.
 
-The active project and inspectable path remain in the header. **Switch Folder** is available from the header overflow menu and invokes the native picker; it is distinct from **Attach files** and is not a persistent control in Chat's lower-left corner. The conversation column is centered with a readable line length; structured controller cards may be wider when a matrix, file list or criterion table requires it.
+The active project and inspectable path remain in the header. Screen 3 has no folder control, visible or hidden, and **Attach files** remains a separate composer action. Project switching still needs a user entry point outside Chat; its placement is not specified by this preview. The conversation column is centered with a readable line length; structured controller cards may be wider when a matrix, file list or criterion table requires it.
 
 ### Contextual disclosure
 
@@ -187,7 +188,7 @@ Render immediately:
 - for a user with no bound project, the first-run onboarding sequence (§5.2) starting at screen 1; for a bound project, the Chat welcome/empty state;
 - an editable draft composer on the open-folder screen and in Chat;
 - disabled Send with a clear "Open a folder to send" explanation; and
-- **Switch Folder** in the Chat header overflow after a project is bound.
+- no folder control in bound-project Chat.
 
 Start bounded, non-mutating CLI checks in the background. The compact CLI status indicator renders in the Chat header as soon as each first observed result arrives; while a check is still running it shows that CLI as `CHECKING` (see §6.2).
 
@@ -216,7 +217,7 @@ A user with no bound project sees a dismissible onboarding sequence — **screen
 
 **Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing, consumes no model-provider usage, and **installs nothing** — the three CLIs stay machine-level tools the user installs and signs into outside Mayasaba, and Mayasaba never installs, updates or configures one, in the selected folder or elsewhere. The editable draft composer is available here; a draft typed on this screen is preserved when Chat opens and is never a submission before a root is bound.
 
-**Chat — the destination.** Binding a folder opens Chat's welcome view with the composer and header indicator. Its header overflow offers **Switch Folder**; there is no lower-left Open Folder/current-project control on Chat. This is the persistent route for every later launch.
+**Screen 3 — Chat, the destination.** Binding a folder opens Chat's welcome view with the composer and header indicator. No folder control appears in Chat or its overflow menu. This is the persistent route for every later launch.
 
 An empty bound project's composer is centered in the conversation area. A project restored with retained conversation opens with that same composer docked below its timeline. The first confirmed persisted user contribution moves the centered composer to the bottom for the continuing conversation; this visual transition never changes the submission command or CLI-readiness rules.
 
@@ -234,30 +235,50 @@ Rules:
 - No side effects. No installation, download, credential collection, model/provider change, working agent session, repository scan, Git initialization or provider usage results from these screens, and nothing is installed into the selected folder.
 
 ```text
-+--------------------------------------------------------------------------------------+
-| (● Kilo Code  ● Claude Code  ● Hermes)                                               |
-+--------------------------------------------------------------------------------------+
-|                                                                                      |
-|     Welcome to Mayasaba                                                              |
-|     A native Windows control plane that coordinates the coding CLIs you already       |
-|     have installed and verifies their work before anything is called done.           |
-|                                                                                      |
-|     Mayasaba works with three CLIs you install and sign into yourself:               |
-|       Hermes Agent CLI · Kilo Code CLI · Claude Code CLI                              |
-|     It never installs or changes them. A missing CLI never blocks opening your       |
-|     folder, and once it is open it never blocks Chat or your history.                |
-|                                                                                      |
-|     Next step: open the project folder you want to work in.                          |
-|                                                                                      |
-|                                                    [Skip]              [Next >]      |
-+--------------------------------------------------------------------------------------+
+SCREEN 1 — WELCOME
++--------------------------------------------------------------------------+
+| Mayasaba                         Hermes Agent CLI  ● CHECKING            |
+|                                  Kilo Code CLI     ● CHECKING            |
+|                                  Claude Code CLI   ● CHECKING            |
++--------------------------------------------------------------------------+
+|                                                                          |
+|       Welcome to Mayasaba                                                |
+|       A native Windows control plane for the coding CLIs you already     |
+|       use. It checks their work before calling it done.                  |
+|                                                                          |
+|       You install and sign in to the three CLIs yourself. Mayasaba       |
+|       does not install or change them.                                   |
+|                                                                          |
+|       A missing CLI never blocks opening a folder or Chat.               |
+|                                                                          |
+|                                                 [Skip]       [Next]      |
++--------------------------------------------------------------------------+
+
+SCREEN 2 — OPEN FOLDER
++--------------------------------------------------------------------------+
+| Mayasaba                         Hermes Agent CLI  ● CHECKING            |
+|                                  Kilo Code CLI     ● CHECKING            |
+|                                  Claude Code CLI   ● CHECKING            |
++--------------------------------------------------------------------------+
+|                                                                          |
+|       Open a project folder                                              |
+|       Choose the folder where your work belongs. Opening it restores     |
+|       project identity; it starts no agents or repository scan.          |
+|                                                                          |
+|       [Back]                                  [Open Folder]              |
+|                                                                          |
+|       [ Draft a message before opening a folder...              ]        |
+|                                                    [Send disabled]       |
++--------------------------------------------------------------------------+
 ```
+
+The `CHECKING` values are illustrative; each screen shows the current observed readiness for all three CLIs. Binding the folder on screen 2 opens screen 3 Chat immediately, with no separate Next action.
 
 Accessibility: focus moves to each screen's heading when it opens; **Next**, **Back** and **Skip** are keyboard-reachable with **Escape** mapped to Skip; the screen change is announced to screen readers; the layout honors high contrast, DPI scaling and reduced motion; and the status indicator keeps its accessible names on every screen.
 
 ### 5.3 Open Folder
 
-**Open Folder** on onboarding screen 2 and **Switch Folder** in the Chat header overflow launch the same native Windows directory picker. The selected path is a candidate until Workspace Manager and Policy Engine validate locality, existence, permissions, aliases, and scope. Project service then creates or restores the project identity.
+**Open Folder** on onboarding screen 2 launches the native Windows directory picker. The selected path is a candidate until Workspace Manager and Policy Engine validate locality, existence, permissions, aliases, and scope. Project service then creates or restores the project identity. Later project switching must retain the same picker and authority rules; its user entry point outside Chat remains to be designed.
 
 Success behavior:
 
@@ -271,7 +292,7 @@ Rejection behavior:
 
 - explain the exact path or authorization problem;
 - preserve the draft;
-- keep the applicable Open Folder or Switch Folder action available; and
+- keep the applicable folder-selection action available; and
 - do not create a partial project identity or imply access was granted.
 
 Opening a folder must not visibly or invisibly:
@@ -286,7 +307,7 @@ Opening a folder must not visibly or invisibly:
 
 ### 5.4 Project switching
 
-The Chat header overflow offers **Switch Folder**, which invokes the native picker without opening a new top-level route. Switching uses Project service and must:
+The entry point for project switching is unresolved. It must be outside Chat screen 3, invoke the native picker without adding a new top-level route, and use Project service. Switching must:
 
 - preserve each project's independent Chat and state;
 - never retarget an active CLI session to the new root;
@@ -493,7 +514,7 @@ Every reply-eligible submitted message, including “Hi”, goes to all three au
 
 While collecting responses or reviews, show one source-linked turn status without fabricated percentages or simulated agent agreement. The compact header indicator continues to report each CLI's observed installation readiness independently of turn progress; per-agent session and task state stay on the work cards. With any missing response/review, keep the persisted contribution and explain what is waiting/blocked; never show a one-/two-agent reply as complete. Bound retries and draft revision, preserve reading position, and mark any displayed draft provisional. Finalization displays one primary answer; replay must not duplicate it, and corrections are explicit supersessions. A disagreement may be stated in the reviewed answer rather than hidden.
 
-Explicit Pause/Stop controls execute immediately without waiting for the three-agent exchange or contribution persistence. Show the observed control outcome separately; do not restart stopped agents to obtain a conversational answer. A control-only Chat submission still attempts to persist one contribution but creates no turn or writer ordinal, and failed or uncertain persistence sends no CLI notification. Send, history, drafts and folder controls remain available with missing agents. A greeting grants no scan, web research or file-write authority. For an engineering request, distinguish independent input, FULL-council plan review, required user choices, verified all-three plan application, individually assigned background tasks and evidence-backed delivery. Do not require an extra finalized conversational reply before authorized planning can proceed. No model/provider settings page is added.
+Explicit Pause/Stop controls execute immediately without waiting for the three-agent exchange or contribution persistence. Show the observed control outcome separately; do not restart stopped agents to obtain a conversational answer. A control-only Chat submission still attempts to persist one contribution but creates no turn or writer ordinal, and failed or uncertain persistence sends no CLI notification. Send, history, drafts, folder selection and project switching remain available with missing agents. A greeting grants no scan, web research or file-write authority. For an engineering request, distinguish independent input, FULL-council plan review, required user choices, verified all-three plan application, individually assigned background tasks and evidence-backed delivery. Do not require an extra finalized conversational reply before authorized planning can proceed. No model/provider settings page is added.
 
 ### 9.2 Repository exploration
 
@@ -958,7 +979,7 @@ At minimum, native automated and manual acceptance must cover:
 72. English-only product language: inspect onboarding, Chat, cards, questions, approvals, errors, recovery, notifications, installer text and screen-reader output under multiple Windows display locales. Verify Mayasaba offers no language picker or translated resources and presents its own text in English. Supply non-English first, middle and final stream segments and complete replies from each CLI: none reaches provisional Chat, the primary reply, Show details, notifications, history or accessibility output; the affected turn shows an English blocker and controlled recovery without translation or reduced-agent completion. Supply non-English project/attachment source: Mayasaba must not surface raw non-English text in previews, thumbnails, file labels, citations or accessible names; a required deliverable that cannot satisfy English-only acceptance is blocked. Verify authorized source bytes and provenance remain available to the owning evidence path without being mistaken for approved output.
 73. CLI session replacement: while one project has dependent work, replace one of its CLI sessions. Show the linked handoff and source-fencing status without presenting an old lease or ACK as successor readiness. Withhold dependent work and show an English blocker if the source effect outcome is unknown or the successor has stale context. Release the hold only after current application and barrier evidence; preserve Chat, unrelated work and the user's reading position throughout. Replaying the handoff must not duplicate a reply or task attempt.
 74. Initial Windows support: on Windows 11 25H2 native x64 outside S mode, a missing CLI does not block MSI admission or Chat after installation; show its normal readiness/problem card. On Windows 10, Windows 11 24H2/26H2, ARM64 with x64 emulation, x86, Server or S mode, the MSI refuses before partial installation with an English unsupported-platform reason. Do not show these platforms as supported merely because Windows App SDK can run on them.
-75. Composer placement: in an empty bound project, verify the one composer is centered in the conversation area, with no lower-left Open Folder/current-project control. The header identifies the project and its overflow offers Switch Folder separately from Attach files. A confirmed persisted first user contribution docks that composer below the timeline; subsequent messages appear chronologically above it, and a restored project with retained conversation starts docked. A failed or uncertain first Send preserves the centered unsaved draft and precise recovery action without a false saved message or layout change; CLI problem cards alone do not dock the composer. Verify attachments, focus, screen-reader reading order, narrow windows, theme changes, reduced motion and reading position without creating another input path or route.
+75. Three-screen flow and composer placement: screen 1 shows welcome and truthful CLI status; Next, Skip or Escape reach mandatory screen 2, where Back returns to welcome and Open Folder binds the root before Chat opens. Screen 3 Chat has no folder control, visible or hidden. In an empty bound project, verify the one composer is centered; a confirmed persisted first contribution docks it below the timeline, later messages appear above it, and retained conversation opens docked. A failed or uncertain first Send preserves the centered draft and precise recovery action without a false saved message or layout change; CLI problem cards alone do not dock it. Verify attachments, focus, screen-reader reading order, narrow windows, theme changes, reduced motion and reading position without another input path or route. Project switching entry placement remains to be decided before native implementation.
 
 ## 22. UX anti-patterns
 

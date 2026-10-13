@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Mayasaba Chat interface preview</title>
+  <title>Mayasaba three-screen interface preview</title>
   <style>
     :root {
       font-family: "Segoe UI Variable", "Segoe UI", sans-serif;
@@ -47,6 +47,7 @@
       color: var(--ink);
     }
     .preview-controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .preview-controls button[aria-current="step"] { border-color: var(--authority); color: var(--authority); font-weight: 650; }
 
     .app {
       position: relative;
@@ -92,6 +93,37 @@
       color: var(--ink);
       font-size: 12px;
     }
+    .app:not([data-screen="chat"]) .project,
+    .app:not([data-screen="chat"]) .project-state,
+    .app:not([data-screen="chat"]) .header-actions,
+    .app:not([data-screen="chat"]) .timeline,
+    .app:not([data-screen="chat"]) .empty-prompt { display: none; }
+    .app:not([data-screen="folder"]):not([data-screen="chat"]) .composer { display: none; }
+    .app[data-screen="chat"] .onboarding { display: none; }
+    .app[data-screen="welcome"] .folder-screen,
+    .app[data-screen="folder"] .welcome-screen { display: none; }
+
+    .onboarding {
+      position: absolute;
+      inset: 118px 0 0;
+      overflow-y: auto;
+      padding: 52px max(32px, calc((100% - 680px) / 2));
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+    }
+    .onboarding h1 { margin: 0 0 16px; font-size: clamp(28px, 3.5vw, 38px); letter-spacing: -.035em; font-weight: 600; }
+    .onboarding p { max-width: 630px; margin: 0 0 15px; color: var(--muted); font-size: 15px; line-height: 1.55; }
+    .onboarding .lead { color: var(--ink); font-size: 17px; }
+    .onboarding .agent-list { margin: 8px 0 20px; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+    .onboarding .agent-list li { padding: 7px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); font-size: 12px; }
+    .onboarding-actions { display: flex; align-items: center; gap: 10px; margin-top: 17px; }
+    .onboarding-actions button { padding: 9px 17px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-size: 13px; }
+    .onboarding-actions .primary { border-color: var(--authority); background: var(--authority); color: white; font-weight: 650; }
+    .folder-screen { padding-bottom: 175px; }
+    .folder-screen .onboarding-actions { margin-top: 12px; }
+    .folder-screen .draft-note { margin-top: 20px; font-size: 12px; }
 
     .timeline {
       position: absolute;
@@ -161,10 +193,6 @@
     .send { grid-column: 2; grid-row: 2; padding: 8px 17px; border: 1px solid var(--authority); border-radius: 6px; background: var(--authority); color: white; font-size: 12px; font-weight: 650; }
     .send:disabled { opacity: .48; cursor: default; }
 
-    .menu { position: absolute; z-index: 5; top: 62px; right: 18px; min-width: 155px; padding: 5px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 3px 12px rgba(0,0,0,.08); }
-    .menu[hidden] { display: none; }
-    .menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; font-size: 12px; }
-    .menu button:hover { background: var(--authority-quiet); }
     .toast { position: absolute; z-index: 5; right: 20px; top: 66px; max-width: 260px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-size: 12px; box-shadow: 0 3px 12px rgba(0,0,0,.08); }
     .toast[hidden] { display: none; }
 
@@ -174,6 +202,8 @@
       .header-right { width: 100%; justify-content: space-between; }
       .readiness { gap: 3px; }
       .timeline { top: 161px; padding: 24px 24px 30px; }
+      .onboarding { top: 161px; padding: 34px 28px; }
+      .folder-screen { padding-bottom: 175px; }
       .app.has-messages .timeline { bottom: 150px; }
       .empty-prompt { top: calc(50% - 129px); }
       .composer { width: calc(100% - 32px); }
@@ -187,11 +217,20 @@
       .readiness { min-width: 0; }
       .readiness-row { grid-template-columns: minmax(105px, 1fr) 8px 50px; gap: 5px; }
       .timeline { top: 193px; }
+      .onboarding { top: 193px; padding: 26px 22px; justify-content: flex-start; }
+      .folder-screen { padding-bottom: 175px; }
       .empty-prompt { top: calc(50% - 118px); }
       .empty-prompt p { font-size: 12px; }
       .composer { top: 59%; }
       .has-messages .composer { top: calc(100% - 77px); }
     }
+    .app[data-screen="folder"] .composer { top: auto; bottom: 24px; transform: translateX(-50%); }
+    .app[data-screen="folder"] .send { opacity: .48; }
+    .app[data-screen="folder"] .composer-tools { display: none; }
+    .menu { position: absolute; z-index: 5; top: 62px; right: 18px; min-width: 155px; padding: 5px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 3px 12px rgba(0,0,0,.08); }
+    .menu[hidden] { display: none; }
+    .menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; font-size: 12px; }
+    .menu button:hover { background: var(--authority-quiet); }
     @media (prefers-color-scheme: dark) {
       :root {
         --canvas: #111318;
@@ -207,6 +246,7 @@
       }
       .composer { border-color: var(--line); box-shadow: none; }
       .send { color: #151a32; }
+      .onboarding-actions .primary { color: #151a32; }
     }
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
@@ -219,11 +259,11 @@
 </head>
 <body>
   <div class="preview-bar">
-    <span><strong>Mayasaba Chat preview</strong> · Sample project and status. Nothing is sent or saved.</span>
-    <div class="preview-controls"><button type="button" id="sample">Show conversation</button><button type="button" id="reset">Reset preview</button></div>
+    <span><strong>Mayasaba interface preview</strong> · Open Folder uses a sample project. Nothing is sent or saved.</span>
+    <div class="preview-controls" aria-label="Preview screens"><button type="button" data-preview-screen="welcome" aria-current="step">1 Welcome</button><button type="button" data-preview-screen="folder">2 Open Folder</button><button type="button" data-preview-screen="chat">3 Chat</button><button type="button" id="sample">Show conversation</button><button type="button" id="reset">Reset</button></div>
   </div>
 
-  <main class="app" id="app" aria-label="Mayasaba Chat layout preview">
+  <main class="app" id="app" data-screen="welcome" aria-label="Mayasaba interface preview">
     <header class="header">
       <div>
         <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Mayasaba</span></div>
@@ -236,9 +276,26 @@
           <div class="readiness-row"><span>Kilo Code CLI</span><span class="dot" aria-hidden="true"></span><strong>READY</strong></div>
           <div class="readiness-row"><span>Claude Code CLI</span><span class="dot" aria-hidden="true"></span><strong>READY</strong></div>
         </div>
-        <div class="header-actions"><button type="button" data-preview-only="Pause">Pause</button><button type="button" data-preview-only="Stop">Stop</button><button type="button" id="more" aria-label="More options" aria-expanded="false" aria-controls="projectMenu">•••</button></div>
+        <div class="header-actions"><button type="button" data-preview-only="Pause">Pause</button><button type="button" data-preview-only="Stop">Stop</button><button type="button" id="more" aria-label="More options" aria-expanded="false" aria-controls="chatMenu">•••</button></div>
       </div>
     </header>
+
+    <section class="onboarding welcome-screen" aria-labelledby="welcomeTitle">
+      <h1 id="welcomeTitle" tabindex="-1">Welcome to Mayasaba</h1>
+      <p class="lead">Mayasaba coordinates the coding tools already on your PC and checks their work before calling it done.</p>
+      <p>Install and sign in to these tools yourself. Mayasaba does not install, update, or change their settings:</p>
+      <ul class="agent-list"><li>Hermes Agent CLI</li><li>Kilo Code CLI</li><li>Claude Code CLI</li></ul>
+      <p>A missing tool does not stop you from opening a project folder. Once a folder is open, you can use Chat while Mayasaba shows what needs attention.</p>
+      <div class="onboarding-actions"><button type="button" id="skip">Skip</button><button type="button" class="primary" id="next">Next</button></div>
+    </section>
+
+    <section class="onboarding folder-screen" aria-labelledby="folderTitle">
+      <h1 id="folderTitle" tabindex="-1">Open a project folder</h1>
+      <p class="lead">Choose the folder where your work belongs.</p>
+      <p>Opening it creates or restores the project in Mayasaba. It does not install a CLI, scan the folder, start an agent, initialize Git, or approve any work.</p>
+      <div class="onboarding-actions"><button type="button" id="back">Back</button><button type="button" class="primary" id="openFolder">Open Folder</button></div>
+      <p class="draft-note">You can draft a message below. Send becomes available after a folder is open.</p>
+    </section>
 
     <section class="timeline" id="timeline" aria-label="Conversation" aria-live="polite"></section>
     <div class="empty-prompt" id="emptyPrompt"><h1>What would you like to work on?</h1><p>Start a conversation about the open project.</p></div>
@@ -249,7 +306,7 @@
       <button type="submit" class="send" id="send" disabled>Send</button>
     </form>
 
-    <div class="menu" id="projectMenu" hidden><button type="button" data-preview-only="Switch Folder">Switch Folder</button><button type="button" data-preview-only="Close Project">Close Project</button></div>
+    <div class="menu" id="chatMenu" hidden><button type="button" data-preview-only="Diagnostics">Diagnostics</button><button type="button" data-preview-only="Close Project">Close Project</button></div>
     <div class="toast" id="toast" role="status" hidden></div>
   </main>
 
@@ -314,7 +371,40 @@
       timeline.scrollTop = timeline.scrollHeight;
     }
 
-    message.addEventListener('input', () => { send.disabled = !message.value.trim(); });
+    function setScreen(screen, focus = true) {
+      app.dataset.screen = screen;
+      document.getElementById('chatMenu').hidden = true;
+      document.getElementById('more').setAttribute('aria-expanded', 'false');
+      send.disabled = screen !== 'chat' || !message.value.trim();
+      document.querySelectorAll('[data-preview-screen]').forEach(button => {
+        if (button.dataset.previewScreen === screen) button.setAttribute('aria-current', 'step');
+        else button.removeAttribute('aria-current');
+      });
+      if (focus) {
+        if (screen === 'welcome') document.getElementById('welcomeTitle').focus();
+        if (screen === 'folder') document.getElementById('folderTitle').focus();
+        if (screen === 'chat') message.focus();
+      }
+    }
+
+    document.querySelectorAll('[data-preview-screen]').forEach(button => {
+      button.addEventListener('click', () => setScreen(button.dataset.previewScreen));
+    });
+    document.getElementById('next').addEventListener('click', () => setScreen('folder'));
+    document.getElementById('skip').addEventListener('click', () => setScreen('folder'));
+    document.getElementById('back').addEventListener('click', () => setScreen('welcome'));
+    document.getElementById('openFolder').addEventListener('click', () => setScreen('chat'));
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      const menu = document.getElementById('chatMenu');
+      if (!menu.hidden) {
+        menu.hidden = true;
+        document.getElementById('more').setAttribute('aria-expanded', 'false');
+        document.getElementById('more').focus();
+      } else if (app.dataset.screen === 'welcome') setScreen('folder');
+    });
+
+    message.addEventListener('input', () => { send.disabled = app.dataset.screen !== 'chat' || !message.value.trim(); });
     message.addEventListener('keydown', event => {
       if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
         event.preventDefault();
@@ -324,7 +414,7 @@
     composer.addEventListener('submit', event => {
       event.preventDefault();
       const value = message.value.trim();
-      if (!value) return;
+      if (!value || app.dataset.screen !== 'chat') return;
       addMessage(value);
       message.value = '';
       send.disabled = true;
@@ -335,33 +425,33 @@
       app.classList.remove('has-messages');
       message.value = '';
       send.disabled = true;
-      message.focus();
+      setScreen('welcome');
     });
     document.getElementById('sample').addEventListener('click', () => {
+      setScreen('chat');
       if (!app.classList.contains('has-messages')) addMessage('Help me understand what this project needs next.');
     });
     const more = document.getElementById('more');
-    const projectMenu = document.getElementById('projectMenu');
+    const chatMenu = document.getElementById('chatMenu');
     more.addEventListener('click', () => {
-      projectMenu.hidden = !projectMenu.hidden;
-      more.setAttribute('aria-expanded', String(!projectMenu.hidden));
-    });
-    document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !projectMenu.hidden) {
-        projectMenu.hidden = true;
-        more.setAttribute('aria-expanded', 'false');
-        more.focus();
-      }
+      chatMenu.hidden = !chatMenu.hidden;
+      more.setAttribute('aria-expanded', String(!chatMenu.hidden));
     });
     document.querySelectorAll('[data-preview-only]').forEach(button => {
       button.addEventListener('click', () => {
-        projectMenu.hidden = true;
+        chatMenu.hidden = true;
         more.setAttribute('aria-expanded', 'false');
         showToast(button.dataset.previewOnly + ' is shown for layout only in this preview.');
       });
     });
-    if (new URLSearchParams(location.search).get('state') === 'conversation') {
+    const params = new URLSearchParams(location.search);
+    if (params.get('state') === 'conversation') {
+      setScreen('chat', false);
       addMessage('Help me understand what this project needs next.');
+    } else if (params.get('screen') === 'folder' || params.get('screen') === 'chat') {
+      setScreen(params.get('screen'), false);
+    } else {
+      setScreen('welcome');
     }
   </script>
 </body>
