@@ -22,12 +22,13 @@
     }
 
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--page); color: var(--ink); }
+    body { display: flex; flex-direction: column; height: 100dvh; margin: 0; background: var(--page); color: var(--ink); }
     button, textarea { font: inherit; }
     button { cursor: pointer; }
     button:focus-visible, textarea:focus-visible { outline: 2px solid var(--authority); outline-offset: 3px; }
 
     .preview-bar {
+      flex: 0 0 auto;
       min-height: 48px;
       padding: 10px max(22px, calc((100vw - 1180px) / 2));
       display: flex;
@@ -49,9 +50,10 @@
 
     .app {
       position: relative;
+      flex: 1 1 auto;
       width: min(1180px, calc(100vw - 32px));
-      height: min(750px, calc(100dvh - 72px));
-      min-height: 540px;
+      max-height: 750px;
+      min-height: 0;
       margin: 0 auto 16px;
       overflow: hidden;
       background: var(--canvas);
@@ -93,11 +95,11 @@
 
     .timeline {
       position: absolute;
-      inset: 118px 0 55px;
+      inset: 118px 0 0;
       overflow-y: auto;
       padding: 42px max(28px, calc((100% - 680px) / 2)) 28px;
     }
-    .app.has-messages .timeline { bottom: 206px; }
+    .app.has-messages .timeline { bottom: 150px; }
     .empty-prompt {
       position: absolute;
       top: calc(50% - 137px);
@@ -150,7 +152,7 @@
       box-shadow: 0 5px 22px rgba(32, 33, 36, .08);
       transition: top .42s ease, transform .42s ease;
     }
-    .has-messages .composer { top: calc(100% - 134px); transform: translate(-50%, -50%); }
+    .has-messages .composer { top: calc(100% - 77px); transform: translate(-50%, -50%); }
     .composer textarea { width: 100%; min-height: 46px; max-height: 120px; resize: vertical; padding: 10px 2px 4px; border: 0; outline: none; background: transparent; color: var(--ink); line-height: 1.4; }
     .composer textarea::placeholder { color: var(--muted); }
     .composer-tools { grid-column: 1; display: flex; align-items: center; gap: 10px; }
@@ -159,36 +161,36 @@
     .send { grid-column: 2; grid-row: 2; padding: 8px 17px; border: 1px solid var(--authority); border-radius: 6px; background: var(--authority); color: white; font-size: 12px; font-weight: 650; }
     .send:disabled { opacity: .48; cursor: default; }
 
-    .footer { position: absolute; inset: auto 0 0; height: 55px; display: flex; align-items: center; padding: 0 28px; border-top: 1px solid var(--line); background: var(--surface); }
-    .folder { padding: 8px 11px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-size: 12px; }
-    .toast { position: absolute; z-index: 5; right: 20px; bottom: 61px; max-width: 260px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-size: 12px; box-shadow: 0 3px 12px rgba(0,0,0,.08); }
+    .menu { position: absolute; z-index: 5; top: 62px; right: 18px; min-width: 155px; padding: 5px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 3px 12px rgba(0,0,0,.08); }
+    .menu[hidden] { display: none; }
+    .menu button { display: block; width: 100%; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); text-align: left; font-size: 12px; }
+    .menu button:hover { background: var(--authority-quiet); }
+    .toast { position: absolute; z-index: 5; right: 20px; top: 66px; max-width: 260px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); color: var(--ink); font-size: 12px; box-shadow: 0 3px 12px rgba(0,0,0,.08); }
     .toast[hidden] { display: none; }
 
     @media (max-width: 860px) {
-      .app { width: calc(100vw - 16px); height: calc(100dvh - 68px); min-height: 520px; }
+      .app { width: calc(100vw - 16px); }
       .header { padding: 15px 17px; gap: 9px; flex-direction: column; min-height: 161px; }
       .header-right { width: 100%; justify-content: space-between; }
       .readiness { gap: 3px; }
       .timeline { top: 161px; padding: 24px 24px 30px; }
-      .app.has-messages .timeline { bottom: 206px; }
+      .app.has-messages .timeline { bottom: 150px; }
       .empty-prompt { top: calc(50% - 129px); }
       .composer { width: calc(100% - 32px); }
-      .footer { padding: 0 16px; }
     }
     @media (max-width: 540px) {
       .preview-bar { align-items: flex-start; }
       .preview-bar span { max-width: 270px; }
       .header { min-height: 193px; }
       .header-right { gap: 9px; }
-      .header-actions { flex-direction: column; }
-      .header-actions button { padding: 4px 7px; }
+      .header-actions button { padding: 4px 6px; }
       .readiness { min-width: 0; }
       .readiness-row { grid-template-columns: minmax(105px, 1fr) 8px 50px; gap: 5px; }
       .timeline { top: 193px; }
       .empty-prompt { top: calc(50% - 118px); }
       .empty-prompt p { font-size: 12px; }
       .composer { top: 59%; }
-      .has-messages .composer { top: calc(100% - 134px); }
+      .has-messages .composer { top: calc(100% - 77px); }
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -234,7 +236,7 @@
           <div class="readiness-row"><span>Kilo Code CLI</span><span class="dot" aria-hidden="true"></span><strong>READY</strong></div>
           <div class="readiness-row"><span>Claude Code CLI</span><span class="dot" aria-hidden="true"></span><strong>READY</strong></div>
         </div>
-        <div class="header-actions"><button type="button" data-preview-only="Pause">Pause</button><button type="button" data-preview-only="Stop">Stop</button></div>
+        <div class="header-actions"><button type="button" data-preview-only="Pause">Pause</button><button type="button" data-preview-only="Stop">Stop</button><button type="button" id="more" aria-label="More options" aria-expanded="false" aria-controls="projectMenu">•••</button></div>
       </div>
     </header>
 
@@ -247,7 +249,7 @@
       <button type="submit" class="send" id="send" disabled>Send</button>
     </form>
 
-    <footer class="footer"><button type="button" class="folder" data-preview-only="Open Folder">Open Folder / Sample project ▾</button></footer>
+    <div class="menu" id="projectMenu" hidden><button type="button" data-preview-only="Switch Folder">Switch Folder</button><button type="button" data-preview-only="Close Project">Close Project</button></div>
     <div class="toast" id="toast" role="status" hidden></div>
   </main>
 
@@ -338,8 +340,25 @@
     document.getElementById('sample').addEventListener('click', () => {
       if (!app.classList.contains('has-messages')) addMessage('Help me understand what this project needs next.');
     });
+    const more = document.getElementById('more');
+    const projectMenu = document.getElementById('projectMenu');
+    more.addEventListener('click', () => {
+      projectMenu.hidden = !projectMenu.hidden;
+      more.setAttribute('aria-expanded', String(!projectMenu.hidden));
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !projectMenu.hidden) {
+        projectMenu.hidden = true;
+        more.setAttribute('aria-expanded', 'false');
+        more.focus();
+      }
+    });
     document.querySelectorAll('[data-preview-only]').forEach(button => {
-      button.addEventListener('click', () => showToast(button.dataset.previewOnly + ' is shown for layout only in this preview.'));
+      button.addEventListener('click', () => {
+        projectMenu.hidden = true;
+        more.setAttribute('aria-expanded', 'false');
+        showToast(button.dataset.previewOnly + ' is shown for layout only in this preview.');
+      });
     });
     if (new URLSearchParams(location.search).get('state') === 'conversation') {
       addMessage('Help me understand what this project needs next.');

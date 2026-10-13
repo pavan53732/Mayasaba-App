@@ -70,11 +70,11 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 
 ## 3. Chat-only information architecture
 
-Chat is the only persistent route and fills the application workspace. There is no side rail, tab bar, dashboard, alternate project screen or permanent details pane. The shell has three persistent regions, while the one composer changes position within them:
+Chat is the only persistent route and fills the application workspace. There is no side rail, tab bar, dashboard, alternate project screen or permanent details pane. The shell has a compact header and conversation area; a composer dock appears below the timeline after the first confirmed persisted contribution:
 
-1. **Compact Chat header** — project identity, inspectable canonical path, lifecycle phase, operational condition, the compact three-CLI status indicator at its top right, Pause/Stop and a small overflow menu.
+1. **Compact Chat header** — project identity, inspectable canonical path, lifecycle phase, operational condition, the compact three-CLI status indicator at its top right, Pause/Stop and a small overflow menu containing **Switch Folder**.
 2. **Conversation area** — the chronological timeline of user messages, agent responses and controller-owned contextual cards. In an empty bound project, the one composer is centered here until the first user contribution is confirmed persisted.
-3. **Chat footer** — lower-left Open Folder/current-project control in every state; after the first confirmed persisted contribution, the same composer, pending attachments and Send dock here beneath the timeline.
+3. **Composer dock** — after the first confirmed persisted contribution, the same composer, pending attachments and Send sit beneath the timeline. The empty bound-project Chat has no separate footer control.
 
 Council, requirements, decisions, tasks, files/evidence, validation/repair, delivery and agent diagnostics run in the background. They become visible only when relevant as a compact timeline card, an inline expansion of that card, or a temporary details sheet over Chat. The details sheet is not a route and cannot be pinned as a replacement workspace.
 
@@ -92,8 +92,6 @@ EMPTY BOUND PROJECT
 |                 [Attach files]                      [Send]               |
 |                                                                          |
 +--------------------------------------------------------------------------+
-| [Open Folder / Project ▾]                                                |
-+--------------------------------------------------------------------------+
 
 AFTER THE FIRST CONFIRMED PERSISTED MESSAGE
 +--------------------------------------------------------------------------+
@@ -109,14 +107,14 @@ AFTER THE FIRST CONFIRMED PERSISTED MESSAGE
 |                                                                          |
 |                                                [Jump to latest]          |
 +--------------------------------------------------------------------------+
-| [Open Folder / Project ▾]   [ Message Mayasaba...         ] [Send]       |
-|                             [Attach files] · attachment chips            |
+|             [ Message Mayasaba...                     ] [Send]           |
+|             [Attach files] · attachment chips                            |
 +--------------------------------------------------------------------------+
 ```
 
 The readiness values are illustrative; each actual indicator entry uses its CLI's current observed status. In both layouts it remains in the header's top-right region. A failed or uncertain first Send preserves the centered draft and shows its precise error without displaying a saved contribution or moving the composer. CLI problem cards can appear before the first user message without docking it.
 
-Open Folder/current project remains outside the text-entry field and must never look like Attach files. The conversation column is centered with a readable line length; structured controller cards may be wider when a matrix, file list or criterion table requires it.
+The active project and inspectable path remain in the header. **Switch Folder** is available from the header overflow menu and invokes the native picker; it is distinct from **Attach files** and is not a persistent control in Chat's lower-left corner. The conversation column is centered with a readable line length; structured controller cards may be wider when a matrix, file list or criterion table requires it.
 
 ### Contextual disclosure
 
@@ -134,7 +132,7 @@ Routine heartbeats, queue operations, protocol envelopes and low-value progress 
 - Wide: keep one centered conversation column; a temporary details sheet may use available width while Chat remains visible or dimmed behind it.
 - Medium: expand details inline when readable; otherwise use a modal sheet.
 - Narrow: cards become single-column and the details sheet becomes full-width but remains dismissible back to the same Chat position.
-- Keep the empty Chat composer centered in the available conversation area and dock the same composer below the timeline after the first confirmed persisted contribution; neither placement may obscure cards, the bottom-left project control or Send at narrow widths.
+- Keep the empty Chat composer centered in the available conversation area and dock the same composer below the timeline after the first confirmed persisted contribution; neither placement may obscure cards or Send at narrow widths.
 - Keep Pause/Stop reachable while work is active.
 - Restore scroll position, selected card and keyboard/screen-reader focus after closing details.
 
@@ -189,7 +187,7 @@ Render immediately:
 - for a user with no bound project, the first-run onboarding sequence (§5.2) starting at screen 1; for a bound project, the Chat welcome/empty state;
 - an editable draft composer on the open-folder screen and in Chat;
 - disabled Send with a clear "Open a folder to send" explanation; and
-- lower-left Open Folder in the Chat shell.
+- **Switch Folder** in the Chat header overflow after a project is bound.
 
 Start bounded, non-mutating CLI checks in the background. The compact CLI status indicator renders in the Chat header as soon as each first observed result arrives; while a check is still running it shows that CLI as `CHECKING` (see §6.2).
 
@@ -218,7 +216,7 @@ A user with no bound project sees a dismissible onboarding sequence — **screen
 
 **Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing, consumes no model-provider usage, and **installs nothing** — the three CLIs stay machine-level tools the user installs and signs into outside Mayasaba, and Mayasaba never installs, updates or configures one, in the selected folder or elsewhere. The editable draft composer is available here; a draft typed on this screen is preserved when Chat opens and is never a submission before a root is bound.
 
-**Chat — the destination.** Binding a folder opens Chat's welcome view with the composer, the lower-left project control and the header indicator. This is the persistent route for every later launch.
+**Chat — the destination.** Binding a folder opens Chat's welcome view with the composer and header indicator. Its header overflow offers **Switch Folder**; there is no lower-left Open Folder/current-project control on Chat. This is the persistent route for every later launch.
 
 An empty bound project's composer is centered in the conversation area. A project restored with retained conversation opens with that same composer docked below its timeline. The first confirmed persisted user contribution moves the centered composer to the bottom for the continuing conversation; this visual transition never changes the submission command or CLI-readiness rules.
 
@@ -259,12 +257,12 @@ Accessibility: focus moves to each screen's heading when it opens; **Next**, **B
 
 ### 5.3 Open Folder
 
-Open Folder launches the native Windows directory picker. The selected path is a candidate until Workspace Manager and Policy Engine validate locality, existence, permissions, aliases, and scope. Project service then creates or restores the project identity.
+**Open Folder** on onboarding screen 2 and **Switch Folder** in the Chat header overflow launch the same native Windows directory picker. The selected path is a candidate until Workspace Manager and Policy Engine validate locality, existence, permissions, aliases, and scope. Project service then creates or restores the project identity.
 
 Success behavior:
 
 - update the persistent header;
-- replace Open Folder with the folder/project name and an inspectable canonical path;
+- show the folder/project name and an inspectable canonical path in the Chat header;
 - enable Send;
 - restore Chat plus the authoritative background requirements, decisions, tasks and evidence needed to reconstruct its cards; and
 - retain any pre-selection draft.
@@ -273,7 +271,7 @@ Rejection behavior:
 
 - explain the exact path or authorization problem;
 - preserve the draft;
-- keep Open Folder available; and
+- keep the applicable Open Folder or Switch Folder action available; and
 - do not create a partial project identity or imply access was granted.
 
 Opening a folder must not visibly or invisibly:
@@ -288,7 +286,7 @@ Opening a folder must not visibly or invisibly:
 
 ### 5.4 Project switching
 
-The current-project control offers Open Folder or Switch Folder. Switching uses Project service and must:
+The Chat header overflow offers **Switch Folder**, which invokes the native picker without opening a new top-level route. Switching uses Project service and must:
 
 - preserve each project's independent Chat and state;
 - never retarget an active CLI session to the new root;
@@ -296,7 +294,7 @@ The current-project control offers Open Folder or Switch Folder. Switching uses 
 - allow previously authorized old-project work to continue only when project-scoped session/workspace isolation and safe supervision remain proven after the switch; otherwise hold the view change until affected activity reaches controlled pause/recovery, with an exact blocker if safe pause cannot be established; and
 - restore the selected project's projections after binding succeeds.
 
-**Closing and reopening are separate, explicit actions.** `Close Project` and `Reopen Project` live in the same project control area and are never triggered by switching, inactivity or closing the application. Opening an already known folder restores its identity and existing open/closed condition; it is not a Reopen Project action. Closing requires safe quiescence: the composer explains exactly which operations block closure — active leases, running processes, a pending publication journal, an unresolved outcome or an in-flight council round — and offers only the permitted recovery or stop actions. When closure proceeds, a summary card states what closure does and does not do: it preserves the folder, retained history, decisions and evidence; it does not delete, rewrite, certify unfinished work, or cancel anything silently; and outstanding questions and approvals and their required references remain protected and listed for reopening. A closed project remains readable — its retained records stay inspectable and CLI readiness is irrelevant to reading — while every new submission explicitly requires reopen authorization. Reopening is blocked from silently resuming work and, where unrelated history was lawfully retired under an opt-in policy, discloses exactly what was removed rather than claiming recovered evidence.
+**Closing and reopening are separate, explicit actions.** `Close Project` and `Reopen Project` live in the same Chat header overflow menu and are never triggered by switching, inactivity or closing the application. Opening an already known folder restores its identity and existing open/closed condition; it is not a Reopen Project action. Closing requires safe quiescence: the composer explains exactly which operations block closure — active leases, running processes, a pending publication journal, an unresolved outcome or an in-flight council round — and offers only the permitted recovery or stop actions. When closure proceeds, a summary card states what closure does and does not do: it preserves the folder, retained history, decisions and evidence; it does not delete, rewrite, certify unfinished work, or cancel anything silently; and outstanding questions and approvals and their required references remain protected and listed for reopening. A closed project remains readable — its retained records stay inspectable and CLI readiness is irrelevant to reading — while every new submission explicitly requires reopen authorization. Reopening is blocked from silently resuming work and, where unrelated history was lawfully retired under an opt-in policy, discloses exactly what was removed rather than claiming recovered evidence.
 
 ## 6. Agent readiness UX
 
@@ -960,7 +958,7 @@ At minimum, native automated and manual acceptance must cover:
 72. English-only product language: inspect onboarding, Chat, cards, questions, approvals, errors, recovery, notifications, installer text and screen-reader output under multiple Windows display locales. Verify Mayasaba offers no language picker or translated resources and presents its own text in English. Supply non-English first, middle and final stream segments and complete replies from each CLI: none reaches provisional Chat, the primary reply, Show details, notifications, history or accessibility output; the affected turn shows an English blocker and controlled recovery without translation or reduced-agent completion. Supply non-English project/attachment source: Mayasaba must not surface raw non-English text in previews, thumbnails, file labels, citations or accessible names; a required deliverable that cannot satisfy English-only acceptance is blocked. Verify authorized source bytes and provenance remain available to the owning evidence path without being mistaken for approved output.
 73. CLI session replacement: while one project has dependent work, replace one of its CLI sessions. Show the linked handoff and source-fencing status without presenting an old lease or ACK as successor readiness. Withhold dependent work and show an English blocker if the source effect outcome is unknown or the successor has stale context. Release the hold only after current application and barrier evidence; preserve Chat, unrelated work and the user's reading position throughout. Replaying the handoff must not duplicate a reply or task attempt.
 74. Initial Windows support: on Windows 11 25H2 native x64 outside S mode, a missing CLI does not block MSI admission or Chat after installation; show its normal readiness/problem card. On Windows 10, Windows 11 24H2/26H2, ARM64 with x64 emulation, x86, Server or S mode, the MSI refuses before partial installation with an English unsupported-platform reason. Do not show these platforms as supported merely because Windows App SDK can run on them.
-75. Composer placement: in an empty bound project, verify the one composer is centered in the conversation area and Open Folder stays fixed at the lower-left, separate from Attach files. A confirmed persisted first user contribution docks that composer below the timeline; subsequent messages appear chronologically above it, and a restored project with retained conversation starts docked. A failed or uncertain first Send preserves the centered unsaved draft and precise recovery action without a false saved message or layout change; CLI problem cards alone do not dock the composer. Verify attachments, focus, screen-reader reading order, narrow windows, theme changes, reduced motion and reading position without creating another input path or route.
+75. Composer placement: in an empty bound project, verify the one composer is centered in the conversation area, with no lower-left Open Folder/current-project control. The header identifies the project and its overflow offers Switch Folder separately from Attach files. A confirmed persisted first user contribution docks that composer below the timeline; subsequent messages appear chronologically above it, and a restored project with retained conversation starts docked. A failed or uncertain first Send preserves the centered unsaved draft and precise recovery action without a false saved message or layout change; CLI problem cards alone do not dock the composer. Verify attachments, focus, screen-reader reading order, narrow windows, theme changes, reduced motion and reading position without creating another input path or route.
 
 ## 22. UX anti-patterns
 
