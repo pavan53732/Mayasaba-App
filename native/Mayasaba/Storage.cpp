@@ -153,7 +153,9 @@ namespace mayasaba
         std::lock_guard lock(mutex_);
         Statement q(db_, "SELECT id,display_name,canonical_path,draft,closed,version FROM projects WHERE id=?1;");
         Bind(q.value,1,id);
-        if (sqlite3_step(q.value)!=SQLITE_ROW) return std::nullopt;
+        int rc=sqlite3_step(q.value);
+        if (rc==SQLITE_DONE) return std::nullopt;
+        Check(rc,db_);
         return ProjectRecord{Text(q.value,0),Text(q.value,1),Text(q.value,2),Text(q.value,3),
             sqlite3_column_int(q.value,4)!=0,sqlite3_column_int(q.value,5)};
     }
@@ -161,7 +163,9 @@ namespace mayasaba
     {
         std::lock_guard lock(mutex_);
         Statement q(db_, "SELECT last_project FROM ui_state WHERE singleton=1;");
-        if (sqlite3_step(q.value)!=SQLITE_ROW) return std::nullopt;
+        int rc=sqlite3_step(q.value);
+        if (rc==SQLITE_DONE) return std::nullopt;
+        Check(rc,db_);
         return Text(q.value,0);
     }
     void Storage::SaveDraft(std::string const& id, std::string const& body)
@@ -177,7 +181,9 @@ namespace mayasaba
         std::lock_guard lock(mutex_);
         Statement q(db_, "SELECT submission_id,body FROM pending_submissions WHERE project_id=?1;");
         Bind(q.value,1,id);
-        if(sqlite3_step(q.value)!=SQLITE_ROW) return std::nullopt;
+        int rc=sqlite3_step(q.value);
+        if (rc==SQLITE_DONE) return std::nullopt;
+        Check(rc,db_);
         return PendingSubmission{Text(q.value,0),Text(q.value,1)};
     }
     std::string Storage::StageSubmission(std::string const& id, std::string const& proposed, std::string const& body)
@@ -187,10 +193,15 @@ namespace mayasaba
         Exec("BEGIN IMMEDIATE;");
         try
         {
-            Statement project(db_, "SELECT closed FROM projects WHERE id=?1;");
-            Bind(project.value,1,id);
-            if(sqlite3_step(project.value)!=SQLITE_ROW||sqlite3_column_int(project.value,0))
-                throw std::runtime_error("Closed or missing project");
+            {
+                Statement project(db_, "SELECT closed FROM projects WHERE id=?1;");
+                Bind(project.value,1,id);
+                int rc=sqlite3_step(project.value);
+                if (rc==SQLITE_DONE) throw std::runtime_error("Missing project");
+                Check(rc,db_);
+                if (sqlite3_column_int(project.value,0))
+                    throw std::runtime_error("Closed project");
+            }
             std::string winner=proposed;
             {
                 Statement q(db_, "SELECT submission_id,body FROM pending_submissions WHERE project_id=?1;");
