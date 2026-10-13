@@ -1,6 +1,6 @@
 # C03 — Handoff #9, Start/Stop and bounded recovery traces
 
-**Status: derived documentation; typed transitions and Windows CLI proof OPEN.** Source: [authoritative Handoff machine #9](../Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#handoff-machine-9-replacement-of-a-project-scoped-cli-session), approved run-scoped Start rules and bounded self-recovery. This does not add a thirteenth machine or independent controller.
+**Status: NORMATIVE TRACE CONTRACT; WINDOWS CLI PROOF PENDING.** Source: [authoritative Handoff machine #9](../Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md#handoff-machine-9-replacement-of-a-project-scoped-cli-session), approved run-scoped Start rules and bounded self-recovery. [C06](./C06-BINDING-PRODUCT-DECISIONS.md) fixes operational bounds; [C08](./C08-TWELVE-STATE-MACHINES.md) fixes Handoff transitions; [C09](./C09-SELECTION-TRANSACTION-RECOVERY.md) fixes guarded transaction and recovery selection. This does not add a thirteenth machine or independent controller.
 
 ## Ownership stays separated
 
@@ -28,7 +28,7 @@ Only one replacement for an identity is active. Same-key duplicate Begin returns
 
 ## Adversarial case matrix
 
-| Case | Observed situation | Required safe action | Still OPEN |
+| Case | Observed situation | Required safe action | Implementation evidence/fixture |
 | --- | --- | --- | --- |
 | H01 | Duplicate Begin with identical key | Return same handoff and hold, not second replacement | Idempotent typed result |
 | H02 | Competing different replacement for same project/CLI | Conflict, no parallel hold transfer | Admission transaction |
@@ -51,4 +51,4 @@ Only one replacement for an identity is active. Same-key duplicate Begin returns
 
 ## Implementation-readiness boundary
 
-**OPEN:** exact typed Handoff #9 command/error/event fields, guarded cross-owner atomic transactions, native process/service confinement and cessation, result receipt replay, numeric deadlines and sleep/restart clock, successor/session compatibility tuple, Start/Stop observed physical outcomes and publication B6 safe-recovery algorithm. No Windows runtime proof or executable schema is claimed.
+Handoff commands use the C07 wrapper and enabled-slice payload rule; C08 fixes legal phases, guards and results; C09 fixes transaction/replay, successor eligibility and B6 recovery; C06 fixes deadlines and suspend/restart behavior. The implementation must still supply the command-specific payload schema and prove native process/service confinement, cessation, Start/Stop observation and publication recovery under C10. No Windows runtime proof is claimed.

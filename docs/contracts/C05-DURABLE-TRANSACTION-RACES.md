@@ -1,6 +1,6 @@
 # C05 — Durable transaction, ACK and recovery race matrix
 
-**Status: SOURCE-DERIVED ORDERING TRACES; EXACT OWNER TRANSACTION CONTRACT OPEN.** This pack applies the [authoritative state/MCF/storage/Stop rules](../Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) and [architecture](../ARCHITECTURE.md). It does **not** choose SQLite SQL statements, version-guard algorithm, process sandbox, distributed transaction scheme, canonical bytes, clocks, or error-code values.
+**Status: NORMATIVE ORDERING AND ADVERSARIAL TRACE MATRIX.** This pack applies the [authoritative state/MCF/storage/Stop rules](../Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) and [architecture](../ARCHITECTURE.md). [C06](./C06-BINDING-PRODUCT-DECISIONS.md) fixes product limits and clocks; [C07](./C07-VERSIONED-CONTRACT-REGISTRY.md) fixes shared representations; [C08](./C08-TWELVE-STATE-MACHINES.md) fixes transitions; and [C09](./C09-SELECTION-TRANSACTION-RECOVERY.md) fixes version guards, owner transactions, delivery and recovery. SQL statements and native confinement remain implementation details that must satisfy those contracts.
 
 ## Five separate facts
 
@@ -27,7 +27,7 @@ Owner commitment and MCF inbox acknowledgement are **distinct durable boundaries
 | CLOSURE FENCE → CLOSE | Durable admission fence and current quiescence recheck before closing while racing work cannot enter | One stale read of “zero leases” |
 | STOP → RECONCILE | Immediate authorized Stop independent of any Chat persistence; truthful observed cancellation and unresolved-effect handling | Waiting for reply, assuming cancelled helper |
 
-These are *partial-order conditions*. They do not imply all services can atomically include physical file/process effects inside one SQLite transaction. The precise owner transaction/outbox coupling, B1 transition guard, B3 SQLite journal choices and mixed physical recovery algorithms remain OPEN.
+These are *partial-order conditions*. They do not imply all services can atomically include physical file/process effects inside one SQLite transaction. C09 fixes owner transaction/outbox coupling, B1 guards, B3 journal selection and mixed physical recovery; the implementation must realize and test them without treating an external effect as part of a SQLite commit.
 
 ## Adversarial commit and crash decisions
 
@@ -53,17 +53,17 @@ These are *partial-order conditions*. They do not imply all services can atomica
 | T18 | CLI saw peer proposals, then “independent” new council first proposal requested | Do not count contaminated response as independently produced | Context/session isolation and provenance |
 | T19 | Remaining event hashes valid but expected retained head missing | Do not claim complete retained history | Expected-head/anchor/checkpoint proof |
 | T20 | A's late CLI response arrives while B is visible | Attribute to A, reject cross-project current effect | Exact session/root/epoch envelope validation |
-| T21 | Build passes but login/runtime criterion remains unobserved | Do not claim runtime PASS; INCONCLUSIVE/BLOCKED as applicable | D-15 oracle sufficiency and tests |
+| T21 | Build passes but a blocking login/runtime criterion remains unobserved | Record validation `INCONCLUSIVE`, refuse completion for inadequate evidence, and keep the dependent operation `BLOCKED`; never claim runtime PASS | D-15 oracle sufficiency and tests |
 | T22 | Repeated repair same failure signature exhausts allowed attempts | Stop bounded repair; preserve diagnostics and affected BLOCKED | Numeric attempt/clock and repair identity |
 
 All entries are **expected outcomes**, not executed tests. A refusal of unsafe progress is not proof that the unknown physical outcome was harmless or reversed.
 
 ## Owner-boundary review protocol
 
-A future versioned executable implementation contract must answer, for each T case: which existing owner receives which valid command; project/epoch/user authority; stable operation and expected-version identity; one precise accepted/refused/unknown result; owner records/events/outbox in the atomic boundary; inbox ACK semantics; how identical and altered duplicates differ; crash/replay query; physical effect and children/service attribution; actual cancellation/Stop precedence; and user-visible evidence. For an unsafe effect, explicitly name the unavailable proof rather than silently selecting a more permissive profile.
+For each T case, C07–C09 determine the owner, command/result grammar, authority/epoch/version identity, owner record/event/outbox boundary, ACK meaning, duplicate handling, restart reconciliation, physical-outcome separation and safe recovery class. Each enabled implementation slice supplies its exact payload schema, SQL mapping and fixtures. For an unsafe effect, the implementation names the unavailable proof rather than selecting a more permissive profile.
 
-## Open freeze gates
+## Completion boundary
 
-**Z-01/Z-02/P0-01–04:** schemas, transaction and idempotency, error and uncertain-commit grammar. **Z-06/D-18/B5:** sequence, delivery, expiry/dead letter and fairness. **Z-04/Z-05/D-09/D-10/B6:** physical CLI confinement, handoff and user-edit-safe publication. **Z-11/Z-12/B2/B3/B4:** clocks/limits, consistent backup and canonical bytes. **D-04/D-11/D-15/D-16/U2:** unresolved genuine product/acceptance choices.
+C06–C09 close the documentation choices previously tracked by Z-01/Z-02/Z-03/Z-06/Z-11/Z-12, D-04/D-11/D-15/D-16/U2 and B1–B10. C10 keeps the affected implementation gates closed until schemas for enabled payloads, transaction and fault-injection tests, per-CLI physical confinement, publication safety and Windows evidence pass.
 
-**Result: source-derived transaction-order coverage only.** No executable JSON schema, native Windows experiment, SQL transaction test, implementation or closed P0 finding is claimed.
+**Result: normative transaction-order coverage.** The v1 shared schemas exist, but no native Windows experiment, SQL transaction test or application implementation is claimed.

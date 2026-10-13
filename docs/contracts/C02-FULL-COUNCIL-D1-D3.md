@@ -1,6 +1,6 @@
 # C02 — FULL council D1, D2 and D3 trace contract
 
-**Status: derived documentation / executable transition schemas OPEN.** Source: [authoritative system description — FULL council and D-03](../Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md). This table is subordinate and does not reopen existing approved council rules or select D-04 materiality.
+**Status: NORMATIVE TRACE CONTRACT.** Source: [authoritative system description — FULL council and D-03](../Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md). [C06](./C06-BINDING-PRODUCT-DECISIONS.md) fixes D-04 materiality and point identity; [C08](./C08-TWELVE-STATE-MACHINES.md) fixes the Council Round transition contract. This table remains subordinate and does not reopen approved council rules.
 
 ## Project-local D1 role identity
 
@@ -63,4 +63,4 @@ The **five externally reported outcomes** remain exactly: converged, synthesized
 
 ## Implementation-readiness boundary
 
-**Still OPEN:** D-04 trigger/materiality registry, duplicate-key construction, normalized surviving-position equality and baseline comparison algorithm, typed Council machine #7 state/command/event/error/transaction, exact bounds, D-15 objective evidence sufficiency and fresh independence after peer material disclosure. The D1/D2/D3 rules are approved; their machine-readable and physical verification obligations remain open. No application implementation or runtime test is claimed.
+The documentation choices for D-04 triggers/deduplication, Council machine #7, exact bounds and D-15 evidence sufficiency are closed by C06–C09. Comparable-position equality is canonical equality of the registered surviving-position set, with the baseline digest and predecessor round fixed before comparison; contamination or changed context invalidates comparability and requires a fresh independent proposal set. Command-specific schemas and native/runtime results remain implementation evidence under C10. No application implementation or runtime test is claimed.

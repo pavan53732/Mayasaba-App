@@ -1,12 +1,12 @@
 # C01 — Chat contribution, immediate control and turn admission
 
-**Documentation status: source-derived trace contract; versioned executable schema remains OPEN.** This pack restates the approved [Mayasaba authoritative description](../Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md): Continuous Chat, three-agent reply, immediate controls and persistence gate. It adds no project decision, service or state machine.
+**Documentation status: NORMATIVE TRACE CONTRACT.** This pack restates the approved [Mayasaba authoritative description](../Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md): Continuous Chat, three-agent reply, immediate controls and persistence gate. [C06](./C06-BINDING-PRODUCT-DECISIONS.md) fixes exact control recognition and attachment bounds; [C07](./C07-VERSIONED-CONTRACT-REGISTRY.md) fixes the shared representation; [C08](./C08-TWELVE-STATE-MACHINES.md) and [C09](./C09-SELECTION-TRANSACTION-RECOVERY.md) fix the transition and transaction rules. It adds no project decision, service or state machine.
 
 ## Existing owners and identities
 
 - **Message/Contribution** owns immutable UserContribution, turn identity, writer ordinal, consolidated reply and local draft links. **Project** owns binding and closure. **Work-request authority** owns independently scoped material actions. **Orchestrator/Gateway/MCF/Context** coordinate actual authorized three-agent delivery, sessions and current application proof. **SQLite Storage** commits owned state, event and outbound record atomically. **Policy and execution owners** govern effective physical effects. The **WinUI UI** only submits typed commands and projects observed results.
 - Every enabled Send has one stable submission identity, complete text and selected attachment set; at most one immutable confirmed contribution may result. A valid immediate Pause/Stop has a **separate stable control-operation identity**. A confirmed reply-eligible contribution may allocate exactly one zero-based **project-local turn ordinal**. A control-only submission allocates neither turn nor writer ordinal.
-- Exact JSON field types, wire IDs, error codes, construction of idempotency keys and commit transaction boundaries **remain OPEN**; names here are existing concepts, not implementation schemas.
+- C07–C09 fix the shared JSON types, identifiers, errors, idempotency construction and owner commit boundary. Each enabled command still supplies its bounded command-specific payload schema and implementation mapping under C07.
 
 ## Send admission table
 
@@ -49,8 +49,8 @@ A confirmed stored contribution, conversational interpretation, authorized work 
 
 For zero-based **project-local reply-eligible turn ordinal** t, writer = t mod 3 in fixed order Hermes Agent CLI, Kilo Code CLI, Claude Code CLI. A preceding control-only Stop does **not** advance t. Thus first later reply-eligible “Hi” uses t=0 and Hermes, then t=1 Kilo, t=2 Claude. Restart/replay retains original t/writer. Council D1 decision ordinal d is an independent counter.
 
-**Failure traces that remain relevant:** (P1) DB commit succeeded but UI ACK lost; (P2) duplicate Send identity with changed payload; (P3) Stop racing an uncertain commit and an already leased task; (P4) file changing during attachment preparation; (P5) cross-project stale response; (P6) app relaunch before new Start; (P7) hung descendant that ignores Stop. The approved outcomes forbid silent duplication, stale authority or unsafe effect claims, but their exact typed command/error, atomicity and native proof are still missing.
+**Required failure traces:** (P1) DB commit succeeded but UI ACK lost; (P2) duplicate Send identity with changed payload; (P3) Stop racing an uncertain commit and an already leased task; (P4) file changing during attachment preparation; (P5) cross-project stale response; (P6) app relaunch before new Start; (P7) hung descendant that ignores Stop. C07–C09 define their command/result, transaction and recovery grammar. The implementation must still prove those contracts with fault injection and native observations.
 
 ## Implementation-readiness boundary
 
-**Still OPEN:** P0-01/02/03/05, D-06/D-07, Z-01/Z-02/Z-03/Z-06/Z-11; control-only recognition predicate, true schema/record and error definitions, idempotency key construction, owner transaction/ACK replay, attachment size/count/deadline rules and Windows CLI effective fencing. This document is a **source-based expected trace**, **not executable JSON Schema**, **not a test result**, and **not authorization to implement a missing choice**.
+The documentation choices for exact control aliases, approval identity, submission/attachment bounds, shared receipts/errors, idempotent owner transactions, replay and bounded clocks are closed by C06–C09. Command-specific payload schemas are completed per enabled implementation slice under C07 rather than accepted as unconstrained payloads. Windows CLI fencing, transaction code and fault-injection results remain implementation evidence under [C10](./C10-IMPLEMENTATION-ENTRY-GATE.md). This document is not a runtime test result.
