@@ -57,6 +57,7 @@ The repository is organized around the specification. Start with this README for
 | [Architecture](./docs/ARCHITECTURE.md) | Service boundaries, communication, execution, storage, integration, and required proof |
 | [UI and UX](./docs/UI-UX.md) | The native Chat experience, accessibility, attachments, details sheets, and desktop acceptance scenarios |
 | [Three-screen interface preview](./docs/CHAT-INTERFACE-PREVIEW.html) | A standalone sample of welcome, Open Folder, and Chat; Send moves the one composer from the center to the bottom; no message is sent or saved |
+| [User-visible screen diagrams](./docs/USER-VISIBLE-SCREENS.md) | One Markdown reference for the full Welcome → Open Folder → Chat journey and the important Chat states through delivery and recovery |
 | [Agent instructions](./AGENTS.md) | Repository working rules, scope, development workflow, validation, and prohibited shortcuts |
 | [README](./README.md) | The project overview and entry point you are reading |
 | [Implementation-readiness audit](./docs/IMPLEMENTATION-READINESS-AUDIT.md) | The open documentation decisions and contract gaps tracked against the current documents |

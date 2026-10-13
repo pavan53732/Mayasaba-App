@@ -4,6 +4,8 @@
 
 This document translates the user-interface requirements in [Mayasaba — Complete System Description (for AI agents).md](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) into an implementation-facing reference for product, design, WinUI, accessibility, and desktop-test work. The complete system description remains authoritative.
 
+For the complete user-visible journey in one Markdown file, see [User-visible screen diagrams](./USER-VISIBLE-SCREENS.md).
+
 Mayasaba's interface is the native WinUI 3 **Control Room**. It is not a terminal multiplexer, a browser UI, a setup wizard, or a passive chat wrapper. Its job is to make authority, work, uncertainty, evidence, and recovery understandable without exposing private reasoning or raw protocol noise.
 
 ## 1. Experience goals

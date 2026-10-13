@@ -1,0 +1,358 @@
+# Mayasaba — complete user-visible screen diagrams
+
+## Purpose and status
+
+This is the single visual reference for what a person sees from first launch through a completed or blocked project. It describes the intended **native Windows interface**, not a working implementation. The [complete system description](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) is authoritative; [UI-UX.md](./UI-UX.md) supplies the detailed behavior and acceptance rules. The [interactive preview](./CHAT-INTERFACE-PREVIEW.html) illustrates the three main screens and composer movement with sample data.
+
+There are **three main screens**: welcome, open folder, and Chat. Welcome and open folder appear only before the first project root is bound. Chat is the only persistent workspace. The later diagrams are **states within Chat**, not extra pages, routes, tabs, or dashboards. Text in square brackets represents a control. Names, paths, statuses, messages, and evidence in the diagrams are illustrative; the product must show current observed values. `Show details` means inline expansion or a temporary, dismissible sheet when the content is too large.
+
+## End-to-end journey
+
+```text
+FIRST LAUNCH, NO BOUND PROJECT
+  Screen 1 Welcome ── Next / Skip / Escape ──> Screen 2 Open Folder
+         ^                                          │
+         └──────────────── Back ────────────────────┘
+                                                    │
+                                          authorized folder binding
+                                                    ▼
+OTHER LAUNCHES WITH A BOUND PROJECT ─────────> Screen 3 Chat
+                                                    │
+                                         first confirmed saved message
+                                                    ▼
+                                      Chat with bottom composer
+                                                    │
+          conversation / questions / approval / work / evidence / recovery
+                                                    │
+                                                    ▼
+                                    certified delivery or stated blocker
+```
+
+Opening a folder does not start agents, scan files, initialize Git, or approve work. The three CLI readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. Once a project is bound, later launches open its Chat directly.
+
+## Screen 1 — Welcome
+
+```text
++--------------------------------------------------------------------------+
+| Mayasaba                         Hermes Agent CLI  ● CHECKING            |
+|                                  Kilo Code CLI     ● CHECKING            |
+|                                  Claude Code CLI   ● CHECKING            |
++--------------------------------------------------------------------------+
+|                                                                          |
+|       Welcome to Mayasaba                                                |
+|                                                                          |
+|       Mayasaba coordinates the coding CLIs already on your PC and        |
+|       checks their work before calling it done.                          |
+|                                                                          |
+|       You install and sign in to Hermes Agent CLI, Kilo Code CLI,        |
+|       and Claude Code CLI yourself. Mayasaba does not change them.       |
+|                                                                          |
+|       A missing CLI does not stop you from opening a folder.             |
+|                                                                          |
+|                                                 [Skip]       [Next]      |
++--------------------------------------------------------------------------+
+```
+
+`Next`, `Skip`, and Escape advance to screen 2. Skip dismisses the explanation only; it cannot skip folder binding. Each CLI entry shows its own observed `CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, or `PROBE_FAILED` status with name, text, dot, and accessible name. The illustrated `CHECKING` values are examples.
+
+## Screen 2 — Open Folder
+
+```text
++--------------------------------------------------------------------------+
+| Mayasaba                         Hermes Agent CLI  ● READY               |
+|                                  Kilo Code CLI     ● MISSING             |
+|                                  Claude Code CLI   ● CHECKING            |
++--------------------------------------------------------------------------+
+|                                                                          |
+|       Open a project folder                                              |
+|       Choose the local Windows folder where your work belongs.           |
+|       Opening it creates or restores the project identity only.          |
+|                                                                          |
+|       [Back]                                  [Open Folder]              |
+|                                                                          |
+|       [ Draft a message before opening a folder...              ]        |
+|                                                    [Send disabled]       |
++--------------------------------------------------------------------------+
+```
+
+`Back` returns to Welcome. `Open Folder` opens the native directory picker. A valid selection opens Chat immediately and carries the unsent text draft forward. Send stays disabled until a root is authorized. No project folder selection installs a CLI or uses a provider account.
+
+### Native picker and rejected folder
+
+```text
+SCREEN 2 REMAINS VISIBLE             NATIVE WINDOWS DIRECTORY PICKER
+[Open Folder] ────────────────────> [Select a folder] [Cancel]
+     │                                      │
+     │                           selected path is validated
+     │                                      │
+     ├── authorized ────────────────────────┴──> Screen 3 Chat
+     │
+     └── rejected / cancelled ─────────────────> Screen 2 remains
+           Folder could not be opened: [exact reason]
+           Draft preserved                         [Open Folder]
+```
+
+A rejected selection must name the path or authorization problem and retain the draft. Cancel does not create a project. A known folder restores its existing project identity and open or closed condition; it never silently reopens a closed project.
+
+## Screen 3 — Chat, empty bound project
+
+```text
++--------------------------------------------------------------------------+
+| Mayasaba · Project name + inspectable path                               |
+| Phase + condition                Hermes Agent CLI  ● READY               |
+| [Pause] [Stop] [•••]             Kilo Code CLI     ● READY               |
+|                                 Claude Code CLI   ● READY                |
++--------------------------------------------------------------------------+
+|                                                                          |
+|                                                                          |
+|                   What would you like to work on?                        |
+|                                                                          |
+|                 +--------------------------------------+                 |
+|                 | Message Mayasaba...                   |                |
+|                 | [Attach files]                [Send] |                 |
+|                 +--------------------------------------+                 |
+|                                                                          |
++--------------------------------------------------------------------------+
+```
+
+The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, immediate Pause/Stop controls, and exactly one truthful status entry per required CLI. There is no setup banner when all CLIs are ready.
+
+```text
+CHAT HEADER OVERFLOW [•••]
+  [Diagnostics]
+  [Close Project]       when the project is open
+  [Reopen Project]      when the project is closed
+  No Open Folder or Switch Folder action
+```
+
+### First Send and composer movement
+
+```text
+EMPTY CHAT, CENTERED COMPOSER
+    │ Send
+    ▼
+Sending: same draft and submission identity remain visible
+    │
+    ├── confirmed persisted ──> saved user message enters timeline;
+    │                          the SAME composer docks at the bottom
+    │
+    └── failed or uncertain ──> no saved message appears;
+                               draft stays in the centered composer;
+                               exact failure and recovery appear
+```
+
+CLI readiness and problem cards do not move the composer. A restored project with retained conversation starts with the composer docked. The change preserves draft text, selected attachments, focus, and reading position; reduced-motion settings are honored.
+
+## Screen 3 — Chat with a conversation
+
+```text
++--------------------------------------------------------------------------+
+| Mayasaba · Project name + inspectable path                               |
+| Phase + condition                Hermes Agent CLI  ● READY               |
+| [Pause] [Stop] [•••]             Kilo Code CLI     ● READY               |
+|                                 Claude Code CLI   ● READY                |
++--------------------------------------------------------------------------+
+| You · 10:42 · Saved                                                      |
+| Help me understand what this project needs next.                         |
+|                                                                          |
+| Mayasaba · one reviewed reply                         [Show details]     |
+| Summary written by the rotating CLI writer and reviewed by both peers.   |
+|                                                                          |
+| Controller card · current operation                    [Show details]    |
+| Status, consequence, timestamp, and next permitted action.               |
+|                                                                          |
+|                                               [Jump to latest]           |
++--------------------------------------------------------------------------+
+| [ Message Mayasaba...                                      ] [Send]      |
+| [Attach files] · selected attachment chips                               |
++--------------------------------------------------------------------------+
+```
+
+Messages and cards are chronological. Every submitted contribution separates **saved** status from interpretation, authorization, execution, and completion. A successfully finalized conversational turn has one primary reply, with all three responses, the selected writer, both peer reviews, and material disagreement available through `Show details`. A missing response or review shows waiting or a bounded blocker; it never produces a one- or two-agent final reply. A greeting grants no file scan or write permission. Long history preserves the reader's position and offers `Jump to latest`.
+
+## Chat state — a CLI needs attention
+
+```text
++--------------------------------------------------------------------------+
+| Project name                     Hermes Agent CLI  ● READY               |
+|                                  Kilo Code CLI     ● MISSING             |
+|                                  Claude Code CLI   ● READY               |
++--------------------------------------------------------------------------+
+| ! Kilo Code CLI · MISSING                             [Show details]     |
+|   Executable not found at the checked location.                          |
+|   Three-agent replies and other operations requiring Kilo must wait.     |
+|   Install or repair the CLI outside Mayasaba.                            |
+|   [Locate executable] [Recheck]                                          |
+|                                                                          |
+| Other saved Chat and recoverable drafts remain available.                |
+|                                               [composer and Send]        |
++--------------------------------------------------------------------------+
+```
+
+An `UNSUPPORTED` or `PROBE_FAILED` card names its own exact cause and operation impact. Healthy CLIs have no problem card. The status indicator is selectable for a read-only diagnostics sheet; it never becomes an Agents or Settings page. Locating and rechecking do not install, update, authenticate, or reconfigure a CLI. A missing CLI does not disable Send for an open bound project.
+
+## Chat state — attachments and submission
+
+```text
+| [ Message with supporting files...                         ] [Send]      |
+| [Attach files]                                                          |
+| [design.png · image · preparing] [Remove]                                |
+| [notes.txt  · text  · ready]     [Remove] [Preview]                      |
+| [other file · rejected: exact reason] [Remove]                           |
+```
+
+Selected files show name or English-safe metadata, detected type, size, preparation state, and a removal action. A supported English-safe preview is read-only; otherwise show an English preview-unavailable explanation. Selecting a file never submits it. When Send occurs while a selected file is preparing, keep the same complete draft and submission identity through bounded verification. A changed, rejected, timed-out, or unverified file prevents a partial contribution; no selected file is silently omitted. After persistence, the message links each submitted attachment to provenance and its separate context-inclusion status. An outside-root file needs explicit authorization for that file and managed copy only. Exact count, byte, type, and preparation-time limits remain to be decided.
+
+### Failed or uncertain persistence
+
+```text
+| Message not saved                                                        |
+| The submission could not be confirmed: [precise storage reason].        |
+| Your text and valid selections remain in the composer.                  |
+| [Recheck submission outcome] [Show details]                              |
+|                                                                          |
+| [ Original draft...                                        ] [Send held] |
+```
+
+An uncertain commit is reconciled using the same submission identity before another attempt. The UI must not show a saved message, interpretation, reply, or duplicate contribution until persistence is confirmed. Recovery controls depend on the actual failure; the diagram's `Recheck submission outcome` illustrates a permitted reconciliation action, not a universal button.
+
+## Chat state — questions, choices, and approvals
+
+```text
+| ? Clarification needed for this request               [Show details]    |
+|   One batch of unanswered questions, each tied to the affected work.    |
+|   [Answer in the same Chat composer]                                     |
+|                                                                          |
+| ? Choice required for decision D-…                    [Show details]    |
+|   Option A: [effect]    Option B: [effect]                               |
+|   Constraints, evidence, uncertainty, and impact are inspectable.       |
+|   Advisory recommendation is labelled advisory.                         |
+|                                                                          |
+| ! Approval requested for [exact proposed effect]      [Show details]    |
+|   [Approve this effect] [Decline]                                        |
+```
+
+A factual question asks for missing information; a choice packet asks which eligible path the user wants. A proven conflict shows both acceptance obligations and the evidence of contradiction. Approval names its exact effect and remains linked to its source. Silence, timeout, an unrelated “yes,” or an agent recommendation is never approval. Answers and control-only messages use the same Chat composer and contribution path, while immediate Pause/Stop does not wait for a conversational reply.
+
+### Immediate controls
+
+```text
+[Pause] or [Stop] ──> Controller acts immediately
+                     │
+                     ├── observed effect: status card names the result
+                     └── uncertain effect: status card names the blocker
+
+A separately submitted control-only message is saved as one contribution
+when persistence succeeds; it creates no conversational turn or writer step.
+```
+
+## Chat state — exploration, plan, tasks, and evidence
+
+```text
+| Repository exploration · partial/complete            [Show details]     |
+|   Requested root; inventory, read, analyzed, excluded, unreadable,      |
+|   unsupported, too-large and stale counts; three named CLI results.     |
+|                                                                          |
+| Reviewed plan · proposed/authorized                    [Show details]    |
+|   Requirements, decisions, assignments, dependencies, acceptance.       |
+|                                                                          |
+| Plan application · waiting for [named CLI]            [Show details]    |
+|   All three must apply the exact authorized plan before dependent work. |
+|                                                                          |
+| Task · assigned to [one CLI] · running                 [Show details]    |
+|   Expected artifact, bounded scope, blocker or observed progress.       |
+|                                                                          |
+| Evidence · [artifact and exact version]                [Show details]    |
+|   Source, hash, environment, check, result, and limitations.             |
+```
+
+These are contextual cards within the same timeline, not a Council, Tasks, Files, or Validation page. Complete repository exploration requires three independent current-context results and verified file coverage; missing evidence is labelled partial or blocked. A proposed plan is never displayed as authorized. A plan-delivery acknowledgement is never displayed as proof that all three sessions applied it. Individually leased implementation tasks name their assigned CLI and dependencies. Task details can show attempts, changed paths, criteria, and evidence without inventing progress percentages.
+
+### Mid-project change
+
+```text
+| Pending change · source message                     [Show details]     |
+|   Proposed effect and affected requirements, decisions, tasks, files.    |
+|   Current approved scope remains in force where still safe.             |
+|   FULL review, exact user approval, and plan resynchronization follow.  |
+```
+
+A request to change direction is a new Chat contribution. The proposal is not displayed as approved scope until the relevant owners authorize it. Unaffected safe work may continue; affected unsafe work is held. On-demand requirements and decision cards show approved versions, pending amendments, source contributions, decision dispositions, affected artifacts, and the current project epoch as source-linked detail, rather than opening separate pages.
+
+### Council and decision detail
+
+```text
+TEMPORARY DETAILS SHEET OVER CHAT                         [Close]
++--------------------------------------------------------------------------+
+| Decision: [exact question] · Round [current / declared cap]              |
+| Three independent proposals: Hermes · Kilo Code · Claude Code            |
+| Six directed peer critiques: [actual completion per assignment]          |
+| Chair synthesis: [revision] · both non-chair reviews: [status]           |
+| Evidence and surviving disagreement: [source-linked summary]             |
+| Outcome: [waiting / question / choice / eligible decision / blocked]     |
++--------------------------------------------------------------------------+
+```
+
+The sheet is opened by a relevant `Show details` action and returns to the same Chat focus and reading position when closed. It shows concise positions and evidence, never private chain of thought. Missing mandatory participation remains incomplete, not approval. A decision card distinguishes `HARD_LOCK`, `SOFT_DECISION`, `ASSUMPTION`, and `OPEN`, and shows an authorized successor when a prior decision changes.
+
+## Chat state — validation, publication, and recovery
+
+```text
+| Validation · criterion [ID]                          [Show details]     |
+|   Expectation: [observable result] · Oracle: [method]                    |
+|   Verdict: PASS / FAIL / INCONCLUSIVE / BLOCKED / NOT_APPLICABLE         |
+|   Staged result and published-folder result are distinct.               |
+|                                                                          |
+| Publication · reconciling / blocked / complete        [Show details]    |
+|   Files applied, pending, conflicted; journal and post-check status.     |
+|                                                                          |
+| Unknown physical outcome · affected operation        [Show details]    |
+|   Cannot yet prove what changed. Safe unrelated work may continue.      |
+|   [Recheck outcome] [Inspect affected files] [Resolve conflict]         |
+```
+
+The card offers only actions currently proven safe for its operation. `Retry safely` appears only after reconciliation rules out duplication; unresolved material effects never get a generic Retry. A blocked outcome can remain physically unknown. Validation distinguishes schema checks, build, tests, process launch, runtime behavior, accessibility, publication, and final certification. A clean process exit or one passing check is never shown as final proof. Repair cards show the failing criterion, observed signature, current hypothesis, bounded attempt, and rerun result. User edits that conflict with publication remain visible and are never silently overwritten.
+
+## Chat state — certified delivery
+
+```text
+| Certified delivery                                  [Show details]       |
+|   [Deliverable] is present at [final path in selected project].          |
+|   Applicable blocking criteria: passed with current evidence.           |
+|   Source-linked hashes/checks: [inspectable references].                |
+|   Nonblocking warnings and accepted limits: [if any].                   |
+|   Final project path and linked evidence remain inspectable.            |
+```
+
+The final card appears only after the applicable acceptance checks and post-publication evidence support the exact deliverable. A document or research task uses its relevant checks; it does not require a software build merely because Mayasaba can build software. If completion cannot be proved, the UI names the remaining criterion and blocker instead of showing this card.
+
+## Chat state — explicit project closure and reopening
+
+```text
+OPEN PROJECT                                    CLOSED PROJECT
+[•••] → [Close Project]                       [•••] → [Reopen Project]
+         │                                               │
+         ▼                                               ▼
+Closure check: active work, unknown outcomes,    Exact reopen effect and
+publication and council round must be safe.      authority are checked.
+         │                                               │
+         ▼                                               ▼
+Closure summary card: retained history,          Retained Chat is readable;
+questions, approvals, and protected evidence.    new Send waits for reopen.
+```
+
+Closing is explicit and never follows from switching folders, inactivity, application exit, or a lifecycle label. A closed project's retained Chat remains readable. `Reopen Project` requires explicit authorization before any new submission and never silently resumes earlier work. The UI discloses any history lawfully retired under an opt-in retention policy. Project switching still requires an entry point outside Chat, but its **placement is unresolved**; these diagrams deliberately do not invent one. The native picker and project isolation rules continue to apply whenever that entry point is defined.
+
+## Shared behavior on every visible surface
+
+| Concern | What the user sees |
+| --- | --- |
+| Loading or unavailable data | Existing readable state stays visible; a bounded status names the dependency and next action. |
+| Corrupted or missing managed evidence | An integrity or availability failure; that evidence cannot support a passing criterion. |
+| Restart after interrupted work | Persisted history returns; uncertain physical effects show reconciling or unknown until checked. |
+| Full local application storage | Precise storage blocker and permitted cleanup/recovery controls; no false “saved” message. |
+| Light, dark, and Windows high contrast | Readable surfaces and status text; changing theme preserves project, draft, focus, and scroll position. |
+| Keyboard and screen reader | Logical focus, visible focus ring, named controls and states, meaningful announcements, and return focus from details. |
+| Privacy and English-only output | No credentials, tokens, private reasoning, unrelated process output, or unverified non-English agent text. Required non-English output is blocked with an English explanation. |
+
+All cards with more inspectable information expose `Show details`. Dense content uses a temporary sheet over Chat and returns to the invoking control. No illustration here authorizes new filesystem access, provider changes, credentials, a fourth agent, a separate top-level route, or a shortcut around approval and evidence requirements.
