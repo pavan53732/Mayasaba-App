@@ -70,36 +70,51 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 
 ## 3. Chat-only information architecture
 
-Chat is the only persistent route and fills the application workspace. There is no side rail, tab bar, dashboard, alternate project screen or permanent details pane. The shell has three persistent regions:
+Chat is the only persistent route and fills the application workspace. There is no side rail, tab bar, dashboard, alternate project screen or permanent details pane. The shell has three persistent regions, while the one composer changes position within them:
 
 1. **Compact Chat header** — project identity, inspectable canonical path, lifecycle phase, operational condition, the compact three-CLI status indicator at its top right, Pause/Stop and a small overflow menu.
-2. **Conversation timeline** — user messages, agent responses and controller-owned contextual cards in chronological order.
-3. **Chat footer** — lower-left Open Folder/current-project control plus the composer, pending attachments and Send.
+2. **Conversation area** — the chronological timeline of user messages, agent responses and controller-owned contextual cards. In an empty bound project, the one composer is centered here until the first user contribution is confirmed persisted.
+3. **Chat footer** — lower-left Open Folder/current-project control in every state; after the first confirmed persisted contribution, the same composer, pending attachments and Send dock here beneath the timeline.
 
 Council, requirements, decisions, tasks, files/evidence, validation/repair, delivery and agent diagnostics run in the background. They become visible only when relevant as a compact timeline card, an inline expansion of that card, or a temporary details sheet over Chat. The details sheet is not a route and cannot be pinned as a replacement workspace.
 
 ### Desktop layout
 
 ```text
-+--------------------------------------------------------------------------------------+
-| Mayasaba | Project + path | phase + condition | (● Kilo Code  ● Claude Code  ● Hermes) [Pause] [Stop] [•••] |
-+--------------------------------------------------------------------------------------+
-|                                                                                      |
-|                 User message                                                         |
-|                                                                                      |
-|                 Agent response                                                       |
-|                                                                                      |
-|                 ┌ Controller work card ───────────────────────────┐                  |
-|                 │ Build failed · 1 blocking criterion             │                  |
-|                 │ Clear summary and next action       [Show details]                 |
-|                 └─────────────────────────────────────────────────┘                  |
-|                                                                                      |
-|                 Conversation continues                                               |
-|                                                                                      |
-+--------------------------------------------------------------------------------------+
-| [Open Folder / Project ▾]  [Attach files] [ Message Mayasaba...              ] [Send] |
-+--------------------------------------------------------------------------------------+
+EMPTY BOUND PROJECT
++--------------------------------------------------------------------------+
+| Mayasaba · Project + path         Hermes Agent CLI  ● READY              |
+| Phase + condition                Kilo Code CLI     ● READY               |
+| [Pause] [Stop] [•••]             Claude Code CLI   ● READY               |
++--------------------------------------------------------------------------+
+|                                                                          |
+|                 [ Message Mayasaba...                     ]              |
+|                 [Attach files]                      [Send]               |
+|                                                                          |
++--------------------------------------------------------------------------+
+| [Open Folder / Project ▾]                                                |
++--------------------------------------------------------------------------+
+
+AFTER THE FIRST CONFIRMED PERSISTED MESSAGE
++--------------------------------------------------------------------------+
+| Mayasaba · Project + path         Hermes Agent CLI  ● READY              |
+| Phase + condition                Kilo Code CLI     ● READY               |
+| [Pause] [Stop] [•••]             Claude Code CLI   ● READY               |
++--------------------------------------------------------------------------+
+| User message · Saved                                                     |
+|                                                                          |
+| One reviewed consolidated reply                        [Show details]    |
+|                                                                          |
+| Controller card · next action                          [Show details]    |
+|                                                                          |
+|                                                [Jump to latest]          |
++--------------------------------------------------------------------------+
+| [Open Folder / Project ▾]   [ Message Mayasaba...         ] [Send]       |
+|                             [Attach files] · attachment chips            |
++--------------------------------------------------------------------------+
 ```
+
+The readiness values are illustrative; each actual indicator entry uses its CLI's current observed status. In both layouts it remains in the header's top-right region. A failed or uncertain first Send preserves the centered draft and shows its precise error without displaying a saved contribution or moving the composer. CLI problem cards can appear before the first user message without docking it.
 
 Open Folder/current project remains outside the text-entry field and must never look like Attach files. The conversation column is centered with a readable line length; structured controller cards may be wider when a matrix, file list or criterion table requires it.
 
@@ -119,6 +134,7 @@ Routine heartbeats, queue operations, protocol envelopes and low-value progress 
 - Wide: keep one centered conversation column; a temporary details sheet may use available width while Chat remains visible or dimmed behind it.
 - Medium: expand details inline when readable; otherwise use a modal sheet.
 - Narrow: cards become single-column and the details sheet becomes full-width but remains dismissible back to the same Chat position.
+- Keep the empty Chat composer centered in the available conversation area and dock the same composer below the timeline after the first confirmed persisted contribution; neither placement may obscure cards, the bottom-left project control or Send at narrow widths.
 - Keep Pause/Stop reachable while work is active.
 - Restore scroll position, selected card and keyboard/screen-reader focus after closing details.
 
@@ -203,6 +219,8 @@ A user with no bound project sees a dismissible onboarding sequence — **screen
 **Screen 2 — open folder.** Shows native **Open Folder** and explains that opening a folder only creates or restores project identity: it launches no agent session, scans no repository, initializes no Git repository, approves nothing, consumes no model-provider usage, and **installs nothing** — the three CLIs stay machine-level tools the user installs and signs into outside Mayasaba, and Mayasaba never installs, updates or configures one, in the selected folder or elsewhere. The editable draft composer is available here; a draft typed on this screen is preserved when Chat opens and is never a submission before a root is bound.
 
 **Chat — the destination.** Binding a folder opens Chat's welcome view with the composer, the lower-left project control and the header indicator. This is the persistent route for every later launch.
+
+An empty bound project's composer is centered in the conversation area. A project restored with retained conversation opens with that same composer docked below its timeline. The first confirmed persisted user contribution moves the centered composer to the bottom for the continuing conversation; this visual transition never changes the submission command or CLI-readiness rules.
 
 Controls:
 
@@ -371,7 +389,9 @@ Controller cards use a consistent anatomy: plain-language title, source-linked s
 
 ### 7.2 Composer
 
-The single native composer provides:
+The single native composer is centered in an empty bound project's conversation area. After the first confirmed persisted user contribution, it docks below the chronological timeline and stays there for later messages; restoring a project with retained conversation starts in the docked layout. A failed or uncertain first Send leaves the unsaved draft centered, shows the precise error and recovery action, and does not imply that a message was saved. CLI problem cards alone do not trigger docking. Moving the composer preserves its text, pending attachment selections, keyboard focus and the timeline's reading position, with reduced motion respected. Placement is presentation state, not a second composer, Chat route, contribution state machine or input mode.
+
+The composer provides:
 
 - multiline text;
 - configurable keyboard send behavior;
@@ -940,6 +960,7 @@ At minimum, native automated and manual acceptance must cover:
 72. English-only product language: inspect onboarding, Chat, cards, questions, approvals, errors, recovery, notifications, installer text and screen-reader output under multiple Windows display locales. Verify Mayasaba offers no language picker or translated resources and presents its own text in English. Supply non-English first, middle and final stream segments and complete replies from each CLI: none reaches provisional Chat, the primary reply, Show details, notifications, history or accessibility output; the affected turn shows an English blocker and controlled recovery without translation or reduced-agent completion. Supply non-English project/attachment source: Mayasaba must not surface raw non-English text in previews, thumbnails, file labels, citations or accessible names; a required deliverable that cannot satisfy English-only acceptance is blocked. Verify authorized source bytes and provenance remain available to the owning evidence path without being mistaken for approved output.
 73. CLI session replacement: while one project has dependent work, replace one of its CLI sessions. Show the linked handoff and source-fencing status without presenting an old lease or ACK as successor readiness. Withhold dependent work and show an English blocker if the source effect outcome is unknown or the successor has stale context. Release the hold only after current application and barrier evidence; preserve Chat, unrelated work and the user's reading position throughout. Replaying the handoff must not duplicate a reply or task attempt.
 74. Initial Windows support: on Windows 11 25H2 native x64 outside S mode, a missing CLI does not block MSI admission or Chat after installation; show its normal readiness/problem card. On Windows 10, Windows 11 24H2/26H2, ARM64 with x64 emulation, x86, Server or S mode, the MSI refuses before partial installation with an English unsupported-platform reason. Do not show these platforms as supported merely because Windows App SDK can run on them.
+75. Composer placement: in an empty bound project, verify the one composer is centered in the conversation area and Open Folder stays fixed at the lower-left, separate from Attach files. A confirmed persisted first user contribution docks that composer below the timeline; subsequent messages appear chronologically above it, and a restored project with retained conversation starts docked. A failed or uncertain first Send preserves the centered unsaved draft and precise recovery action without a false saved message or layout change; CLI problem cards alone do not dock the composer. Verify attachments, focus, screen-reader reading order, narrow windows, theme changes, reduced motion and reading position without creating another input path or route.
 
 ## 22. UX anti-patterns
 

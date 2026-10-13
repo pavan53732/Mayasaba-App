@@ -201,6 +201,8 @@ Important command flows include:
 
 The UI owns unsent drafts, pending attachment selections, card expansion, temporary-sheet state, focus/scroll restoration, and presentation state only. Domain owners validate and persist all authoritative effects. Current scope is a read-only application query over approved requirements and binding decisions, retaining their versions, project epoch, and originating contribution/approval links. It has no separate durable record, version sequence, editor, approval flow, or service owner. No approved build requirements are needed for conversation or separately authorized exploration; a derived view cannot authorize work.
 
+Composer placement is UI presentation state: an empty bound project's one composer is centered in the conversation area; after the first confirmed persisted user contribution it docks below the chronological timeline, and a project restored with retained conversation starts docked. A failed or uncertain first persist leaves the unsaved draft centered with an exact recovery path. CLI problem cards alone do not dock it. The lower-left Open Folder control stays separate in both layouts. The transition preserves attachments, focus and reading position, respects reduced motion, and does not create another input path, route or authoritative state machine.
+
 ### Chat-only projection model
 
 Chat is the application's sole persistent route. Layer 1 does not expose Council, Requirements, Decisions, Tasks, Files, Validation, Delivery, Settings or Agents as standalone pages, tabs or navigation destinations. Their domain records remain fully authoritative in their owning services but are hidden from ordinary presentation until relevant.

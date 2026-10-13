@@ -81,6 +81,8 @@ The [authoritative platform rule](./Mayasaba%20%E2%80%94%20Complete%20System%20D
 
 ## Direct corrections propagated in this documentation batch
 
+**Empty-Chat composer placement (2026-10-13).** The user selected a centered composer for an empty bound project's Chat and bottom docking of that same composer after the first confirmed persisted user contribution. Restored conversations open docked; failed or uncertain first persistence keeps the unsaved draft centered; CLI problem cards alone do not move it. The authoritative specification, UI/UX wireframe and scenario 75, architecture, AGENTS and README carry the same presentation rule. This is a documentation-level UX selection, not a new composer, route, state machine or runtime proof. The implementation-readiness gaps below remain open.
+
 ### Native light/dark theme correction
 
 The former UI/UX §4 specified only a light reference palette. The approved presentation rule now follows the Windows light/dark app setting at launch and on live changes; Windows high contrast takes precedence. UI/UX §4 supplies a dark reference palette, and desktop scenario 36 plus the authoritative specification test the full shell, status and details surfaces, readable contrast, and preservation of draft/focus/reading position. Theme selection is presentation state and cannot alter project or controller authority. This closes the missing dark-theme instruction in prose; actual WinUI rendering still requires local Windows proof.
