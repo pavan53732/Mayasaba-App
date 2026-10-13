@@ -6,6 +6,7 @@
 #include <microsoft.ui.xaml.window.h>
 #include <shobjidl_core.h>
 #include <winrt/Windows.System.h>
+#include <chrono>
 #include <cwctype>
 #include <limits>
 
@@ -134,7 +135,7 @@ namespace winrt::Mayasaba::implementation
         Grid::SetRow(ComposerPanel(), populated ? 2 : 1);
         ComposerPanel().VerticalAlignment(populated ? VerticalAlignment::Stretch : VerticalAlignment::Center);
         ComposerPanel().Margin(populated ? Thickness{12, 8, 12, 12} : Thickness{18, 135, 18, 0});
-        ComposerPanel().Width(populated ? std::numeric_limits<double>::quiet_NaN() : 720.0);
+
         for (auto const& item : messages)
         {
             Border bubble{};

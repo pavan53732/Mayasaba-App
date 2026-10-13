@@ -182,8 +182,8 @@
                 </ScrollViewer>
 
                 <!-- The ONE Chat composer moves from centered Row 1 to docked Row 2 after confirmed storage. -->
-                <Border x:Name="ComposerPanel" Grid.Row="1" Width="720" MaxWidth="720"
-                        HorizontalAlignment="Center" VerticalAlignment="Center" Margin="18,135,18,0"
+                <Border x:Name="ComposerPanel" Grid.Row="1" MaxWidth="720"
+                        HorizontalAlignment="Stretch" VerticalAlignment="Center" Margin="18,135,18,0"
                         Padding="13" CornerRadius="17" Background="{ThemeResource MayasabaPanelBrush}"
                         BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1">
                     <StackPanel Spacing="9">
