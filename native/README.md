@@ -30,6 +30,16 @@ msbuild native/Mayasaba/Mayasaba.vcxproj /restore /p:Configuration=Release /p:Pl
 
 The local VS 2022 BuildTools installation has v143 but lacks the Windows/XAML targets. On this machine, use VS 18 Enterprise MSBuild with `/p:PlatformToolset=v145`; this is an explicit build override and leaves the project default at v143. Do not remove `ApplicationType` to bypass missing targets: doing so skips required XAML compilation. Deployment of this unpackaged self-contained app via a user-approved MSI is future work, **not** a completed installer.
 
+Verified working invocation on this machine (Git Bash; `MSYS2_ARG_CONV_EXCL='*'` keeps the `/p:` switches intact, and the lowercase `*_proxy` duplicates must be unset because Windows environment keys are case-insensitive and CL.exe then fails with `MSB6001`):
+
+```bash
+export MSYS2_ARG_CONV_EXCL='*' && unset https_proxy http_proxy
+mb=(/c/Program\ Files/Microsoft\ Visual\ Studio/18/Enterprise/M*/Current/Bin/M*.exe)
+"${mb[0]}" native/Mayasaba/Mayasaba.vcxproj /restore /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145 /v:quiet /nologo "/flp:logfile=native-build.log;verbosity=normal"
+```
+
+Last build from this command: exit 0, 0 warnings, 0 errors, Release x64, output `native/Mayasaba/bin/x64/Release/Mayasaba.exe`. See [local validation](LOCAL-VALIDATION.md) for executable hashes and runtime evidence.
+
 ## Source-of-truth and safety
 
 Read [AGENTS.md](../AGENTS.md), [the complete system description](../docs/Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md), [C06 decisions](../docs/contracts/C06-BINDING-PRODUCT-DECISIONS.md) and [C10 entry gate](../docs/contracts/C10-IMPLEMENTATION-ENTRY-GATE.md). Existing 13 layers and 12 authoritative state machines remain binding. Native implementation code does not override their safety rules or permit unproven action.

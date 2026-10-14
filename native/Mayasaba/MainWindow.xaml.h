@@ -28,6 +28,7 @@ namespace winrt::Mayasaba::implementation
         void OnCloseProject(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnReopen(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnDiagnostics(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnExit(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
 
     private:
         std::unique_ptr<mayasaba::Storage> storage_;

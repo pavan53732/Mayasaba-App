@@ -9,17 +9,19 @@ There are **three main screens**: welcome, open folder, and Chat. Welcome and op
 ## End-to-end journey
 
 ```text
-FIRST LAUNCH, NO BOUND PROJECT
+APPLICATION LAUNCH LIFECYCLE
   Screen 1 Welcome ── Next / Skip / Escape ──> Screen 2 Open Folder
          ^                                          │
          └──────────────── Back ────────────────────┘
                                                     │
                                           authorized folder binding
+                                          (restores existing history)
                                                     ▼
-OTHER LAUNCHES WITH A BOUND PROJECT ─────────> Screen 3 Chat
+                                               Screen 3 Chat
                                                     │
                                     [Start] initializes three sessions;
-                                    each observed status is shown
+                                    [Exit] flushes draft and closes app;
+                                    reopening Mayasaba opens Screen 1
                                                     │
                                          first confirmed saved message
                                                     ▼
@@ -31,7 +33,7 @@ OTHER LAUNCHES WITH A BOUND PROJECT ─────────> Screen 3 Chat
                                     certified delivery or stated blocker
 ```
 
-Opening a folder refreshes bounded, non-mutating detection of all three CLIs and shows their individual readiness on screen 3. It does not start working agent sessions, scan files, initialize Git, or approve work. The readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. Once a project is bound, later launches open its Chat directly.
+Opening a folder refreshes bounded, non-mutating detection of all three CLIs and shows their individual readiness on screen 3. It does not start working agent sessions, scan files, initialize Git, or approve work. The readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. Every application launch begins at Screen 1 (Welcome); re-selecting an authorized project folder on Screen 2 restores its retained history and draft directly into Screen 3 Chat. Selecting **Exit** on Screen 3 safely persists the active draft and exits the application.
 
 The native Windows application menu is outside all three screen content areas. Once a project is bound, **File → Switch Project** opens the native folder picker. It changes the active Chat only after Project service validates the chosen root and the existing safe-switching guards pass. Chat itself has no folder control.
 
@@ -108,7 +110,7 @@ NATIVE WINDOWS APPLICATION MENU (outside Chat)
 +--------------------------------------------------------------------------+
 | Mayasaba · Project name + inspectable path                               |
 | Phase + condition                Hermes Agent CLI  ● READY               |
-| [Start] [Pause] [Stop] [•••]     Kilo Code CLI     ● READY               |
+| [Start] [Pause] [Stop] [•••] [Exit]  Kilo Code CLI ● READY               |
 |                                 Claude Code CLI   ● READY                |
 +--------------------------------------------------------------------------+
 |                                                                          |
@@ -123,7 +125,7 @@ NATIVE WINDOWS APPLICATION MENU (outside Chat)
 +--------------------------------------------------------------------------+
 ```
 
-The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, visible Start/Pause/Stop controls, and exactly one truthful readiness entry per required CLI. `READY` detection does not mean a project session is active. There is no setup banner when all CLIs are ready.
+The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, visible Start/Pause/Stop/Exit controls, overflow [•••], and exactly one truthful readiness entry per required CLI. Selecting [Exit] flushes the draft and closes the application; the next launch always begins from Screen 1 (Welcome). `READY` detection does not mean a project session is active. There is no setup banner when all CLIs are ready.
 
 ### Switching projects from the native application menu
 
@@ -202,7 +204,7 @@ CLI readiness and problem cards do not move the composer. A restored project wit
 +--------------------------------------------------------------------------+
 | Mayasaba · Project name + inspectable path                               |
 | Phase + condition                Hermes Agent CLI  ● READY               |
-| [Start] [Pause] [Stop] [•••]     Kilo Code CLI     ● READY               |
+| [Start] [Pause] [Stop] [•••] [Exit]  Kilo Code CLI ● READY               |
 |                                 Claude Code CLI   ● READY                |
 +--------------------------------------------------------------------------+
 | You · 10:42 · Saved                                                      |
@@ -414,6 +416,6 @@ Closing is explicit and never follows from switching folders, inactivity, applic
 | Keyboard and screen reader | Logical focus, visible focus ring, named controls and states, meaningful announcements, and return focus from details. |
 | Privacy and English-only output | No credentials, tokens, private reasoning, unrelated process output, or unverified non-English agent prose. Required non-English generated prose is blocked with an English explanation. The user's own submitted contribution remains exact only in its user-message/history view with English labels; generated output does not repeat it. The smallest exact technical-identity token may remain unchanged when correctness requires it, with English labels and provenance. |
 
-The permanent Chat-header controls are **Start**, **Pause**, and **Stop**. After Pause, the paused-status card exposes a contextual **Resume** action; exact standalone `/start`, `/pause`, `/resume`, and `/stop` aliases follow the same controller path. The default composer shortcut is **Enter to send** and **Shift+Enter for a new line**. An accessibility preference changes this to **Enter for a new line** and **Ctrl+Enter to send** without changing or submitting the current draft. If Stop cannot prove physical cessation after its 20-second reconciliation window, the UI keeps the affected outcome `UNKNOWN` and operation `BLOCKED`; it never shows a confirmed stop merely because the deadline elapsed.
+The permanent Chat-header controls are **Start**, **Pause**, **Stop**, and **Exit**. After Pause, the paused-status card exposes a contextual **Resume** action; exact standalone `/start`, `/pause`, `/resume`, and `/stop` aliases follow the same controller path. The default composer shortcut is **Enter to send** and **Shift+Enter for a new line**. An accessibility preference changes this to **Enter for a new line** and **Ctrl+Enter to send** without changing or submitting the current draft. If Stop cannot prove physical cessation after its 20-second reconciliation window, the UI keeps the affected outcome `UNKNOWN` and operation `BLOCKED`; it never shows a confirmed stop merely because the deadline elapsed.
 
 All cards with more inspectable information expose `Show details`. Dense content uses a temporary sheet over Chat and returns to the invoking control. No illustration here authorizes new filesystem access, provider changes, credentials, a fourth agent, a separate top-level route, or a shortcut around approval and evidence requirements.

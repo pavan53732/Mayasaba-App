@@ -241,11 +241,15 @@
                 <Border Grid.Row="0" Background="{ThemeResource MayasabaPanelBrush}"
                         BorderBrush="{ThemeResource MayasabaBorderBrush}"
                         BorderThickness="0,0,0,1" Padding="22,16">
-                    <Grid ColumnSpacing="14">
+                    <Grid ColumnSpacing="14" RowSpacing="7">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
                         <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
                             <Border Width="31" Height="31" CornerRadius="11"
                                     Background="{ThemeResource MayasabaBrandGradientBrush}"
@@ -263,14 +267,18 @@
                             </Border>
                             <StackPanel Spacing="4" VerticalAlignment="Center">
                                 <TextBlock x:Name="ProjectHeading" FontSize="20" FontWeight="SemiBold"
-                                           Foreground="{ThemeResource MayasabaInkBrush}" Text="Project"/>
+                                           Foreground="{ThemeResource MayasabaInkBrush}" Text="Project"
+                                           TextTrimming="CharacterEllipsis"/>
                                 <TextBlock x:Name="ProjectPathLabel" FontSize="11" TextTrimming="CharacterEllipsis"
                                            Foreground="{ThemeResource MayasabaMutedBrush}" Text="C:\Projects"/>
                                 <TextBlock x:Name="ProjectCondition" FontSize="11" Text="Not started"
                                            Foreground="{ThemeResource MayasabaMutedBrush}"/>
                             </StackPanel>
                         </StackPanel>
-                        <StackPanel Grid.Column="1" Spacing="7" HorizontalAlignment="Right">
+                        <!-- Narrow-window safety: identity and controls share row 0 (identity is
+                             star-sized and ellipsis-trimmed, never collapsed); the CLI status line
+                             owns row 1 at full width so it keeps both names and status visible. -->
+                        <StackPanel Grid.Row="0" Grid.Column="1" HorizontalAlignment="Right">
                             <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                                 <Button x:Name="StartButton" Content="Start" Click="OnStart" Padding="15,7" CornerRadius="11"/>
                                 <Button x:Name="PauseButton" Content="Pause" Click="OnPause" Padding="15,7" CornerRadius="11"/>
@@ -285,15 +293,19 @@
                                         </MenuFlyout>
                                     </Button.Flyout>
                                 </Button>
+                                <Button x:Name="ExitButton" Content="Exit" Click="OnExit"
+                                        Padding="15,7" CornerRadius="11"
+                                        AutomationProperties.Name="Exit Mayasaba"/>
                             </StackPanel>
-                            <StackPanel Orientation="Horizontal" Spacing="13" HorizontalAlignment="Right">
-                                <TextBlock x:Name="HermesStatus" FontSize="11"
-                                           Text="● Hermes · UNSUPPORTED"/>
-                                <TextBlock x:Name="KiloStatus" FontSize="11"
-                                           Text="● Kilo · UNSUPPORTED"/>
-                                <TextBlock x:Name="ClaudeStatus" FontSize="11"
-                                           Text="● Claude · UNSUPPORTED"/>
-                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="13"
+                                    HorizontalAlignment="Right">
+                            <TextBlock x:Name="HermesStatus" FontSize="11"
+                                       Text="● Hermes · UNSUPPORTED"/>
+                            <TextBlock x:Name="KiloStatus" FontSize="11"
+                                       Text="● Kilo · UNSUPPORTED"/>
+                            <TextBlock x:Name="ClaudeStatus" FontSize="11"
+                                       Text="● Claude · UNSUPPORTED"/>
                         </StackPanel>
                     </Grid>
                 </Border>

@@ -103,21 +103,16 @@ namespace winrt::Mayasaba::implementation
         try
         {
             storage_ = std::make_unique<mayasaba::Storage>(mayasaba::Storage::DefaultFile());
-            if (auto key = storage_->LastBoundProject())
-            {
-                if (storage_->Project(*key))
-                {
-                    activeProject_ = *key;
-                    ShowChat();
-                    return;
-                }
-            }
         }
         catch (std::exception const& e)
         {
             storage_.reset();
             ShowNotice(L"SQLite startup failed. Folder binding and Send are blocked: " + Utf16(e.what()), true);
         }
+        // Startup always begins at Screen 1 (Welcome), by explicit product instruction:
+        // a previously bound project is never reopened automatically. The user reaches a
+        // bound project through Screen 2 (Open Folder); re-selecting the same folder
+        // re-binds it and restores its stored history.
         ShowWelcome();
     }
 
@@ -595,16 +590,73 @@ namespace winrt::Mayasaba::implementation
         try
         {
             PersistDraft();
-            FolderPicker picker;
-            picker.FileTypeFilter().Append(L"*");
-            Microsoft::UI::Xaml::Window window = *this;
-            HWND hwnd{};
-            winrt::check_hresult(window.as<IWindowNative>()->get_WindowHandle(&hwnd));
-            winrt::check_hresult(picker.as<IInitializeWithWindow>()->Initialize(hwnd));
-            auto selected = co_await picker.PickSingleFolderAsync();
-            if (!selected) co_return;
+            std::wstring folderPath;
+            bool folderSelected = false;
+            try
+            {
+                FolderPicker picker;
+                picker.FileTypeFilter().Append(L"*");
+                Microsoft::UI::Xaml::Window window = *this;
+                HWND hwnd{};
+                winrt::check_hresult(window.as<IWindowNative>()->get_WindowHandle(&hwnd));
+                winrt::check_hresult(picker.as<IInitializeWithWindow>()->Initialize(hwnd));
+                auto selected = co_await picker.PickSingleFolderAsync();
+                if (selected)
+                {
+                    folderPath = selected.Path().c_str();
+                    folderSelected = true;
+                }
+                else
+                {
+                    co_return;
+                }
+            }
+            catch (...)
+            {
+                // Fallback to native Win32 IFileOpenDialog with FOS_PICKFOLDERS
+                Microsoft::UI::Xaml::Window window = *this;
+                HWND hwnd{};
+                if (SUCCEEDED(window.as<IWindowNative>()->get_WindowHandle(&hwnd)))
+                {
+                    winrt::com_ptr<IFileOpenDialog> dialog;
+                    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(dialog.put()))))
+                    {
+                        DWORD options{};
+                        if (SUCCEEDED(dialog->GetOptions(&options)))
+                        {
+                            dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
+                            dialog->SetTitle(L"Select Folder");
+                            if (SUCCEEDED(dialog->Show(hwnd)))
+                            {
+                                winrt::com_ptr<IShellItem> item;
+                                if (SUCCEEDED(dialog->GetResult(item.put())))
+                                {
+                                    PWSTR pszPath = nullptr;
+                                    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &pszPath)) && pszPath)
+                                    {
+                                        folderPath = pszPath;
+                                        folderSelected = true;
+                                        CoTaskMemFree(pszPath);
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                co_return; // user cancelled dialog
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!folderSelected || folderPath.empty()) co_return;
+            // The picker is a separate top-level window: the main window can close while it is
+            // open. This coroutine holds a strong reference, so the window cannot be destroyed
+            // under it, but Window.Closed may already have run its teardown. Never resume UI
+            // work after closure.
+            if (windowClosed_) co_return;
             if (!storage_) { ShowNotice(L"Store unavailable; project cannot be bound.", true); co_return; }
-            auto root = mayasaba::ValidateProjectRoot(selected.Path().c_str());
+            auto root = mayasaba::ValidateProjectRoot(folderPath.c_str());
             auto id = Utf8(root.stableIdentity);
             storage_->BindProject(id, Utf8(root.displayName), Utf8(root.canonicalPath));
             if (!prebindingDraft_.empty())
@@ -619,8 +671,14 @@ namespace winrt::Mayasaba::implementation
             ShowChat();
             ShowNotice(L"Project bound. No CLI was started and no repository scan occurred.");
         }
-        catch (winrt::hresult_error const& e) { ShowNotice(L"Picker failed: " + e.message(), true); }
-        catch (std::exception const& e) { ShowNotice(L"Project root refused: " + Utf16(e.what()), true); }
+        catch (winrt::hresult_error const& e)
+        {
+            if (!windowClosed_) ShowNotice(L"Picker failed: " + e.message(), true);
+        }
+        catch (std::exception const& e)
+        {
+            if (!windowClosed_) ShowNotice(L"Project root refused: " + Utf16(e.what()), true);
+        }
     }
     void MainWindow::OnChooseFolder(IInspectable const&, RoutedEventArgs const&) { PickFolderAsync(); }
     void MainWindow::OnSwitchProject(IInspectable const&, RoutedEventArgs const&) { PickFolderAsync(); }
@@ -636,6 +694,14 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnDiagnostics(IInspectable const&, RoutedEventArgs const&)
     {
         ShowNotice(L"Hermes, Kilo Code, Claude Code: UNSUPPORTED. Executable identity and native probes not implemented; no provider calls.", true);
+    }
+    // Explicit in-app exit for the whole application. The current draft is flushed first
+    // so a confirmed Exit never loses the newest composer text; Close() then runs the same
+    // Window.Closed teardown as the title-bar close (no separate shutdown path).
+    void MainWindow::OnExit(IInspectable const&, RoutedEventArgs const&)
+    {
+        PersistDraft();
+        Close();
     }
     void MainWindow::OnCloseProject(IInspectable const&, RoutedEventArgs const&)
     {

@@ -373,6 +373,7 @@ h1 .gradient{background:linear-gradient(110deg,var(--brand),var(--violet));color
      <button class="btn btn-xs" id="pauseButton"><svg class="icon s"><use href="#i-pause"/></svg> Pause</button>
      <button class="btn btn-danger btn-xs" id="stopButton"><svg class="icon s"><use href="#i-stop"/></svg> Stop</button>
      <button class="btn btn-xs" id="moreButton" title="More project actions" aria-label="More project actions" aria-expanded="false"><svg class="icon s"><use href="#i-ellipsis"/></svg></button>
+     <button class="btn btn-xs" id="exitButton" title="Exit Mayasaba" aria-label="Exit Mayasaba"><svg class="icon s"><use href="#i-x"/></svg> Exit</button>
     </div></div>
   </section>
   <div id="chatMore" class="menu-pop" style="left:auto;right:20px;top:92px" hidden>
@@ -520,6 +521,8 @@ $('folderButton').addEventListener('click',function(){showPicker(this);});$('can
 $('fileButton').addEventListener('click',function(){var open=$('filePop').hidden;$('filePop').hidden=!open;this.setAttribute('aria-expanded',String(open));});
 $('switchProject').addEventListener('click',function(){showPicker(this);});
 document.querySelectorAll('[data-project]').forEach(function(el){el.addEventListener('click',function(){switchToProject(el.dataset.project);});});
+function exitApp(){project().draft=$('message').value;setScene('welcome');toast('Mayasaba exited. Next launch opens from Screen 1.');}
+$('exitButton').addEventListener('click',exitApp);
 $('startButton').addEventListener('click',start);$('pauseButton').addEventListener('click',pause);$('stopButton').addEventListener('click',stop);
 $('moreButton').addEventListener('click',function(){var open=$('chatMore').hidden;$('chatMore').hidden=!open;this.setAttribute('aria-expanded',String(open));});
 $('diagnosticsButton').addEventListener('click',function(){showDetails('cli',this);$('chatMore').hidden=true;});
