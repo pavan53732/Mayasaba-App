@@ -52,7 +52,7 @@
       "type_enum_pointer": "/$defs/BoundaryCommand/properties/command_type/enum",
       "owner_enum_pointer": "/$defs/Owner/enum",
       "mapping_rules_pointer": "/$defs/BoundaryCommand/allOf",
-      "type_count": 115,
+      "type_count": 123,
       "required_validation": "EXACTLY_ONE_OWNER_PER_TYPE"
     },
     "events": {
@@ -60,7 +60,7 @@
       "type_enum_pointer": "/$defs/DomainEvent/properties/event_type/enum",
       "owner_enum_pointer": "/$defs/Owner/enum",
       "mapping_rules_pointer": "/$defs/DomainEvent/allOf",
-      "type_count": 122,
+      "type_count": 125,
       "required_validation": "EXACTLY_ONE_OWNER_PER_TYPE"
     },
     "records": {

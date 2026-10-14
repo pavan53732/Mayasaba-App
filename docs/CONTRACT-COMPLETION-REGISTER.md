@@ -65,8 +65,8 @@ The machine-readable [`trace-fixtures.json`](./contracts/schemas/v1/trace-fixtur
 | Check | Evidence recorded for this documentation change |
 | --- | --- |
 | C06 decisions propagated | **PASS** — authoritative specification, AGENTS, architecture, UI/UX, screens, README and C01–C10 contain the ten decisions and three safety clarifications without a conflicting open choice |
-| JSON registry | **PASS** — all eight v1 JSON files parse; five schemas pass Draft 2020-12 meta-validation; local references resolve; ten accepted hashes and eleven required rejections pass |
-| Fixed ownership | **PASS** — exactly one registered owner validates for each of 115 commands, 122 events and 56 record types; the manifest records counts, pointers and all twelve machine owners |
+| JSON registry | **HISTORICAL PASS, additional validation pending** — prior eight v1 files and five schemas were checked at original closure; C11 adds one schema and one CQ fixture file whose JSON shape, local references and SHA-256 manifest entries were checked in this refinement. A fresh complete Draft 2020-12 metaschema/canonical-vector suite has not yet been executed |
+| Fixed ownership | **PASS (rechecked 2026-10-14)** — current boundary schema contains 123 commands, 125 events and 56 records, each with exactly one owner match; prior documented 115/122 counts were stale and are corrected in the manifest; all twelve machine owners remain |
 | Twelve machines | **PASS** — C08 contains exactly twelve consecutively numbered authoritative machines and no new state owner |
 | B1–B10 | **PASS** — C09 contains one selected documentation mechanism, evidence requirement and fail-closed rule for each alternative |
 | Fixture mapping | **PASS** — T01–T22 and F01–F30 form 52 unique, schema-valid fixtures with separate boundary, physical and operational results |
