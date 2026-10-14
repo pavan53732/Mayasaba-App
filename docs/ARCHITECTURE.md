@@ -366,6 +366,9 @@ A missing mandatory proposal, critique, rebuttal or synthesis review leaves the 
 
 User choice/trade-off and missing factual information use distinct typed answer contracts. Silence and timeout pause; they never authorize.
 
+
+**C11 Council Decision Quality Contract:** In existing Council Engine records, a six-directed-critique source/claim coverage packet tracks substantive critiques, justified dispositions and exact synthesis/coverage review digests. Evidence/Validation checks observation independence, checkable logical premises and shared-assumption challenges; Decision service alone binds after its own requirement/policy/user gates. This is an additional quality condition for existing positive outcomes, not a new owner, state machine, Council mode, UI route, round or authority. [C11](./contracts/C11-COUNCIL-DECISION-QUALITY.md) documents its semantic oracles and CQ01–CQ16 prospective fixtures.
+
 ## 11. Context and repository exploration
 
 Workspace Manager owns the permitted `RepositoryManifest`. Context Synchronizer uses that manifest to create versioned, immutable, digest-linked snapshots. Repository relationships and indexes are advisory and carry source file IDs, hashes, extraction method, epoch, and uncertainty.

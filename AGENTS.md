@@ -147,6 +147,9 @@ See `docs/UI-UX.md` before changing any user-facing flow.
 - Assign individual tasks through scoped leases; do not make every agent write every task. Preserve source links and unaffected work when an authorized plan change invalidates affected leases.
 - A missing CLI blocks only operations that require it. Never reduce an all-three workflow to two agents.
 
+
+**C11 documentation-only quality refinement:** [C11](docs/contracts/C11-COUNCIL-DECISION-QUALITY.md) requires evidence-adequate load-bearing claims, exactly six source-linked substantive critique/disposition rows, shared-assumption adversarial checking, fair comparison of all viable alternatives, explicit historical decision validity and concise choice packs. A hollow rubber stamp cannot count as the actual required critique; a chair may not erase unresolved objections with synthesis prose. All previous D-03/approval/owner/state and five-round bounds remain in force.
+
 ## 7. FULL council rules
 
 FULL is the only council mode. Every registered council decision point requires:

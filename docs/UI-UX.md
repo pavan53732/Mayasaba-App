@@ -706,6 +706,9 @@ Visually communicate that:
 
 When the D-03 precedence blocks or pauses a round, show the highest-priority applicable reason, every missing mandatory contribution and the permitted recovery action. An incomplete round never displays `cap reached` as though it had completed; neither a timed-out choice packet nor pending approval displays an approved result.
 
+
+**C11 Council quality inspection in the existing Chat UI.** The compact Council card shows the scoped decision, meaningful viable alternatives without forcing a binary choice, binding constraints, strongest surviving objections, credible/uncertain evidence, risk/reversibility, current D-03 outcome and the next actually permitted user action. Show details reveals all six source/claim-directed critique slots with actual authored content and dispositions, linked rebuttals/revisions, independent observation quality, challenge of common assumptions, exact synthesis *and coverage* digest reviewed by both nonchair agents, and historical validity impact. Missing/hollow critique remains incomplete; fabricated/unsupported evidence never displays certified PASS. A missing fact, user choice and completed unresolved cap remain distinguishable. Preserve the existing one Chat route, keyboard/accessibility/reading position and no exposed private reasoning. [C11](./contracts/C11-COUNCIL-DECISION-QUALITY.md) introduces no standalone Council screen.
+
 ## 12. Requirements and decision cards
 
 ### 12.1 Requirements
