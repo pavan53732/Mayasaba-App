@@ -18,7 +18,6 @@ This register records where the completed product choices and deterministic cont
 | [C08](./contracts/C08-TWELVE-STATE-MACHINES.md) | Exactly twelve state machines and transitions | Normative behavior contract |
 | [C09](./contracts/C09-SELECTION-TRANSACTION-RECOVERY.md) | B1–B10, owner transactions, delivery and recovery | Normative algorithm contract |
 | [C10](./contracts/C10-IMPLEMENTATION-ENTRY-GATE.md) | Documentation closure and I0–I8 implementation gates | Normative entry gate |
-
 | [C11](./contracts/C11-COUNCIL-DECISION-QUALITY.md) | FULL Council substantive quality and C11 CQ01–CQ16 prospective oracles | Normative quality refinement; no native proof |
 
 The [`schemas/v1`](./contracts/schemas/v1/README.md) registry contains the shared machine-readable representation and fixture indexes. Enabled implementation slices extend the registry with closed command-specific payload schemas under C07.
