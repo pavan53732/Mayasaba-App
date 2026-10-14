@@ -7,10 +7,10 @@
 All of the following must pass in the repository:
 
 1. The ten C06 product decisions and three safety clarifications appear in the authoritative system description and relevant derived documents without contradictory `OPEN` wording.
-2. C07 and the v1 schema registry parse successfully, all local `$ref` files exist, shared types are bounded, and canonical vectors contain verified expected hashes/rejections.
+2. C07 and the v1 schema registry parse successfully, all local `$ref` files exist, shared types are bounded, canonical vectors contain verified expected hashes/rejections, and C11's schema/fixtures resolve against the manifest's exact digests.
 3. C08 names exactly twelve machines, one owner per machine, every state, registered command, guard, event/result, illegal transition and restart/unknown branch.
 4. C09 fixes B1–B10, owner commit/outbox/receipt ordering, instance exclusion, MCF class/replay/expiry, approval routing, context application, publication recovery and clocks.
-5. Every C05 T01–T22 and completion-register F01–F30 fixture maps to one expected result and governing contract.
+5. Every C05 T01–T22 and completion-register F01–F30 fixture maps to one expected result and governing contract; C11 CQ01–CQ16 additionally map to independent prospective substantive-quality oracles, without claiming they ran.
 6. C04 owner inventory, contract index, authoritative specification, architecture, UI/UX, user-visible screens, README, AGENTS, readiness audit and completion register agree.
 7. Relative file links and heading anchors resolve; JSON parses; Markdown tables are structurally complete; all numbered UI scenarios remain consecutive and new scenarios append consecutively.
 8. A fresh-context reader can determine one owner, command, guard/result and recovery path for the adversarial questions without inventing product behavior.
@@ -54,7 +54,7 @@ Implement one bounded end-to-end path, beginning with contribution persistence o
 
 ### Gate I5 — Three-CLI coordination and FULL council
 
-Implement verified context application, all-three Chat response/review, D1/D2/D3 FULL rounds, barrier and Handoff #9. Evidence must cover missing participants, contaminated independence, changed synthesis revision, five-round/incomplete bounds, replacement and current-plan application. No two-agent fallback.
+Implement verified context application, all-three Chat response/review, D1/D2/D3 FULL rounds, barrier and Handoff #9. Evidence must cover missing participants, contaminated independence, changed synthesis revision, five-round/incomplete bounds, replacement and current-plan application. Execute C11 CQ01–CQ16 with observed native/semantic critique-quality, source, evidence and authorization oracles; their existence in documentation is not a passing test. No two-agent fallback.
 
 ### Gate I6 — Isolated execution, publication and recovery
 

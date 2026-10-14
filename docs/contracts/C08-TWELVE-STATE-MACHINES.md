@@ -128,15 +128,18 @@ States: `ALLOCATED`, `COLLECTING_PROPOSALS`, `PROPOSALS_FROZEN`, `COLLECTING_CRI
 | `ALLOCATED` | `BeginProposalCollection`; synchronized fresh independent context for all three | `COLLECTING_PROPOSALS`; `CouncilProposalCollectionStarted` | Prior peer disclosure contaminating baseline blocks independence |
 | `COLLECTING_PROPOSALS` | `FreezeProposals`; exactly one current independent proposal from each CLI | `PROPOSALS_FROZEN`; `CouncilProposalsFrozen` | Missing/duplicate/stale proposal remains incomplete |
 | `PROPOSALS_FROZEN` | `BeginCritiques` | `COLLECTING_CRITIQUES`; six directed assignments persisted; `CouncilCritiquesAssigned` | Self-critique or omitted edge invalid |
-| `COLLECTING_CRITIQUES` | `CloseCritiques`; six actual current critiques complete | `COLLECTING_REBUTTALS`; `CouncilCritiquesCompleted` | Silence/ACK cannot count |
+| `COLLECTING_CRITIQUES` | `CloseCritiques`; six distinct actual authored, current, frozen-target critiques with C11 substantive challenge/no-defect checks | `COLLECTING_REBUTTALS`; `CouncilCritiquesCompleted` | ACK, hollow agreement, self/duplicate edge or stale target leaves a required slot incomplete |
 | `COLLECTING_REBUTTALS` | `CloseRebuttals`; required rebuttals/revisions linked immutably | `SYNTHESIZING`; `CouncilRebuttalsCompleted` | Missing required rebuttal stays incomplete |
-| `SYNTHESIZING` | `SubmitSynthesis`; assigned chair, exact frozen inputs and revision digest | `AWAITING_SYNTHESIS_REVIEWS`; `CouncilSynthesisSubmitted` | Changed revision invalidates reviews |
-| `AWAITING_SYNTHESIS_REVIEWS` | `SealCouncilRound`; both nonchair exact-revision reviews and coverage complete | D-03 outcome; normally `COMPLETE`; `CouncilRoundSealed` | Apply ten-priority D-03 order exactly |
+| `SYNTHESIZING` | `SubmitSynthesis`; assigned chair, exact frozen inputs and complete source-checked C11 six-slot claim-to-critique coverage with immutable revision digest | `AWAITING_SYNTHESIS_REVIEWS`; `CouncilSynthesisSubmitted` | Missing/false coverage withholds synthesis; changed synthesis/coverage digest invalidates reviews |
+| `AWAITING_SYNTHESIS_REVIEWS` | `SealCouncilRound`; both nonchair reviews of exact synthesis/coverage revision, complete mandatory participation and current C11 evidence/quality assessment | D-03 outcome; normally `COMPLETE`; `CouncilRoundSealed` | Preserve first-applicable ten-priority D-03 result; failed quality/evidence cannot certify positive synthesis/convergence |
 | Any nonterminal | `PauseCouncilRound` | `PAUSED`; `CouncilRoundPaused` | No positive outcome |
 | `PAUSED` | `ResumeCouncilRound`; same baseline or authorized successor context with invalidation | Earliest incomplete phase; `CouncilRoundResumed` | Five-round budget never resets |
 | Any nonterminal | `BlockCouncilRound`; bound expires with mandatory contribution missing | `BLOCKED`; `CouncilRoundBlockedIncomplete` | Never `cap reached` |
 
 Only Decision service can bind an eligible result after authority, evidence, policy and user gates. Comparable-position equality uses sorted canonical position IDs, normative claims, dispositions, affected authority IDs and evidence digests; narrative wording and confidence are excluded. Two consecutive complete rounds must have identical canonical surviving-position digests unless a fully reviewed synthesis resolves earlier.
+
+
+**C11 quality guards refine existing commands, not machine states.** Check the original six directed edges H→K, H→C, K→H, K→C, C→H, C→K; actual authored substance; accurate frozen source claim/critique/revision links; adequate independent observations and inference premises; justified challenge dispositions; common-assumption tests or documented bounds; fair comparisons and current binding-decision validity. A substantive critique failure is incomplete participation; material unresolved fact/choice/evidence maps to the original D-03 priorities. Exact two-peer synthesis/coverage digest matching is mandatory when evaluated. No extra critique, event, owner, positive outcome, round or authorization is introduced. [C11](./C11-COUNCIL-DECISION-QUALITY.md) and CQ01–CQ16 are prospective semantic oracles.
 
 ## 8. Synchronization barrier — Orchestrator
 
