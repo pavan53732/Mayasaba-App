@@ -19,6 +19,8 @@ This register records where the completed product choices and deterministic cont
 | [C09](./contracts/C09-SELECTION-TRANSACTION-RECOVERY.md) | B1–B10, owner transactions, delivery and recovery | Normative algorithm contract |
 | [C10](./contracts/C10-IMPLEMENTATION-ENTRY-GATE.md) | Documentation closure and I0–I8 implementation gates | Normative entry gate |
 
+| [C11](./contracts/C11-COUNCIL-DECISION-QUALITY.md) | FULL Council substantive quality and C11 CQ01–CQ16 prospective oracles | Normative quality refinement; no native proof |
+
 The [`schemas/v1`](./contracts/schemas/v1/README.md) registry contains the shared machine-readable representation and fixture indexes. Enabled implementation slices extend the registry with closed command-specific payload schemas under C07.
 
 ## Closed documentation decisions
@@ -74,6 +76,8 @@ The machine-readable [`trace-fixtures.json`](./contracts/schemas/v1/trace-fixtur
 | Reader test | **PASS** — independent fresh-context reviews found the requested UI, authority, language, storage, Stop and proof boundaries deterministic after their reported issues were corrected |
 
 These are documentation checks over the committed sources and fixtures. They do not substitute for any C10 implementation or native-evidence gate.
+
+**C11 documentation addendum, 2026-10-14:** The historical numerical PASS rows above describe the earlier C01–C10 documentation-closure check and have **not** all been re-run in a fresh environment for this C11 update. C11 adds one schema, a 16-case expected-fixture catalog and exact digest entries in the v1 registry. The CQ cases are **not** executed native/semantic tests; Gate I5 remains pending for actual evidence. The C02/C07/C08/C09/C10, architecture and Chat UI contracts reference C11 without new modes, states or authority.
 
 ## Implementation gates
 

@@ -98,6 +98,8 @@ Command-specific payloads are closed when their implementation slice is prepared
 
 The repository validation record is completed in the companion [contract completion register](./CONTRACT-COMPLETION-REGISTER.md). Any later contradictory semantic change reopens only its affected documentation scope and follows D-04 when material.
 
+**C11 refinement (2026-10-14):** [C11](./contracts/C11-COUNCIL-DECISION-QUALITY.md) augments the FULL Council's decision-quality specification with six-slot critique dispositions, classified evidence, adversarial common-assumption checks, fair nonbinary alternatives and decision-validity review. Its typed v1 subdocuments and CQ01–CQ16 are documentation-stage expected scenarios only. Existing thirteen layers, twelve authoritative machines, D-03 priority and the five-round bound do not change; this makes no Windows/CLI or I5 runtime claim.
+
 ## Remaining implementation and proof obligations
 
 These items are deliberately not documentation ambiguities:
