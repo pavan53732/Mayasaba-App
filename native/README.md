@@ -1,6 +1,6 @@
 # Mayasaba — real native Windows implementation
 
-**Implementation status: INCOMPLETE.** This directory contains a **real native C++20 / C++/WinRT / WinUI 3 unpackaged application starting slice**, not a renamed browser preview. Windows App SDK 2.5.1 and Microsoft.Windows.CppWinRT 3.0.260818.1 are pinned in the `.vcxproj`. Initial x64 support targets the previously approved Windows 11 system class. The current source has **not** passed an actual Windows build or test in this conversation; CI status must be inspected before claiming it launches.
+**Implementation status: INCOMPLETE.** This directory contains a **real native C++20 / C++/WinRT / WinUI 3 unpackaged application starting slice**, not a renamed browser preview. Windows App SDK 2.5.1 and Microsoft.Windows.CppWinRT 3.0.260818.1 are pinned in the `.vcxproj`. Initial x64 support targets the previously approved Windows 11 system class. A local Release x64 build and native Welcome/Open Folder launch were verified on 2026-10-14 using VS 18 Enterprise with the v145 toolset. See [local validation](LOCAL-VALIDATION.md) for commands, evidence and outstanding runtime checks. This does not establish full application acceptance.
 
 ## What's implemented in this slice
 
@@ -28,7 +28,7 @@ On an eligible Windows x64 developer machine, install VS 2022 Desktop developmen
 msbuild native/Mayasaba/Mayasaba.vcxproj /restore /p:Configuration=Release /p:Platform=x64
 ```
 
-See [native CI workflow](../.github/workflows/native-winui.yml). Deployment of this unpackaged self-contained app via a user-approved MSI is future work, **not** a completed installer.
+The local VS 2022 BuildTools installation has v143 but lacks the Windows/XAML targets. On this machine, use VS 18 Enterprise MSBuild with `/p:PlatformToolset=v145`; this is an explicit build override and leaves the project default at v143. Do not remove `ApplicationType` to bypass missing targets: doing so skips required XAML compilation. Deployment of this unpackaged self-contained app via a user-approved MSI is future work, **not** a completed installer.
 
 ## Source-of-truth and safety
 

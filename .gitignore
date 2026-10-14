@@ -1,1 +1,8 @@
 .workbuddy-ai/
+/native/Mayasaba/bin/
+/native/Mayasaba/obj/
+/native/Mayasaba/Generated Files/
+/native/Mayasaba/XamlMetaDataProvider.cpp
+/native/Mayasaba/XamlMetaDataProvider.idl
+/native-build.log
+/native-evaluated.xml

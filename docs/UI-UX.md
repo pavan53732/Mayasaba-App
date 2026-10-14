@@ -141,44 +141,102 @@ Routine heartbeats, queue operations, protocol envelopes and low-value progress 
 
 ## 4. Visual direction
 
-The visual idea is a **quiet conversation with an evidence spine**. Ordinary messages remain spacious in both light and dark themes. Controller cards carry a narrow semantic edge and precise status text, so authority and proof are recognizable without turning Chat into a grid of equal boxes. Follow the current Windows app light/dark setting on launch and update the open window when that setting changes. Windows high contrast takes precedence over both palettes. Theme changes affect presentation only: they do not reset Chat, drafts, scroll position, focus, project binding, or controller state.
+The visual idea is a **calm, luminous control room** — one evidence-backed conversation wrapped in a branded, gently animated surface. Depth, gradient and motion exist to make authority, provenance and state legible; they are never ambient decoration. Ordinary messages stay spacious in both light and dark themes, and controller cards keep a narrow semantic edge and precise status text so authority and proof remain recognizable without turning Chat into a grid of equal boxes. Brand expression is deliberate and finite: one logo mark, one brand ramp, one motion language, one icon set. Follow the current Windows app light/dark setting on launch and update the open window when that setting changes. Windows high contrast takes precedence over both palettes. Theme changes affect presentation only: they do not reset Chat, drafts, scroll position, focus, project binding, or controller state.
 
-### Default light-theme tokens
+### Brand ramp and tokens
+
+Three palettes are required: **light**, **dark**, and **Windows high contrast**. The values below define the intended relationships; implementation must use theme resources so high contrast overrides them.
+
+**Light**
 
 | Token | Value | Role |
 | --- | --- | --- |
-| `Canvas` | `#F7F8FA` | Application and timeline background |
+| `Canvas` | `#F3F4F8` | Application and timeline background |
+| `Window` | `#FAFBFE` | Chat shell background |
 | `Surface` | `#FFFFFF` | Composer, cards and temporary sheets |
-| `Ink` | `#202124` | Primary text |
-| `Muted` | `#62666D` | Secondary metadata |
-| `Authority` | `#4057C8` | Controller provenance and active controls |
-| `Attention` | `#A65D00` | Waiting, warning and unresolved state |
-| `Critical` | `#B4232C` | Blocking failure and destructive-stop emphasis |
+| `SurfaceSoft` | `#F5F6FB` | Secondary panels, chips, hover fills |
+| `Ink` | `#1D2440` | Primary text |
+| `Muted` | `#64708C` | Secondary metadata |
+| `Soft` | `#8993AA` | Tertiary and hint text |
+| `Border` | `#E3E6EF` | Container borders |
+| `Brand` | `#5957C7` | Controller provenance, active controls |
+| `BrandStrong` | `#4542B4` | Pressed and emphasis states |
+| `BrandQuiet` | `#EEEEFE` | Brand-tinted fills |
+| `Violet` | `#9273EE` | Gradient partner for `Brand` |
+| `Mint` | `#2EA891` | Healthy, verified, ready |
+| `Amber` | `#BB751E` | Waiting, warning, unresolved |
+| `Danger` | `#C75568` | Blocking failure, destructive stop |
+| `Blue` | `#3970B3` | Informational |
 
-Use Windows theme resources and high-contrast overrides in implementation; these values define the intended default-light relationships, not hard-coded inaccessible colors. Certification uses a distinct success semantic token but never color alone.
-
-### Default dark-theme tokens
+**Dark**
 
 | Token | Value | Role |
 | --- | --- | --- |
 | `Canvas` | `#111318` | Application and timeline background |
-| `Surface` | `#1B1D22` | Composer, cards and temporary sheets |
-| `Ink` | `#F2F3F5` | Primary text |
-| `Muted` | `#B3B8C2` | Secondary metadata |
-| `Authority` | `#A9B7FF` | Controller provenance and active controls |
-| `Attention` | `#F4C477` | Waiting, warning and unresolved state |
-| `Critical` | `#FF8E95` | Blocking failure and destructive-stop emphasis |
+| `Window` | `#161922` | Chat shell background |
+| `Surface` | `#1E2230` | Composer, cards and temporary sheets |
+| `SurfaceSoft` | `#252A3A` | Secondary panels, chips, hover fills |
+| `Ink` | `#F0F2FF` | Primary text |
+| `Muted` | `#A5ADC6` | Secondary metadata |
+| `Soft` | `#7F8AA5` | Tertiary and hint text |
+| `Border` | `#363C52` | Container borders |
+| `Brand` | `#A5A1FF` | Controller provenance, active controls |
+| `BrandStrong` | `#C4C0FF` | Pressed and emphasis states |
+| `BrandQuiet` | `#343454` | Brand-tinted fills |
+| `Violet` | `#BBA0FF` | Gradient partner for `Brand` |
+| `Mint` | `#69DBC3` | Healthy, verified, ready |
+| `Amber` | `#F0B565` | Waiting, warning, unresolved |
+| `Danger` | `#FA94A1` | Blocking failure, destructive stop |
+| `Blue` | `#90BCF9` | Informational |
 
-These are reference relationships for the native dark palette, not literal colors to impose in high contrast. Status, error, selection, focus and certification remain distinguishable by text/semantics as well as color. Foreground/background pairs must retain readable contrast across Chat, cards, inline expansions, temporary sheets, onboarding and native controls; never leave a light-only surface or dark text in the dark theme.
+**Windows high contrast** maps every token to system colours: backgrounds to `SystemColorWindowColor`, text to `SystemColorWindowTextColor`, brand and selection to `SystemColorHighlightColor`, and drops all elevation. No gradient, shadow or ambient glow is drawn in high contrast, and every semantic state must remain distinguishable by text alone.
+
+These are reference relationships, not literal colours to impose in high contrast. Status, error, selection, focus and certification remain distinguishable by text and semantics as well as colour. Foreground/background pairs must retain readable contrast across Chat, cards, inline expansions, temporary sheets, onboarding and native controls; never leave a light-only surface or dark text in the dark theme.
 
 ### Typography and shape
 
 - Use **Segoe UI Variable** for interface and conversation text.
 - Use **Cascadia Mono** only for code, paths, hashes and command fragments.
 - Keep prose lines below roughly 80 characters where window width allows.
-- Prefer small-radius message/card containers and quiet one-pixel separators over repeated shadows.
-- Use the evidence spine, not decorative gradients, as the memorable visual motif.
-- Use motion only for user-triggered expansion, collapse, insertion and confirmed state change; respect reduced motion.
+- Use an 18px corner radius for panels and cards, 11px for buttons and chips, 17px for the composer.
+- Separate surfaces with one-pixel `Border` lines **and** elevation; elevation is permitted under this direction.
+
+### Gradients, depth and elevation
+
+Gradients are part of the brand and are permitted in exactly three places:
+
+- the **logo mark** (`linear-gradient(145deg, Brand, Violet)`),
+- the **primary action** (`linear-gradient(115deg, #5651C8, #766CE6)`),
+- **headline accent spans** in onboarding and the empty-Chat state.
+
+Two soft **radial ambient glows** (brand at 10–14% alpha) may sit behind hero surfaces only. These limits always apply: never place body text directly on a gradient without an opaque backing; no gradient in high contrast; a gradient may never carry meaning that text does not also carry; and no animated gradient.
+
+Elevation uses two levels: a resting card shadow, and a raised overlay shadow for temporary sheets, flyouts and the window frame. High contrast drops both.
+
+### Motion
+
+Motion is a **status and affordance language**, not ambience. Exactly these named motions are permitted:
+
+| Motion | Applied to | Behaviour |
+| --- | --- | --- |
+| `Enter` | screen and card insertion | fade in, `translateY(10px)` → `0` |
+| `Appear` | inline detail expansion | fade in, opacity `0` → `1` |
+| `SlideIn` | newly inserted timeline entries | fade plus `translateX(20px)` → `0` |
+| `Dock` | the one composer moving from centred to docked | position and size transition after confirmed persistence |
+| `Levitate` | logo mark and agent orbs on onboarding | ±10px vertical float over ~5–6s |
+| `Glow` | ambient halo behind hero art | scale to 1.12, opacity to 0.68 |
+| `Orbit` | decorative orbit rings on onboarding | slow continuous rotation, 52s and 74s |
+
+Base duration is **260ms** with easing `cubic-bezier(.18, .78, .2, 1)`. `Levitate`, `Glow` and `Orbit` are long-form ambient motions restricted to the onboarding screens and the empty-Chat hero; they must never appear behind timeline content, cards, or while work is running.
+
+**Reduced motion is a hard rule.** When `UISettings.AnimationsEnabled` is false or the OS reduced-motion preference is set, every animation, transition and ambient loop is disabled and `Dock` becomes an instant reposition. A hung operation never shows an endless spinner or a continuous ambient animation; the status card names the real observed liveness instead.
+
+### Logo and iconography
+
+- One logo mark: a rounded brand-gradient tile containing the three-node Mayasaba glyph — three connected nodes on an ascending path, representing three perspectives resolving to one direction.
+- The mark appears at 92px on onboarding, 31px in the title bar, and 138px as the levitating hero. It is never recoloured outside the brand ramp and never animated in high contrast or reduced motion.
+- Icons come from a single inline vector set drawn at 18px (15px small, 23px large), stroked with `currentColor` at 1.9px with round caps and joins. No icon font, no external network request, no emoji.
+- Each CLI keeps a stable monogram identity: **Hermes Agent CLI** indigo, **Kilo Code CLI** mint, **Claude Code CLI** amber. A monogram colour is never the only carrier of meaning; the CLI name always accompanies it.
 
 ## 5. Startup and folder selection
 

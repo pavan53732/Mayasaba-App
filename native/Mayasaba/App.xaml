@@ -4,30 +4,130 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
       <ResourceDictionary>
+        <ResourceDictionary.MergedDictionaries>
+          <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls"/>
+        </ResourceDictionary.MergedDictionaries>
+        <!-- Shape and rhythm tokens are theme-independent. -->
+        <CornerRadius x:Key="MayasabaRadiusPanel">18</CornerRadius>
+        <CornerRadius x:Key="MayasabaRadiusControl">11</CornerRadius>
+        <CornerRadius x:Key="MayasabaRadiusComposer">17</CornerRadius>
+        <CornerRadius x:Key="MayasabaRadiusChip">14</CornerRadius>
+        <CornerRadius x:Key="MayasabaRadiusMonogram">10</CornerRadius>
+        <x:Double x:Key="MayasabaBrandMarkHeroSize">138</x:Double>
+        <x:Double x:Key="MayasabaBrandMarkOnboardingSize">92</x:Double>
+        <x:Double x:Key="MayasabaBrandMarkTitleSize">31</x:Double>
+
         <ResourceDictionary.ThemeDictionaries>
           <ResourceDictionary x:Key="Light">
+            <SolidColorBrush x:Key="MayasabaCanvasBrush" Color="#FFF3F4F8"/>
+            <SolidColorBrush x:Key="MayasabaWindowBrush" Color="#FFFAFBFE"/>
             <SolidColorBrush x:Key="MayasabaPanelBrush" Color="#FFFFFFFF"/>
-            <SolidColorBrush x:Key="MayasabaSecondaryBrush" Color="#FFF4F3FA"/>
-            <SolidColorBrush x:Key="MayasabaInkBrush" Color="#FF232545"/>
-            <SolidColorBrush x:Key="MayasabaMutedBrush" Color="#FF67708D"/>
-            <SolidColorBrush x:Key="MayasabaAccentBrush" Color="#FF5A54C8"/>
-            <SolidColorBrush x:Key="MayasabaBorderBrush" Color="#FFE5E5F0"/>
+            <SolidColorBrush x:Key="MayasabaSecondaryBrush" Color="#FFF5F6FB"/>
+            <SolidColorBrush x:Key="MayasabaInkBrush" Color="#FF1D2440"/>
+            <SolidColorBrush x:Key="MayasabaMutedBrush" Color="#FF64708C"/>
+            <SolidColorBrush x:Key="MayasabaSoftBrush" Color="#FF8993AA"/>
+            <SolidColorBrush x:Key="MayasabaBorderBrush" Color="#FFE3E6EF"/>
+            <SolidColorBrush x:Key="MayasabaLineBrush" Color="#FFECEEF4"/>
+            <SolidColorBrush x:Key="MayasabaBrandBrush" Color="#FF5957C7"/>
+            <SolidColorBrush x:Key="MayasabaBrandStrongBrush" Color="#FF4542B4"/>
+            <SolidColorBrush x:Key="MayasabaBrandQuietBrush" Color="#FFEEEEFE"/>
+            <SolidColorBrush x:Key="MayasabaVioletBrush" Color="#FF9273EE"/>
+            <SolidColorBrush x:Key="MayasabaMintBrush" Color="#FF2EA891"/>
+            <SolidColorBrush x:Key="MayasabaAmberBrush" Color="#FFBB751E"/>
+            <SolidColorBrush x:Key="MayasabaDangerBrush" Color="#FFC75568"/>
+            <SolidColorBrush x:Key="MayasabaBlueBrush" Color="#FF3970B3"/>
+            <SolidColorBrush x:Key="MayasabaHermesMonogramBrush" Color="#FFEEEAFF"/>
+            <SolidColorBrush x:Key="MayasabaHermesInkBrush" Color="#FF6854BC"/>
+            <SolidColorBrush x:Key="MayasabaKiloMonogramBrush" Color="#FFDFF8F3"/>
+            <SolidColorBrush x:Key="MayasabaKiloInkBrush" Color="#FF17816D"/>
+            <SolidColorBrush x:Key="MayasabaClaudeMonogramBrush" Color="#FFFFF0E2"/>
+            <SolidColorBrush x:Key="MayasabaClaudeInkBrush" Color="#FFB36B2C"/>
+            <!-- Brand gradient: the logo mark (CSS 145deg Brand -> Violet). -->
+            <LinearGradientBrush x:Key="MayasabaBrandGradientBrush" StartPoint="0,0" EndPoint="1,1">
+              <GradientStop Color="#FF5957C7" Offset="0"/>
+              <GradientStop Color="#FF9273EE" Offset="1"/>
+            </LinearGradientBrush>
+            <!-- Action gradient: primary button (CSS 115deg #5651C8 -> #766CE6). -->
+            <LinearGradientBrush x:Key="MayasabaActionGradientBrush" StartPoint="0,0.15" EndPoint="1,0.85">
+              <GradientStop Color="#FF5651C8" Offset="0"/>
+              <GradientStop Color="#FF766CE6" Offset="1"/>
+            </LinearGradientBrush>
+            <!-- Ambient hero glow. Brand at ~14% alpha, never behind timeline content. -->
+            <RadialGradientBrush x:Key="MayasabaAmbientGlowBrush" MappingMode="RelativeToBoundingBox"
+                                 Center="0.5,0.12" GradientOrigin="0.5,0.12" RadiusX="0.55" RadiusY="0.65">
+              <GradientStop Color="#249273EE" Offset="0"/>
+              <GradientStop Color="#009273EE" Offset="1"/>
+            </RadialGradientBrush>
           </ResourceDictionary>
+
           <ResourceDictionary x:Key="Dark">
-            <SolidColorBrush x:Key="MayasabaPanelBrush" Color="#FF202234"/>
-            <SolidColorBrush x:Key="MayasabaSecondaryBrush" Color="#FF2A2C42"/>
-            <SolidColorBrush x:Key="MayasabaInkBrush" Color="#FFF3F1FF"/>
-            <SolidColorBrush x:Key="MayasabaMutedBrush" Color="#FFB8BDD5"/>
-            <SolidColorBrush x:Key="MayasabaAccentBrush" Color="#FFBBB4FF"/>
-            <SolidColorBrush x:Key="MayasabaBorderBrush" Color="#FF44475E"/>
+            <SolidColorBrush x:Key="MayasabaCanvasBrush" Color="#FF111318"/>
+            <SolidColorBrush x:Key="MayasabaWindowBrush" Color="#FF161922"/>
+            <SolidColorBrush x:Key="MayasabaPanelBrush" Color="#FF1E2230"/>
+            <SolidColorBrush x:Key="MayasabaSecondaryBrush" Color="#FF252A3A"/>
+            <SolidColorBrush x:Key="MayasabaInkBrush" Color="#FFF0F2FF"/>
+            <SolidColorBrush x:Key="MayasabaMutedBrush" Color="#FFA5ADC6"/>
+            <SolidColorBrush x:Key="MayasabaSoftBrush" Color="#FF7F8AA5"/>
+            <SolidColorBrush x:Key="MayasabaBorderBrush" Color="#FF363C52"/>
+            <SolidColorBrush x:Key="MayasabaLineBrush" Color="#FF30364A"/>
+            <SolidColorBrush x:Key="MayasabaBrandBrush" Color="#FFA5A1FF"/>
+            <SolidColorBrush x:Key="MayasabaBrandStrongBrush" Color="#FFC4C0FF"/>
+            <SolidColorBrush x:Key="MayasabaBrandQuietBrush" Color="#FF343454"/>
+            <SolidColorBrush x:Key="MayasabaVioletBrush" Color="#FFBBA0FF"/>
+            <SolidColorBrush x:Key="MayasabaMintBrush" Color="#FF69DBC3"/>
+            <SolidColorBrush x:Key="MayasabaAmberBrush" Color="#FFF0B565"/>
+            <SolidColorBrush x:Key="MayasabaDangerBrush" Color="#FFFA94A1"/>
+            <SolidColorBrush x:Key="MayasabaBlueBrush" Color="#FF90BCF9"/>
+            <SolidColorBrush x:Key="MayasabaHermesMonogramBrush" Color="#FF2E2B4D"/>
+            <SolidColorBrush x:Key="MayasabaHermesInkBrush" Color="#FFB9AEFF"/>
+            <SolidColorBrush x:Key="MayasabaKiloMonogramBrush" Color="#FF183C38"/>
+            <SolidColorBrush x:Key="MayasabaKiloInkBrush" Color="#FF69DBC3"/>
+            <SolidColorBrush x:Key="MayasabaClaudeMonogramBrush" Color="#FF463522"/>
+            <SolidColorBrush x:Key="MayasabaClaudeInkBrush" Color="#FFF0B565"/>
+            <LinearGradientBrush x:Key="MayasabaBrandGradientBrush" StartPoint="0,0" EndPoint="1,1">
+              <GradientStop Color="#FF5853C9" Offset="0"/>
+              <GradientStop Color="#FFAB88E8" Offset="1"/>
+            </LinearGradientBrush>
+            <LinearGradientBrush x:Key="MayasabaActionGradientBrush" StartPoint="0,0.15" EndPoint="1,0.85">
+              <GradientStop Color="#FF5B56C7" Offset="0"/>
+              <GradientStop Color="#FF7E74E8" Offset="1"/>
+            </LinearGradientBrush>
+            <RadialGradientBrush x:Key="MayasabaAmbientGlowBrush" MappingMode="RelativeToBoundingBox"
+                                 Center="0.5,0.12" GradientOrigin="0.5,0.12" RadiusX="0.55" RadiusY="0.65">
+              <GradientStop Color="#2E9E8FFF" Offset="0"/>
+              <GradientStop Color="#009E8FFF" Offset="1"/>
+            </RadialGradientBrush>
           </ResourceDictionary>
+
+          <!-- High contrast: system colours only. Every gradient collapses to a solid
+               system brush and elevation is dropped, so no meaning depends on colour. -->
           <ResourceDictionary x:Key="HighContrast">
+            <SolidColorBrush x:Key="MayasabaCanvasBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaWindowBrush" Color="{ThemeResource SystemColorWindowColor}"/>
             <SolidColorBrush x:Key="MayasabaPanelBrush" Color="{ThemeResource SystemColorWindowColor}"/>
             <SolidColorBrush x:Key="MayasabaSecondaryBrush" Color="{ThemeResource SystemColorWindowColor}"/>
             <SolidColorBrush x:Key="MayasabaInkBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
             <SolidColorBrush x:Key="MayasabaMutedBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
-            <SolidColorBrush x:Key="MayasabaAccentBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+            <SolidColorBrush x:Key="MayasabaSoftBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
             <SolidColorBrush x:Key="MayasabaBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaLineBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaBrandBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+            <SolidColorBrush x:Key="MayasabaBrandStrongBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+            <SolidColorBrush x:Key="MayasabaBrandQuietBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaVioletBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaMintBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaAmberBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaDangerBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaBlueBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaHermesMonogramBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaHermesInkBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaKiloMonogramBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaKiloInkBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaClaudeMonogramBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaClaudeInkBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaBrandGradientBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+            <SolidColorBrush x:Key="MayasabaActionGradientBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
+            <SolidColorBrush x:Key="MayasabaAmbientGlowBrush" Color="{ThemeResource SystemColorWindowColor}"/>
           </ResourceDictionary>
         </ResourceDictionary.ThemeDictionaries>
       </ResourceDictionary>

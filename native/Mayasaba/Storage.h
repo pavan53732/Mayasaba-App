@@ -7,7 +7,19 @@
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
+// The Windows SDK is expected to provide winsqlite3.h. Some SDK installs ship
+// winsqlite3.lib without the header; in that case compile against the pinned
+// declaration shim instead of failing the build. The system header is always
+// preferred when present.
+#if defined(__has_include)
+#if __has_include(<winsqlite3.h>)
 #include <winsqlite3.h>
+#define MAYASABA_HAVE_SYSTEM_WINSQLITE3 1
+#endif
+#endif
+#ifndef MAYASABA_HAVE_SYSTEM_WINSQLITE3
+#include "winsqlite3_compat.h"
+#endif
 #else
 #include <sqlite3.h>
 #endif

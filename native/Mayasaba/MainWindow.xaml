@@ -5,7 +5,55 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
-    <Grid Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    <Grid Background="{ThemeResource MayasabaCanvasBrush}">
+        <Grid.Resources>
+            <!-- Named ambient motions. They are NOT auto-started: MainWindow starts them only
+                 when UISettings.AnimationsEnabled is true, so reduced motion disables every
+                 loop. See ApplyMotionPreference in MainWindow.xaml.cpp. -->
+            <Storyboard x:Key="MayasabaHeroLevitate" RepeatBehavior="Forever" AutoReverse="True">
+                <DoubleAnimation Storyboard.TargetName="WelcomeHeroCoreTransform"
+                                 Storyboard.TargetProperty="TranslateY"
+                                 From="0" To="-10" Duration="0:0:2.85">
+                    <DoubleAnimation.EasingFunction>
+                        <SineEase EasingMode="EaseInOut"/>
+                    </DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+            </Storyboard>
+            <Storyboard x:Key="MayasabaHeroGlow" RepeatBehavior="Forever" AutoReverse="True">
+                <DoubleAnimation Storyboard.TargetName="WelcomeHeroGlowTransform"
+                                 Storyboard.TargetProperty="ScaleX"
+                                 From="1" To="1.12" Duration="0:0:3">
+                    <DoubleAnimation.EasingFunction>
+                        <SineEase EasingMode="EaseInOut"/>
+                    </DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+                <DoubleAnimation Storyboard.TargetName="WelcomeHeroGlowTransform"
+                                 Storyboard.TargetProperty="ScaleY"
+                                 From="1" To="1.12" Duration="0:0:3">
+                    <DoubleAnimation.EasingFunction>
+                        <SineEase EasingMode="EaseInOut"/>
+                    </DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+                <DoubleAnimation Storyboard.TargetName="WelcomeHeroGlow"
+                                 Storyboard.TargetProperty="Opacity"
+                                 From="0.5" To="0.85" Duration="0:0:3">
+                    <DoubleAnimation.EasingFunction>
+                        <SineEase EasingMode="EaseInOut"/>
+                    </DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+            </Storyboard>
+            <Storyboard x:Key="MayasabaHeroOrbitOuter" RepeatBehavior="Forever">
+                <DoubleAnimation Storyboard.TargetName="WelcomeHeroOrbitOuterRotate"
+                                 Storyboard.TargetProperty="Angle"
+                                 From="0" To="360" Duration="0:0:52"/>
+            </Storyboard>
+            <Storyboard x:Key="MayasabaHeroOrbitInner" RepeatBehavior="Forever">
+                <DoubleAnimation Storyboard.TargetName="WelcomeHeroOrbitInnerRotate"
+                                 Storyboard.TargetProperty="Angle"
+                                 From="360" To="0" Duration="0:1:14"/>
+            </Storyboard>
+        </Grid.Resources>
+
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -25,49 +73,118 @@
             <!-- Screen 1: presentation only. Intentionally NO composer. -->
             <ScrollViewer x:Name="WelcomeScreen" VerticalScrollBarVisibility="Auto">
                 <Grid MinHeight="620" Padding="46">
-                    <StackPanel MaxWidth="820" HorizontalAlignment="Center"
+                    <StackPanel x:Name="WelcomeStack" MaxWidth="820" HorizontalAlignment="Center"
                                 VerticalAlignment="Center" Spacing="17">
-                        <StackPanel.ChildrenTransitions>
-                            <TransitionCollection><EntranceThemeTransition FromVerticalOffset="30"/></TransitionCollection>
-                        </StackPanel.ChildrenTransitions>
-                        <Border Width="92" Height="92" HorizontalAlignment="Left"
-                                Background="{ThemeResource MayasabaAccentBrush}" CornerRadius="27">
-                            <Viewbox Margin="13">
-                                <Canvas Width="72" Height="72">
-                                    <Path Data="M14,48 L14,25 C14,17 20,15 26,19 L36,26 L46,19 C52,15 58,17 58,25 L58,48"
-                                          Stroke="White" StrokeThickness="7" StrokeLineJoin="Round"
-                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                    <Ellipse Width="10" Height="10" Canvas.Left="11" Canvas.Top="48" Fill="White"/>
-                                    <Ellipse Width="10" Height="10" Canvas.Left="31" Canvas.Top="29" Fill="White"/>
-                                    <Ellipse Width="10" Height="10" Canvas.Left="51" Canvas.Top="48" Fill="White"/>
-                                </Canvas>
-                            </Viewbox>
-                        </Border>
+
+                        <!-- Hero: ambient glow, two slow orbit rings, and the levitating brand mark. -->
+                        <Grid Width="230" Height="206" HorizontalAlignment="Left">
+                            <Ellipse x:Name="WelcomeHeroGlow" Width="230" Height="176"
+                                     Fill="{ThemeResource MayasabaAmbientGlowBrush}" Opacity="0.5"
+                                     RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform>
+                                    <ScaleTransform x:Name="WelcomeHeroGlowTransform"/>
+                                </Ellipse.RenderTransform>
+                            </Ellipse>
+                            <Ellipse x:Name="WelcomeHeroOrbitOuter" Width="198" Height="198"
+                                     Stroke="{ThemeResource MayasabaBorderBrush}" StrokeThickness="1"
+                                     StrokeDashArray="3,4" RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform>
+                                    <RotateTransform x:Name="WelcomeHeroOrbitOuterRotate"/>
+                                </Ellipse.RenderTransform>
+                            </Ellipse>
+                            <Ellipse x:Name="WelcomeHeroOrbitInner" Width="156" Height="156"
+                                     Stroke="{ThemeResource MayasabaBorderBrush}" StrokeThickness="1"
+                                     StrokeDashArray="3,4" RenderTransformOrigin="0.5,0.5">
+                                <Ellipse.RenderTransform>
+                                    <RotateTransform x:Name="WelcomeHeroOrbitInnerRotate"/>
+                                </Ellipse.RenderTransform>
+                            </Ellipse>
+                            <Border x:Name="WelcomeHeroCore" Width="92" Height="92" CornerRadius="27"
+                                    Background="{ThemeResource MayasabaBrandGradientBrush}">
+                                <Border.RenderTransform>
+                                    <CompositeTransform x:Name="WelcomeHeroCoreTransform" Rotation="-8"/>
+                                </Border.RenderTransform>
+                                <Viewbox Margin="13">
+                                    <Canvas Width="72" Height="72">
+                                        <Canvas.RenderTransform>
+                                            <RotateTransform Angle="8"/>
+                                        </Canvas.RenderTransform>
+                                        <Path Data="M14,48 L14,25 C14,17 20,15 26,19 L36,26 L46,19 C52,15 58,17 58,25 L58,48"
+                                              Stroke="White" StrokeThickness="7" StrokeLineJoin="Round"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                        <Ellipse Width="10" Height="10" Canvas.Left="11" Canvas.Top="48" Fill="White"/>
+                                        <Ellipse Width="10" Height="10" Canvas.Left="31" Canvas.Top="29" Fill="White"/>
+                                        <Ellipse Width="10" Height="10" Canvas.Left="51" Canvas.Top="48" Fill="White"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Border>
+                        </Grid>
+
                         <TextBlock Text="THREE PERSPECTIVES · ONE CLEAR DIRECTION"
                                    FontSize="12" FontWeight="SemiBold"
-                                   Foreground="{ThemeResource MayasabaAccentBrush}"/>
+                                   Foreground="{ThemeResource MayasabaBrandBrush}"/>
                         <TextBlock x:Name="WelcomeHeading" Text="Welcome to Mayasaba"
                                    FontSize="49" FontWeight="SemiBold" TextWrapping="Wrap"
                                    Foreground="{ThemeResource MayasabaInkBrush}"/>
                         <TextBlock FontSize="18" Foreground="{ThemeResource MayasabaMutedBrush}"
                                    TextWrapping="Wrap" MaxWidth="700"
                                    Text="A calm Windows control room for Hermes Agent, Kilo Code and Claude Code. Inspect their work, preserve evidence and stay in control of every material action."/>
+
+                        <!-- Stable per-CLI monogram identity: name plus colour, never colour alone. -->
                         <StackPanel Orientation="Horizontal" Spacing="10">
-                            <Border Background="{ThemeResource MayasabaSecondaryBrush}" CornerRadius="14" Padding="15,10">
-                                <TextBlock Text="Hermes Agent · UNSUPPORTED" FontSize="12"/>
+                            <Border Background="{ThemeResource MayasabaSecondaryBrush}"
+                                    BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
+                                    CornerRadius="14" Padding="12,8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Border Width="22" Height="22" CornerRadius="7"
+                                            Background="{ThemeResource MayasabaHermesMonogramBrush}">
+                                        <TextBlock Text="H" FontSize="11" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource MayasabaHermesInkBrush}"/>
+                                    </Border>
+                                    <TextBlock Text="Hermes Agent · UNSUPPORTED" FontSize="12"
+                                               VerticalAlignment="Center"
+                                               Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                                </StackPanel>
                             </Border>
-                            <Border Background="{ThemeResource MayasabaSecondaryBrush}" CornerRadius="14" Padding="15,10">
-                                <TextBlock Text="Kilo Code · UNSUPPORTED" FontSize="12"/>
+                            <Border Background="{ThemeResource MayasabaSecondaryBrush}"
+                                    BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
+                                    CornerRadius="14" Padding="12,8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Border Width="22" Height="22" CornerRadius="7"
+                                            Background="{ThemeResource MayasabaKiloMonogramBrush}">
+                                        <TextBlock Text="K" FontSize="11" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource MayasabaKiloInkBrush}"/>
+                                    </Border>
+                                    <TextBlock Text="Kilo Code · UNSUPPORTED" FontSize="12"
+                                               VerticalAlignment="Center"
+                                               Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                                </StackPanel>
                             </Border>
-                            <Border Background="{ThemeResource MayasabaSecondaryBrush}" CornerRadius="14" Padding="15,10">
-                                <TextBlock Text="Claude Code · UNSUPPORTED" FontSize="12"/>
+                            <Border Background="{ThemeResource MayasabaSecondaryBrush}"
+                                    BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
+                                    CornerRadius="14" Padding="12,8">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Border Width="22" Height="22" CornerRadius="7"
+                                            Background="{ThemeResource MayasabaClaudeMonogramBrush}">
+                                        <TextBlock Text="C" FontSize="11" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource MayasabaClaudeInkBrush}"/>
+                                    </Border>
+                                    <TextBlock Text="Claude Code · UNSUPPORTED" FontSize="12"
+                                               VerticalAlignment="Center"
+                                               Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                                </StackPanel>
                             </Border>
                         </StackPanel>
+
                         <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,23,0,0">
                             <Button x:Name="NextButton" Click="OnWelcomeNext" Padding="23,13"
-                                    Background="{ThemeResource MayasabaAccentBrush}" Foreground="White"
-                                    Content="Next →"/>
-                            <Button Click="OnWelcomeNext" Content="Skip introduction" Padding="20,13"/>
+                                    Background="{ThemeResource MayasabaActionGradientBrush}" Foreground="White"
+                                    CornerRadius="11" Content="Next →"/>
+                            <Button Click="OnWelcomeNext" Content="Skip introduction" Padding="20,13"
+                                    CornerRadius="11"/>
                         </StackPanel>
                         <TextBlock MaxWidth="720" TextWrapping="Wrap"
                                    Foreground="{ThemeResource MayasabaMutedBrush}" FontSize="12"
@@ -79,21 +196,22 @@
             <!-- Screen 2: draft is editable, Send is disabled until a root is bound. -->
             <ScrollViewer x:Name="FolderScreen" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
                 <Grid MinHeight="620" Padding="44">
-                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center"
+                    <StackPanel x:Name="FolderStack" VerticalAlignment="Center" HorizontalAlignment="Center"
                                 MaxWidth="760" Spacing="14">
-                        <StackPanel.ChildrenTransitions>
-                            <TransitionCollection><EntranceThemeTransition FromVerticalOffset="25"/></TransitionCollection>
-                        </StackPanel.ChildrenTransitions>
-                        <FontIcon Glyph="&#xE8B7;" FontFamily="Segoe Fluent Icons"
-                                  FontSize="64" Foreground="{ThemeResource MayasabaAccentBrush}"/>
+                        <Border Width="104" Height="104" HorizontalAlignment="Center" CornerRadius="32"
+                                Background="{ThemeResource MayasabaBrandGradientBrush}">
+                            <FontIcon Glyph="&#xE8B7;" FontFamily="Segoe Fluent Icons"
+                                      FontSize="52" Foreground="White"/>
+                        </Border>
                         <TextBlock x:Name="FolderHeading" Text="Open a project folder"
                                    FontSize="43" FontWeight="SemiBold" TextWrapping="Wrap"/>
                         <TextBlock Text="Choose a local Windows project folder. We will validate its identity and open Chat. No CLI launches, repository scan, Git initialization or provider activity occurs here."
                                    FontSize="17" TextWrapping="Wrap" Foreground="{ThemeResource MayasabaMutedBrush}"/>
                         <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,9,0,14">
-                            <Button Click="OnWelcomeBack" Content="← Back" Padding="18,12"/>
+                            <Button Click="OnWelcomeBack" Content="← Back" Padding="18,12" CornerRadius="11"/>
                             <Button x:Name="ChooseFolderButton" Click="OnChooseFolder" Content="Open Folder"
-                                    Padding="22,12" Background="{ThemeResource MayasabaAccentBrush}" Foreground="White"/>
+                                    Padding="22,12" CornerRadius="11"
+                                    Background="{ThemeResource MayasabaActionGradientBrush}" Foreground="White"/>
                         </StackPanel>
                         <Border BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
                                 Background="{ThemeResource MayasabaPanelBrush}" CornerRadius="17" Padding="18">
@@ -104,7 +222,7 @@
                                          AcceptsReturn="True" TextWrapping="Wrap" MinHeight="100"
                                          TextChanged="OnPrebindDraftChanged"/>
                                 <Button Content="Send · choose a folder first" IsEnabled="False"
-                                        HorizontalAlignment="Right"/>
+                                        HorizontalAlignment="Right" CornerRadius="11"/>
                             </StackPanel>
                         </Border>
                         <TextBlock FontSize="12" Foreground="{ThemeResource MayasabaMutedBrush}"
@@ -128,22 +246,38 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <StackPanel Spacing="4">
-                            <TextBlock x:Name="ProjectHeading" FontSize="20" FontWeight="SemiBold"
-                                       Foreground="{ThemeResource MayasabaInkBrush}" Text="Project"/>
-                            <TextBlock x:Name="ProjectPathLabel" FontSize="11" TextTrimming="CharacterEllipsis"
-                                       Foreground="{ThemeResource MayasabaMutedBrush}" Text="C:\Projects"/>
-                            <TextBlock x:Name="ProjectCondition" FontSize="11" Text="Not started"
-                                       Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                            <Border Width="31" Height="31" CornerRadius="11"
+                                    Background="{ThemeResource MayasabaBrandGradientBrush}"
+                                    VerticalAlignment="Center">
+                                <Viewbox Margin="5">
+                                    <Canvas Width="72" Height="72">
+                                        <Path Data="M14,48 L14,25 C14,17 20,15 26,19 L36,26 L46,19 C52,15 58,17 58,25 L58,48"
+                                              Stroke="White" StrokeThickness="7" StrokeLineJoin="Round"
+                                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                        <Ellipse Width="10" Height="10" Canvas.Left="11" Canvas.Top="48" Fill="White"/>
+                                        <Ellipse Width="10" Height="10" Canvas.Left="31" Canvas.Top="29" Fill="White"/>
+                                        <Ellipse Width="10" Height="10" Canvas.Left="51" Canvas.Top="48" Fill="White"/>
+                                    </Canvas>
+                                </Viewbox>
+                            </Border>
+                            <StackPanel Spacing="4" VerticalAlignment="Center">
+                                <TextBlock x:Name="ProjectHeading" FontSize="20" FontWeight="SemiBold"
+                                           Foreground="{ThemeResource MayasabaInkBrush}" Text="Project"/>
+                                <TextBlock x:Name="ProjectPathLabel" FontSize="11" TextTrimming="CharacterEllipsis"
+                                           Foreground="{ThemeResource MayasabaMutedBrush}" Text="C:\Projects"/>
+                                <TextBlock x:Name="ProjectCondition" FontSize="11" Text="Not started"
+                                           Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                            </StackPanel>
                         </StackPanel>
                         <StackPanel Grid.Column="1" Spacing="7" HorizontalAlignment="Right">
                             <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                                <Button x:Name="StartButton" Content="Start" Click="OnStart" Padding="15,7"/>
-                                <Button x:Name="PauseButton" Content="Pause" Click="OnPause" Padding="15,7"/>
-                                <Button x:Name="StopButton" Content="Stop" Click="OnStop" Padding="15,7"/>
+                                <Button x:Name="StartButton" Content="Start" Click="OnStart" Padding="15,7" CornerRadius="11"/>
+                                <Button x:Name="PauseButton" Content="Pause" Click="OnPause" Padding="15,7" CornerRadius="11"/>
+                                <Button x:Name="StopButton" Content="Stop" Click="OnStop" Padding="15,7" CornerRadius="11"/>
                                 <Button x:Name="ReopenButton" Content="Reopen Project" Click="OnReopen"
-                                        Visibility="Collapsed"/>
-                                <Button Content="•••" AutomationProperties.Name="More project actions">
+                                        Visibility="Collapsed" CornerRadius="11"/>
+                                <Button Content="•••" AutomationProperties.Name="More project actions" CornerRadius="11">
                                     <Button.Flyout>
                                         <MenuFlyout>
                                             <MenuFlyoutItem Text="CLI diagnostics" Click="OnDiagnostics"/>
@@ -166,8 +300,16 @@
 
                 <StackPanel x:Name="EmptyChatPanel" Grid.Row="1" HorizontalAlignment="Center"
                             VerticalAlignment="Center" Spacing="13" Margin="20,0,20,190">
-                    <FontIcon Glyph="&#xE8F2;" FontFamily="Segoe Fluent Icons" FontSize="46"
-                              Foreground="{ThemeResource MayasabaAccentBrush}"/>
+                    <Grid Width="180" Height="150">
+                        <Ellipse x:Name="EmptyChatGlow" Width="180" Height="132"
+                                 Fill="{ThemeResource MayasabaAmbientGlowBrush}" Opacity="0.45"/>
+                        <Border Width="76" Height="76" CornerRadius="24" HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Background="{ThemeResource MayasabaBrandGradientBrush}">
+                            <FontIcon Glyph="&#xE8F2;" FontFamily="Segoe Fluent Icons" FontSize="34"
+                                      Foreground="White"/>
+                        </Border>
+                    </Grid>
                     <TextBlock Text="What would you like to work on?"
                                FontSize="29" FontWeight="SemiBold" TextAlignment="Center" TextWrapping="Wrap"/>
                     <TextBlock Text="Every saved message is independent of CLI readiness."
@@ -198,14 +340,15 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
                                 <Button x:Name="AttachButton" Content="Attach files" IsEnabled="False"
+                                        CornerRadius="11"
                                         AutomationProperties.HelpText="Attachments require verified byte preparation and are not yet available."/>
                                 <TextBlock Text="Enter to send · Shift+Enter for newline"
                                            VerticalAlignment="Center" FontSize="11"
                                            Foreground="{ThemeResource MayasabaMutedBrush}"/>
                             </StackPanel>
                             <Button x:Name="SendButton" Grid.Column="1" Content="Send →"
-                                    Background="{ThemeResource MayasabaAccentBrush}" Foreground="White"
-                                    Click="OnSend" Padding="17,9"/>
+                                    Background="{ThemeResource MayasabaActionGradientBrush}" Foreground="White"
+                                    Click="OnSend" Padding="17,9" CornerRadius="11"/>
                         </Grid>
                     </StackPanel>
                 </Border>
