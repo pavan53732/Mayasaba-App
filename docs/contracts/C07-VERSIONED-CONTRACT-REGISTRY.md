@@ -57,6 +57,13 @@ The shared `OwnerRecord.body` and `BoundaryCommand.payload` slots allow the cata
 
 This is an implementation slice gate, not an open product decision. A disabled unimplemented command is compliant; accepting an unconstrained material payload is not.
 
+
+## C11 typed quality subdocuments and fixture expectations
+
+[`council-quality.schema.json`](./schemas/v1/council-quality.schema.json) defines closed `ClaimQuality`, `DirectedCritiqueCoverage`, `SynthesisQualityPacket` and `ChoiceExplanationPacket` typed subdocuments inside existing Council/Evidence/Decision owner bodies or exact-digest references. They create no new `OwnerRecord.record_type`, command/event owner, twelfth-plus-one state machine or wire receipt family. Each eventual enabled command still needs its own versioned C07 payload and runtime evidence. The v1 manifest registers the C11 schema SHA-256 and [`council-quality-fixtures.json`](./schemas/v1/council-quality-fixtures.json) CQ01–CQ16 expectations separately from the unchanged original 52 T/F cases.
+
+Cross-record semantic validators must independently enforce six unique directed reviewer→author assignments, authentic substantive current authored work, frozen target IDs, adequate observation and inference premises, source deduplication, justified critique resolution, exact synthesis/coverage and both nonchair reviews, prior decision compatibility and original first-applicable D-03 priority. Schema validity by itself never certifies an observation or an LLM's assertion. This documentation refinement does not alter existing v1 wrapper accepted instances/canonical bytes or implement a native validator.
+
 ## Query contract
 
 Read-only application queries carry contract version, query ID, project, requested projection, snapshot consistency token, page size (1–200) and opaque continuation token. Results carry the owner record versions used, projection time, completeness (`COMPLETE`, `PARTIAL`, `STALE`), next token and typed error. Queries never authorize actions or fill absent facts with defaults. A UI projection may combine read-only results but cannot create an aggregate authority record.

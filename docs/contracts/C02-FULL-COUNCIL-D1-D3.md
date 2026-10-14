@@ -53,6 +53,15 @@ Apply the authoritative ten-row priority table; rows below are adversarial *cros
 
 The **five externally reported outcomes** remain exactly: converged, synthesized, cap reached, escalated, sealed with an open question. CONTINUE is internal/nonterminal; PAUSED/BLOCKED are operating dispositions, not sixth/seventh council outcome values.
 
+
+## C11 substantive Council quality (normative supplement)
+
+[C11](./C11-COUNCIL-DECISION-QUALITY.md) requires six *actual substantive* directed critiques, each linked to its frozen target claim, reviewer, current context and explicit checked challenge/no-defect basis; ACK, empty agreement, duplicated/self-edge or stale target leaves a mandatory slot **incomplete** under D-03 priority 3. The six-slot Claim-to-Critique Coverage Matrix must reference every required critique and preserve one justified `RESOLVED_BY_REVISION`, `REFUTED_BY_EVIDENCE`, `SURVIVING_TRADE_OFF`, `UNRESOLVED_FACT` or `UNRESOLVED_CHALLENGE` disposition. Invalid/missing content is never silently marked resolved. Incomplete matrix coverage withholds synthesis before reviews; changed synthesis/coverage digest invalidates both peer reviews.
+
+Evidence checks distinguish observed facts, current binding constraints, checkable logical inference, explicit user preference and assumptions; repeated citations of one observation are not independent proof. The rotating skeptic challenges high-impact shared assumptions, the verifier checks objective premises, and alternatives are fairly compared against the same approved constraints without forced binary packaging. Unresolved blocking objections/insufficient evidence cannot become positive synthesis or fixpoint. Historical decision clashes require scoped owner validation and D-04 as applicable.
+
+**The ten original D-03 priorities remain binding**, particularly incomplete before fact, fact before choice, inadequate evidence before synthesis, two complete comparable rounds before fixpoint, and completed cap only after prior guards. No additional role, critique, owner, state, approval, UI route, round or outcome is created. The CQ01–CQ16 acceptance cases are prospective documentation fixtures, not executed native tests.
+
 ## Concurrent and replay cases (expected, not executed)
 
 - Concurrent same-project point creation must not allocate one d twice; duplicate trigger identity must not manufacture an additional FULL point.
