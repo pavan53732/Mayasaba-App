@@ -3,13 +3,48 @@
   "status": "NORMATIVE_DOCUMENTATION_REGISTRY",
   "canonical_profile": "mayasaba-jcs-1",
   "artifacts": [
-    { "file": "core.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/core.schema.json", "sha256": "7907b2306258e21b738763bab13625adc3f4a13d4bf8e20a5e3a81322e575d49" },
-    { "file": "boundaries.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/boundaries.schema.json", "sha256": "f053d2eb4f2ac4d6cc46e5a271eb24628f50ef722bbebe2ea1eee43e81c0021a" },
-    { "file": "state-machines.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/state-machines.schema.json", "sha256": "fa2fc5572ef71fc3c75d1f2a37f034e329fbdb36add8f74c6d09f0a9d62d3b70" },
-    { "file": "policy.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/policy.schema.json", "sha256": "48637022f890c2a148f7cbc6221d414fa7f76f090a9f26c10b7c1b8ab3abc178" },
-    { "file": "trace-fixtures.schema.json", "schema_id": "https://mayasaba.local/contracts/v1/trace-fixtures.schema.json", "sha256": "601d094fd452c4b845d49a2ff81588165bafd090ee77f98d5b8bd271ed309783" },
-    { "file": "canonical-vectors.json", "sha256": "a72424d85b7332c585a6df349bb03c61423b12fb1f2d1c1cc5040ebbbf8c8432" },
-    { "file": "trace-fixtures.json", "sha256": "502555a3dcec51c294229a033194804e1facbe3a794612cf4541783db094333e" }
+    {
+      "file": "core.schema.json",
+      "schema_id": "https://mayasaba.local/contracts/v1/core.schema.json",
+      "sha256": "7907b2306258e21b738763bab13625adc3f4a13d4bf8e20a5e3a81322e575d49"
+    },
+    {
+      "file": "boundaries.schema.json",
+      "schema_id": "https://mayasaba.local/contracts/v1/boundaries.schema.json",
+      "sha256": "f053d2eb4f2ac4d6cc46e5a271eb24628f50ef722bbebe2ea1eee43e81c0021a"
+    },
+    {
+      "file": "state-machines.schema.json",
+      "schema_id": "https://mayasaba.local/contracts/v1/state-machines.schema.json",
+      "sha256": "fa2fc5572ef71fc3c75d1f2a37f034e329fbdb36add8f74c6d09f0a9d62d3b70"
+    },
+    {
+      "file": "policy.schema.json",
+      "schema_id": "https://mayasaba.local/contracts/v1/policy.schema.json",
+      "sha256": "48637022f890c2a148f7cbc6221d414fa7f76f090a9f26c10b7c1b8ab3abc178"
+    },
+    {
+      "file": "council-quality.schema.json",
+      "schema_id": "https://mayasaba.local/contracts/v1/council-quality.schema.json",
+      "sha256": "bfa6c8d8cfbeaaaf7d652fd8151cb17625aaa788e94f0a3e261dd6059b744bd4"
+    },
+    {
+      "file": "trace-fixtures.schema.json",
+      "schema_id": "https://mayasaba.local/contracts/v1/trace-fixtures.schema.json",
+      "sha256": "601d094fd452c4b845d49a2ff81588165bafd090ee77f98d5b8bd271ed309783"
+    },
+    {
+      "file": "canonical-vectors.json",
+      "sha256": "a72424d85b7332c585a6df349bb03c61423b12fb1f2d1c1cc5040ebbbf8c8432"
+    },
+    {
+      "file": "trace-fixtures.json",
+      "sha256": "502555a3dcec51c294229a033194804e1facbe3a794612cf4541783db094333e"
+    },
+    {
+      "file": "council-quality-fixtures.json",
+      "sha256": "580b4b3e7915e347ec613325bec82940e1eeca99d74c9ef2f9d5ebd1884a1ac3"
+    }
   ],
   "owner_registries": {
     "commands": {
@@ -52,7 +87,23 @@
     "REPAIR": "VALIDATION_REPAIR_ENGINE"
   },
   "fixture_sets": [
-    { "file": "trace-fixtures.json", "schema": "trace-fixtures.schema.json", "id_range": "T01-T22", "count": 22 },
-    { "file": "trace-fixtures.json", "schema": "trace-fixtures.schema.json", "id_range": "F01-F30", "count": 30 }
+    {
+      "file": "trace-fixtures.json",
+      "schema": "trace-fixtures.schema.json",
+      "id_range": "T01-T22",
+      "count": 22
+    },
+    {
+      "file": "trace-fixtures.json",
+      "schema": "trace-fixtures.schema.json",
+      "id_range": "F01-F30",
+      "count": 30
+    },
+    {
+      "file": "council-quality-fixtures.json",
+      "schema": "council-quality.schema.json",
+      "id_range": "CQ01-CQ16",
+      "count": 16
+    }
   ]
 }

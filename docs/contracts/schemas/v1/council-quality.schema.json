@@ -1,0 +1,638 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mayasaba.local/contracts/v1/council-quality.schema.json",
+  "title": "Mayasaba Council decision-quality typed subdocuments and CQ fixtures",
+  "$comment": "Top-level validates fixture set; validate individual typed owner-body subdocuments against named $defs. Six unique slots, current evidence, reviews and D-03 precedence additionally require semantic validation.",
+  "$ref": "#/$defs/QualityFixtureSet",
+  "$defs": {
+    "ClaimQuality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "claim_id",
+        "position_id",
+        "context_digest",
+        "classification",
+        "load_bearing",
+        "evidence_state",
+        "source_ids",
+        "premise_claim_ids",
+        "contradicting_evidence_ids"
+      ],
+      "properties": {
+        "claim_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "position_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "context_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "classification": {
+          "enum": [
+            "EMPIRICAL_OBSERVATION",
+            "AUTHORITATIVE_CONSTRAINT",
+            "LOGICAL_INFERENCE",
+            "USER_PREFERENCE",
+            "ASSUMPTION"
+          ]
+        },
+        "load_bearing": {
+          "type": "boolean"
+        },
+        "evidence_state": {
+          "enum": [
+            "SUPPORTED",
+            "INCONCLUSIVE",
+            "CONTRADICTED",
+            "STALE"
+          ]
+        },
+        "source_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "premise_claim_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "contradicting_evidence_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "authority_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "inference_rule": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 4096
+        },
+        "adequacy_note": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "classification": {
+                "const": "LOGICAL_INFERENCE"
+              }
+            },
+            "required": [
+              "classification"
+            ]
+          },
+          "then": {
+            "required": [
+              "inference_rule"
+            ],
+            "properties": {
+              "premise_claim_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "classification": {
+                "enum": [
+                  "EMPIRICAL_OBSERVATION",
+                  "AUTHORITATIVE_CONSTRAINT"
+                ]
+              }
+            },
+            "required": [
+              "classification"
+            ]
+          },
+          "then": {
+            "properties": {
+              "source_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "classification": {
+                "const": "USER_PREFERENCE"
+              }
+            },
+            "required": [
+              "classification"
+            ]
+          },
+          "then": {
+            "required": [
+              "authority_id"
+            ]
+          }
+        }
+      ]
+    },
+    "DirectedCritiqueCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "slot",
+        "critique_id",
+        "target_position_id",
+        "target_claim_ids",
+        "context_digest",
+        "disposition",
+        "evidence_ids",
+        "tradeoff_ids",
+        "checks_summary"
+      ],
+      "properties": {
+        "slot": {
+          "enum": [
+            "HERMES>KILO_CODE",
+            "HERMES>CLAUDE_CODE",
+            "KILO_CODE>HERMES",
+            "KILO_CODE>CLAUDE_CODE",
+            "CLAUDE_CODE>HERMES",
+            "CLAUDE_CODE>KILO_CODE"
+          ]
+        },
+        "critique_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "target_position_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "target_claim_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "context_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "disposition": {
+          "enum": [
+            "RESOLVED_BY_REVISION",
+            "REFUTED_BY_EVIDENCE",
+            "SURVIVING_TRADE_OFF",
+            "UNRESOLVED_FACT",
+            "UNRESOLVED_CHALLENGE"
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "tradeoff_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "checks_summary": {
+          "type": "string",
+          "minLength": 12,
+          "maxLength": 4096
+        },
+        "successor_revision_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "factual_question_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "RESOLVED_BY_REVISION"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "successor_revision_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "REFUTED_BY_EVIDENCE"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "evidence_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "SURVIVING_TRADE_OFF"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "properties": {
+              "tradeoff_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "disposition": {
+                "const": "UNRESOLVED_FACT"
+              }
+            },
+            "required": [
+              "disposition"
+            ]
+          },
+          "then": {
+            "required": [
+              "factual_question_id"
+            ]
+          }
+        }
+      ]
+    },
+    "SynthesisReviewProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reviewer",
+        "review_id",
+        "synthesis_digest",
+        "coverage_digest",
+        "disposition"
+      ],
+      "properties": {
+        "reviewer": {
+          "enum": [
+            "HERMES",
+            "KILO_CODE",
+            "CLAUDE_CODE"
+          ]
+        },
+        "review_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "synthesis_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "coverage_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "disposition": {
+          "enum": [
+            "ACCEPT",
+            "REQUEST_REVISION",
+            "BLOCK"
+          ]
+        }
+      }
+    },
+    "SynthesisQualityPacket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_point_id",
+        "round_id",
+        "context_digest",
+        "synthesis_digest",
+        "coverage_digest",
+        "frozen_proposal_digest",
+        "surviving_position_ids",
+        "claim_quality",
+        "critique_coverage",
+        "synthesis_reviews",
+        "shared_assumption_challenges",
+        "alternative_matrix_digest",
+        "evidence_adequacy",
+        "conflict_coverage",
+        "authority_consistency"
+      ],
+      "properties": {
+        "decision_point_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "round_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "context_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "synthesis_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "coverage_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "frozen_proposal_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "surviving_position_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "claim_quality": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "items": {
+            "$ref": "#/$defs/ClaimQuality"
+          }
+        },
+        "critique_coverage": {
+          "type": "array",
+          "minItems": 6,
+          "maxItems": 6,
+          "items": {
+            "$ref": "#/$defs/DirectedCritiqueCoverage"
+          }
+        },
+        "synthesis_reviews": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/SynthesisReviewProof"
+          }
+        },
+        "shared_assumption_challenges": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "alternative_matrix_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "evidence_adequacy": {
+          "enum": [
+            "PASS",
+            "INCONCLUSIVE",
+            "FAIL"
+          ]
+        },
+        "conflict_coverage": {
+          "enum": [
+            "PASS",
+            "INCONCLUSIVE",
+            "FAIL"
+          ]
+        },
+        "authority_consistency": {
+          "enum": [
+            "PASS",
+            "INCONCLUSIVE",
+            "FAIL"
+          ]
+        }
+      }
+    },
+    "ChoiceExplanationPacket": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision_point_id",
+        "packet_kind",
+        "question",
+        "option_ids",
+        "tradeoff_ids",
+        "source_evidence_ids",
+        "unresolved_fact_ids",
+        "scope_digest",
+        "next_action"
+      ],
+      "properties": {
+        "decision_point_id": {
+          "$ref": "core.schema.json#/$defs/Uuid"
+        },
+        "packet_kind": {
+          "enum": [
+            "USER_CHOICE",
+            "OPEN_FACT",
+            "CAP_REACHED_EXPLANATION"
+          ]
+        },
+        "question": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 8192
+        },
+        "option_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "tradeoff_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "source_evidence_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "unresolved_fact_ids": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "core.schema.json#/$defs/Uuid"
+          }
+        },
+        "scope_digest": {
+          "$ref": "core.schema.json#/$defs/Sha256"
+        },
+        "next_action": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 4096
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "packet_kind": {
+                "const": "USER_CHOICE"
+              }
+            },
+            "required": [
+              "packet_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "option_ids": {
+                "minItems": 2
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "packet_kind": {
+                "const": "OPEN_FACT"
+              }
+            },
+            "required": [
+              "packet_kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "unresolved_fact_ids": {
+                "minItems": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "QualityFixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "initial_facts",
+        "expected_gate",
+        "required_oracle"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^CQ(0[1-9]|1[0-6])$"
+        },
+        "initial_facts": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 2048
+        },
+        "expected_gate": {
+          "enum": [
+            "PARTICIPATION_INCOMPLETE",
+            "QUALITY_REFUSED",
+            "EVIDENCE_BLOCKED",
+            "D03_OPEN_FACT",
+            "D03_ESCALATED",
+            "D03_CONTINUE",
+            "ELIGIBLE_SYNTHESIS",
+            "HOLD_AUTHORITY",
+            "STALE_REVIEW_REFUSED"
+          ]
+        },
+        "required_oracle": {
+          "type": "string",
+          "minLength": 25,
+          "maxLength": 4096
+        }
+      }
+    },
+    "QualityFixtureSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "status",
+        "fixtures"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "1.0.0"
+        },
+        "status": {
+          "const": "DOCUMENTATION_EXPECTATION_NOT_EXECUTED_TEST"
+        },
+        "fixtures": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/QualityFixture"
+          }
+        }
+      }
+    }
+  }
+}

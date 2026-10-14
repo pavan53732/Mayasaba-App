@@ -1,0 +1,102 @@
+{
+  "contract_version": "1.0.0",
+  "status": "DOCUMENTATION_EXPECTATION_NOT_EXECUTED_TEST",
+  "fixtures": [
+    {
+      "id": "CQ01",
+      "initial_facts": "In a registered FULL Council point: Three peers politely approve with no evidence-linked objections or adequacy review.",
+      "expected_gate": "QUALITY_REFUSED",
+      "required_oracle": "Peer approval is insufficient: source-linked critique dispositions and independent coverage required."
+    },
+    {
+      "id": "CQ02",
+      "initial_facts": "In a registered FULL Council point: A sixth directed critique is absent when round five expires.",
+      "expected_gate": "PARTICIPATION_INCOMPLETE",
+      "required_oracle": "Missing authored directed slot leaves round incomplete and BLOCKED; never completed cap reached."
+    },
+    {
+      "id": "CQ03",
+      "initial_facts": "In a registered FULL Council point: One critique is only transport ACK or repeated generic praise.",
+      "expected_gate": "PARTICIPATION_INCOMPLETE",
+      "required_oracle": "Hollow message must not satisfy mandatory critique; substantive frozen-target replacement required."
+    },
+    {
+      "id": "CQ04",
+      "initial_facts": "In a registered FULL Council point: Chair changes a blocking critique to resolved without verified rebuttal/revision.",
+      "expected_gate": "QUALITY_REFUSED",
+      "required_oracle": "Reject synthesis source-to-disposition misquotation before peer review."
+    },
+    {
+      "id": "CQ05",
+      "initial_facts": "In a registered FULL Council point: Peers reviewed synthesis and coverage digest A, but chair submits digest B.",
+      "expected_gate": "STALE_REVIEW_REFUSED",
+      "required_oracle": "Both exact-revision nonchair reviews become stale and must be redone for B."
+    },
+    {
+      "id": "CQ06",
+      "initial_facts": "In a registered FULL Council point: Agent asserts benchmark speedup solely from another model's estimate.",
+      "expected_gate": "EVIDENCE_BLOCKED",
+      "required_oracle": "Unsupported claimed measurement lacks reproducible artifact/environment evidence."
+    },
+    {
+      "id": "CQ07",
+      "initial_facts": "In a registered FULL Council point: Logical inference's premise is unverified despite unanimous endorsement.",
+      "expected_gate": "EVIDENCE_BLOCKED",
+      "required_oracle": "Verify premises and counterexamples before certifying conclusion."
+    },
+    {
+      "id": "CQ08",
+      "initial_facts": "In a registered FULL Council point: Three citations refer to the identical experiment log.",
+      "expected_gate": "EVIDENCE_BLOCKED",
+      "required_oracle": "Deduplicate independent-observation identity; citations do not establish corroboration."
+    },
+    {
+      "id": "CQ09",
+      "initial_facts": "In a registered FULL Council point: All three agree on option violating measured hard isolation constraint.",
+      "expected_gate": "EVIDENCE_BLOCKED",
+      "required_oracle": "Observed hard-counterexample supersedes agreement and prohibits positive synthesis."
+    },
+    {
+      "id": "CQ10",
+      "initial_facts": "In a registered FULL Council point: Aesthetic choice is subjective and valid proposals disagree.",
+      "expected_gate": "D03_ESCALATED",
+      "required_oracle": "No false numeric score; ask authorized user trade-off choice with provenance."
+    },
+    {
+      "id": "CQ11",
+      "initial_facts": "In a registered FULL Council point: There are three viable architectures but UI packager drops third choice.",
+      "expected_gate": "D03_ESCALATED",
+      "required_oracle": "Preserve all viable material alternatives and their constraints, costs and risks."
+    },
+    {
+      "id": "CQ12",
+      "initial_facts": "In a registered FULL Council point: Completed round lacks platform fact and also has undecided user preference.",
+      "expected_gate": "D03_OPEN_FACT",
+      "required_oracle": "Original D-03 priority 4 factual dependency precedes priority 5 choice."
+    },
+    {
+      "id": "CQ13",
+      "initial_facts": "In a registered FULL Council point: Round two recycles peer language while shared load-bearing premise stays unchallenged.",
+      "expected_gate": "D03_CONTINUE",
+      "required_oracle": "Do not certify false fixpoint; require substantive checks and eligible continuation."
+    },
+    {
+      "id": "CQ14",
+      "initial_facts": "In a registered FULL Council point: New material baseline after round two reuses old critiques and resets point budget.",
+      "expected_gate": "QUALITY_REFUSED",
+      "required_oracle": "Reject old context, require fresh blind proposals; roles and five-round cap persist."
+    },
+    {
+      "id": "CQ15",
+      "initial_facts": "In a registered FULL Council point: Changed evidence undermines approved hard lock but agents overwrite it silently.",
+      "expected_gate": "HOLD_AUTHORITY",
+      "required_oracle": "Scope assessment and authorized reopening required; unaffected work preserved."
+    },
+    {
+      "id": "CQ16",
+      "initial_facts": "In a registered FULL Council point: Complete six-slot coverage, adequate evidence, current context and exact dual reviews.",
+      "expected_gate": "ELIGIBLE_SYNTHESIS",
+      "required_oracle": "Only eligible for D-03 priority 7 if earlier guards clear; separate binding approvals remain."
+    }
+  ]
+}

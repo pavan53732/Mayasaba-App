@@ -8,6 +8,8 @@ This directory is the machine-readable documentation registry for contract versi
 | [`boundaries.schema.json`](./boundaries.schema.json) | Owner commands, domain events, MCF envelopes, authoritative record wrapper and acceptance evidence |
 | [`state-machines.schema.json`](./state-machines.schema.json) | Records for exactly twelve authoritative machines |
 | [`policy.schema.json`](./policy.schema.json) | Approved storage/attachment/time bounds, executable pins, explicit bound actions, language, composer and governed-update policy |
+| [`council-quality.schema.json`](./council-quality.schema.json) | C11 typed Council quality subdocuments and fixture schema; no new owner/command/state |
+| [`council-quality-fixtures.json`](./council-quality-fixtures.json) | CQ01–CQ16 prospective evidence/critique-quality scenarios, not executed results |
 | [`canonical-vectors.json`](./canonical-vectors.json) | `mayasaba-jcs-1` accept/reject and digest vectors |
 | [`trace-fixtures.schema.json`](./trace-fixtures.schema.json) | Closed shape for the 52 adversarial fixture mappings |
 | [`trace-fixtures.json`](./trace-fixtures.json) | Machine-readable mapping of C05 T01–T22 and register F01–F30 to separate boundary, physical and operational results |
@@ -36,3 +38,5 @@ The profile uses RFC 8785/JCS-compatible canonical JSON over I-JSON and UTF-8 wi
 ## Proof boundary
 
 Successful JSON parsing or schema validation proves only contract shape. It does not prove authority, owner transaction atomicity, physical-effect safety, language admission, evidence adequacy, native CLI behavior, Windows confinement or MSI operation. Those gates remain explicit in C08–C10.
+
+**C11 adds documentation-only subdocument schemas and separate prospective CQ fixtures.** Existing authoritative enum counts and T/F fixtures are preserved. Native validators and semantic oracles must prove independent evidence and D-03 precedence; JSON shape alone cannot.
