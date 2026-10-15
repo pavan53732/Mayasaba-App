@@ -103,16 +103,29 @@ namespace winrt::Mayasaba::implementation
         try
         {
             storage_ = std::make_unique<mayasaba::Storage>(mayasaba::Storage::DefaultFile());
+            // A previously bound project opens directly at Chat (AGENTS.md section 5, UI-UX
+            // acceptance criteria 59 and 80): onboarding is never re-shown once a project is
+            // bound, and a known open project restores its timeline and docked composer.
+            // Screen 1 (Welcome) is the no-bound-root first-run path only. Restoration is not
+            // authorization: a relaunch still requires a fresh Start before any CLI session is
+            // initialized, and no work, draft submission or closure change is resumed here.
+            if (auto key = storage_->LastBoundProject())
+            {
+                if (storage_->Project(*key))
+                {
+                    activeProject_ = *key;
+                    ShowChat();
+                    return;
+                }
+            }
         }
         catch (std::exception const& e)
         {
             storage_.reset();
             ShowNotice(L"SQLite startup failed. Folder binding and Send are blocked: " + Utf16(e.what()), true);
         }
-        // Startup always begins at Screen 1 (Welcome), by explicit product instruction:
-        // a previously bound project is never reopened automatically. The user reaches a
-        // bound project through Screen 2 (Open Folder); re-selecting the same folder
-        // re-binds it and restores its stored history.
+        // No bound root: the mandatory first-run onboarding sequence, which still requires
+        // Open Folder before Chat.
         ShowWelcome();
     }
 
