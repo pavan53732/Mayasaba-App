@@ -9,7 +9,7 @@ There are **three main screens**: welcome, open folder, and Chat. Welcome and op
 ## End-to-end journey
 
 ```text
-APPLICATION LAUNCH LIFECYCLE
+FIRST LAUNCH, NO BOUND PROJECT
   Screen 1 Welcome ── Next / Skip / Escape ──> Screen 2 Open Folder
          ^                                          │
          └──────────────── Back ────────────────────┘
@@ -17,11 +17,11 @@ APPLICATION LAUNCH LIFECYCLE
                                           authorized folder binding
                                           (restores existing history)
                                                     ▼
-                                               Screen 3 Chat
+OTHER LAUNCHES WITH A BOUND PROJECT ─────────> Screen 3 Chat
                                                     │
                                     [Start] initializes three sessions;
-                                    [Exit] flushes draft and closes app;
-                                    reopening Mayasaba opens Screen 1
+                                    each observed status is shown;
+                                    [Exit] flushes draft and closes app
                                                     │
                                          first confirmed saved message
                                                     ▼
@@ -33,7 +33,7 @@ APPLICATION LAUNCH LIFECYCLE
                                     certified delivery or stated blocker
 ```
 
-Opening a folder refreshes bounded, non-mutating detection of all three CLIs and shows their individual readiness on screen 3. It does not start working agent sessions, scan files, initialize Git, or approve work. The readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. Every application launch begins at Screen 1 (Welcome); re-selecting an authorized project folder on Screen 2 restores its retained history and draft directly into Screen 3 Chat. Selecting **Exit** on Screen 3 safely persists the active draft and exits the application.
+Opening a folder refreshes bounded, non-mutating detection of all three CLIs and shows their individual readiness on screen 3. It does not start working agent sessions, scan files, initialize Git, or approve work. The readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. Once a project is bound, later launches open its Chat directly and the onboarding sequence is never re-shown. Selecting **Exit** on Screen 3 safely persists the active draft and exits the application.
 
 The native Windows application menu is outside all three screen content areas. Once a project is bound, **File → Switch Project** opens the native folder picker. It changes the active Chat only after Project service validates the chosen root and the existing safe-switching guards pass. Chat itself has no folder control.
 
@@ -125,7 +125,7 @@ NATIVE WINDOWS APPLICATION MENU (outside Chat)
 +--------------------------------------------------------------------------+
 ```
 
-The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, visible Start/Pause/Stop/Exit controls, overflow [•••], and exactly one truthful readiness entry per required CLI. Selecting [Exit] flushes the draft and closes the application; the next launch always begins from Screen 1 (Welcome). `READY` detection does not mean a project session is active. There is no setup banner when all CLIs are ready.
+The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, visible Start/Pause/Stop/Exit controls, overflow [•••], and exactly one truthful readiness entry per required CLI. Selecting [Exit] flushes the draft and closes the application; a later launch with a bound project opens Chat directly. `READY` detection does not mean a project session is active. There is no setup banner when all CLIs are ready.
 
 ### Switching projects from the native application menu
 

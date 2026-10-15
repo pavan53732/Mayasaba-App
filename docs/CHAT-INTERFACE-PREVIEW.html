@@ -521,7 +521,7 @@ $('folderButton').addEventListener('click',function(){showPicker(this);});$('can
 $('fileButton').addEventListener('click',function(){var open=$('filePop').hidden;$('filePop').hidden=!open;this.setAttribute('aria-expanded',String(open));});
 $('switchProject').addEventListener('click',function(){showPicker(this);});
 document.querySelectorAll('[data-project]').forEach(function(el){el.addEventListener('click',function(){switchToProject(el.dataset.project);});});
-function exitApp(){project().draft=$('message').value;setScene('welcome');toast('Mayasaba exited. Next launch opens from Screen 1.');}
+function exitApp(){project().draft=$('message').value;toast('Mayasaba exited. A later launch with a bound project opens Chat directly.');}
 $('exitButton').addEventListener('click',exitApp);
 $('startButton').addEventListener('click',start);$('pauseButton').addEventListener('click',pause);$('stopButton').addEventListener('click',stop);
 $('moreButton').addEventListener('click',function(){var open=$('chatMore').hidden;$('chatMore').hidden=!open;this.setAttribute('aria-expanded',String(open));});
