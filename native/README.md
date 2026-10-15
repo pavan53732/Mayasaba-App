@@ -1,5 +1,7 @@
 # Mayasaba — real native Windows implementation
 
+> **2026-10-15 project-selector amendment:** [Approved Screen 2 contract](../docs/PROJECT-SELECTION.md) replaces automatic last-project Chat startup with explicit selection on later launches, adds recent projects and explicit empty-folder creation, and routes File → Switch Project through the selector. This amendment is documentation/preview only: native UI, recent-list query metadata, create-folder typed command/fixtures and recovery proof remain pending. Earlier launch validation applies to the previous requirement and does not certify this amendment.
+
 **Implementation status: INCOMPLETE.** This directory contains a **real native C++20 / C++/WinRT / WinUI 3 unpackaged application starting slice**, not a renamed browser preview. Windows App SDK 2.5.1 and Microsoft.Windows.CppWinRT 3.0.260818.1 are pinned in the `.vcxproj`. Initial x64 support targets the previously approved Windows 11 system class. A local Release x64 build and native Welcome/Open Folder launch were verified on 2026-10-14 using VS 18 Enterprise with the v145 toolset. See [local validation](LOCAL-VALIDATION.md) for commands, evidence and outstanding runtime checks. This does not establish full application acceptance.
 
 ## What's implemented in this slice

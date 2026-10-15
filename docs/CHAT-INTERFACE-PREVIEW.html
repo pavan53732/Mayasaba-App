@@ -319,7 +319,7 @@ h1 .gradient{background:linear-gradient(110deg,var(--brand),var(--violet));color
   <div class="harness-controls">
     <label class="sr-only" for="scenePicker">Preview a UI state</label>
     <select id="scenePicker">
-      <option value="welcome">01 · Welcome</option><option value="folder">02 · Open folder</option><option value="empty">03 · Empty Chat</option><option value="conversation">04 · Three-agent conversation</option>
+      <option value="welcome">01 · Welcome</option><option value="folder">02 · Project selection</option><option value="empty">03 · Empty Chat</option><option value="conversation">04 · Three-agent conversation</option>
       <option value="cli">05 · CLI needs attention</option><option value="attachments">06 · Attachments</option><option value="questions">07 · Clarifying questions</option><option value="council">08 · FULL council</option>
       <option value="tasks">09 · Plan & tasks</option><option value="evidence">10 · Files & evidence</option><option value="validation">11 · Validation & repair</option>
       <option value="recovery">12 · Recovery & unknown effects</option><option value="delivery">13 · Verified delivery</option><option value="approval">14 · Explicit approval</option>
@@ -338,7 +338,7 @@ h1 .gradient{background:linear-gradient(110deg,var(--brand),var(--violet));color
   <div class="titlebrand"><span class="logo-mark"><svg aria-hidden="true"><use href="#logo"/></svg></span> Mayasaba <span class="native-preview">/ CONTROL ROOM</span></div>
   <div class="window-actions" aria-label="Windows title bar illustration"><button class="win-key" aria-label="Minimize illustration" data-toast="Title-bar buttons are illustrative only"><svg class="icon"><path d="M4 12h16"/></svg></button><button class="win-key" aria-label="Maximize illustration" data-toast="Title-bar buttons are illustrative only"><svg class="icon"><rect x="5" y="5" width="14" height="14" rx="1"/></svg></button><button class="win-key" aria-label="Close illustration" data-toast="Use the browser tab controls to close this preview"><svg class="icon"><use href="#i-x"/></svg></button></div>
  </div>
- <div class="native-bar" id="nativeBar" hidden><button class="menu-button" id="fileButton" aria-haspopup="true" aria-expanded="false">File</button><span class="native-preview">Native Windows application menu · represented for design review</span><div class="menu-pop" id="filePop" hidden><button type="button" id="switchProject"><svg class="icon s"><use href="#i-folder"/></svg> Switch Project <span class="shortcut">Picker</span></button></div></div>
+ <div class="native-bar" id="nativeBar" hidden><button class="menu-button" id="fileButton" aria-haspopup="true" aria-expanded="false">File</button><span class="native-preview">Native Windows application menu · represented for design review</span><div class="menu-pop" id="filePop" hidden><button type="button" id="switchProject"><svg class="icon s"><use href="#i-folder"/></svg> Switch Project <span class="shortcut">Selector</span></button></div></div>
  <main class="app" id="app" aria-label="Mayasaba application experience demonstration">
   <section class="onboarding" id="welcomeScreen" aria-labelledby="welcomeTitle">
    <div class="welcome-layout">
@@ -356,13 +356,13 @@ h1 .gradient{background:linear-gradient(110deg,var(--brand),var(--violet));color
   <section class="onboarding" id="folderScreen" aria-labelledby="folderTitle" hidden>
    <div style="width:100%;max-width:1020px">
     <div class="folder-layout">
-     <div><div class="eyebrow">One secure workspace</div><h1 id="folderTitle" tabindex="-1">Let's open your <span class="gradient">project.</span></h1><p class="lead">Choose the folder where your project already lives. Mayasaba keeps conversations and evidence tied to that root—without changing your installed CLIs or installing anything inside it.</p>
-      <div class="action-row"><button class="btn btn-primary" id="folderButton"><svg class="icon s"><use href="#i-folder"/></svg> Open folder <svg class="icon s"><use href="#i-arrow"/></svg></button><button class="btn btn-plain" id="backWelcome">Back</button></div><p class="cap">In the native Windows app, this opens the system folder picker. Here you'll choose between two illustration-only projects.</p>
+     <div><div class="eyebrow">One secure workspace</div><h1 id="folderTitle" tabindex="-1">Let's open your <span class="gradient">project.</span></h1><p class="lead">Select a recent project, open an existing folder, or explicitly create a new empty folder. Mayasaba keeps conversations and evidence tied to that root—without changing your installed CLIs or installing anything inside it.</p>
+      <div class="action-row"><button class="btn btn-primary" id="folderButton"><svg class="icon s"><use href="#i-folder"/></svg> Open existing folder <svg class="icon s"><use href="#i-arrow"/></svg></button><button class="btn" id="newProjectFolder">Create new project folder</button><button class="btn btn-plain" id="backWelcome">Back</button><button class="btn btn-plain" id="cancelSelection" hidden>Cancel</button><button class="btn btn-plain" id="exitSelection" hidden>Exit</button></div><p class="cap">In the native Windows app, this opens the system folder picker. Here you'll choose between two illustration-only projects.</p>
       <div class="chip-row"><span class="soft-chip"><svg class="icon s"><use href="#i-lock"/></svg> Project-isolated history</span><span class="soft-chip"><svg class="icon s"><use href="#i-shield"/></svg> No automatic CLI work</span></div>
      </div>
      <div class="folder-figure"><div class="folder-frame"><svg class="icon folder-art"><use href="#i-folder"/></svg><span class="folder-tip">Your folder stays yours</span></div></div>
     </div>
-    <div class="folder-draft" id="folderDraftHost"></div>
+    <h2>Recent projects <small>Illustrative data only</small></h2><div id="recentProjects"></div><p class="cap">Rows retain their own history. Selecting a closed project does not reopen it. Real folder identity and safety must be validated by the native app. Pre-binding draft entry and draft-collision recovery are specified in the contract but are not simulated here.</p><div class="folder-draft" id="folderDraftHost"></div>
    </div>
   </section>
   <section class="chat-header" id="chatHeader" aria-label="Project and controller actions" hidden>
@@ -416,7 +416,10 @@ var projects={
  atlas:{name:'Atlas',path:'D:\\Work\\Atlas',started:false,paused:false,stopped:false,closed:false,draft:'',history:[],files:[]}
 };
 var state={scene:'welcome',project:'northstar',screen:'welcome',showcase:false,detailsTrigger:null,pickerTrigger:null,keyboardAccessible:false};
+var selectionReturn=null,hasBoundProject=false;
 var toastHandle=null;
+function renderRecentProjects(){var host=$('recentProjects');host.innerHTML='';Object.keys(projects).forEach(function(key){var p=projects[key],button=document.createElement('button');button.className='option';button.innerHTML='<span><strong>'+escapeHtml(p.name)+'</strong><small>'+escapeHtml(p.path)+' · '+(p.closed?'CLOSED':'OPEN')+' · Last opened: sample date · Activity: unknown</small></span>';button.addEventListener('click',function(){switchToProject(key);});host.appendChild(button);});$('backWelcome').hidden=hasBoundProject;$('cancelSelection').hidden=!selectionReturn;$('exitSelection').hidden=!hasBoundProject||!!selectionReturn;}
+
 function project(){return projects[state.project];}
 function escapeHtml(value){return String(value).replace(/[&<>"']/g,function(x){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[x];});}
 function toast(value){var box=$('toast');box.textContent=value;box.hidden=false;clearTimeout(toastHandle);toastHandle=setTimeout(function(){box.hidden=true;},3300);}
@@ -486,9 +489,9 @@ function renderHeader(){var p=project();$('projectName').textContent=p.name;$('p
 function setScene(scene,focus){modalclose();$('scenePicker').value=scene;state.scene=scene;state.screen=(scene==='welcome'||scene==='folder')?scene:'chat';state.showcase=!['welcome','folder','empty'].includes(scene);
  $('welcomeScreen').hidden=state.screen!=='welcome';$('folderScreen').hidden=state.screen!=='folder';$('chatHeader').hidden=state.screen!=='chat';$('chatBody').hidden=state.screen!=='chat';$('nativeBar').hidden=state.screen!=='chat';$('chatMore').hidden=true;$('moreButton').setAttribute('aria-expanded','false');
  $('dock').hidden=true;$('emptyState').hidden=true;$('chatContent').hidden=true;
- if(state.screen==='folder')moveComposer($('folderDraftHost'));
+ if(state.screen==='folder'){moveComposer($('folderDraftHost'));renderRecentProjects();}
  if(state.screen==='chat'){renderHeader();if(scene==='empty'&&!project().history.length){$('emptyState').hidden=false;moveComposer($('centerComposerHost'));}else{$('chatContent').hidden=false;$('dock').hidden=false;moveComposer($('dockHost'));renderTimeline();}}
- $('message').value=project().draft;renderFiles();composerMode();
+ $('message').value=project().draft;renderFiles();composerMode();if(state.screen==='folder')$('folderDraftHost').hidden=true;
  if(focus!==false){if(scene==='welcome')$('welcomeTitle').focus();if(scene==='folder')$('folderTitle').focus();if(state.screen==='chat')$('projectName').setAttribute('tabindex','-1'),$('projectName').focus();}
 }
 function renderTimeline(){var scene=state.scene,timeline=$('timeline');timeline.innerHTML='';
@@ -497,7 +500,7 @@ function renderTimeline(){var scene=state.scene,timeline=$('timeline');timeline.
  else{timeline.innerHTML='<div class="mock-banner">'+I('info','s')+' Illustrated project timeline. Preview controls are outside the native application shell.</div>'+buildScenario('conversation');}
  $('chatBody').scrollTop=0;
 }
-function switchToProject(key){if(!projects[key])return;project().draft=$('message').value;state.project=key;state.showcase=false;state.scene=projects[key].history.length?'conversation':'empty';if(projects[key].closed)state.scene='closed';setScene(state.scene);toast('Sample project selected: '+projects[key].name+'. No real folder was opened.');}
+function switchToProject(key){if(!projects[key])return;hasBoundProject=true;selectionReturn=null;project().draft=$('message').value;state.project=key;state.showcase=false;state.scene=projects[key].history.length?'conversation':'empty';if(projects[key].closed)state.scene='closed';setScene(state.scene);toast('Sample project selected: '+projects[key].name+'. No real folder was opened.');}
 function start(){if(project().closed){toast('Project is closed. Use explicit Reopen Project.');return;}
  if(project().started&&!project().stopped){toast('The three sample sessions already have Start permission; no duplicate launch.');return;}
  project().started=true;project().stopped=false;project().paused=false;renderHeader();toast('Demo Start recorded for '+project().name+'. No CLI processes were launched.');}
@@ -519,10 +522,12 @@ $('motionSwitch').addEventListener('click',function(){var off=document.body.data
 $('nextWelcome').addEventListener('click',function(){setScene('folder');});$('skipWelcome').addEventListener('click',function(){setScene('folder');});$('backWelcome').addEventListener('click',function(){setScene('welcome');});
 $('folderButton').addEventListener('click',function(){showPicker(this);});$('cancelPicker').addEventListener('click',modalclose);
 $('fileButton').addEventListener('click',function(){var open=$('filePop').hidden;$('filePop').hidden=!open;this.setAttribute('aria-expanded',String(open));});
-$('switchProject').addEventListener('click',function(){showPicker(this);});
+$('switchProject').addEventListener('click',function(){project().draft=$('message').value;selectionReturn=state.scene;$('filePop').hidden=true;setScene('folder');});
+$('cancelSelection').addEventListener('click',function(){var prior=selectionReturn;selectionReturn=null;setScene(prior||'empty');});
+$('newProjectFolder').addEventListener('click',function(){toast('Design only: choose a parent and new folder name, confirm the final path, then create an empty folder. No filesystem changes occur in this preview.');});
 document.querySelectorAll('[data-project]').forEach(function(el){el.addEventListener('click',function(){switchToProject(el.dataset.project);});});
-function exitApp(){project().draft=$('message').value;toast('Mayasaba exited. A later launch with a bound project opens Chat directly.');}
-$('exitButton').addEventListener('click',exitApp);
+function exitApp(){project().draft=$('message').value;Object.keys(projects).forEach(function(key){projects[key].started=false;projects[key].paused=false;projects[key].stopped=false;});selectionReturn=null;setScene(hasBoundProject?'folder':'welcome');toast('Mayasaba exited. A later launch opens Screen 2 Project selection.');}
+$('exitButton').addEventListener('click',exitApp);$('exitSelection').addEventListener('click',exitApp);
 $('startButton').addEventListener('click',start);$('pauseButton').addEventListener('click',pause);$('stopButton').addEventListener('click',stop);
 $('moreButton').addEventListener('click',function(){var open=$('chatMore').hidden;$('chatMore').hidden=!open;this.setAttribute('aria-expanded',String(open));});
 $('diagnosticsButton').addEventListener('click',function(){showDetails('cli',this);$('chatMore').hidden=true;});
@@ -532,8 +537,8 @@ $('reopenProject').addEventListener('click',function(){project().closed=false;se
 $('closeDetails').addEventListener('click',modalclose);$('doneDetails').addEventListener('click',modalclose);
 $('backdrop').addEventListener('click',function(e){if(e.target===$('backdrop'))modalclose();});
 $('pickerBackdrop').addEventListener('click',function(e){if(e.target===$('pickerBackdrop'))modalclose();});
-$('resetPreview').addEventListener('click',function(){Object.keys(projects).forEach(function(k){projects[k].started=false;projects[k].stopped=false;projects[k].closed=false;projects[k].paused=false;projects[k].draft='';projects[k].history=[];projects[k].files=[];});state.project='northstar';document.body.dataset.theme='light';$('themePicker').value='light';setScene('welcome');toast('Illustrative session reset.');});
-document.addEventListener('keydown',function(e){if(e.key==='Escape'){if(!$('backdrop').hidden||!$('pickerBackdrop').hidden){e.preventDefault();modalclose();return;}if(!$('filePop').hidden){$('filePop').hidden=true;$('fileButton').setAttribute('aria-expanded','false');$('fileButton').focus();return;}if(state.screen==='welcome'){setScene('folder');}}});
+$('resetPreview').addEventListener('click',function(){Object.keys(projects).forEach(function(k){projects[k].started=false;projects[k].stopped=false;projects[k].closed=false;projects[k].paused=false;projects[k].draft='';projects[k].history=[];projects[k].files=[];});state.project='northstar';hasBoundProject=false;selectionReturn=null;document.body.dataset.theme='light';$('themePicker').value='light';setScene('welcome');toast('Illustrative session reset.');});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){if(!$('backdrop').hidden||!$('pickerBackdrop').hidden){e.preventDefault();modalclose();return;}if(!$('filePop').hidden){$('filePop').hidden=true;$('fileButton').setAttribute('aria-expanded','false');$('fileButton').focus();return;}if(state.screen==='welcome'){setScene('folder');}else if(state.screen==='folder'&&selectionReturn){var prior=selectionReturn;selectionReturn=null;setScene(prior);}}});
 document.addEventListener('click',function(e){
  var detail=e.target.closest('[data-detail]');if(detail){showDetails(detail.dataset.detail,detail);return;}
  var action=e.target.closest('[data-action]');if(action){var a=action.dataset.action;if(a==='cliDetails')showDetails('cli',action);

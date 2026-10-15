@@ -1,8 +1,10 @@
 # Mayasaba — implementation-readiness audit
 
-**Audit status: DOCUMENTATION CLOSED; PARTIAL NATIVE IMPLEMENTATION AND LOCAL WINDOWS VALIDATION IN PROGRESS.**
+> **2026-10-15 project-selector amendment:** [Approved Screen 2 contract](PROJECT-SELECTION.md) replaces automatic last-project Chat startup with explicit selection on later launches, adds recent projects and explicit empty-folder creation, and routes File → Switch Project through the selector. This amendment is documentation/preview only: native UI, recent-list query metadata, create-folder typed command/fixtures and recovery proof remain pending. Earlier launch validation applies to the previous requirement and does not certify this amendment.
 
-This audit reconciles the authoritative specification, AGENTS, architecture, UI/UX, user-visible screens, C01–C11 contracts and v1 shared schemas. It closes the documentation-stage ambiguity inventory. A partial native C++20 / WinUI 3 desktop slice exists under native/ and is undergoing local Windows validation, but end-to-end orchestration, CLI adapters, publication, and MSI packaging remain to be completed.
+**Audit status: BASELINE DOCUMENTATION CLOSED; PROJECT-SELECTOR CONTRACT EXTENSIONS PENDING; PARTIAL NATIVE IMPLEMENTATION AND LOCAL WINDOWS VALIDATION IN PROGRESS.**
+
+This audit reconciles the authoritative specification, AGENTS, architecture, UI/UX, user-visible screens, C01–C11 contracts and v1 shared schemas. It records closure of the baseline documentation-stage ambiguity inventory; the project-selector amendment above adds pending command and query contract work. A partial native C++20 / WinUI 3 desktop slice exists under native/ and is undergoing local Windows validation, but end-to-end orchestration, CLI adapters, publication, and MSI packaging remain to be completed.
 
 ## Closure meaning
 

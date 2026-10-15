@@ -1,6 +1,8 @@
 # Mayasaba — contract completion register
 
-**Status: DOCUMENTATION CONTRACT SET COMPLETE; IMPLEMENTATION GATES PENDING.**
+> **2026-10-15 project-selector amendment:** [Approved Screen 2 contract](PROJECT-SELECTION.md) replaces automatic last-project Chat startup with explicit selection on later launches, adds recent projects and explicit empty-folder creation, and routes File → Switch Project through the selector. This amendment is documentation/preview only: native UI, recent-list query metadata, create-folder typed command/fixtures and recovery proof remain pending. Earlier launch validation applies to the previous requirement and does not certify this amendment.
+
+**Status: BASELINE DOCUMENTATION CONTRACT SET COMPLETE; PROJECT-SELECTOR COMMAND/QUERY EXTENSIONS AND IMPLEMENTATION GATES PENDING.**
 
 This register records where the completed product choices and deterministic contracts live. It is subordinate to the authoritative system description and does not claim a working Windows application.
 

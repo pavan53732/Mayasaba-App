@@ -1,5 +1,7 @@
 # Local native validation — Mayasaba native WinUI slice
 
+> **Requirement changed 2026-10-15:** the user approved the [Screen 2 project selector](../docs/PROJECT-SELECTION.md). Direct-to-Chat startup results below are historical evidence for the preceding requirement. The new selector, recent-project list and explicit folder creation have not been implemented or runtime-verified by this documentation amendment.
+
 **Scope.** This report covers the native C++20 / C++/WinRT / WinUI 3 starting slice under `native/Mayasaba/` only. It is **not** certification of the complete Mayasaba application: the three CLI adapters, orchestration, work authority, publication, accessibility acceptance and MSI packaging are not implemented, so no whole-product acceptance is claimed anywhere below.
 
 **Current revision.** `main` at `45662c7`, with the 2026-10-15 startup correction in `native/Mayasaba/MainWindow.xaml.cpp`.

@@ -1,41 +1,37 @@
 # Mayasaba — complete user-visible screen diagrams
 
+> **2026-10-15 approved navigation change:** Screen 2 is the reusable project selector. First binding: Welcome → selector → Chat. Later launches: selector → Chat. File → Switch Project returns to the selector. See [project selection contract](PROJECT-SELECTION.md). Native implementation remains pending.
+
 ## Purpose and status
 
 This is the single visual reference for what a person sees from first launch through a completed or blocked project. It describes the intended **native Windows interface**, not a working implementation. The [complete system description](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) is authoritative; [UI-UX.md](./UI-UX.md) supplies the detailed behavior and acceptance rules. The [interactive preview](./CHAT-INTERFACE-PREVIEW.html) illustrates the three main screens and composer movement with sample data.
 
-There are **three main screens**: welcome, open folder, and Chat. Welcome and open folder appear only before the first project root is bound. Chat is the only persistent workspace. The later diagrams are **states within Chat**, not extra pages, routes, tabs, or dashboards. Text in square brackets represents a control. Names, paths, statuses, messages, and evidence in the diagrams are illustrative; the product must show current observed values. `Show details` means inline expansion or a temporary, dismissible sheet when the content is too large.
+There are **three main screens**: Welcome, Project selection, and Chat. Welcome appears until the first root is bound; Screen 2 Project selection also appears on later launches and project switching. Chat is the only persistent workspace. The later diagrams are **states within Chat**, not extra pages, routes, tabs, or dashboards. Text in square brackets represents a control. Names, paths, statuses, messages, and evidence in the diagrams are illustrative; the product must show current observed values. `Show details` means inline expansion or a temporary, dismissible sheet when the content is too large.
 
 ## End-to-end journey
 
 ```text
-FIRST LAUNCH, NO BOUND PROJECT
-  Screen 1 Welcome ── Next / Skip / Escape ──> Screen 2 Open Folder
-         ^                                          │
-         └──────────────── Back ────────────────────┘
-                                                    │
-                                          authorized folder binding
-                                          (restores existing history)
-                                                    ▼
-OTHER LAUNCHES WITH A BOUND PROJECT ─────────> Screen 3 Chat
-                                                    │
-                                    [Start] initializes three sessions;
-                                    each observed status is shown;
-                                    [Exit] flushes draft and closes app
-                                                    │
-                                         first confirmed saved message
-                                                    ▼
-                                      Chat with bottom composer
-                                                    │
-          conversation / questions / approval / work / evidence / recovery
-                                                    │
-                                                    ▼
-                                    certified delivery or stated blocker
+FIRST BINDING: Screen 1 Welcome -- Next / Skip / Escape --> Screen 2
+LATER LAUNCH: ------------------------------------------> Screen 2
+
+SCREEN 2 PROJECT SELECTION
+  Recent project -- revalidate identity and safe switching --+
+  Open existing folder -- native picker -- validate ---------+--> Chat
+  Create new project folder -- explicit empty creation -----+
+  Cancel switch --------------------------------------------> Old Chat
+  Missing/unsafe root --> exact blocker; no binding change
+
+SCREEN 3 CHAT
+  Empty project --> centered composer
+  Confirmed saved contribution / restored history --> bottom composer
+  Start --> explicitly initialize three project-scoped sessions
+  File > Switch Project --> Screen 2 (old project/draft preserved)
+  Exit --> leave app; next launch shows Screen 2
 ```
 
-Opening a folder refreshes bounded, non-mutating detection of all three CLIs and shows their individual readiness on screen 3. It does not start working agent sessions, scan files, initialize Git, or approve work. The readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. Once a project is bound, later launches open its Chat directly and the onboarding sequence is never re-shown. Selecting **Exit** on Screen 3 safely persists the active draft and exits the application.
+Opening a folder refreshes bounded, non-mutating detection of all three CLIs and shows their individual readiness on screen 3. It does not start working agent sessions, scan files, initialize Git, or approve work. The readiness entries never block folder selection or Chat. Screen 2 has no Next-to-Chat button. No path opens Chat without an authorized project root. After the first project binding, later launches show Screen 2 Project selection; only Welcome is not automatically repeated. Selecting **Exit** on Screen 3 safely persists the active draft and exits the application.
 
-The native Windows application menu is outside all three screen content areas. Once a project is bound, **File → Switch Project** opens the native folder picker. It changes the active Chat only after Project service validates the chosen root and the existing safe-switching guards pass. Chat itself has no folder control.
+The native Windows application menu is outside all three screen content areas. Once a project is bound, **File → Switch Project** opens Screen 2 Project selection, whose Open existing folder action opens the native picker. It changes the active Chat only after Project service validates the chosen root and the existing safe-switching guards pass. Chat itself has no folder control.
 
 ## Screen 1 — Welcome
 
@@ -62,27 +58,28 @@ The native Windows application menu is outside all three screen content areas. O
 
 `Next`, `Skip`, and Escape advance to screen 2. Skip dismisses the explanation only; it cannot skip folder binding. Each CLI entry shows its own observed `CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, or `PROBE_FAILED` status with name, text, dot, and accessible name. The illustrated `CHECKING` values are examples.
 
-## Screen 2 — Open Folder
+## Screen 2 — Project selection
 
 ```text
-+--------------------------------------------------------------------------+
-| Mayasaba                         Hermes Agent CLI  ● READY               |
-|                                  Kilo Code CLI     ● MISSING             |
-|                                  Claude Code CLI   ● CHECKING            |
-+--------------------------------------------------------------------------+
-|                                                                          |
-|       Open a project folder                                              |
-|       Choose the local Windows folder where your work belongs.           |
-|       Opening it creates or restores the project identity only.          |
-|                                                                          |
-|       [Back]                                  [Open Folder]              |
-|                                                                          |
-|       [ Draft a message before opening a folder...              ]        |
-|                                                    [Send disabled]       |
-+--------------------------------------------------------------------------+
++--------------------------------------------------------------------+
+| Mayasaba                 Open a project                             |
+|                                                                    |
+| [Open existing folder]       [Create new project folder]             |
+|                                                                    |
+| Recent projects (illustrative values, not live activity)             |
+| Northstar   C:\Projects\Northstar   Last opened: 15 Oct 2026          |
+| OPEN        Activity: unknown                      [Open project]  |
+| Atlas       D:\Work\Atlas           Last opened: 14 Oct 2026          |
+| CLOSED      Retained history                       [View history]  |
+| Missing folder: exact cause                         [Locate folder] |
+|                                                                    |
+| [Unsent pre-binding draft; never copies another project's draft]    |
+| [Send disabled]                                                    |
+| [Back: first introduction] / [Cancel: switching] / [Exit: startup]  |
++--------------------------------------------------------------------+
 ```
 
-`Back` returns to Welcome. `Open Folder` opens the native directory picker. A valid selection opens Chat immediately, carries the unsent text draft forward, and refreshes detection of Hermes Agent CLI, Kilo Code CLI and Claude Code CLI. Send stays disabled until a root is authorized. No project folder selection installs a CLI, starts a working session, or uses a provider account.
+Recent rows query recorded projects, sorted by last successful open; they do not scan the PC. Selection revalidates the root and opens Chat only after safe binding. Closed history stays read-only. Missing or mismatched paths cannot inherit another identity. Creation explicitly creates only the requested empty folder; no Git, scans, installations or agent work follow. Preserve drafts on failure and cancellation. See [the complete selector contract](PROJECT-SELECTION.md) for recovery and authority rules.
 
 ### Native picker and rejected folder
 
@@ -125,7 +122,7 @@ NATIVE WINDOWS APPLICATION MENU (outside Chat)
 +--------------------------------------------------------------------------+
 ```
 
-The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, visible Start/Pause/Stop/Exit controls, overflow [•••], and exactly one truthful readiness entry per required CLI. Selecting [Exit] flushes the draft and closes the application; a later launch with a bound project opens Chat directly. `READY` detection does not mean a project session is active. There is no setup banner when all CLIs are ready.
+The one composer is centered while this project has no confirmed saved user contribution. Chat has **no folder control anywhere**, including the header overflow. `Attach files` selects message attachments and does not select or switch projects. The header shows the project and its canonical path, phase and condition, visible Start/Pause/Stop/Exit controls, overflow [•••], and exactly one truthful readiness entry per required CLI. Selecting [Exit] flushes the draft and closes the application; a later launch opens Screen 2 Project selection. `READY` detection does not mean a project session is active. There is no setup banner when all CLIs are ready.
 
 ### Switching projects from the native application menu
 
