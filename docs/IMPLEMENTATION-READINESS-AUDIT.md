@@ -1,8 +1,8 @@
 # Mayasaba — implementation-readiness audit
 
-**Audit status: DOCUMENTATION CLOSED; IMPLEMENTATION AND NATIVE PROOF NOT STARTED.**
+**Audit status: DOCUMENTATION CLOSED; PARTIAL NATIVE IMPLEMENTATION AND LOCAL WINDOWS VALIDATION IN PROGRESS.**
 
-This audit reconciles the authoritative specification, AGENTS, architecture, UI/UX, user-visible screens, C01–C10 contracts and v1 shared schemas after the user's 2026-10-13 approval of the final ten product decisions. It closes the documentation-stage ambiguity inventory. It does not assert that Mayasaba has been compiled, run, packaged, confined, installed or tested on Windows.
+This audit reconciles the authoritative specification, AGENTS, architecture, UI/UX, user-visible screens, C01–C11 contracts and v1 shared schemas. It closes the documentation-stage ambiguity inventory. A partial native C++20 / WinUI 3 desktop slice exists under native/ and is undergoing local Windows validation, but end-to-end orchestration, CLI adapters, publication, and MSI packaging remain to be completed.
 
 ## Closure meaning
 
@@ -116,4 +116,4 @@ Follow [C10 — Documentation closure and implementation entry gate](./contracts
 
 ## Verdict
 
-The Mayasaba documentation stage was recorded as closed under C10's mechanical and fresh-reader rules. Since then, a **partial native C++20 / WinUI 3 source slice** has been added under [native/](../native/README.md), with project root validation, local SQLite contribution/draft persistence and three native screen definitions. The slice has **not** completed I1–I8 and no Windows certification is asserted. The first GitHub Actions attempts for Windows and portable storage exited without runner assignment or steps; no compiler or test verdict was obtained. This audit remains an implementation gate, not an assertion that Mayasaba is operational end to end.
+The Mayasaba documentation stage was recorded as closed under C10's mechanical and fresh-reader rules. Since then, a **partial native C++20 / WinUI 3 source slice** has been added under [native/](../native/README.md), with project root validation, local SQLite contribution/draft persistence, three native screen definitions, and an in-app Exit control. The slice has **not** completed I1–I8 and no complete Windows certification is asserted. In accordance with AGENTS.md §3 ("Do not add hosted CI or cloud execution. Build and verification are local to the user's Windows machine"), hosted GitHub Actions workflows have been removed; all compilation, verification, and tests are conducted locally on Windows. This audit remains an implementation gate, not an assertion that Mayasaba is operational end to end.
