@@ -82,6 +82,9 @@
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
       <WarningLevel>Level4</WarningLevel>
+      <!-- NOMINMAX keeps std::min/std::max/std::clamp usable; windows.h otherwise
+           defines them as macros and breaks the standard-library calls. -->
+      <PreprocessorDefinitions>NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>%(AdditionalOptions) /bigobj /utf-8</AdditionalOptions>
     </ClCompile>
     <!--
@@ -107,11 +110,19 @@
     <ClInclude Include="SerialQueue.h" />
     <ClInclude Include="NativeIds.h" />
     <ClInclude Include="ProtectedDraft.h" />
+    <ClInclude Include="Motion.h" />
+    <ClInclude Include="RichText.h" />
+    <ClInclude Include="Timeline.h" />
+    <ClInclude Include="Fixtures.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>
     <ClCompile Include="App.xaml.cpp"><DependentUpon>App.xaml</DependentUpon></ClCompile>
     <ClCompile Include="MainWindow.xaml.cpp"><DependentUpon>MainWindow.xaml</DependentUpon></ClCompile>
+    <ClCompile Include="Motion.cpp" />
+    <ClCompile Include="RichText.cpp" />
+    <ClCompile Include="Timeline.cpp" />
+    <ClCompile Include="Fixtures.cpp" />
     <!-- Portable storage and direct Win32 root helper do not include pch.h. -->
     <ClCompile Include="Storage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ProjectRoot.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

@@ -7,15 +7,159 @@
         <ResourceDictionary.MergedDictionaries>
           <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls"/>
         </ResourceDictionary.MergedDictionaries>
+
+        <!-- ==================================================================
+             Mayasaba shared visual system.
+             One token source for all three screens: shape, rhythm, type scale,
+             elevation and motion. Every colour is a theme resource so Windows
+             high contrast overrides the whole ramp.
+             ================================================================== -->
+
         <!-- Shape and rhythm tokens are theme-independent. -->
         <CornerRadius x:Key="MayasabaRadiusPanel">18</CornerRadius>
         <CornerRadius x:Key="MayasabaRadiusControl">11</CornerRadius>
         <CornerRadius x:Key="MayasabaRadiusComposer">17</CornerRadius>
         <CornerRadius x:Key="MayasabaRadiusChip">14</CornerRadius>
         <CornerRadius x:Key="MayasabaRadiusMonogram">10</CornerRadius>
+
+        <!-- 4/8/12/16/24/32 spacing scale. -->
+        <x:Double x:Key="MayasabaSpace1">4</x:Double>
+        <x:Double x:Key="MayasabaSpace2">8</x:Double>
+        <x:Double x:Key="MayasabaSpace3">12</x:Double>
+        <x:Double x:Key="MayasabaSpace4">16</x:Double>
+        <x:Double x:Key="MayasabaSpace6">24</x:Double>
+        <x:Double x:Key="MayasabaSpace8">32</x:Double>
+
+        <!-- Brand mark sizes. The dimensional hero is the strongest 3D expression
+             and is confined to the Welcome screen and the empty-Chat hero. -->
         <x:Double x:Key="MayasabaBrandMarkHeroSize">138</x:Double>
         <x:Double x:Key="MayasabaBrandMarkOnboardingSize">92</x:Double>
         <x:Double x:Key="MayasabaBrandMarkTitleSize">31</x:Double>
+        <x:Double x:Key="MayasabaBrandMarkChatHeroSize">76</x:Double>
+
+        <!-- Logical type scale. Windows text scaling still takes precedence: every
+             text style below sets only a base size and lets the platform scale it. -->
+        <x:Double x:Key="MayasabaFontHero">40</x:Double>
+        <x:Double x:Key="MayasabaFontScreenTitle">30</x:Double>
+        <x:Double x:Key="MayasabaFontSection">19</x:Double>
+        <x:Double x:Key="MayasabaFontConversation">15.5</x:Double>
+        <x:Double x:Key="MayasabaFontBody">14</x:Double>
+        <x:Double x:Key="MayasabaFontMeta">12.5</x:Double>
+        <x:Double x:Key="MayasabaFontMicro">11.5</x:Double>
+
+        <!-- Prose measure: roughly 60-80 characters per line on a wide window. -->
+        <x:Double x:Key="MayasabaProseMeasure">720</x:Double>
+        <x:Double x:Key="MayasabaWideMeasure">880</x:Double>
+
+        <!-- Motion tokens live in Motion.h (MotionTokens). The XAML-declared ambient
+             storyboards in MainWindow.xaml keep their own inline durations because a
+             XAML Duration is not a usable shared resource. -->
+
+        <!-- Elevation. Two levels: resting content and raised overlays.
+             High contrast drops both (see the HighContrast dictionary). -->
+        <x:Double x:Key="MayasabaElevationResting">8</x:Double>
+        <x:Double x:Key="MayasabaElevationRaised">32</x:Double>
+        <x:Double x:Key="MayasabaElevationHero">24</x:Double>
+
+        <!-- Reusable text styles. Segoe UI Variable for product text; Cascadia Mono
+             is reserved for code, paths and technical identities. -->
+        <Style x:Key="MayasabaHeroText" TargetType="TextBlock">
+          <Setter Property="FontFamily" Value="Segoe UI Variable Display"/>
+          <Setter Property="FontSize" Value="{StaticResource MayasabaFontHero}"/>
+          <Setter Property="FontWeight" Value="SemiBold"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaInkBrush}"/>
+        </Style>
+        <Style x:Key="MayasabaScreenTitleText" TargetType="TextBlock">
+          <Setter Property="FontFamily" Value="Segoe UI Variable Display"/>
+          <Setter Property="FontSize" Value="{StaticResource MayasabaFontScreenTitle}"/>
+          <Setter Property="FontWeight" Value="SemiBold"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaInkBrush}"/>
+        </Style>
+        <Style x:Key="MayasabaSectionText" TargetType="TextBlock">
+          <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+          <Setter Property="FontSize" Value="{StaticResource MayasabaFontSection}"/>
+          <Setter Property="FontWeight" Value="SemiBold"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaInkBrush}"/>
+        </Style>
+        <Style x:Key="MayasabaBodyText" TargetType="TextBlock">
+          <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+          <Setter Property="FontSize" Value="{StaticResource MayasabaFontBody}"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaInkBrush}"/>
+        </Style>
+        <Style x:Key="MayasabaConversationText" TargetType="TextBlock">
+          <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+          <Setter Property="FontSize" Value="{StaticResource MayasabaFontConversation}"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+          <Setter Property="IsTextSelectionEnabled" Value="True"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaInkBrush}"/>
+        </Style>
+        <Style x:Key="MayasabaMetaText" TargetType="TextBlock">
+          <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+          <Setter Property="FontSize" Value="{StaticResource MayasabaFontMeta}"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaMutedBrush}"/>
+        </Style>
+        <Style x:Key="MayasabaMicroText" TargetType="TextBlock">
+          <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+          <Setter Property="FontSize" Value="{StaticResource MayasabaFontMicro}"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaMutedBrush}"/>
+        </Style>
+        <!-- Paths, hashes and technical identities: monospace, inspectable, selectable. -->
+        <Style x:Key="MayasabaTechnicalText" TargetType="TextBlock">
+          <Setter Property="FontFamily" Value="Cascadia Mono"/>
+          <Setter Property="FontSize" Value="{StaticResource MayasabaFontMicro}"/>
+          <Setter Property="TextWrapping" Value="Wrap"/>
+          <Setter Property="IsTextSelectionEnabled" Value="True"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaMutedBrush}"/>
+        </Style>
+
+        <!-- Surfaces. The quiet background plane, the readable content plane and the
+             raised temporary-details plane. -->
+        <Style x:Key="MayasabaCardSurface" TargetType="Border">
+          <Setter Property="Background" Value="{ThemeResource MayasabaPanelBrush}"/>
+          <Setter Property="BorderBrush" Value="{ThemeResource MayasabaBorderBrush}"/>
+          <Setter Property="BorderThickness" Value="1"/>
+          <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusPanel}"/>
+          <Setter Property="Padding" Value="{StaticResource MayasabaSpace4}"/>
+        </Style>
+        <Style x:Key="MayasabaSecondarySurface" TargetType="Border">
+          <Setter Property="Background" Value="{ThemeResource MayasabaSecondaryBrush}"/>
+          <Setter Property="BorderBrush" Value="{ThemeResource MayasabaBorderBrush}"/>
+          <Setter Property="BorderThickness" Value="1"/>
+          <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusChip}"/>
+        </Style>
+
+        <!-- Primary action: the permitted brand action gradient. -->
+        <Style x:Key="MayasabaPrimaryAction" TargetType="Button">
+          <Setter Property="Background" Value="{ThemeResource MayasabaActionGradientBrush}"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaOnActionBrush}"/>
+          <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusControl}"/>
+          <Setter Property="Padding" Value="20,10"/>
+          <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+          <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+        <Style x:Key="MayasabaSecondaryAction" TargetType="Button">
+          <Setter Property="Background" Value="{ThemeResource MayasabaSecondaryBrush}"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaInkBrush}"/>
+          <Setter Property="BorderBrush" Value="{ThemeResource MayasabaBorderBrush}"/>
+          <Setter Property="BorderThickness" Value="1"/>
+          <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusControl}"/>
+          <Setter Property="Padding" Value="16,10"/>
+          <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+        </Style>
+        <Style x:Key="MayasabaQuietAction" TargetType="Button">
+          <Setter Property="Background" Value="Transparent"/>
+          <Setter Property="Foreground" Value="{ThemeResource MayasabaInkBrush}"/>
+          <Setter Property="BorderThickness" Value="0"/>
+          <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusControl}"/>
+          <Setter Property="Padding" Value="12,8"/>
+          <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+        </Style>
 
         <ResourceDictionary.ThemeDictionaries>
           <ResourceDictionary x:Key="Light">
@@ -42,6 +186,17 @@
             <SolidColorBrush x:Key="MayasabaKiloInkBrush" Color="#FF17816D"/>
             <SolidColorBrush x:Key="MayasabaClaudeMonogramBrush" Color="#FFFFF0E2"/>
             <SolidColorBrush x:Key="MayasabaClaudeInkBrush" Color="#FFB36B2C"/>
+            <!-- On-action ink is fixed white over the brand action gradient in both
+                 standard themes; high contrast replaces the gradient with a system
+                 brush and switches this to the system highlight-text colour. -->
+            <SolidColorBrush x:Key="MayasabaOnActionBrush" Color="#FFFFFFFF"/>
+            <!-- Agent reply surface: a slightly raised reading plane, distinct from
+                 the user's brand-tinted bubble. -->
+            <SolidColorBrush x:Key="MayasabaReplySurfaceBrush" Color="#FFFFFFFF"/>
+            <SolidColorBrush x:Key="MayasabaReplyEdgeBrush" Color="#FF5957C7"/>
+            <SolidColorBrush x:Key="MayasabaCodeSurfaceBrush" Color="#FFF5F6FB"/>
+            <!-- Layered-edge tints for the dimensional brand mark. -->
+            <SolidColorBrush x:Key="MayasabaDepthEdgeBrush" Color="#FF4542B4"/>
             <!-- Brand gradient: the logo mark (CSS 145deg Brand -> Violet). -->
             <LinearGradientBrush x:Key="MayasabaBrandGradientBrush" StartPoint="0,0" EndPoint="1,1">
               <GradientStop Color="#FF5957C7" Offset="0"/>
@@ -58,6 +213,11 @@
               <GradientStop Color="#249273EE" Offset="0"/>
               <GradientStop Color="#009273EE" Offset="1"/>
             </RadialGradientBrush>
+            <!-- Hero-only headline accent span. Never behind body text. -->
+            <LinearGradientBrush x:Key="MayasabaHeadlineAccentBrush" StartPoint="0,0" EndPoint="1,1">
+              <GradientStop Color="#FF5957C7" Offset="0"/>
+              <GradientStop Color="#FF9273EE" Offset="1"/>
+            </LinearGradientBrush>
           </ResourceDictionary>
 
           <ResourceDictionary x:Key="Dark">
@@ -84,6 +244,11 @@
             <SolidColorBrush x:Key="MayasabaKiloInkBrush" Color="#FF69DBC3"/>
             <SolidColorBrush x:Key="MayasabaClaudeMonogramBrush" Color="#FF463522"/>
             <SolidColorBrush x:Key="MayasabaClaudeInkBrush" Color="#FFF0B565"/>
+            <SolidColorBrush x:Key="MayasabaOnActionBrush" Color="#FFFFFFFF"/>
+            <SolidColorBrush x:Key="MayasabaReplySurfaceBrush" Color="#FF1E2230"/>
+            <SolidColorBrush x:Key="MayasabaReplyEdgeBrush" Color="#FFA5A1FF"/>
+            <SolidColorBrush x:Key="MayasabaCodeSurfaceBrush" Color="#FF252A3A"/>
+            <SolidColorBrush x:Key="MayasabaDepthEdgeBrush" Color="#FF3A3560"/>
             <LinearGradientBrush x:Key="MayasabaBrandGradientBrush" StartPoint="0,0" EndPoint="1,1">
               <GradientStop Color="#FF5853C9" Offset="0"/>
               <GradientStop Color="#FFAB88E8" Offset="1"/>
@@ -97,10 +262,15 @@
               <GradientStop Color="#2E9E8FFF" Offset="0"/>
               <GradientStop Color="#009E8FFF" Offset="1"/>
             </RadialGradientBrush>
+            <LinearGradientBrush x:Key="MayasabaHeadlineAccentBrush" StartPoint="0,0" EndPoint="1,1">
+              <GradientStop Color="#FFA5A1FF" Offset="0"/>
+              <GradientStop Color="#FFBBA0FF" Offset="1"/>
+            </LinearGradientBrush>
           </ResourceDictionary>
 
           <!-- High contrast: system colours only. Every gradient collapses to a solid
-               system brush and elevation is dropped, so no meaning depends on colour. -->
+               system brush and elevation is dropped, so no meaning depends on colour.
+               Decorative depth and ambient motion are also disabled at runtime. -->
           <ResourceDictionary x:Key="HighContrast">
             <SolidColorBrush x:Key="MayasabaCanvasBrush" Color="{ThemeResource SystemColorWindowColor}"/>
             <SolidColorBrush x:Key="MayasabaWindowBrush" Color="{ThemeResource SystemColorWindowColor}"/>
@@ -125,9 +295,15 @@
             <SolidColorBrush x:Key="MayasabaKiloInkBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
             <SolidColorBrush x:Key="MayasabaClaudeMonogramBrush" Color="{ThemeResource SystemColorWindowColor}"/>
             <SolidColorBrush x:Key="MayasabaClaudeInkBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaOnActionBrush" Color="{ThemeResource SystemColorHighlightTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaReplySurfaceBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaReplyEdgeBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaCodeSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaDepthEdgeBrush" Color="{ThemeResource SystemColorWindowColor}"/>
             <SolidColorBrush x:Key="MayasabaBrandGradientBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
             <SolidColorBrush x:Key="MayasabaActionGradientBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
             <SolidColorBrush x:Key="MayasabaAmbientGlowBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaHeadlineAccentBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
           </ResourceDictionary>
         </ResourceDictionary.ThemeDictionaries>
       </ResourceDictionary>

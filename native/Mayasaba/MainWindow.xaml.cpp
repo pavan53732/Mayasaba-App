@@ -1,11 +1,15 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
+#include "Fixtures.h"
 #if __has_include("MainWindow.g.cpp")
 #include "MainWindow.g.cpp"
 #endif
 #include <microsoft.ui.xaml.window.h>
 #include <shobjidl_core.h>
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.ApplicationModel.DataTransfer.h>
+#include <winrt/Microsoft.UI.Input.h>
+#include <algorithm>
 #include <chrono>
 #include <coroutine>
 #include <cwctype>
@@ -56,11 +60,9 @@ namespace winrt::Mayasaba::implementation
         }
         std::string SubmissionId() { return mayasaba::NewUuid(); }
 
-
-
-        // Theme-aware brush lookup. Returns a safe fallback instead of throwing when a key is
-        // absent, so a missing brand token can never take down the timeline.
-        Brush BrandBrush(wchar_t const* key)
+        // Theme-aware brush lookup with a safe fallback, so a missing brand token
+        // can never take down the timeline or a selector row.
+        Brush Token(wchar_t const* key)
         {
             auto const value = Application::Current().Resources().TryLookup(winrt::box_value(key));
             if (auto const brush = value.try_as<Brush>())
@@ -70,44 +72,56 @@ namespace winrt::Mayasaba::implementation
             return SolidColorBrush{};
         }
 
-        // A small semantic status dot. Colour is never the only carrier of meaning: callers
-        // always render the matching status text beside it.
-        Microsoft::UI::Xaml::Shapes::Ellipse StatusDot(Brush const& fill, double size)
-        {
-            Microsoft::UI::Xaml::Shapes::Ellipse dot{};
-            dot.Width(size);
-            dot.Height(size);
-            dot.Fill(fill);
-            return dot;
-        }
+        GridLength StarLength() { return GridLengthHelper::FromValueAndType(1, GridUnitType::Star); }
+        GridLength AutoLength() { return GridLengthHelper::FromValueAndType(1, GridUnitType::Auto); }
+        GridLength ZeroLength() { return GridLengthHelper::FromPixels(0); }
 
-        // The evidence spine: a narrow semantic edge that distinguishes controller authority
-        // from conversation (UI-UX section 4). Two nested Borders avoid any layout dependency;
-        // the outer draws only the left edge, the inner draws the card surface.
-        Border CardWithSpine(FrameworkElement const& content, Brush const& spine, double radius)
+        // Contribution timestamps are stored as UTC ISO-8601. The reader is shown a
+        // local-time label; the exact stored value stays inspectable in the record.
+        std::string LocalStamp(std::string const& iso)
         {
-            Border surface{};
-            surface.Background(BrandBrush(L"MayasabaPanelBrush"));
-            surface.BorderBrush(BrandBrush(L"MayasabaBorderBrush"));
-            surface.BorderThickness(Thickness{0, 1, 1, 1});
-            surface.CornerRadius(CornerRadius{0, radius, radius, 0});
-            surface.Padding(Thickness{16, 14, 16, 14});
-            surface.Child(content);
-
-            Border card{};
-            card.BorderBrush(spine);
-            card.BorderThickness(Thickness{3, 0, 0, 0});
-            card.CornerRadius(CornerRadius{radius, 0, 0, radius});
-            card.Child(surface);
-            return card;
+            if (iso.size() < 19) return iso;
+            int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0;
+            if (sscanf_s(iso.c_str(), "%d-%d-%dT%d:%d:%d", &year, &month, &day, &hour, &minute, &second) != 6)
+            {
+                return iso;
+            }
+            SYSTEMTIME utc{};
+            utc.wYear = static_cast<WORD>(year);
+            utc.wMonth = static_cast<WORD>(month);
+            utc.wDay = static_cast<WORD>(day);
+            utc.wHour = static_cast<WORD>(hour);
+            utc.wMinute = static_cast<WORD>(minute);
+            utc.wSecond = static_cast<WORD>(second);
+            SYSTEMTIME local{};
+            if (!SystemTimeToTzSpecificLocalTime(nullptr, &utc, &local)) return iso;
+            // The date is included as well as the time: a time-only label is
+            // ambiguous for anything not opened today.
+            wchar_t date[64]{};
+            wchar_t time[64]{};
+            if (!GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_SHORTDATE, &local, nullptr, date, 64, nullptr)) return iso;
+            if (!GetTimeFormatEx(LOCALE_NAME_USER_DEFAULT, 0, &local, nullptr, time, 64)) return iso;
+            return winrt::to_string(winrt::hstring{date}) + " " + winrt::to_string(winrt::hstring{time});
         }
     }
 
     MainWindow::MainWindow()
     {
         InitializeComponent();
-        ApplyMotionPreference();
         Title(L"Mayasaba · Engineering Control Room");
+
+        // The timeline renderer owns the virtualized realization of the timeline and
+        // builds each card lazily. It is created once and never rebuilt per status event.
+        timeline_ = winrt::make_self<mayasaba::ui::TimelineRenderer>(motion_);
+        timeline_->SetCopyHandler([this](winrt::hstring const& text) { CopyToClipboard(text); });
+        HistoryRepeater().ItemTemplate(timeline_.as<Microsoft::UI::Xaml::IElementFactory>());
+        HistoryRepeater().ItemsSource(timeline_->Items());
+
+        // The opt-in fixture harness is read exactly once. Production startup never
+        // sets the variable, so fixture records cannot appear in ordinary use.
+        fixtureMode_ = mayasaba::ui::FixtureMode();
+        fixturesActive_ = !fixtureMode_.empty();
+
         draftTimer_ = DispatcherTimer{};
         draftTimer_.Interval(std::chrono::milliseconds(450));
         // The timer is a member, but its handler holds only a weak reference so a queued tick
@@ -124,17 +138,45 @@ namespace winrt::Mayasaba::implementation
                 }
             }
         });
-        SetVisible(WelcomeScreen(), false);
-        ShowNotice(L"Opening the local project store…");
+
         auto closeWeak = get_weak();
         AppWindow().Closing([closeWeak](auto const&, Microsoft::UI::Windowing::AppWindowClosingEventArgs const& e)
         {
             if (auto self=closeWeak.get(); self && !self->allowClose_)
             { e.Cancel(true); self->NavigateAsync(true); }
         });
+
+        // Window teardown cancels every obsolete animation and releases the handlers.
+        auto closedWeak = get_weak();
+        Closed([closedWeak](winrt::Windows::Foundation::IInspectable const&,
+                            Microsoft::UI::Xaml::WindowEventArgs const&)
+        {
+            if (auto const self = closedWeak.get())
+            {
+                self->windowClosed_ = true;
+                ++self->selectorGeneration_;
+                self->draftTimer_.Stop();
+                self->animationsEnabled_ = false;
+                self->motion_.CancelAll();
+                self->ApplyHeroMotion(false);
+                self->RevokeMotionSubscription();
+                self->RevokeAccessibilitySubscription();
+                if (self->timeline_) self->timeline_->SetCopyHandler(nullptr);
+            }
+        });
+
+        SetVisible(WelcomeScreen(), false);
+        ShowNotice(L"Opening the local project store…");
         ChooseFolderButton().IsEnabled(false);
         CreateNewProjectButton().IsEnabled(false);
+        ApplyMotionPreference();
         InitializeStoreAsync();
+    }
+
+    MainWindow::~MainWindow()
+    {
+        RevokeMotionSubscription();
+        RevokeAccessibilitySubscription();
     }
 
     winrt::fire_and_forget MainWindow::InitializeStoreAsync()
@@ -167,14 +209,15 @@ namespace winrt::Mayasaba::implementation
         if (hasProjects) ShowFolder(SelectorContext::Startup); else ShowWelcome();
     }
 
-    // Motion is a status and affordance language, never ambience. The onboarding hero loops
-    // (levitate, glow, orbit) run only while the OS animation setting is on, so a reduced-motion
-    // preference disables every ambient animation. The storyboards live in the root Grid's
-    // resources and are never auto-started; they are looked up here and started or stopped.
-    // Reads the current Windows animation setting, resolves the hero storyboards once, and
-    // registers a live handler so a change made while Mayasaba is open takes effect at once.
-    // Every callback holds a WEAK reference and the subscription is revoked on close, so no
-    // handler or queued callback can outlive the window.
+    // ---------------------------------------------------------------------------
+    // Motion, depth and preference handling.
+    //
+    // Motion is a status and affordance language, never ambience. Every transition
+    // on all three screens goes through motion_, which enforces the two hard
+    // guards: reduced motion disables every transition and loop (Dock becomes an
+    // instant layout change), and high contrast removes decorative depth, ambient
+    // motion and every shadow. Both are observed live.
+    // ---------------------------------------------------------------------------
     void MainWindow::ApplyMotionPreference()
     {
         if (windowClosed_)
@@ -207,23 +250,6 @@ namespace winrt::Mayasaba::implementation
                         }
                     });
                 motionSubscriptionActive_ = true;
-
-                auto const closedWeak = get_weak();
-                Closed([closedWeak](winrt::Windows::Foundation::IInspectable const&,
-                                    Microsoft::UI::Xaml::WindowEventArgs const&)
-                {
-                    if (auto const self = closedWeak.get())
-                    {
-                        self->windowClosed_ = true;
-                        ++self->selectorGeneration_;
-                        self->draftTimer_.Stop();
-                        self->animationsEnabled_ = false;
-                        self->ApplyHeroMotion(false);
-                        self->ApplyScreenMotion();
-                        self->ApplyTimelineMotion();
-                        self->RevokeMotionSubscription();
-                    }
-                });
             }
             animationsEnabled_ = uiSettings_.AnimationsEnabled();
         }
@@ -249,43 +275,62 @@ namespace winrt::Mayasaba::implementation
             }
         }
 
-        // Every animated collection follows the preference, not just the hero loops.
-        ApplyScreenMotion();
-        ApplyTimelineMotion();
+        motion_.SetAnimationsEnabled(animationsEnabled_);
+        ApplyHighContrast();
         ApplyHeroMotion(WelcomeScreen().Visibility() == Visibility::Visible);
     }
 
-    // Starts or stops every ambient hero loop. `running` is the caller's intent; the current
-    // animation setting and a missing storyboard both force a stop, so no loop can keep
-    // running behind Chat or after a reduced-motion change.
-    void MainWindow::ApplyHeroMotion(bool const running)
+    // Reads the current Windows high-contrast setting and registers a live handler.
+    // High contrast must not rely on the OS also disabling animation effects, so it
+    // is observed explicitly and enforced separately from reduced motion.
+    void MainWindow::ApplyHighContrast()
     {
-        auto const apply = [this, running](Microsoft::UI::Xaml::Media::Animation::Storyboard const& board)
+        if (windowClosed_) return;
+        bool previous = highContrast_;
+        try
         {
-            if (!board)
+            if (!accessibilitySettings_)
             {
-                return;
+                accessibilitySettings_ = winrt::Windows::UI::ViewManagement::AccessibilitySettings{};
+                auto const weak = get_weak();
+                auto const queue = DispatcherQueue();
+                highContrastChangedToken_ = accessibilitySettings_.HighContrastChanged(
+                    [weak, queue](winrt::Windows::UI::ViewManagement::AccessibilitySettings const&,
+                                  winrt::Windows::Foundation::IInspectable const&)
+                    {
+                        if (queue)
+                        {
+                            queue.TryEnqueue([weak]()
+                            {
+                                if (auto const self = weak.get())
+                                {
+                                    self->ApplyHighContrast();
+                                    self->ApplyHeroMotion(self->WelcomeScreen().Visibility() == Visibility::Visible);
+                                }
+                            });
+                        }
+                    });
+                highContrastSubscriptionActive_ = true;
             }
-            if (running && animationsEnabled_)
-            {
-                if (board.GetCurrentState() == Microsoft::UI::Xaml::Media::Animation::ClockState::Stopped)
-                {
-                    board.Begin();
-                }
-            }
-            else
-            {
-                board.Stop();
-            }
-        };
-        apply(heroLevitate_);
-        apply(heroGlow_);
-        apply(heroOrbitOuter_);
-        apply(heroOrbitInner_);
+            highContrast_ = accessibilitySettings_.HighContrast();
+        }
+        catch (...)
+        {
+            highContrast_ = false;
+        }
+        motion_.SetHighContrast(highContrast_);
+        ApplyElevationCues();
+
+        // A live high-contrast change must preserve reading position, so the offset
+        // is captured before the timeline re-applies its (now shadowless) surfaces.
+        if (previous != highContrast_ && timeline_ && !timeline_->Empty())
+        {
+            double const offset = HistoryScroller().VerticalOffset();
+            RenderHistory(false);
+            HistoryScroller().ChangeView(nullptr, offset, nullptr, true);
+        }
     }
 
-    // Revokes the UISettings subscription. Called from Window.Closed and from the destructor,
-    // so the subscription cannot outlive the window even if the window object is kept alive.
     void MainWindow::RevokeMotionSubscription()
     {
         if (!motionSubscriptionActive_ || !uiSettings_)
@@ -304,42 +349,85 @@ namespace winrt::Mayasaba::implementation
         motionSubscriptionActive_ = false;
     }
 
-    MainWindow::~MainWindow()
+    void MainWindow::RevokeAccessibilitySubscription()
     {
-        RevokeMotionSubscription();
-    }
-
-    // The onboarding screens' entrance motion is attached here rather than declared in XAML, so
-    // it can never run unconditionally under a reduced-motion preference.
-    void MainWindow::ApplyScreenMotion()
-    {
-        auto const build = [this](double fromOffset)
+        if (!highContrastSubscriptionActive_ || !accessibilitySettings_)
         {
-            Microsoft::UI::Xaml::Media::Animation::TransitionCollection collection{};
-            if (animationsEnabled_)
-            {
-                Microsoft::UI::Xaml::Media::Animation::EntranceThemeTransition enter{};
-                enter.FromVerticalOffset(fromOffset);
-                collection.Append(enter);
-            }
-            return collection;
-        };
-        WelcomeStack().ChildrenTransitions(build(30));
-        FolderStack().ChildrenTransitions(build(25));
-    }
-
-    // The timeline's insertion motion is attached only while motion is permitted, so toggling
-    // the Windows setting takes effect without waiting for the next re-render.
-    void MainWindow::ApplyTimelineMotion()
-    {
-        Microsoft::UI::Xaml::Media::Animation::TransitionCollection collection{};
-        if (animationsEnabled_)
-        {
-            Microsoft::UI::Xaml::Media::Animation::EntranceThemeTransition slide{};
-            slide.FromHorizontalOffset(20);
-            collection.Append(slide);
+            return;
         }
-        HistoryList().ChildrenTransitions(collection);
+        try
+        {
+            accessibilitySettings_.HighContrastChanged(highContrastChangedToken_);
+        }
+        catch (...)
+        {
+        }
+        highContrastChangedToken_ = {};
+        highContrastSubscriptionActive_ = false;
+    }
+
+    // Starts or stops every ambient hero loop. `running` is the caller's intent; the
+    // motion utility's guards (reduced motion OR high contrast) and a missing
+    // storyboard all force a stop, so no loop can keep running behind Chat.
+    void MainWindow::ApplyHeroMotion(bool const running)
+    {
+        auto const apply = [this, running](Microsoft::UI::Xaml::Media::Animation::Storyboard const& board)
+        {
+            if (!board)
+            {
+                return;
+            }
+            if (running && motion_.Allowed())
+            {
+                if (board.GetCurrentState() == Microsoft::UI::Xaml::Media::Animation::ClockState::Stopped)
+                {
+                    board.Begin();
+                }
+            }
+            else
+            {
+                board.Stop();
+            }
+        };
+        apply(heroLevitate_);
+        apply(heroGlow_);
+        apply(heroOrbitOuter_);
+        apply(heroOrbitInner_);
+    }
+
+    // Decorative depth is removed entirely in high contrast: the extruded layers
+    // and the ambient glow carry no meaning, and the orbit rings are motion.
+    void MainWindow::ApplyElevationCues()
+    {
+        bool const decorative = !highContrast_;
+        SetVisible(WelcomeHeroGlow(), decorative);
+        SetVisible(WelcomeHeroOrbitOuter(), decorative);
+        SetVisible(WelcomeHeroOrbitInner(), decorative);
+        SetVisible(WelcomeHeroLayer1(), decorative);
+        SetVisible(WelcomeHeroLayer2(), decorative);
+        SetVisible(WelcomeHeroLayer3(), decorative);
+        SetVisible(EmptyChatGlow(), decorative);
+        SetVisible(EmptyHeroLayer1(), decorative);
+        SetVisible(EmptyHeroLayer2(), decorative);
+
+        // The quiet background plane, the readable content plane and the raised
+        // temporary-details plane. All of it is dropped in high contrast.
+        motion_.ApplyElevation(ComposerPanel(), (timeline_ && !timeline_->Empty()) ? 8.0 : 24.0);
+        motion_.ApplyElevation(EmptyChatHero(), 0);
+    }
+
+    void MainWindow::CopyToClipboard(hstring const& text)
+    {
+        try
+        {
+            winrt::Windows::ApplicationModel::DataTransfer::DataPackage package{};
+            package.SetText(text);
+            winrt::Windows::ApplicationModel::DataTransfer::Clipboard::SetContent(package);
+        }
+        catch (...)
+        {
+            ShowNotice(L"The clipboard could not be updated.", true);
+        }
     }
 
     void MainWindow::ShowNotice(hstring const& message, bool error)
@@ -352,22 +440,36 @@ namespace winrt::Mayasaba::implementation
             peer.RaiseAutomationEvent(Automation::Peers::AutomationEvents::LiveRegionChanged);
     }
 
+    // One finite, ordered entrance sequence: identity, then message, then actions.
+    // The explanatory copy is never animated run by run.
     void MainWindow::ShowWelcome()
     {
         ++selectorGeneration_;
+        motion_.CancelAll();
         SetVisible(WelcomeScreen(), true);
         SetVisible(FolderScreen(), false);
         SetVisible(ChatScreen(), false);
         SetVisible(NativeFileMenu(), false);
-        // Re-read the animation setting and start the hero loops now that welcome is visible.
+        // Re-read the animation and contrast settings and start the hero loops now
+        // that welcome is visible.
         ApplyMotionPreference();
+        ApplyElevationCues();
+
+        motion_.Enter(WelcomeHeroStage(), 12, 0);
+        motion_.DepthReveal(WelcomeHeroMark());
+        motion_.Enter(WelcomeMessageBlock(), 10, 70);
+        motion_.Enter(WelcomeMonogramPanel(), 10, 140);
+        motion_.Enter(WelcomeFooter(), 8, 210);
+
         NextButton().Focus(FocusState::Programmatic);
     }
+
     void MainWindow::ShowFolder(SelectorContext context)
     {
         selectorContext_ = context;
         recentOffset_=0;
         ++selectorGeneration_;
+        motion_.CancelAll();
         SetVisible(WelcomeScreen(), false);
         SetVisible(FolderScreen(), true);
         SetVisible(ChatScreen(), false);
@@ -387,13 +489,16 @@ namespace winrt::Mayasaba::implementation
         suppressPrebind_ = false;
 
         RefreshRecentProjects();
+        motion_.Enter(FolderStack(), 10, 0);
         ChooseFolderButton().Focus(FocusState::Programmatic);
     }
+
     void MainWindow::ShowChat()
     {
         if (!storage_ || activeProject_.empty()) { ShowFolder(SelectorContext::Startup); return; }
         LoadChatAsync(activeProject_, ++selectorGeneration_);
     }
+
     winrt::fire_and_forget MainWindow::LoadChatAsync(std::string id, uint64_t gen)
     {
         auto keepAlive = get_strong();
@@ -417,6 +522,8 @@ namespace winrt::Mayasaba::implementation
         projectClosed_=project->closed;
         historyCache_ = std::move(history);
         draftTimer_.Stop();
+        motion_.CancelAll();
+        bool const chatAlreadyVisible = ChatScreen().Visibility() == Visibility::Visible;
         SetVisible(WelcomeScreen(), false);
         SetVisible(FolderScreen(), false);
         SetVisible(ChatScreen(), true);
@@ -426,6 +533,8 @@ namespace winrt::Mayasaba::implementation
         ProjectHeading().Text(Utf16(project->displayName));
         ProjectPathLabel().Text(Utf16(project->canonicalPath));
         ToolTipService::SetToolTip(ProjectPathLabel(), box_value(Utf16(project->canonicalPath)));
+        Automation::AutomationProperties::SetName(ProjectPathLabel(),
+            hstring{L"Canonical project path: "} + Utf16(project->canonicalPath));
         ProjectCondition().Text(project->closed ?
             L"CLOSED · Explicit Reopen Project required" : L"Bound · No working CLI session admitted");
         ReopenButton().Visibility(project->closed ? Visibility::Visible : Visibility::Collapsed);
@@ -442,121 +551,368 @@ namespace winrt::Mayasaba::implementation
         SendButton().Content(winrt::box_value(hstring{pending ? L"Reconcile Send" : L"Send →"}));
         SendButton().IsEnabled(!project->closed && (pending.has_value() || !project->draft.empty()));
         if (pending) ShowNotice(L"A previous Send is unresolved. Its exact text and submission identity are locked; use Reconcile Send.");
-        RenderHistory();
+
+        // A restored project opens in its final layout immediately: no entrance
+        // replay for retained history, and no Dock transition for a restored dock.
+        // The Dock runs only for the one confirmed first save that set the flag.
+        bool const dock = showChatDockTransition_;
+        showChatDockTransition_ = false;
+        RenderHistory(dock);
+        if (!chatAlreadyVisible)
+        {
+            motion_.Enter(ChatBody(), 10, 0);
+        }
+        if (timeline_ && timeline_->Empty() && !chatAlreadyVisible)
+        {
+            motion_.DepthReveal(EmptyHeroMark());
+        }
         ComposerBox().Focus(FocusState::Programmatic);
     }
 
-    void MainWindow::RenderHistory()
-    {
-        auto const& messages = historyCache_;
-        bool populated = !messages.empty();
-        SetVisible(EmptyChatPanel(), !populated);
-        SetVisible(HistoryScroller(), populated);
-        Grid::SetRow(ComposerPanel(), populated ? 2 : 1);
-        ComposerPanel().VerticalAlignment(populated ? VerticalAlignment::Stretch : VerticalAlignment::Center);
-        ComposerPanel().Margin(populated ? Thickness{12, 8, 12, 12} : Thickness{18, 135, 18, 0});
+    // ---------------------------------------------------------------------------
+    // Timeline projection.
+    // ---------------------------------------------------------------------------
 
-        // A different project, a shrunken list, or the first render rebuilds the timeline from
-        // scratch. Restored history is not "new", so it must never replay an insertion motion.
-        bool const rebuild = (activeProject_ != renderedProject_) || (messages.size() < renderedCount_);
-        std::size_t start = 0;
-        if (rebuild)
+    std::vector<mayasaba::ui::TimelineEntry> MainWindow::ProjectHistoryEntries() const
+    {
+        std::vector<mayasaba::ui::TimelineEntry> entries;
+        entries.reserve(historyCache_.size());
+        for (auto const& item : historyCache_)
         {
-            HistoryList().Children().Clear();
-            HistoryList().ChildrenTransitions(
-                Microsoft::UI::Xaml::Media::Animation::TransitionCollection{});
-            renderedProject_ = activeProject_;
-            renderedCount_ = 0;
+            mayasaba::ui::TimelineEntry entry{};
+            entry.kind = mayasaba::ui::EntryKind::UserContribution;
+            entry.state = mayasaba::ui::EntryState::Saved;
+            entry.identity = item.submissionId;
+            entry.author = "You";
+            entry.timestamp = item.createdAt.empty() ? std::string{"saved"} : LocalStamp(item.createdAt);
+            entry.body = item.body;
+            entries.push_back(std::move(entry));
+        }
+        return entries;
+    }
+
+    // The single condition card. It states the current dependency once instead of
+    // repeating a full warning card after every message. It never claims a reply,
+    // an authorization or a completion.
+    mayasaba::ui::TimelineEntry MainWindow::ConditionCard() const
+    {
+        mayasaba::ui::TimelineEntry entry{};
+        entry.kind = mayasaba::ui::EntryKind::ControllerCard;
+        entry.silentInsert = true;
+        entry.identity = "condition:" + activeProject_;
+
+        if (projectClosed_)
+        {
+            entry.state = mayasaba::ui::EntryState::Stopped;
+            entry.title = "Project closed · history is read-only";
+            entry.consequence = "Retained history, decisions and evidence stay inspectable. Every new submission waits for explicit Reopen Project authorization.";
+            entry.operation = "project closure record · " + activeProject_;
+            entry.nextAction = "Use Reopen Project in the project actions menu to authorize new submissions.";
+        }
+        else if (!pendingAttemptId_.empty())
+        {
+            entry.state = mayasaba::ui::EntryState::Unknown;
+            entry.title = "A previous Send is unresolved";
+            entry.consequence = "The exact text and submission identity of that message are locked. Nothing was displayed as saved.";
+            entry.operation = "pending submission · " + pendingAttemptId_;
+            entry.nextAction = "Use Reconcile Send to resolve the same submission identity. A blind retry is not offered.";
         }
         else
         {
-            start = renderedCount_;
-            if (start >= messages.size())
+            entry.state = mayasaba::ui::EntryState::Waiting;
+            entry.title = "Saved only · agent replies are unavailable in this build";
+            entry.consequence = "Each message above is durably saved. No three-CLI reply, peer review, work authorization or completion is claimed.";
+            entry.operation = "owner interfaces not implemented · MCF-v2 dispatch, Agent Gateway adapters, three-agent turn finalization";
+            entry.nextAction = "Send, drafts, history and project switching remain available.";
+        }
+
+        entry.detailsAvailable = true;
+        entry.details =
+            "### What exists\n"
+            "- The contribution is durably saved under its immutable submission identity.\n"
+            "- Project identity, drafts, closure state and history are persisted locally.\n\n"
+            "### What does not exist in this build\n"
+            "- Native Hermes Agent CLI, Kilo Code CLI and Claude Code CLI probes and adapters.\n"
+            "- Safe session admission, per-operation confinement and effect cessation proof.\n"
+            "- Three independent responses, the rotating writer, both peer reviews and turn finalization.\n"
+            "- Work authorization, task leasing, validation and publication.\n\n"
+            "### Consequence\n"
+            "Start is blocked by design rather than simulated. No fixture, mock or placeholder "
+            "reply is ever presented as an agent record, and no progress percentage is invented "
+            "where no measured denominator exists.\n\n"
+            "### Authority\n"
+            "Controller-owned status. This card is not an agent reply and is not a completion claim.";
+        return entry;
+    }
+
+    // Rebuilds or extends the timeline. Restored history never replays an entrance
+    // transition; only newly appended conversation receives the insertion motion.
+    void MainWindow::RenderHistory(bool dockTransition)
+    {
+        bool const rebuild = (activeProject_ != renderedProject_) || (historyCache_.size() < renderedCount_);
+        if (rebuild)
+        {
+            std::vector<mayasaba::ui::TimelineEntry> entries;
+            if (fixturesActive_)
             {
+                auto fixture = mayasaba::ui::FixtureEntries();
+                entries.insert(entries.end(), fixture.begin(), fixture.end());
+            }
+            auto const history = ProjectHistoryEntries();
+            entries.insert(entries.end(), history.begin(), history.end());
+            if (!history.empty()) entries.push_back(ConditionCard());
+            timeline_->ReplaceAll(std::move(entries));
+            renderedProject_ = activeProject_;
+            renderedCount_ = historyCache_.size();
+            following_ = true;
+            unseen_ = 0;
+        }
+        else
+        {
+            if (historyCache_.size() == renderedCount_)
+            {
+                ApplyChatLayout(dockTransition);
+                UpdateJumpToLatest();
                 return;
+            }
+            // The condition card is always the last entry, so it is refreshed rather
+            // than accumulated. It is marked silent so it never re-animates.
+            bool const hadCondition = renderedCount_ > 0;
+            if (hadCondition) timeline_->RemoveLast();
+            for (std::size_t index = renderedCount_; index < historyCache_.size(); ++index)
+            {
+                auto const& item = historyCache_[index];
+                mayasaba::ui::TimelineEntry entry{};
+                entry.kind = mayasaba::ui::EntryKind::UserContribution;
+                entry.state = mayasaba::ui::EntryState::Saved;
+                entry.identity = item.submissionId;
+                entry.author = "You";
+                entry.timestamp = item.createdAt.empty() ? std::string{"saved"} : LocalStamp(item.createdAt);
+                entry.body = item.body;
+                timeline_->Append(std::move(entry));
+                if (!following_) ++unseen_;
+            }
+            timeline_->Append(ConditionCard());
+            renderedCount_ = historyCache_.size();
+        }
+
+        ApplyChatLayout(dockTransition);
+        UpdateJumpToLatest();
+        if (following_)
+        {
+            ScrollToEnd();
+        }
+    }
+
+    // The empty state groups the hero and the composer through row geometry rather
+    // than two independent fixed offsets: [*] [hero] [composer] [*] centres them as
+    // one block, and [*] [0] [composer] [0] pins the composer under the timeline.
+    void MainWindow::ApplyChatLayout(bool dockTransition)
+    {
+        bool const populated = timeline_ && !timeline_->Empty();
+
+        winrt::Windows::Foundation::Rect before{};
+        bool haveBefore = false;
+        if (dockTransition && ComposerPanel().ActualWidth() > 0 && ComposerPanel().ActualHeight() > 0)
+        {
+            auto const toBody = ComposerPanel().TransformToVisual(ChatBody());
+            before = toBody.TransformBounds(winrt::Windows::Foundation::Rect{0, 0,
+                static_cast<float>(ComposerPanel().ActualWidth()),
+                static_cast<float>(ComposerPanel().ActualHeight())});
+            haveBefore = true;
+        }
+
+        ChatTopSpacer().Height(StarLength());
+        ChatHeroRow().Height(populated ? ZeroLength() : AutoLength());
+        ChatBottomSpacer().Height(populated ? ZeroLength() : StarLength());
+        SetVisible(EmptyChatHero(), !populated);
+        SetVisible(HistoryScroller(), populated);
+
+        ApplyResponsiveLayout();
+
+        if (haveBefore)
+        {
+            // The layout change is already committed; the Dock animates a
+            // compensating translate so the same composer appears to travel. The
+            // control itself is never re-parented, so text, caret, selection and
+            // focus are preserved.
+            ChatBody().UpdateLayout();
+            auto const toBody = ComposerPanel().TransformToVisual(ChatBody());
+            auto const after = toBody.TransformBounds(winrt::Windows::Foundation::Rect{0, 0,
+                static_cast<float>(ComposerPanel().ActualWidth()),
+                static_cast<float>(ComposerPanel().ActualHeight())});
+            motion_.DockFromTo(ComposerPanel(), before, after);
+        }
+        ApplyElevationCues();
+    }
+
+    // Adaptive layout. The conversation measure is derived from the real viewport,
+    // and decorative hero art is removed before the composer can be pushed off a
+    // short window or a heavily scaled one.
+    void MainWindow::ApplyResponsiveLayout()
+    {
+        double const bodyWidth = ChatBody().ActualWidth();
+        double const bodyHeight = ChatBody().ActualHeight();
+        if (bodyWidth <= 0 || bodyHeight <= 0) return;
+
+        double const column = std::clamp(bodyWidth - 56.0, 260.0, 900.0);
+        HistoryRepeater().Width(column);
+        if (timeline_) timeline_->SetMeasure(std::max(240.0, column - 96.0));
+        ComposerPanel().MaxWidth(std::clamp(bodyWidth - 36.0, 240.0, 760.0));
+
+        double textScale = 1.0;
+        try
+        {
+            if (uiSettings_) textScale = uiSettings_.TextScaleFactor();
+        }
+        catch (...)
+        {
+            textScale = 1.0;
+        }
+        bool const compact = bodyHeight < 430.0 || textScale >= 1.3;
+        if (compact != compactChatBody_)
+        {
+            compactChatBody_ = compact;
+            EmptyChatHeading().FontSize(compact ? 21.0 : 27.0);
+            EmptyChatHeading().MaxWidth(compact ? 420.0 : 560.0);
+            EmptyChatHint().MaxWidth(compact ? 420.0 : 560.0);
+            EmptyChatHero().Spacing(compact ? 8.0 : 12.0);
+            EmptyChatHero().Margin(compact ? Thickness{24, 0, 24, 10} : Thickness{24, 0, 24, 20});
+            EmptyHeroArt().Width(compact ? 120.0 : 176.0);
+            EmptyHeroArt().Height(compact ? 100.0 : 146.0);
+        }
+        bool const showArt = !compact;
+        if (showArt != heroArtVisible_)
+        {
+            heroArtVisible_ = showArt;
+            SetVisible(EmptyHeroArt(), showArt);
+        }
+    }
+
+    void MainWindow::UpdateJumpToLatest()
+    {
+        bool const populated = timeline_ && !timeline_->Empty();
+        bool const show = populated && !following_;
+        if (show)
+        {
+            JumpToLatestButton().Content(winrt::box_value(unseen_ > 0
+                ? hstring{L"Jump to latest · "} + to_hstring(unseen_) + L" new"
+                : hstring{L"Jump to latest"}));
+            Automation::AutomationProperties::SetName(JumpToLatestButton(), unseen_ > 0
+                ? hstring{L"Jump to the latest entry. "} + to_hstring(unseen_) + L" unseen entries."
+                : hstring{L"Jump to the latest entry"});
+        }
+        SetVisible(JumpToLatestButton(), show);
+    }
+
+    void MainWindow::ScrollToEnd()
+    {
+        HistoryScroller().ChangeView(nullptr, HistoryScroller().ScrollableHeight(), nullptr, true);
+    }
+
+    void MainWindow::OnJumpToLatest(IInspectable const&, RoutedEventArgs const&)
+    {
+        if (windowClosed_) return;
+        ScrollToEnd();
+        following_ = true;
+        unseen_ = 0;
+        UpdateJumpToLatest();
+    }
+
+    void MainWindow::OnHistoryViewChanged(IInspectable const&,
+        Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const&)
+    {
+        if (windowClosed_) return;
+        auto const scroller = HistoryScroller();
+        double const remaining = scroller.ScrollableHeight() - scroller.VerticalOffset();
+        bool const atEnd = remaining <= 4.0;
+        if (atEnd != following_)
+        {
+            following_ = atEnd;
+            if (atEnd) unseen_ = 0;
+            UpdateJumpToLatest();
+        }
+    }
+
+    void MainWindow::OnChatBodySizeChanged(IInspectable const&, SizeChangedEventArgs const&)
+    {
+        if (windowClosed_) return;
+        ApplyResponsiveLayout();
+    }
+
+    void MainWindow::OnRootSizeChanged(IInspectable const&, SizeChangedEventArgs const& e)
+    {
+        if (windowClosed_) return;
+        ApplyReadinessLayout(e.NewSize().Width);
+        ApplyResponsiveLayout();
+    }
+
+    // A horizontal row of three full CLI names cannot fit a narrow window. Rather
+    // than clipping a name away, the entries stack. The names and their status text
+    // are always present, so no meaning is lost.
+    void MainWindow::ApplyReadinessLayout(double width)
+    {
+        if (width <= 0) return;
+
+        // Each concern has its own guard: an early return on one must never skip
+        // the other, or a state set during startup can never be corrected later.
+        bool const stackReadiness = width < 900.0;
+        if (stackReadiness != readinessStacked_)
+        {
+            readinessStacked_ = stackReadiness;
+            auto const orientation = stackReadiness ? Orientation::Vertical : Orientation::Horizontal;
+            auto const alignment = stackReadiness ? HorizontalAlignment::Left : HorizontalAlignment::Right;
+            double const spacing = stackReadiness ? 4.0 : 15.0;
+            for (auto const& panel : {WelcomeReadinessPanel(), FolderReadinessPanel(), ChatReadinessPanel()})
+            {
+                if (!panel) continue;
+                panel.Orientation(orientation);
+                panel.Spacing(spacing);
+                panel.HorizontalAlignment(alignment);
             }
         }
 
-        // Only entries appended by this call animate; a rebuild is restored history and stays
-        // instant. ApplyTimelineMotion keeps the collection aligned with the motion preference.
-        if (!rebuild)
+        // Below this width the welcome footer's explanation would be squeezed into
+        // an unreadable one-word column and would crowd out the body. The buttons
+        // themselves always stay visible, and the same explanation is already in
+        // the body copy above, so the hint is dropped rather than mangled.
+        bool const compact = width < 760.0;
+        if (compact != narrowLayout_)
         {
-            ApplyTimelineMotion();
+            narrowLayout_ = compact;
+            SetVisible(WelcomeFooterHint(), !compact);
+            SetVisible(FolderWordmark(), !compact);
+            WelcomeTopBar().ColumnSpacing(compact ? 8.0 : 20.0);
+            WelcomeTopBar().Padding(compact ? Thickness{16, 12, 16, 6} : Thickness{28, 18, 28, 6});
         }
-
-        auto const ink = BrandBrush(L"MayasabaInkBrush");
-        auto const muted = BrandBrush(L"MayasabaMutedBrush");
-        auto const soft = BrandBrush(L"MayasabaSoftBrush");
-        auto const brandQuiet = BrandBrush(L"MayasabaBrandQuietBrush");
-        auto const amber = BrandBrush(L"MayasabaAmberBrush");
-
-        for (std::size_t index = start; index < messages.size(); ++index)
-        {
-            auto const& item = messages[index];
-            // User contribution: right-aligned, brand-tinted, and never styled as authority.
-            Border bubble{};
-            bubble.CornerRadius(CornerRadius{14});
-            bubble.Padding(Thickness{16, 12, 16, 12});
-            bubble.MaxWidth(660);
-            bubble.HorizontalAlignment(HorizontalAlignment::Right);
-            bubble.Background(brandQuiet);
-
-            StackPanel user{};
-            user.Spacing(6);
-            TextBlock label{};
-            winrt::hstring const stamp =
-                item.createdAt.empty() ? winrt::hstring{L"saved"} : Utf16(item.createdAt);
-            label.Text(winrt::hstring{L"You · "} + stamp);
-            label.FontSize(11);
-            label.Foreground(muted);
-            TextBlock content{};
-            content.Text(Utf16(item.body));
-            content.TextWrapping(TextWrapping::Wrap);
-            content.IsTextSelectionEnabled(true);
-            content.Foreground(ink);
-            user.Children().Append(label);
-            user.Children().Append(content);
-            bubble.Child(user);
-            HistoryList().Children().Append(bubble);
-
-            // Controller card. The amber spine marks an unresolved waiting state, and the
-            // status text says the same thing, so colour is never the only carrier of meaning.
-            StackPanel info{};
-            info.Spacing(7);
-
-            StackPanel header{};
-            header.Orientation(Orientation::Horizontal);
-            header.Spacing(9);
-            header.VerticalAlignment(VerticalAlignment::Center);
-            header.Children().Append(StatusDot(amber, 9));
-            TextBlock status{};
-            status.Text(L"Mayasaba · Waiting for verified CLI integration");
-            status.FontSize(13);
-            status.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
-            status.TextWrapping(TextWrapping::Wrap);
-            status.Foreground(ink);
-            header.Children().Append(status);
-
-            TextBlock reason{};
-            reason.FontSize(12);
-            reason.TextWrapping(TextWrapping::Wrap);
-            reason.Foreground(muted);
-            reason.Text(L"Saved only. No three-CLI reply, review, work authorization, or completion is claimed.");
-
-            TextBlock provenance{};
-            provenance.FontSize(11);
-            provenance.TextWrapping(TextWrapping::Wrap);
-            provenance.Foreground(soft);
-            provenance.Text(L"Controller authority · this is not an agent reply");
-
-            info.Children().Append(header);
-            info.Children().Append(reason);
-            info.Children().Append(provenance);
-
-            HistoryList().Children().Append(CardWithSpine(info, amber, 18));
-        }
-        renderedCount_ = messages.size();
     }
+
+    // Bounded hero pointer tilt (+/- 4 degrees). It is optional by construction:
+    // when motion is not permitted, or the pointer is not a mouse, it does nothing
+    // and the same information is already in the static hero and its accessible name.
+    void MainWindow::OnHeroPointerMoved(IInspectable const&, Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const& e)
+    {
+        if (windowClosed_ || !motion_.Allowed()) return;
+        auto const point = e.GetCurrentPoint(WelcomeHeroStage());
+        double const width = WelcomeHeroStage().ActualWidth();
+        double const height = WelcomeHeroStage().ActualHeight();
+        if (width <= 0 || height <= 0) return;
+        double const nx = (point.Position().X / width) * 2.0 - 1.0;
+        double const ny = (point.Position().Y / height) * 2.0 - 1.0;
+        motion_.HeroTilt(WelcomeHeroMark(), nx, ny);
+    }
+
+    void MainWindow::OnHeroPointerExited(IInspectable const&,
+        Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&)
+    {
+        if (windowClosed_) return;
+        motion_.ResetTilt(WelcomeHeroMark());
+    }
+
+    // ---------------------------------------------------------------------------
+    // Draft and submission paths. Unchanged from the Screen 2 slice except that the
+    // timeline refresh now reports the connected Dock on a confirmed first save.
+    // ---------------------------------------------------------------------------
 
     void MainWindow::PersistDraft()
     {
@@ -657,7 +1013,11 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::ReturnToChat()
     {
         ++selectorGeneration_;
+        motion_.CancelAll();
         SetVisible(FolderScreen(),false); SetVisible(ChatScreen(),true); SetVisible(NativeFileMenu(),true);
+        // Cancel restores the previous Chat without replaying the conversation
+        // entrance: the timeline and its reading position are left untouched.
+        ApplyChatLayout(false);
         if(returnFocus_ && returnFocus_.IsEnabled()) returnFocus_.Focus(FocusState::Programmatic);
         else ComposerBox().Focus(FocusState::Programmatic);
     }
@@ -733,6 +1093,7 @@ namespace winrt::Mayasaba::implementation
     {
         auto alive=get_strong(); auto ui=DispatcherQueue(); std::string error;
         mayasaba::SaveDisposition result=mayasaba::SaveDisposition::Unknown;
+        bool wasFirstContribution = historyCache_.empty();
         try { co_await selectorQueue_.Background(); submission=storage_->StageSubmission(id,submission,text);
             result=storage_->SaveContribution(id,submission,text); }
         catch(std::exception const& e){error=e.what();}
@@ -740,7 +1101,15 @@ namespace winrt::Mayasaba::implementation
         if(windowClosed_ || activeProject_!=id) co_return;
         busy_=false;
         if(result==mayasaba::SaveDisposition::Saved || result==mayasaba::SaveDisposition::Duplicate)
-        { ShowChat(); ShowNotice(L"Message durably saved. CLI interpretation and replies are not yet implemented."); }
+        {
+            pendingAttemptId_.clear(); pendingAttemptProject_.clear(); pendingAttemptBody_.clear();
+            // A confirmed save is the only thing that may move the composer, and it
+            // moves only on the first one. Failed or uncertain persistence never
+            // reaches here, so the recoverable draft stays centred and unacknowledged.
+            showChatDockTransition_ = wasFirstContribution;
+            ShowChat();
+            ShowNotice(L"Message durably saved. Agent replies are unavailable in this build; no interpretation, reply or completion is claimed.");
+        }
         else { pendingAttemptId_=submission;pendingAttemptProject_=id;pendingAttemptBody_=text;
             ComposerBox().IsReadOnly(true); SendButton().IsEnabled(true);SendButton().Content(box_value(L"Reconcile Send"));
             ShowNotice(L"Submission not confirmed. Original draft and identity retained: "+Utf16(error),true); }
@@ -848,6 +1217,8 @@ namespace winrt::Mayasaba::implementation
             TargetDraftPreviewBox().Text(Utf16(result.pending?"An unresolved submission is locked for reconciliation.":result.project.draft));
             PrebindDraftPreviewBox().Text(Utf16(result.selectorDraft));
             UsePrebindDraftButton().IsEnabled(!result.pending);SetVisible(DraftCollisionPanel(),true);
+            // Inline detail reveals with Appear; focus moves to the primary choice.
+            motion_.Appear(DraftCollisionPanel());
             KeepTargetDraftButton().Focus(FocusState::Programmatic);co_return;
         }
         prebindingDraft_=Utf16(result.selectorDraft);suppressPrebind_=true;
@@ -865,6 +1236,7 @@ namespace winrt::Mayasaba::implementation
         if (!isVis)
         {
             UpdateCreateFolderState();
+            motion_.Appear(CreateFolderPanel());
             NewFolderNameBox().Focus(FocusState::Programmatic);
         }
     }
@@ -985,17 +1357,51 @@ namespace winrt::Mayasaba::implementation
         PreviousRecentButton().IsEnabled(offset>0);NextRecentButton().IsEnabled(result.hasMore);
         NoRecentProjectsText().Text(L"No recorded projects on this page. Open an existing folder to begin.");SetVisible(NoRecentProjectsText(),result.items.empty());
         for(auto const& p:result.items){
+            // Recent row: a raised resting surface with a subtle hover lift. Rows
+            // containing paths are never rotated or tilted.
+            Border card{};
+            card.CornerRadius(CornerRadius{14});
+            card.Padding(Thickness{14, 12, 14, 12});
+            card.Background(Token(L"MayasabaSecondaryBrush"));
+            card.BorderBrush(Token(L"MayasabaBorderBrush"));
+            card.BorderThickness(Thickness{1});
+            card.HorizontalAlignment(HorizontalAlignment::Stretch);
+            motion_.ApplyElevation(card, 8);
+
             StackPanel row;row.Spacing(6);row.HorizontalAlignment(HorizontalAlignment::Stretch);
-            auto text=[&](hstring const& value){TextBlock t;t.Text(value);t.TextWrapping(TextWrapping::Wrap);t.IsTextSelectionEnabled(true);row.Children().Append(t);};
-            text(Utf16(p.displayName)+(p.closed?L" · CLOSED · Read-only":L" · OPEN"));
-            text(Utf16(p.canonicalPath));text(L"Last opened: "+Utf16(p.lastOpenedAt.empty()?"Unknown":p.lastOpenedAt)+L" · Activity: unknown");
+            auto text=[&](hstring const& value, bool technical){
+                TextBlock t;t.Text(value);t.TextWrapping(TextWrapping::Wrap);t.IsTextSelectionEnabled(true);
+                if(technical){t.FontFamily(FontFamily{L"Cascadia Mono"});t.FontSize(12);}
+                else{t.FontSize(14);}
+                t.Foreground(technical?Token(L"MayasabaMutedBrush"):Token(L"MayasabaInkBrush"));
+                row.Children().Append(t);};
+            text(Utf16(p.displayName)+(p.closed?L" · CLOSED · Read-only":L" · OPEN"),false);
+            text(Utf16(p.canonicalPath),true);
+            text(L"Last opened: "+Utf16(p.lastOpenedAt.empty()?"Unknown":LocalStamp(p.lastOpenedAt))+L" · Activity: unknown",false);
             StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(8);auto weak=get_weak();auto id=p.id;
             Button open;open.Content(box_value(p.closed?L"View history":L"Open project"));
+            open.CornerRadius(CornerRadius{11});open.Padding(Thickness{14,7,14,7});
             Automation::AutomationProperties::SetName(open,L"Open project "+Utf16(p.displayName));
             open.Click([weak,id](auto const&,auto const&){if(auto self=weak.get())self->OpenProjectById(id);});actions.Children().Append(open);
             Button locate;locate.Content(box_value(L"Locate folder"));Automation::AutomationProperties::SetName(locate,L"Locate folder for "+Utf16(p.displayName));
+            locate.CornerRadius(CornerRadius{11});locate.Padding(Thickness{14,7,14,7});
             locate.Click([weak,id](auto const&,auto const&){if(auto self=weak.get())self->LocateProjectAsync(id);});actions.Children().Append(locate);
-            row.Children().Append(actions);RecentProjectsList().Items().Append(row);
+            row.Children().Append(actions);
+            card.Child(row);
+
+            // Hover lift is a surface cue only; it never changes a record or a selection.
+            auto* motion = &motion_;
+            auto weakCard = make_weak(card);
+            card.PointerEntered([motion, weakCard](auto const&, auto const&)
+            { if(auto c=weakCard.get()) motion->HoverLift(c, true); });
+            card.PointerExited([motion, weakCard](auto const&, auto const&)
+            { if(auto c=weakCard.get()) motion->HoverLift(c, false); });
+            card.GotFocus([motion, weakCard](auto const&, auto const&)
+            { if(auto c=weakCard.get()) motion->HoverLift(c, true); });
+            card.LostFocus([motion, weakCard](auto const&, auto const&)
+            { if(auto c=weakCard.get()) motion->HoverLift(c, false); });
+
+            RecentProjectsList().Items().Append(card);
         }
         for(auto const& op:recovery){
             StackPanel row;row.Spacing(5);TextBlock info;info.TextWrapping(TextWrapping::Wrap);
@@ -1050,7 +1456,7 @@ namespace winrt::Mayasaba::implementation
     { ShowNotice(L"No working CLI sessions were started; no external effects are claimed ceased."); }
     void MainWindow::OnDiagnostics(IInspectable const&, RoutedEventArgs const&)
     {
-        ShowNotice(L"Hermes, Kilo Code, Claude Code: UNSUPPORTED. Executable identity and native probes not implemented; no provider calls.", true);
+        ShowNotice(L"Hermes Agent CLI, Kilo Code CLI, Claude Code CLI: UNSUPPORTED. Executable identity and native probes are not implemented; no provider calls.", true);
     }
     // Explicit in-app exit for the whole application. The current draft is flushed first
     // so a confirmed Exit never loses the newest composer text; Close() then runs the same

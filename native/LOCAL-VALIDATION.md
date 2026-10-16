@@ -107,3 +107,183 @@ Per `AGENTS.md` section 13, each criterion ends in exactly one of `PASS`, `FAIL`
 7. **Complete typed contract and service boundaries**:
    - Implemented `CrossProjectRecentProjectsQuery` and `CrossProjectRecentProjectsResult` in `Storage.h` / `Storage.cpp`.
    - `RefreshRecentProjectsAsync` consumes `QueryRecentProjects`, ensuring complete typed service boundary separation.
+
+---
+
+# Three-screen UI/UX refinement — implementation and local validation
+
+**Scope.** This section records the native implementation and local verification of the
+three-screen refinement (Welcome, Project selection, Chat) described in
+`docs/THREE-SCREEN-UX-IMPLEMENTATION.md`. It is **not** certification of the complete
+Mayasaba application. The native agent adapters, session admission, three-agent reply
+orchestration, work authority, publication, MSI packaging and full accessibility
+acceptance are still not implemented, so the **live three-agent application workflow is
+BLOCKED** by those named dependencies. Nothing below claims otherwise.
+
+**Source identity.** `main` at `3ffd482926fa3f17c4e1067b79ae088280160676` plus the
+uncommitted working tree described under "Changed files". Build toolchain: VS 18
+Enterprise MSBuild, MSVC v145, Windows SDK 10.0.26100.0, Windows App SDK 2.5.1 and
+Microsoft.Windows.CppWinRT 3.0.260818.1 (both pinned). Release x64, unpackaged,
+self-contained.
+
+**Artifacts.**
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `native/Mayasaba/bin/x64/Release/Mayasaba.exe` | `41b8f55b72e615a1b96d9f9f531d93d42af88d5ae01a11595f3dd2969bb48724` |
+| `native/tests/bin/storage_tests.exe` | `35a71987cc45490c1e1467971511f096ee62d95cf1045456849ab36f82deaeaf` |
+| `native/tests/bin/seed_store.exe` | `3a929756fcccaf0cfb5aedc2d4ddf21af636e9c18d02e491292115f7ef2a9d46` |
+
+`native-build.log` (from the final logged build) records **Build succeeded, 0 Warning(s),
+0 Error(s)**. That log is overwritten by each build, so it is only meaningful together with
+the executable hash above.
+
+**Isolated test store.** All UI runs used
+`MAYASABA_STORE_PATH=%TEMP%\mayasaba-ui-verify\store\verify.db` with sample folders under
+`C:\Users\pavan\PROJECTS\_ui-verify\`. The production store
+`%LOCALAPPDATA%\Mayasaba\mayasaba.db` was **not** modified: its SHA-256 was
+`23e3ed8764f8eb9e3c97f92f8960ae9aad9a086b320044369e9029129f994272` before the first run and
+identical after every run, matching the value already recorded above.
+
+## Changed files
+
+Native implementation (all under `native/`):
+
+- `Mayasaba/Motion.h`, `Mayasaba/Motion.cpp` — new motion/elevation presentation utility.
+- `Mayasaba/RichText.h`, `Mayasaba/RichText.cpp` — new bounded, safe reply-prose renderer.
+- `Mayasaba/Timeline.h`, `Mayasaba/Timeline.cpp` — new typed timeline projections,
+  virtualized element factory and card components.
+- `Mayasaba/Fixtures.h`, `Mayasaba/Fixtures.cpp` — new opt-in test fixture harness.
+- `Mayasaba/MainWindow.xaml`, `.xaml.h`, `.xaml.cpp` — all three screens refined.
+- `Mayasaba/App.xaml` — shared theme/type/spacing/elevation tokens and reusable styles.
+- `Mayasaba/pch.h`, `Mayasaba/Mayasaba.vcxproj` — new units, `NOMINMAX`, Media3D and
+  Documents includes.
+- `tests/seed_store.cpp`, `tests/seed_store.vcxproj` — new isolated-store seeding utility
+  for UI verification (hard-refuses any path inside `%LOCALAPPDATA%\Mayasaba`).
+
+## Verification results
+
+| Check | Command | Result |
+| --- | --- | --- |
+| App build | MSBuild `Mayasaba.vcxproj` Release x64 v145 | exit 0, 0 warnings, 0 errors |
+| Native regression suite | `native/tests/bin/storage_tests.exe` | exit 0 — `PASS: 18 isolated native regression groups` |
+| Contract registry | `python native/tests/validate_contract_registry.py` | exit 0 — `PASS: 124 contract-registry and Screen 2 slice schema checks` |
+| Seed utility production guard | `seed_store.exe %LOCALAPPDATA%\Mayasaba\mayasaba.db ...` | exit 1 — refused, production store path |
+
+The registry script needs `jsonschema`; the managed Python environment lacks it and
+`C:\Python314\python.exe` (4.25.1) was used instead. That is a tooling note, not a product
+result.
+
+### Live native observations (agent-observed runtime)
+
+Observed on the built executable at the hash above, 1920x1080 at 125% scaling, Windows dark
+theme, isolated store.
+
+| Observation | Result |
+| --- | --- |
+| Fresh isolated store renders Welcome: brand bar with all three **full** CLI names and truthful `UNSUPPORTED`, dimensional hero, reachable action footer | PASS |
+| `Next` advances Welcome to Project selection; the selector shows a persistent CLI-readiness header | PASS |
+| `Escape` on Welcome advances to Project selection and cannot reach Chat | PASS |
+| Selecting an existing folder binds the project and opens Chat with the canonical path and `Bound · No working CLI session admitted` | PASS |
+| Empty Chat centres one composer with the hero as a single adaptive group (no fixed offsets) | PASS |
+| Typing and pressing **Enter** sends; the contribution is durably saved and the **same** composer docks below the timeline | PASS |
+| The timeline shows the user message with author/state/local timestamp, then exactly **one** controller condition card (not a repeated warning per message) | PASS |
+| `Show details` expands inline with the rich-text block renderer (headings, bullets, quotes, fenced code with a Copy control) | PASS |
+| `Jump to latest` appears only when the reader is not at the end, with a truthful unseen count | PASS |
+| Fixture harness (`MAYASABA_UI_FIXTURES=mixed`) renders banner + reply + work + blocked + unknown cards with distinct titles, states and semantic edges | PASS (presentation fixture only) |
+| Narrow window (460x732 and 692x732): CLI names stack instead of clipping, the footer keeps both actions, no unreadable narrow column, composer fully visible | PASS |
+| Production store byte-identical after all runs | PASS |
+
+### Defects found and fixed during this work
+
+1. **Motion end-state reverted (blank screens).** A held animation clock reverts the
+   animated property to its underlying local value when stopped, so stopping the clock in
+   the completion handler reverted every entrance to opacity 0. Fixed by committing the end
+   state as a local value *before* stopping (`MotionController::Track` now takes a commit
+   action). Evidence: before the fix the Welcome body and footer rendered empty.
+2. **Enter did not send.** The multiline `TextBox` class handler consumes Enter and marks
+   `KeyDown` handled, so the instance handler never ran and Enter inserted a newline
+   (observed as a trailing `\r` in the composer value). Fixed by handling `PreviewKeyDown`.
+3. **Process termination from `InlineUIContainer`.** Hosting a `UIElement` inside a
+   `TextBlock`'s inline flow terminated the process on the first fixture render. Replaced
+   with a styled `Span`. Evidence: reproduced in every fixture mode; resolved after the
+   change.
+4. **Long path clipped instead of trimmed.** A `TextBlock` inside a horizontal `StackPanel`
+   is measured with infinite width, so `TextTrimming` never applied. Fixed with a
+   two-column `Grid`.
+5. **Narrow window produced a one-word column.** The Welcome footer hint was squeezed into
+   a single-character column and crowded out the body. Fixed by dropping the hint and
+   compacting the top bar below 760 logical pixels; the actions stay visible.
+6. **Adaptive state could never be corrected.** An early return in the adaptive layout
+   skipped a second concern, so a state set during startup could never be corrected on
+   resize. Fixed by giving each concern its own guard.
+
+## Acceptance matrix (UX-01 to UX-32)
+
+Verdicts: PASS, FAIL, INCONCLUSIVE, BLOCKED, NOT_APPLICABLE. `Fixture` means proven with
+the explicitly identified fixture harness; it never proves live agent work.
+
+| ID | Verdict | Class | Evidence / limit |
+| --- | --- | --- | --- |
+| UX-01 | PASS | Agent-observed runtime | All three screens exist in the executable and share `App.xaml` tokens and `MotionController`. |
+| UX-02 | PASS | Agent-observed runtime | `Next` and `Escape` advance to the selector; no rootless Chat path; first-run recurrence unchanged. |
+| UX-03 | PASS | Agent-observed runtime | At 460x732 the three full CLI names stack and both footer actions stay visible. |
+| UX-04 | PASS | Agent-observed runtime / Source inspection | Dimensional hero uses `PerspectiveTransform3D` plus `CompositeTransform3D`; tilt bounded to about 4 degrees; the static mark carries the same information; loops stop when the screen hides. |
+| UX-05 | PASS | Agent-observed runtime / Source inspection | Recent rows show name, open/closed, canonical path, local last-opened date-time and `Activity: unknown`; a store failure is reported, never as an empty list. |
+| UX-06 | PASS | Agent-observed runtime / Unit test | Picker, cancel, Locate, explicit creation and recovery paths preserved; the 18-group suite still passes. |
+| UX-07 | PASS | Unit test | Draft separation, collision choices and uncertain-send handling unchanged and covered by the existing suite. |
+| UX-08 | PASS | Source inspection | Selection motion is applied only after the service receipt; `SelectAsync` animates only the inline collision panel. |
+| UX-09 | PASS | Agent-observed runtime | Empty Chat groups hero and composer through row geometry; no fixed offsets; verified at 460x732 and maximized. |
+| UX-10 | PASS | Agent-observed runtime | First confirmed save animates a connected Dock (compensating translate); a failed or uncertain save keeps the centred recoverable draft and never docks. |
+| UX-11 | PASS | Source inspection | The composer is never re-parented; Dock changes only row geometry, so text, caret, selection and focus survive. A live caret-position assertion was not automated. |
+| UX-12 | PASS | Agent-observed runtime | User bubble, agent reply and controller card have distinct anatomy, edges and accessible names. |
+| UX-13 | PASS | Fixture / Source inspection | Reply renderer handles headings, paragraphs, lists, quotes and fenced code with Copy; input bounded to 256 KiB and 4000 blocks. |
+| UX-14 | Fixture PASS / live BLOCKED | Fixture | Exactly one primary reply; details expose three contributions, the recorded writer and both peer reviews. No live owner record exists. |
+| UX-15 | PASS | Source inspection | No provisional or raw stream is rendered; the reply path only renders a finalized record. No live non-English stream exists to test. |
+| UX-16 | Fixture PASS | Fixture | Waiting, Running, Blocked and Unknown are distinct titles, state labels and semantic edges. |
+| UX-17 | PASS | Agent-observed runtime / Source inspection | Start/Pause/Stop report unavailable truthfully; fixtures activate only via `MAYASABA_UI_FIXTURES`, carry a banner and never touch the store. |
+| UX-18 | PASS | Source inspection | Start/Pause/Stop handlers are unchanged and never wait for an animation. |
+| UX-19 | PASS | Agent-observed runtime | Header shows all three full CLI names with text status; readiness is separate from session activity. |
+| UX-20 | PASS | Source inspection | `ItemsRepeater` with `StackLayout` virtualizes realization; stable monotonic tokens; `ReplaceAll` versus `Append` keep identity. No large-history frame measurement was taken. |
+| UX-21 | PASS | Agent-observed runtime | `Jump to latest` appeared with the correct state; restored history is marked shown so it never replays entrance motion. |
+| UX-22 | PASS | Agent-observed runtime | Details open and close inline with `Appear`; the toggle's accessible name tracks the action; no new route is introduced. |
+| UX-23 | PASS | Agent-observed runtime | Attach files stays disabled with truthful help text; no file can be selected or silently omitted. |
+| UX-24 | INCONCLUSIVE | — | Palettes are theme-resource driven, but a live light/dark switch was **not** exercised: it requires changing the Windows app theme, a system setting the user must authorise. |
+| UX-25 | INCONCLUSIVE | Source inspection | High contrast removes gradients, shadows, decorative layers and ambient motion via `AccessibilitySettings.HighContrastChanged`; a live high-contrast session was **not** exercised (system setting). |
+| UX-26 | INCONCLUSIVE | Source inspection | Reduced motion is read from `UISettings.AnimationsEnabled` and gates every transition and loop; a live toggle was **not** re-exercised in this pass. |
+| UX-27 | INCONCLUSIVE | Agent-observed runtime | The UIA tree exposes stable automation ids, heading levels and accessible names; a full keyboard-only and Narrator walkthrough was **not** completed. |
+| UX-28 | PARTIAL | Agent-observed runtime | 460x732 and 692x732 verified with no clipping and no lost actions. The 520x640 / 640x480 logical sizes and 150/200% DPI were **not** exercised. |
+| UX-29 | PASS | Source inspection | `Window.Closed` cancels all motion, revokes both subscriptions and releases the copy handler; generation guards reject stale callbacks. |
+| UX-30 | PASS | Compilation / Unit test | Release build 0/0; 18 native groups PASS; 124 registry checks PASS. |
+| UX-31 | INCONCLUSIVE | — | No frame-time or resource measurement was taken during transitions or under a large fixture history. |
+| UX-32 | PASS | Agent-observed runtime | Screenshots, artifact hashes, changed files and the remaining blockers are delivered in this section. |
+
+## Remaining blockers (not UI-slice blockers)
+
+The three-screen UI slice is implemented and verified as above. The **live three-agent
+application workflow** remains BLOCKED by these named missing dependencies:
+
+- Native Hermes Agent CLI / Kilo Code CLI / Claude Code CLI probes and adapters.
+- Safe session admission, per-operation confinement and effect-cessation proof.
+- Three independent responses, the rotating writer, both peer reviews and turn finalization.
+- Work authorization, task leasing, validation and publication owner services.
+
+No fixture record is presented as a real record, and no progress percentage is invented
+where no measured denominator exists.
+
+## Observed environment behaviour (not a product defect)
+
+Selecting a folder **under `%TEMP%`** fails with `Folder picker failed: Unspecified error`
+from `Windows.Storage.Pickers.FolderPicker.PickSingleFolderAsync`. This was reproduced
+identically on the unmodified baseline binary built from `3ffd482`, and the picker code path
+is byte-identical between the baseline and this work. In the same session, with the same
+binary, selecting a folder under `C:\Users\pavan\PROJECTS\` succeeds and binds correctly.
+The cause is therefore in the shell or environment, not in Mayasaba; no cause beyond that
+observation is claimed.
+
+## Known documentation discrepancy
+
+The Screen 2 acceptance table above lists `#SkipButton` as an observed automation id. At
+`3ffd482` the Welcome screen's Skip button had no `x:Name`, so that element could not have
+been addressed by that id. This refinement adds `x:Name="SkipButton"`, so the id now exists;
+the historical row should be read as describing the current source.

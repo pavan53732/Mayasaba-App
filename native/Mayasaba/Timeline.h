@@ -1,0 +1,154 @@
+#pragma once
+// Chat timeline presentation.
+//
+// TimelineEntry is a typed, read-only *projection* of an owner record. It is not
+// a new domain machine, it does not originate authority and it never mutates a
+// record. The renderer owns the virtualized realization of those projections and
+// builds each card lazily, so a long history does not create a long visual tree.
+//
+// Owner interfaces that do not exist yet are marked at the call site; the UI
+// shows a precise unavailable state instead of inventing a record.
+
+#include "Motion.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <functional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+#include <winrt/Microsoft.UI.Xaml.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Windows.Foundation.Collections.h>
+
+namespace mayasaba::ui
+{
+    // What the entry is. Visual anatomy and authority differ per kind.
+    enum class EntryKind
+    {
+        UserContribution, // the reader's own saved message
+        AgentReply,       // one consolidated, reviewed reply
+        ControllerCard,   // controller status or outcome
+        TurnProgress,     // three-agent turn progress
+        WorkCard,         // running / paused / stopped operation
+        BlockedCard,      // blocked or physically unknown, with recovery
+        ValidationCard,   // criterion-linked result
+        DeliveryCard,     // publication / certification
+        FixtureBanner     // test-fixture identification; never a real record
+    };
+
+    // The semantic state. Text always states the same thing, so colour is never
+    // the only carrier of meaning.
+    enum class EntryState
+    {
+        Informational,
+        Saved,
+        Provisional,
+        Waiting,
+        Running,
+        Paused,
+        Stopped,
+        Blocked,
+        Unknown,
+        Failed,
+        Recovered,
+        Certified
+    };
+
+    struct TimelineEntry
+    {
+        EntryKind kind{EntryKind::ControllerCard};
+        EntryState state{EntryState::Informational};
+        // Stable owner reference: contribution / turn / operation identity.
+        std::string identity;
+        std::string author;
+        std::string timestamp;
+        std::string title;
+        std::string body;
+        // One-sentence consequence, affected operation and the permitted next action.
+        std::string consequence;
+        std::string operation;
+        std::string nextAction;
+        // Unobtrusive attribution, e.g. the recorded writer and both reviewers.
+        std::string attribution;
+        // Show details body. Rendered as safe rich text; never a route.
+        std::string details;
+        bool detailsAvailable{false};
+        // True only for entries produced by the explicitly identified fixture
+        // harness. Production startup can never set this.
+        bool fixture{false};
+        // A silent insert is a refreshed condition card, not new conversation. It
+        // must not replay an insertion transition on every refresh.
+        bool silentInsert{false};
+    };
+
+    // Renders the timeline. Owns an observable item source of stable indices so
+    // the WinUI repeater can virtualize realization without a custom runtime class.
+    class TimelineRenderer : public winrt::implements<TimelineRenderer,
+        winrt::Microsoft::UI::Xaml::IElementFactory>
+    {
+    public:
+        explicit TimelineRenderer(MotionController& motion);
+        ~TimelineRenderer();
+
+        winrt::Windows::Foundation::Collections::IObservableVector<winrt::Windows::Foundation::IInspectable> Items() const { return items_; }
+
+        // Replaces the whole timeline. Restored history never replays an entrance
+        // transition, so every entry is marked as already shown.
+        void ReplaceAll(std::vector<TimelineEntry> entries);
+
+        // Appends one entry. The newly realized card receives the insertion motion
+        // exactly once, even under virtualization and recycling, unless the entry
+        // is marked silentInsert.
+        void Append(TimelineEntry entry);
+
+        // Removes the most recently appended entry. Used to refresh the single
+        // condition card without accumulating duplicates.
+        void RemoveLast();
+
+        std::size_t Count() const noexcept { return entries_.size(); }
+        TimelineEntry const* At(std::size_t index) const
+        {
+            return index < entries_.size() ? &entries_[index] : nullptr;
+        }
+        bool Empty() const noexcept { return entries_.empty(); }
+
+        void SetCopyHandler(std::function<void(winrt::hstring const&)> handler) { copy_ = std::move(handler); }
+        void SetMeasure(double measure) { measure_ = measure; }
+
+        // IElementFactory
+        winrt::Microsoft::UI::Xaml::UIElement GetElement(
+            winrt::Microsoft::UI::Xaml::ElementFactoryGetArgs const& args);
+        void RecycleElement(
+            winrt::Microsoft::UI::Xaml::ElementFactoryRecycleArgs const& args);
+
+    private:
+        winrt::Microsoft::UI::Xaml::UIElement Build(TimelineEntry const& entry, std::size_t index);
+
+        MotionController& motion_;
+        std::vector<TimelineEntry> entries_;
+        // Parallel to entries_: true once the card has been shown, so a recycled
+        // item never animates a second time.
+        std::vector<bool> shown_;
+        // Stable, monotonically increasing identity per entry. A positional index
+        // would be reused after a removal and could silently keep a stale card.
+        std::vector<int64_t> tokens_;
+        std::unordered_map<int64_t, std::size_t> tokenIndex_;
+        int64_t nextToken_{1};
+        winrt::Windows::Foundation::Collections::IObservableVector<winrt::Windows::Foundation::IInspectable> items_{nullptr};
+        std::function<void(winrt::hstring const&)> copy_;
+        double measure_{720.0};
+    };
+
+    // The semantic edge brush for a state. Controller cards and replies use it so
+    // authority and outcome stay recognisable without a grid of equal boxes.
+    winrt::Microsoft::UI::Xaml::Media::Brush EdgeBrushFor(EntryState state);
+
+    // Human-readable state label. Always rendered beside the edge colour.
+    winrt::hstring StateLabel(EntryState state);
+
+    // Exact full CLI names. The product never abbreviates them.
+    inline constexpr wchar_t HermesName[] = L"Hermes Agent CLI";
+    inline constexpr wchar_t KiloName[] = L"Kilo Code CLI";
+    inline constexpr wchar_t ClaudeName[] = L"Claude Code CLI";
+}

@@ -1,6 +1,8 @@
 # Mayasaba — real native Windows implementation
 
-> **2026-10-15 project-selector amendment:** [Approved Screen 2 contract](../docs/PROJECT-SELECTION.md) replaces automatic last-project Chat startup with explicit selection on later launches, adds recent projects and explicit empty-folder creation, and routes File → Switch Project through the selector. This amendment is documentation/preview only: native UI, recent-list query metadata, create-folder typed command/fixtures and recovery proof remain pending. Earlier launch validation applies to the previous requirement and does not certify this amendment.
+> **2026-10-15 project-selector amendment:** [Approved Screen 2 contract](../docs/PROJECT-SELECTION.md) replaces automatic last-project Chat startup with explicit selection on later launches, adds recent projects and explicit empty-folder creation, and routes File → Switch Project through the selector.
+>
+> **2026-10-16 three-screen refinement:** the Welcome, Project selection and Chat screens and their presentation wiring are implemented natively and locally verified — see [the validation record](LOCAL-VALIDATION.md) for the artifacts, the observations and the UX-01 to UX-32 matrix. New native units: `Motion.*` (motion and elevation), `RichText.*` (bounded reply renderer), `Timeline.*` (typed projections and the virtualized timeline), `Fixtures.*` (opt-in test fixture harness). `tests/seed_store.*` seeds an isolated store for UI verification and refuses the production store path.
 
 **Implementation status: INCOMPLETE.** This directory contains a **real native C++20 / C++/WinRT / WinUI 3 unpackaged application starting slice**, not a renamed browser preview. Windows App SDK 2.5.1 and Microsoft.Windows.CppWinRT 3.0.260818.1 are pinned in the `.vcxproj`. Initial x64 support targets the previously approved Windows 11 system class. A local Release x64 build and native Welcome/Open Folder launch were verified on 2026-10-14 using VS 18 Enterprise with the v145 toolset. See [local validation](LOCAL-VALIDATION.md) for commands, evidence and outstanding runtime checks. This does not establish full application acceptance.
 
@@ -14,6 +16,11 @@
 - Persistent Start/Pause/Stop header controls and visible per-CLI `UNSUPPORTED` readiness, with truthful explanations instead of simulated native CLI actions. Exact standalone slash controls are recognized but **not dispatched** until the adapters are proven safe.
 
 ## Still missing — NOT an end-to-end application
+
+The three-screen UI slice is implemented; the following runtime dependencies are not, so
+the **live three-agent application workflow is blocked**. Nothing in the UI pretends
+otherwise: every dependent surface shows a precise unavailable or waiting state, and the
+fixture harness that exercises reply/work states is opt-in and clearly labelled.
 
 - Native Hermes/Kilo Code/Claude Code capability probes, persistent CLI supervision, per-operation confinement, effective descendant/service revocation, automatic project-safe Start/Stop, safe handoff and real controller session evidence.
 - Full approved `SubmitUserContribution` schema/owner/event/outbox/idempotency receipt, complete attachment byte handling, and unknown-commit reconciliation with durable original submission identity.

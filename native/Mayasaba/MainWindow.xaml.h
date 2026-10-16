@@ -4,6 +4,8 @@
 #include "SerialQueue.h"
 #include "ProjectService.h"
 #include "ProjectRoot.h"
+#include "Motion.h"
+#include "Timeline.h"
 #include <memory>
 #include <string>
 #include <winrt/Windows.Foundation.h>
@@ -45,6 +47,13 @@ namespace winrt::Mayasaba::implementation
         void OnRecentPrevious(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnRecentNext(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnRetryStore(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        // Presentation-only handlers introduced by the three-screen refinement.
+        void OnHeroPointerMoved(IInspectable const&, Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&);
+        void OnHeroPointerExited(IInspectable const&, Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&);
+        void OnChatBodySizeChanged(IInspectable const&, Microsoft::UI::Xaml::SizeChangedEventArgs const&);
+        void OnRootSizeChanged(IInspectable const&, Microsoft::UI::Xaml::SizeChangedEventArgs const&);
+        void OnHistoryViewChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const&);
+        void OnJumpToLatest(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
 
     public:
         enum class SelectorContext
@@ -82,22 +91,51 @@ namespace winrt::Mayasaba::implementation
         std::string pendingAttemptBody_;
         Microsoft::UI::Xaml::DispatcherTimer draftTimer_{nullptr};
 
-        // Motion is a status and affordance language, never ambience. The onboarding hero
-        // storyboards run only while the OS animation setting is on AND the welcome screen is
-        // visible, so reduced motion disables every ambient loop and no loop keeps running
-        // behind Chat. See ApplyMotionPreference() and ApplyHeroMotion().
+        // ------------------------------------------------------------------
+        // Presentation state. None of this is domain state: it never gates an
+        // action, never delays Stop and never confirms persistence.
+        // ------------------------------------------------------------------
+
+        // Shared motion and elevation utility. Every transition and every shadow on
+        // all three screens goes through it, so reduced motion and high contrast
+        // are enforced in exactly one place.
+        mayasaba::ui::MotionController motion_;
+        // The virtualized timeline. Cards are built on realization.
+        winrt::com_ptr<mayasaba::ui::TimelineRenderer> timeline_;
+        // The ambient onboarding hero storyboards. They run only while the OS
+        // animation setting is on AND high contrast is off AND the Welcome screen
+        // is visible, so no loop keeps running behind Chat.
         Microsoft::UI::Xaml::Media::Animation::Storyboard heroLevitate_{nullptr};
         Microsoft::UI::Xaml::Media::Animation::Storyboard heroGlow_{nullptr};
         Microsoft::UI::Xaml::Media::Animation::Storyboard heroOrbitOuter_{nullptr};
         Microsoft::UI::Xaml::Media::Animation::Storyboard heroOrbitInner_{nullptr};
         winrt::Windows::UI::ViewManagement::UISettings uiSettings_{nullptr};
+        winrt::Windows::UI::ViewManagement::AccessibilitySettings accessibilitySettings_{nullptr};
         winrt::event_token animationsEnabledChangedToken_{};
+        winrt::event_token highContrastChangedToken_{};
         bool motionSubscriptionActive_{false};
+        bool highContrastSubscriptionActive_{false};
         bool windowClosed_{false};
         bool animationsEnabled_{true};
+        bool highContrast_{false};
+        // Adaptive layout state, so a size change does not rebuild the screen.
+        bool compactChatBody_{false};
+        bool heroArtVisible_{true};
+        bool readinessStacked_{false};
+        bool narrowLayout_{false};
 
-        // Incremental timeline rendering. Only entries appended after the first render animate,
-        // so restored history never replays an insertion transition.
+        // Reading stability. `following_` is true only while the reader is at the
+        // end of the timeline; `unseen_` counts entries appended since then.
+        bool following_{true};
+        std::size_t unseen_{0};
+        // Set only by the opt-in fixture harness; production startup leaves it false.
+        bool fixturesActive_{false};
+        // Set for exactly one refresh when a confirmed first save moves the composer.
+        bool showChatDockTransition_{false};
+        std::string fixtureMode_;
+
+        // Incremental timeline rendering. Only entries appended after the first
+        // render animate, so restored history never replays an insertion transition.
         std::string renderedProject_;
         std::size_t renderedCount_{0};
 
@@ -105,16 +143,29 @@ namespace winrt::Mayasaba::implementation
 
         void ApplyMotionPreference();
         void ApplyHeroMotion(bool running);
-        void ApplyScreenMotion();
-        void ApplyTimelineMotion();
+        void ApplyHighContrast();
         void RevokeMotionSubscription();
+        void RevokeAccessibilitySubscription();
+        void ApplyElevationCues();
         void ShowWelcome();
         void ShowFolder(SelectorContext context = SelectorContext::FirstRun);
         void ShowChat();
         winrt::fire_and_forget LoadChatAsync(std::string id, uint64_t gen);
         winrt::fire_and_forget InitializeStoreAsync();
         winrt::fire_and_forget SaveProjectDraftAsync(std::string id, std::string text);
-        void RenderHistory();
+        // Rebuilds or extends the timeline from historyCache_. `dockTransition` is
+        // true only for the first confirmed save, which animates the connected Dock.
+        void RenderHistory(bool dockTransition = false);
+        void ApplyChatLayout(bool dockTransition);
+        void ApplyResponsiveLayout();
+        // Keeps every full CLI name visible: the readiness entries are compact on a
+        // wide window and stack vertically on a narrow one.
+        void ApplyReadinessLayout(double width);
+        void UpdateJumpToLatest();
+        void ScrollToEnd();
+        void CopyToClipboard(winrt::hstring const& text);
+        std::vector<mayasaba::ui::TimelineEntry> ProjectHistoryEntries() const;
+        mayasaba::ui::TimelineEntry ConditionCard() const;
         std::vector<mayasaba::Contribution> historyCache_;
         // Neither returns a result: queuing a save is not a persistence receipt, so no
         // caller may treat a `true` as confirmed preservation. Failures surface through
