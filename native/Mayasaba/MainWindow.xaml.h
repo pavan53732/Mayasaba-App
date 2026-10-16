@@ -24,7 +24,6 @@ namespace winrt::Mayasaba::implementation
         void OnChooseFolder(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnSwitchProject(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnDraftChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::TextChangedEventArgs const&);
-        void OnPrebindDraftChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::TextChangedEventArgs const&);
         void OnComposerKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnSend(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnStart(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
@@ -66,7 +65,6 @@ namespace winrt::Mayasaba::implementation
     private:
         std::unique_ptr<mayasaba::Storage> storage_;
         mayasaba::SerialQueue selectorQueue_;
-        bool suppressPrebind_{false};
         bool selectionBusy_{false};
         bool projectClosed_{false}, navigationBusy_{false}, allowClose_{false}, pickerOpen_{false};
         size_t recentOffset_{0};
@@ -81,7 +79,6 @@ namespace winrt::Mayasaba::implementation
         bool BeginSelection();
         bool FinishSelection(uint64_t gen);
         std::string activeProject_;
-        std::wstring prebindingDraft_;
         SelectorContext selectorContext_{SelectorContext::FirstRun};
         std::string collisionTargetProjectId_;
         bool suppressDraft_{false};
@@ -128,6 +125,10 @@ namespace winrt::Mayasaba::implementation
         // end of the timeline; `unseen_` counts entries appended since then.
         bool following_{true};
         std::size_t unseen_{0};
+        // True while a scroll-to-end request has not yet landed at the bottom.
+        bool pendingScrollToEnd_{false};
+        bool scrollingToEnd_{false};
+        double lastScrollTarget_{-1.0};
         // Set only by the opt-in fixture harness; production startup leaves it false.
         bool fixturesActive_{false};
         // Set for exactly one refresh when a confirmed first save moves the composer.
@@ -138,6 +139,12 @@ namespace winrt::Mayasaba::implementation
         // render animate, so restored history never replays an insertion transition.
         std::string renderedProject_;
         std::size_t renderedCount_{0};
+        // Which controller condition the trailing condition card currently shows.
+        // -1 means no condition card is present.
+        int renderedConditionKind_{-1};
+        // Whether the reader has the condition card's detail expanded. Persisted
+        // across the card's rebuild so an open detail is never closed by an update.
+        bool conditionDetailsOpen_{false};
 
         std::atomic_uint64_t selectorGeneration_{0};
 
@@ -163,15 +170,22 @@ namespace winrt::Mayasaba::implementation
         void ApplyReadinessLayout(double width);
         void UpdateJumpToLatest();
         void ScrollToEnd();
+        // Attempts to land at the end of the timeline and keeps retrying while the
+        // request is outstanding: the repeater's extent is not current until its
+        // newly created elements have been measured, so a single ChangeView can
+        // target a stale maximum and leave the newest entry just below the fold.
+        void TryScrollToEnd();
         void CopyToClipboard(winrt::hstring const& text);
         std::vector<mayasaba::ui::TimelineEntry> ProjectHistoryEntries() const;
         mayasaba::ui::TimelineEntry ConditionCard() const;
+        // Identifies which controller condition the rendered card shows, so an
+        // unchanged condition does not rebuild its card and close an open detail.
+        int ConditionKind() const;
         std::vector<mayasaba::Contribution> historyCache_;
         // Neither returns a result: queuing a save is not a persistence receipt, so no
         // caller may treat a `true` as confirmed preservation. Failures surface through
         // ShowNotice from the background completion instead.
         void PersistDraft();
-        void PersistPrebindDraft();
         void SendCurrent();
         winrt::fire_and_forget SubmitAsync(std::string id, std::string submission, std::string text);
         void ShowNotice(winrt::hstring const& text, bool error=false);
@@ -184,9 +198,6 @@ namespace winrt::Mayasaba::implementation
         winrt::fire_and_forget LocateProjectAsync(std::string id);
         winrt::fire_and_forget PickFolderAsync();
         winrt::fire_and_forget OnCreateAndOpenFolderAsync();
-        winrt::fire_and_forget OnUsePrebindDraftAsync(std::string id, uint64_t gen);
-        winrt::fire_and_forget OnKeepTargetDraftAsync(std::string id, uint64_t gen);
-        winrt::fire_and_forget SavePrebindDraftAsync(std::string text, uint64_t gen, uint64_t revision);
     };
 }
 namespace winrt::Mayasaba::factory_implementation

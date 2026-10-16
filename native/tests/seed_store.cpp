@@ -66,12 +66,33 @@ int wmain(int argc, wchar_t** argv)
     {
         if (argc < 3)
         {
-            std::wcerr << L"usage: seed_store <store.db> <project-folder> [contribution-count]\n";
+            std::wcerr << L"usage: seed_store <store.db> <project-folder> [contribution-count] [--stage-pending <text>]\n";
             return 2;
         }
         std::filesystem::path const storePath{argv[1]};
         std::wstring const projectFolder{argv[2]};
-        int const contributionCount = argc > 3 ? std::stoi(argv[3]) : 0;
+
+        // Positional count, then an optional fault-seeding flag. The flag exists so the
+        // unresolved-submission path can be exercised without waiting for a real failure.
+        int contributionCount = 0;
+        std::string pendingText;
+        for (int index = 3; index < argc; ++index)
+        {
+            std::wstring const argument{argv[index]};
+            if (argument == L"--stage-pending")
+            {
+                if (index + 1 >= argc)
+                {
+                    std::wcerr << L"--stage-pending requires the pending submission text\n";
+                    return 2;
+                }
+                pendingText = ToUtf8(argv[++index]);
+            }
+            else
+            {
+                contributionCount = std::stoi(argument);
+            }
+        }
 
         RefuseProductionPath(storePath);
         if (!std::filesystem::exists(projectFolder))
@@ -94,13 +115,31 @@ int wmain(int argc, wchar_t** argv)
                 ". This text exists only to exercise the native timeline renderer, its "
                 "reading position and its bounded update batches. It is a stored user "
                 "contribution, not an agent reply, and no reply is claimed for it.";
-            store.SaveContribution(projectId, submissionId, body);
+            // A contribution may only be committed against a staged submission, so the
+            // durable intent is recorded first. Calling SaveContribution directly
+            // returns Conflict and would silently produce an empty history.
+            auto const staged = store.StageSubmission(projectId, submissionId, body);
+            auto const disposition = store.SaveContribution(projectId, staged, body);
+            if (disposition != mayasaba::SaveDisposition::Saved &&
+                disposition != mayasaba::SaveDisposition::Duplicate)
+            {
+                throw std::runtime_error("Seeded contribution was refused with disposition " +
+                    std::to_string(static_cast<int>(disposition)));
+            }
+        }
+
+        // An unresolved submission: the durable pending row the controller must
+        // reconcile before any new contribution may be accepted for this project.
+        if (!pendingText.empty())
+        {
+            store.StageSubmission(projectId, mayasaba::NewUuid(), pendingText);
         }
 
         auto const record = store.Project(projectId);
         std::cout << "seeded project " << (record ? record->id : std::string{"<none>"}) << "\n";
         std::cout << "canonical path " << (record ? record->canonicalPath : std::string{"<none>"}) << "\n";
         std::cout << "contributions " << contributionCount << "\n";
+        std::cout << "pending submission " << (pendingText.empty() ? "none" : pendingText) << "\n";
         return 0;
     }
     catch (std::exception const& e)

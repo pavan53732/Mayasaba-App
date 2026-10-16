@@ -117,6 +117,59 @@ namespace winrt::Mayasaba::implementation
         HistoryRepeater().ItemTemplate(timeline_.as<Microsoft::UI::Xaml::IElementFactory>());
         HistoryRepeater().ItemsSource(timeline_->Items());
 
+        // A reader-initiated detail toggle on the condition card is persisted, so the
+        // card can be rebuilt to stay last in the timeline without closing it.
+        // A scroll-to-end request is retried on each layout pass until it lands, so
+        // the view reaches the true bottom regardless of when the repeater measures
+        // the elements it just created.
+        auto const layoutWeak = get_weak();
+        HistoryScroller().LayoutUpdated([layoutWeak](IInspectable const&, IInspectable const&)
+        {
+            if (auto const self = layoutWeak.get())
+            {
+                if (self->following_)
+                {
+                    auto const scroller = self->HistoryScroller();
+                    double const extent = scroller.ScrollableHeight();
+                    if (extent > 0.0 && (extent - scroller.VerticalOffset()) > 24.0)
+                    {
+                        self->pendingScrollToEnd_ = true;
+                        self->TryScrollToEnd();
+                    }
+                }
+            }
+        });
+
+        // The repeater creates elements lazily, so the scroll extent is not real
+        // until the tail has been realized. Preparing the last element is the
+        // deterministic signal that the extent is now final.
+        HistoryRepeater().ElementPrepared([layoutWeak](Microsoft::UI::Xaml::Controls::ItemsRepeater const&,
+            Microsoft::UI::Xaml::Controls::ItemsRepeaterElementPreparedEventArgs const& args)
+        {
+            if (auto const self = layoutWeak.get())
+            {
+                if (self->timeline_ && args.Index() >= static_cast<int>(self->timeline_->Count()) - 1)
+                {
+                    if (self->following_)
+                    {
+                        self->ScrollToEnd();
+                    }
+                }
+            }
+        });
+
+        auto const detailWeak = get_weak();
+        timeline_->SetDetailsToggleHandler([detailWeak](std::string const& identity, bool open)
+        {
+            if (auto const self = detailWeak.get())
+            {
+                if (identity.rfind("condition:", 0) == 0)
+                {
+                    self->conditionDetailsOpen_ = open;
+                }
+            }
+        });
+
         // The opt-in fixture harness is read exactly once. Production startup never
         // sets the variable, so fixture records cannot appear in ordinary use.
         fixtureMode_ = mayasaba::ui::FixtureMode();
@@ -185,23 +238,27 @@ namespace winrt::Mayasaba::implementation
         auto uiQueue = DispatcherQueue();
         std::unique_ptr<mayasaba::Storage> store;
         bool hasProjects = false;
-        std::string draft, error;
+        std::string error;
         try
         {
             co_await selectorQueue_.Background();
             store = std::make_unique<mayasaba::Storage>(mayasaba::Storage::DefaultFile());
+            // 2026-10-17: the Screen 2 pre-binding composer was removed at the user's direction, so no UI
+            // path can write, display or transfer a pre-binding draft. Clear any orphaned draft left behind
+            // by an older build before the selector is presented; otherwise Storage::CommitSelection raises
+            // a phantom "Selector pre-binding draft" collision for text the user never typed. The empty()
+            // guard keeps this a pure read on a store that never carried one, so a normal launch performs no
+            // write. ClearPrebindDraft is a bare UPDATE, unlike SavePrebindDraft(""), which would also run
+            // CheckWriteCapacity and reserve a draft revision that nothing consumes.
+            if (!store->GetPrebindDraft().empty())
+                store->ClearPrebindDraft();
             hasProjects = store->HasAnyProjects();
-            draft = store->GetPrebindDraft();
         }
         catch (std::exception const& e) { error = e.what(); }
         if (!co_await resume_foreground(uiQueue)) co_return;
         if (windowClosed_) co_return;
         if (!error.empty()) { ShowFolder(SelectorContext::Startup); RetryStoreButton().Visibility(Visibility::Visible); ShowNotice(L"Store initialization blocked: " + Utf16(error) + L". Retry opening the store or Exit; no empty-list result is claimed.", true); co_return; }
         storage_ = std::move(store);
-        prebindingDraft_ = Utf16(draft);
-        suppressPrebind_ = true;
-        PrebindDraftBox().Text(hstring{prebindingDraft_});
-        suppressPrebind_ = false;
         ChooseFolderButton().IsEnabled(true);
         CreateNewProjectButton().IsEnabled(true);
         RetryStoreButton().Visibility(Visibility::Collapsed);
@@ -484,9 +541,7 @@ namespace winrt::Mayasaba::implementation
         CreateFolderPanel().Visibility(Visibility::Collapsed);
         DraftCollisionPanel().Visibility(Visibility::Collapsed);
 
-        suppressPrebind_ = true;
-        PrebindDraftBox().Text(hstring{prebindingDraft_});
-        suppressPrebind_ = false;
+
 
         RefreshRecentProjects();
         motion_.Enter(FolderStack(), 10, 0);
@@ -645,6 +700,16 @@ namespace winrt::Mayasaba::implementation
         return entry;
     }
 
+    // Identifies the controller condition the trailing card reports. Two states
+    // that render the same condition must not rebuild the card, or an open detail
+    // would close every time an ordinary new message arrives.
+    int MainWindow::ConditionKind() const
+    {
+        if (projectClosed_) return 0;
+        if (!pendingAttemptId_.empty()) return 1;
+        return 2;
+    }
+
     // Rebuilds or extends the timeline. Restored history never replays an entrance
     // transition; only newly appended conversation receives the insertion motion.
     void MainWindow::RenderHistory(bool dockTransition)
@@ -660,7 +725,18 @@ namespace winrt::Mayasaba::implementation
             }
             auto const history = ProjectHistoryEntries();
             entries.insert(entries.end(), history.begin(), history.end());
-            if (!history.empty()) entries.push_back(ConditionCard());
+            conditionDetailsOpen_ = false;
+            if (!history.empty())
+            {
+                auto card = ConditionCard();
+                card.detailsOpen = conditionDetailsOpen_;
+                entries.push_back(std::move(card));
+                renderedConditionKind_ = ConditionKind();
+            }
+            else
+            {
+                renderedConditionKind_ = -1;
+            }
             timeline_->ReplaceAll(std::move(entries));
             renderedProject_ = activeProject_;
             renderedCount_ = historyCache_.size();
@@ -675,10 +751,13 @@ namespace winrt::Mayasaba::implementation
                 UpdateJumpToLatest();
                 return;
             }
-            // The condition card is always the last entry, so it is refreshed rather
-            // than accumulated. It is marked silent so it never re-animates.
-            bool const hadCondition = renderedCount_ > 0;
-            if (hadCondition) timeline_->RemoveLast();
+            // The condition card reports the CURRENT controller condition, so it must
+            // stay last. It is removed BEFORE the new entries are appended: removing it
+            // afterwards would delete the new message, which is the last item by then.
+            // Its expansion state is carried across so an open detail survives, and it
+            // is marked silent so the refresh never re-animates.
+            int const desired = ConditionKind();
+            if (renderedConditionKind_ >= 0) timeline_->RemoveLast();
             for (std::size_t index = renderedCount_; index < historyCache_.size(); ++index)
             {
                 auto const& item = historyCache_[index];
@@ -692,7 +771,10 @@ namespace winrt::Mayasaba::implementation
                 timeline_->Append(std::move(entry));
                 if (!following_) ++unseen_;
             }
-            timeline_->Append(ConditionCard());
+            auto card = ConditionCard();
+            card.detailsOpen = conditionDetailsOpen_;
+            timeline_->Append(std::move(card));
+            renderedConditionKind_ = desired;
             renderedCount_ = historyCache_.size();
         }
 
@@ -700,7 +782,9 @@ namespace winrt::Mayasaba::implementation
         UpdateJumpToLatest();
         if (following_)
         {
-            ScrollToEnd();
+            pendingScrollToEnd_ = true;
+            lastScrollTarget_ = -1.0;
+            TryScrollToEnd();
         }
     }
 
@@ -807,25 +891,92 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::ScrollToEnd()
     {
-        HistoryScroller().ChangeView(nullptr, HistoryScroller().ScrollableHeight(), nullptr, true);
+        pendingScrollToEnd_ = true;
+        lastScrollTarget_ = -1.0;
+        TryScrollToEnd();
+    }
+
+    void MainWindow::TryScrollToEnd()
+    {
+        if (windowClosed_ || !pendingScrollToEnd_ || scrollingToEnd_) return;
+        scrollingToEnd_ = true;
+        auto const scroller = HistoryScroller();
+
+        if (timeline_ && !timeline_->Empty())
+        {
+            int const lastIndex = static_cast<int>(timeline_->Count()) - 1;
+            if (lastIndex >= 0)
+            {
+                try
+                {
+                    auto const element = HistoryRepeater().GetOrCreateElement(lastIndex);
+                    if (element)
+                    {
+                        HistoryRepeater().UpdateLayout();
+                        scroller.RegisterAnchorCandidate(element);
+                        if (auto const framework = element.try_as<FrameworkElement>())
+                        {
+                            framework.UpdateLayout();
+                            BringIntoViewOptions options;
+                            options.AnimationDesired(false);
+                            options.VerticalAlignmentRatio(1.0);
+                            framework.StartBringIntoView(options);
+                        }
+                    }
+                }
+                catch (...)
+                {
+                }
+            }
+        }
+
+        double const extent = scroller.ScrollableHeight();
+        if (extent > 0.0 && extent != lastScrollTarget_)
+        {
+            lastScrollTarget_ = extent;
+            scroller.ChangeView(nullptr, extent, nullptr, true);
+        }
+
+        if (extent > 0.0 && (extent - scroller.VerticalOffset()) <= 24.0)
+        {
+            pendingScrollToEnd_ = false;
+            lastScrollTarget_ = -1.0;
+        }
+        scrollingToEnd_ = false;
     }
 
     void MainWindow::OnJumpToLatest(IInspectable const&, RoutedEventArgs const&)
     {
         if (windowClosed_) return;
-        ScrollToEnd();
         following_ = true;
         unseen_ = 0;
+        ScrollToEnd();
         UpdateJumpToLatest();
     }
 
     void MainWindow::OnHistoryViewChanged(IInspectable const&,
-        Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const&)
+        Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const& e)
     {
         if (windowClosed_) return;
         auto const scroller = HistoryScroller();
-        double const remaining = scroller.ScrollableHeight() - scroller.VerticalOffset();
-        bool const atEnd = remaining <= 4.0;
+        double const extent = scroller.ScrollableHeight();
+        bool const atEnd = extent > 0.0 && (extent - scroller.VerticalOffset()) <= 24.0;
+        if (pendingScrollToEnd_)
+        {
+            if (atEnd && !e.IsIntermediate() && !scrollingToEnd_)
+            {
+                pendingScrollToEnd_ = false;
+                lastScrollTarget_ = -1.0;
+                following_ = true;
+                unseen_ = 0;
+                UpdateJumpToLatest();
+            }
+            else
+            {
+                TryScrollToEnd();
+            }
+            return;
+        }
         if (atEnd != following_)
         {
             following_ = atEnd;
@@ -933,12 +1084,6 @@ namespace winrt::Mayasaba::implementation
         if (!co_await resume_foreground(uiQueue)) co_return;
         if (!windowClosed_ && !error.empty()) ShowNotice(L"Draft not confirmed saved: " + Utf16(error), true);
     }
-    void MainWindow::PersistPrebindDraft()
-    {
-        if (!storage_) return;
-        // TextChanged already queued every edit. Never enqueue stale display text
-        // again during cancellation or after a successful transfer.
-    }
 
     void MainWindow::OnWelcomeNext(IInspectable const&, RoutedEventArgs const&)
     {
@@ -1006,7 +1151,6 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::OnWelcomeBack(IInspectable const&, RoutedEventArgs const&)
     {
-        PersistPrebindDraft();
         ShowWelcome();
     }
 
@@ -1027,42 +1171,7 @@ namespace winrt::Mayasaba::implementation
     }
 
 
-    void MainWindow::OnPrebindDraftChanged(IInspectable const&, TextChangedEventArgs const&)
-    {
-        if (suppressPrebind_ || !storage_) return;
-        prebindingDraft_ = PrebindDraftBox().Text().c_str();
-        SavePrebindDraftAsync(Utf8(prebindingDraft_), selectorGeneration_, storage_->ReservePrebindRevision());
-    }
 
-    winrt::fire_and_forget MainWindow::SavePrebindDraftAsync(std::string text, uint64_t gen, uint64_t revision)
-    {
-        auto keepAlive = get_strong();
-        auto uiQueue = DispatcherQueue();
-        std::string errMsg;
-        try
-        {
-            co_await selectorQueue_.Background();
-            if (storage_)
-            {
-                storage_->SavePrebindDraft(text, revision);
-            }
-        }
-        catch (std::exception const& ex)
-        {
-            errMsg = ex.what();
-        }
-        catch (...)
-        {
-            errMsg = "Unknown database error saving selector draft";
-        }
-
-        if (!errMsg.empty())
-        {
-            if (!co_await resume_foreground(uiQueue)) co_return;
-            if (windowClosed_ || selectorGeneration_ != gen) co_return;
-            ShowNotice(L"Selector draft save failed: " + Utf16(errMsg), true);
-        }
-    }
     void MainWindow::OnDraftChanged(IInspectable const&, TextChangedEventArgs const&)
     {
         if(suppressDraft_) return;
@@ -1141,7 +1250,6 @@ namespace winrt::Mayasaba::implementation
     {
         if (selectionBusy_ || !storage_ || windowClosed_) return false;
         selectionBusy_ = true;
-        PrebindDraftBox().IsReadOnly(true);
         ChooseFolderButton().IsEnabled(false);
         CreateNewProjectButton().IsEnabled(false);
         RecentProjectsList().IsEnabled(false);
@@ -1152,7 +1260,6 @@ namespace winrt::Mayasaba::implementation
     {
         if (windowClosed_) return false;
         selectionBusy_ = false;
-        PrebindDraftBox().IsReadOnly(false);
         ChooseFolderButton().IsEnabled(storage_ != nullptr);
         CreateNewProjectButton().IsEnabled(storage_ != nullptr);
         RecentProjectsList().IsEnabled(true);
@@ -1221,8 +1328,6 @@ namespace winrt::Mayasaba::implementation
             motion_.Appear(DraftCollisionPanel());
             KeepTargetDraftButton().Focus(FocusState::Programmatic);co_return;
         }
-        prebindingDraft_=Utf16(result.selectorDraft);suppressPrebind_=true;
-        PrebindDraftBox().Text(hstring{prebindingDraft_});suppressPrebind_=false;
         SetVisible(CreateFolderPanel(),false);SetVisible(DraftCollisionPanel(),false);collisionRequest_.reset();createRequest_.reset();
         LoadChatAsync(result.project.id,++selectorGeneration_);
         ShowNotice(L"Project selected. CLI readiness: unsupported because native probes are not implemented. No CLI session was started.");
@@ -1426,21 +1531,18 @@ namespace winrt::Mayasaba::implementation
         navigationBusy_=true;auto alive=get_strong();auto ui=DispatcherQueue();
         bool selectionPending=selectionBusy_;
         if(selectionPending) ++selectorGeneration_;
-        auto id=activeProject_;auto draft=Utf8(ComposerBox().Text().c_str());auto prebind=Utf8(prebindingDraft_);
+        auto id=activeProject_;auto draft=Utf8(ComposerBox().Text().c_str());
         bool saveProject=!id.empty() && !projectClosed_;auto wasReadOnly=ComposerBox().IsReadOnly();
-        ComposerBox().IsReadOnly(true);PrebindDraftBox().IsReadOnly(true);draftTimer_.Stop();
+        ComposerBox().IsReadOnly(true);draftTimer_.Stop();
         returnFocus_=Input::FocusManager::GetFocusedElement(Content().as<FrameworkElement>().XamlRoot()).try_as<Control>();
         std::string error;
         try{co_await selectorQueue_.Background();
-            if(saveProject && !storage_->Pending(id))storage_->SaveDraft(id,draft);
-            if(!selectionPending)storage_->SavePrebindDraft(prebind);
-            prebind=storage_->GetPrebindDraft();}
+            if(saveProject && !storage_->Pending(id))storage_->SaveDraft(id,draft);}
         catch(std::exception const& e){error=e.what();}
         if(!co_await resume_foreground(ui))co_return;
         if(windowClosed_)co_return;
-        navigationBusy_=false;ComposerBox().IsReadOnly(wasReadOnly);PrebindDraftBox().IsReadOnly(false);
+        navigationBusy_=false;ComposerBox().IsReadOnly(wasReadOnly);
         if(!error.empty()){ShowNotice(L"Draft preservation failed; navigation was stopped: "+Utf16(error),true);co_return;}
-        prebindingDraft_=Utf16(prebind);
         if(exit){++selectorGeneration_;allowClose_=true;Close();}
         else ShowFolder(SelectorContext::Switching);
     }

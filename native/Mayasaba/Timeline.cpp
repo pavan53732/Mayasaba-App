@@ -95,6 +95,46 @@ namespace mayasaba::ui
             Automation::AutomationProperties::SetName(button, automationName);
             return button;
         }
+
+        // Wires a Show/Hide details toggle. `open` is the persisted initial state so a
+        // card rebuilt to stay last in the timeline keeps the reader's expansion, and
+        // every toggle is reported back so the caller can persist it.
+        void WireDetails(Button const& toggle, StackPanel const& host, bool open,
+                         hstring const& showName, hstring const& hideName,
+                         mayasaba::ui::MotionController* motion,
+                         std::function<void(std::string const&, bool)> const& report,
+                         std::string const& identity)
+        {
+            if (open)
+            {
+                host.Visibility(Visibility::Visible);
+                toggle.Content(box_value(hstring{L"Hide details"}));
+                Automation::AutomationProperties::SetName(toggle, hideName);
+            }
+            auto weakHost = make_weak(host);
+            auto weakToggle = make_weak(toggle);
+            toggle.Click([motion, weakHost, weakToggle, showName, hideName, report, identity](auto const&, auto const&)
+            {
+                auto const detail = weakHost.get();
+                auto const button = weakToggle.get();
+                if (!detail || !button) return;
+                bool const showing = detail.Visibility() == Visibility::Visible;
+                if (showing)
+                {
+                    detail.Visibility(Visibility::Collapsed);
+                    button.Content(box_value(hstring{L"Show details"}));
+                    Automation::AutomationProperties::SetName(button, showName);
+                }
+                else
+                {
+                    detail.Visibility(Visibility::Visible);
+                    if (motion) motion->Appear(detail);
+                    button.Content(box_value(hstring{L"Hide details"}));
+                    Automation::AutomationProperties::SetName(button, hideName);
+                }
+                if (report) report(identity, !showing);
+            });
+        }
     }
 
     Brush EdgeBrushFor(EntryState state)
@@ -368,29 +408,8 @@ namespace mayasaba::ui
                     detailsHost.Children().Append(RenderRichText(entry.details, options));
                 }
 
-                auto* motion = &motion_;
-                auto weakHost = make_weak(detailsHost);
-                auto weakToggle = make_weak(toggle);
-                toggle.Click([motion, weakHost, weakToggle](auto const&, auto const&)
-                {
-                    auto const host = weakHost.get();
-                    auto const button = weakToggle.get();
-                    if (!host || !button) return;
-                    bool const showing = host.Visibility() == Visibility::Visible;
-                    if (showing)
-                    {
-                        host.Visibility(Visibility::Collapsed);
-                        button.Content(box_value(hstring{L"Show details"}));
-                        Automation::AutomationProperties::SetName(button, L"Show reply details");
-                    }
-                    else
-                    {
-                        host.Visibility(Visibility::Visible);
-                        if (motion) motion->Appear(host);
-                        button.Content(box_value(hstring{L"Hide details"}));
-                        Automation::AutomationProperties::SetName(button, L"Hide reply details");
-                    }
-                });
+                WireDetails(toggle, detailsHost, entry.detailsOpen,
+                                L"Show reply details", L"Hide reply details", &motion_, detailsToggle_, entry.identity);
                 actions.Children().Append(toggle);
 
                 if (copy_)
@@ -480,29 +499,8 @@ namespace mayasaba::ui
                 detailsHost.Children().Append(divider);
                 detailsHost.Children().Append(RenderRichText(entry.details, options));
             }
-            auto* motion = &motion_;
-            auto weakHost = make_weak(detailsHost);
-            auto weakToggle = make_weak(toggle);
-            toggle.Click([motion, weakHost, weakToggle](auto const&, auto const&)
-            {
-                auto const host = weakHost.get();
-                auto const button = weakToggle.get();
-                if (!host || !button) return;
-                bool const showing = host.Visibility() == Visibility::Visible;
-                if (showing)
-                {
-                    host.Visibility(Visibility::Collapsed);
-                    button.Content(box_value(hstring{L"Show details"}));
-                    Automation::AutomationProperties::SetName(button, L"Show card details");
-                }
-                else
-                {
-                    host.Visibility(Visibility::Visible);
-                    if (motion) motion->Appear(host);
-                    button.Content(box_value(hstring{L"Hide details"}));
-                    Automation::AutomationProperties::SetName(button, L"Hide card details");
-                }
-            });
+            WireDetails(toggle, detailsHost, entry.detailsOpen,
+                        L"Show card details", L"Hide card details", &motion_, detailsToggle_, entry.identity);
             actions.Children().Append(toggle);
             card.Children().Append(actions);
             card.Children().Append(detailsHost);

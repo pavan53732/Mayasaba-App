@@ -74,6 +74,9 @@ namespace mayasaba::ui
         // Show details body. Rendered as safe rich text; never a route.
         std::string details;
         bool detailsAvailable{false};
+        // Renders the detail already expanded. Persisted by the caller so a card
+        // rebuilt to stay last in the timeline does not close what the reader opened.
+        bool detailsOpen{false};
         // True only for entries produced by the explicitly identified fixture
         // harness. Production startup can never set this.
         bool fixture{false};
@@ -114,6 +117,11 @@ namespace mayasaba::ui
         bool Empty() const noexcept { return entries_.empty(); }
 
         void SetCopyHandler(std::function<void(winrt::hstring const&)> handler) { copy_ = std::move(handler); }
+        // Reports a reader-initiated detail toggle so the caller can persist it.
+        void SetDetailsToggleHandler(std::function<void(std::string const&, bool)> handler)
+        {
+            detailsToggle_ = std::move(handler);
+        }
         void SetMeasure(double measure) { measure_ = measure; }
 
         // IElementFactory
@@ -137,6 +145,7 @@ namespace mayasaba::ui
         int64_t nextToken_{1};
         winrt::Windows::Foundation::Collections::IObservableVector<winrt::Windows::Foundation::IInspectable> items_{nullptr};
         std::function<void(winrt::hstring const&)> copy_;
+        std::function<void(std::string const&, bool)> detailsToggle_;
         double measure_{720.0};
     };
 

@@ -8,7 +8,7 @@
 
 ## What's implemented in this slice
 
-- Native XAML Welcome → required Open Folder → Chat. Welcome contains **no composer**; the Open Folder screen offers a pre-binding local draft and has Send disabled.
+- Native XAML Welcome → required Open Folder → Chat. Welcome contains **no composer**, and neither does the Open Folder screen: the single composer appears in Chat once a project root is bound. The pre-binding draft composer was removed on 2026-10-17 at the user's direction.
 - Real Windows folder-picker API, initialized with the native window handle, used for first selection and `File → Switch Project` (outside Chat). Cancellation never changes the active project.
 - Local fixed-drive ordinary-directory root validation, native volume/file identity and canonical path, with no file scan, Git operation or provider invocation from binding.
 - Windows per-user SQLite store using the OS `winsqlite3` library, a single-writer instance mutex, WAL and `synchronous=FULL`. Project identity and version-guarded closed/reopened flag, per-project unsent drafts, and immutable keyed contributions are persisted.

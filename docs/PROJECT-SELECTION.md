@@ -33,7 +33,9 @@ Closed projects remain listed. Selecting one opens retained history read-only; i
 
 ### Drafts, state and safety
 
-Project drafts remain attached to their original project. Opening the selector never copies the active project's draft or attachments into another project. A separately entered pre-binding draft remains an unsent draft; selection must not overwrite an existing target-project draft. Preserve both and ask for explicit disposition if there is a collision. No selection submits a message.
+Project drafts remain attached to their original project. Opening the selector never copies the active project's draft or attachments into another project. No selection submits a message.
+
+**2026-10-17 amendment (user-directed): the pre-binding draft composer was removed from Screen 2.** Screen 2 no longer offers a draft box; a message is typed in Chat once a project is bound. The storage-level pre-binding draft APIs remain and stay covered by the native suite, but no UI path writes one, so the selector neither loads, displays nor transfers a pre-binding draft.
 
 Changing the active binding still requires the existing isolation, pause and bounded-reconciliation rules. Missing proof keeps the candidate unbound and the old project authoritative; restore the old Chat with the precise blocker. Selection never silently stops active work, merges histories, retargets sessions, closes or reopens a project. Background supervision and immediate control handling remain active during selection.
 
@@ -41,4 +43,4 @@ The list, selection and drafts never depend on CLI readiness. Successful binding
 
 ### Acceptance additions
 
-Verify first-run Welcome → selector → Chat; later launch → selector without automatic last-project binding; recent-project ordering and truthful status; empty list; open/closed history restoration; missing/moved/identity-mismatched roots; picker cancellation; create success/collision/denial/unknown outcome; switch cancellation and unsafe-switch refusal; separate project drafts and pre-binding draft collision; keyboard focus, screen-reader labels, reduced motion and high contrast. No result is certified by the HTML preview.
+Verify first-run Welcome → selector → Chat; later launch → selector without automatic last-project binding; recent-project ordering and truthful status; empty list; open/closed history restoration; missing/moved/identity-mismatched roots; picker cancellation; create success/collision/denial/unknown outcome; switch cancellation and unsafe-switch refusal; separate project drafts (a pre-binding draft collision can no longer be produced from the UI, because the pre-binding composer was removed on 2026-10-17); keyboard focus, screen-reader labels, reduced motion and high contrast. No result is certified by the HTML preview.

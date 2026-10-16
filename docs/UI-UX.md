@@ -35,7 +35,7 @@ The interface should feel calm, native and direct. It is a conversation, not a d
 - The project root is the only precondition for Chat. **CLI readiness never gates Chat** — with zero, one, two or three usable CLIs, the interface and its content behave identically apart from truthful status.
 - CLI discovery runs quietly in the background and never blocks the shell.
 - Local history and project recovery controls remain available when zero agents are usable.
-- A draft may be typed on the open-folder screen; it is preserved when Chat opens and is never a submission before a root is bound.
+- No draft is offered on the open-folder screen; the single composer appears in Chat once a project root is bound.
 - Send remains disabled until an authorized project root is bound.
 
 ### 2.2 One composer, one contribution path
@@ -502,7 +502,7 @@ Draft rules:
 - selecting files does not submit the draft;
 - attachment rejection does not discard valid selections;
 - project switching must not accidentally send a draft to another project; and
-- application restart restores unsent text and selected attachment state as a Windows-user-protected local draft under the originating project, never as a submitted contribution; a pre-binding draft remains unbound until folder selection.
+- application restart restores unsent text and selected attachment state as a Windows-user-protected local draft under the originating project, never as a submitted contribution. There is no pre-binding draft: the selector offers no composer, so nothing can be typed before a root is bound.
 
 The restored draft is never automatically submitted, interpreted or shown in contribution history. A project switch cannot send or merge drafts across projects. Drafts survive switch, restart and Project Close until successful Send or explicit **Discard draft**; there is no automatic draft deletion. Discard first reconciles uncertain persistence and then removes only that draft's controller-managed bytes.
 

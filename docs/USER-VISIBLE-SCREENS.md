@@ -75,8 +75,7 @@ The native Windows application menu is outside all three screen content areas. O
 | CLOSED      Retained history                       [View history]  |
 | Missing folder: exact cause                         [Locate folder] |
 |                                                                    |
-| [Unsent pre-binding draft; never copies another project's draft]    |
-| [Send disabled]                                                    |
+| (no pre-binding draft; the composer appears in Chat)                 |
 | [Back: first introduction] / [Cancel: switching] / [Exit: startup]  |
 +--------------------------------------------------------------------+
 ```

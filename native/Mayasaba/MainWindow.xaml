@@ -515,25 +515,6 @@
                                 </StackPanel>
                             </Border>
 
-                            <!-- Pre-binding composer: an unsent draft, never a submission. -->
-                            <Border Style="{StaticResource MayasabaCardSurface}"
-                                    CornerRadius="{StaticResource MayasabaRadiusComposer}">
-                                <StackPanel Spacing="8">
-                                    <TextBlock Text="Draft a message before choosing a folder"
-                                               Style="{StaticResource MayasabaMicroText}"/>
-                                    <TextBox x:Name="PrebindDraftBox" PlaceholderText="Message Mayasaba..."
-                                             AcceptsReturn="True" TextWrapping="Wrap" MinHeight="80"
-                                             MaxLength="16384"
-                                             AutomationProperties.Name="Unsent selector draft"
-                                             TextChanged="OnPrebindDraftChanged"/>
-                                    <Button Content="Send · choose a project first" IsEnabled="False"
-                                            HorizontalAlignment="Right"
-                                            CornerRadius="{StaticResource MayasabaRadiusControl}"
-                                            AutomationProperties.HelpText="Send stays disabled until an authorized project root is bound."/>
-                                    <TextBlock Text="This draft is preserved when Chat opens. It is never submitted implicitly."
-                                               Style="{StaticResource MayasabaMicroText}"/>
-                                </StackPanel>
-                            </Border>
                         </StackPanel>
                     </Grid>
                 </ScrollViewer>
@@ -646,6 +627,7 @@
                     <ScrollViewer x:Name="HistoryScroller" Grid.Row="0" Visibility="Collapsed"
                                   HorizontalScrollBarVisibility="Disabled"
                                   VerticalScrollBarVisibility="Auto"
+                                  VerticalAnchorRatio="1.0"
                                   ViewChanged="OnHistoryViewChanged">
                         <ItemsRepeater x:Name="HistoryRepeater" Margin="0,20,0,10"
                                        HorizontalAlignment="Center"
