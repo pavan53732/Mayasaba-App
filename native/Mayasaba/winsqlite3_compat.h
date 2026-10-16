@@ -62,12 +62,18 @@ int sqlite3_busy_timeout(sqlite3*, int ms);
 int sqlite3_changes(sqlite3*);
 
 int sqlite3_bind_int(sqlite3_stmt*, int, int);
+int sqlite3_bind_int64(sqlite3_stmt*, int, sqlite3_int64);
 int sqlite3_bind_text(sqlite3_stmt*, int, const char*, int,
     sqlite3_destructor_type);
 
 int sqlite3_column_int(sqlite3_stmt*, int);
 int sqlite3_column_bytes(sqlite3_stmt*, int);
 const unsigned char* sqlite3_column_text(sqlite3_stmt*, int);
+
+typedef struct sqlite3_backup sqlite3_backup;
+sqlite3_backup* sqlite3_backup_init(sqlite3* pDest, const char* zDestDb, sqlite3* pSource, const char* zSourceDb);
+int sqlite3_backup_step(sqlite3_backup* p, int nPage);
+int sqlite3_backup_finish(sqlite3_backup* p);
 
 #ifdef __cplusplus
 }

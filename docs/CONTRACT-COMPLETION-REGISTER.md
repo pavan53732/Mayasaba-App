@@ -71,7 +71,7 @@ The machine-readable [`trace-fixtures.json`](./contracts/schemas/v1/trace-fixtur
 | Twelve machines | **PASS** — C08 contains exactly twelve consecutively numbered authoritative machines and no new state owner |
 | B1–B10 | **PASS** — C09 contains one selected documentation mechanism, evidence requirement and fail-closed rule for each alternative |
 | Fixture mapping | **PASS** — T01–T22 and F01–F30 form 52 unique, schema-valid fixtures with separate boundary, physical and operational results |
-| UX scenarios | **PASS** — 85 numbered desktop scenarios are consecutive |
+| UX scenarios | **PASS (rechecked 2026-10-15)** — 87 numbered desktop scenarios are consecutive (including scenarios 86–87 for reusable Screen 2 project selection and switching) |
 | Links and tables | **PASS** — 178 Markdown links, including 136 local targets and 49 local anchors, resolve; 70 Markdown tables are structurally consistent |
 | Preview syntax | **PASS** — the illustrative HTML preview's JavaScript parses successfully |
 | Reader test | **PASS** — independent fresh-context reviews found the requested UI, authority, language, storage, Stop and proof boundaries deterministic after their reported issues were corrected |

@@ -128,16 +128,17 @@ The one composer is centered while this project has no confirmed saved user cont
 
 ```text
 NATIVE APP MENU, OUTSIDE CHAT: [File] -> [Switch Project]
-                                   |
-                         native Windows folder picker
-                                   |
+                                   │
+                   Screen 2 Project selection (modal presentation)
+                   [Recent projects] [Open existing] [Create new]
+                                   │
              +---------------------+----------------------+
-             |                     |                      |
+             │                     │                      │
           Cancel             Invalid root          Authorized root
-             |               or unsafe switch            |
-             |                     |                 Project service
-             |                     |                 binds/restores
-             v                     v                      v
+       or Escape           or unsafe switch            │
+             │                     │                Project service
+             │                     │                binds/restores
+             ▼                     ▼                      ▼
        Current Chat       Current Chat + exact       Selected project's
        and draft stay     blocker/recovery          Chat, history, draft
 ```

@@ -11,7 +11,7 @@
     {
       "file": "boundaries.schema.json",
       "schema_id": "https://mayasaba.local/contracts/v1/boundaries.schema.json",
-      "sha256": "f053d2eb4f2ac4d6cc46e5a271eb24628f50ef722bbebe2ea1eee43e81c0021a"
+      "sha256": "c5f1ee58f6320be0b9652a94c244240e1230ed22040fe90db4f7808336dcbba2"
     },
     {
       "file": "state-machines.schema.json",

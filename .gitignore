@@ -6,3 +6,9 @@
 /native/Mayasaba/XamlMetaDataProvider.idl
 /native-build.log
 /native-evaluated.xml
+
+/native/tests/bin/
+/native/tests/obj/
+/native/tests/*.exe
+/*.log
+

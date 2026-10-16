@@ -70,8 +70,11 @@
         </MenuBar>
 
         <Grid Grid.Row="1">
-            <!-- Screen 1: presentation only. Intentionally NO composer. -->
-            <ScrollViewer x:Name="WelcomeScreen" VerticalScrollBarVisibility="Auto">
+            <!-- Screen 1: presentation only. Intentionally NO composer. KeyDown is scoped to
+                 this screen so Escape means "skip the explanation" here and keeps its own
+                 meaning everywhere else (Chat, flyouts, dialogs, the native folder picker). -->
+            <ScrollViewer x:Name="WelcomeScreen" VerticalScrollBarVisibility="Auto"
+                          KeyDown="OnWelcomeKeyDown">
                 <Grid MinHeight="620" Padding="46">
                     <StackPanel x:Name="WelcomeStack" MaxWidth="820" HorizontalAlignment="Center"
                                 VerticalAlignment="Center" Spacing="17">
@@ -194,39 +197,188 @@
             </ScrollViewer>
 
             <!-- Screen 2: draft is editable, Send is disabled until a root is bound. -->
-            <ScrollViewer x:Name="FolderScreen" Visibility="Collapsed" VerticalScrollBarVisibility="Auto">
-                <Grid MinHeight="620" Padding="44">
-                    <StackPanel x:Name="FolderStack" VerticalAlignment="Center" HorizontalAlignment="Center"
-                                MaxWidth="760" Spacing="14">
-                        <Border Width="104" Height="104" HorizontalAlignment="Center" CornerRadius="32"
-                                Background="{ThemeResource MayasabaBrandGradientBrush}">
-                            <FontIcon Glyph="&#xE8B7;" FontFamily="Segoe Fluent Icons"
-                                      FontSize="52" Foreground="White"/>
-                        </Border>
-                        <TextBlock x:Name="FolderHeading" Text="Open a project folder"
-                                   FontSize="43" FontWeight="SemiBold" TextWrapping="Wrap"/>
-                        <TextBlock Text="Choose a local Windows project folder. We will validate its identity and open Chat. No CLI launches, repository scan, Git initialization or provider activity occurs here."
-                                   FontSize="17" TextWrapping="Wrap" Foreground="{ThemeResource MayasabaMutedBrush}"/>
-                        <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,9,0,14">
-                            <Button Click="OnWelcomeBack" Content="← Back" Padding="18,12" CornerRadius="11"/>
-                            <Button x:Name="ChooseFolderButton" Click="OnChooseFolder" Content="Open Folder"
-                                    Padding="22,12" CornerRadius="11"
-                                    Background="{ThemeResource MayasabaActionGradientBrush}" Foreground="White"/>
+            <ScrollViewer x:Name="FolderScreen" Visibility="Collapsed" VerticalScrollBarVisibility="Auto"
+                          KeyDown="OnFolderKeyDown">
+                <Grid MinHeight="620" Padding="32,24,32,40">
+                    <StackPanel x:Name="FolderStack" HorizontalAlignment="Center"
+                                MaxWidth="760" Spacing="18">
+
+                        <!-- Contextual Top Action Bar: Back (first-run), Exit (startup), Cancel (switching) -->
+                        <Grid Margin="0,0,0,4">
+                            <Button x:Name="FolderBackButton" Click="OnWelcomeBack" Content="← Back"
+                                    Padding="16,8" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                    Visibility="Collapsed"/>
+                            <Button x:Name="FolderExitButton" Click="OnExit" Content="Exit"
+                                    Padding="16,8" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                    Visibility="Collapsed"/>
+                            <Button x:Name="FolderCancelButton" Click="OnCancelSwitch" Content="Cancel"
+                                    Padding="16,8" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                    Visibility="Collapsed"/>
+                        </Grid>
+
+                        <!-- Screen Header -->
+                        <StackPanel Spacing="6" HorizontalAlignment="Center">
+                            <Border Width="72" Height="72" HorizontalAlignment="Center" CornerRadius="22"
+                                    Background="{ThemeResource MayasabaBrandGradientBrush}">
+                                <FontIcon Glyph="&#xE8B7;" FontFamily="Segoe Fluent Icons"
+                                          FontSize="36" Foreground="White"/>
+                            </Border>
+                            <TextBlock x:Name="FolderHeading" Text="Open a project"
+                                       FontSize="32" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                            <TextBlock Text="Select a recent project, open an existing folder, or create a new project folder."
+                                       FontSize="14" HorizontalAlignment="Center"
+                                       Foreground="{ThemeResource MayasabaMutedBrush}" TextWrapping="Wrap" TextAlignment="Center"/>
                         </StackPanel>
+
+                        <!-- Primary Folder Action Buttons -->
+                        <StackPanel HorizontalAlignment="Stretch" Spacing="10">
+                            <Button x:Name="ChooseFolderButton" Click="OnChooseFolder"
+                                    Padding="22,12" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                    Background="{ThemeResource MayasabaActionGradientBrush}" Foreground="White">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <FontIcon Glyph="&#xED25;" FontFamily="Segoe Fluent Icons" FontSize="16"/>
+                                    <TextBlock Text="Open Existing Folder" FontWeight="Medium"/>
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="CreateNewProjectButton" Click="OnToggleCreateFolder"
+                                    Padding="20,12" CornerRadius="{StaticResource MayasabaRadiusControl}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <FontIcon Glyph="&#xE8F4;" FontFamily="Segoe Fluent Icons" FontSize="16"/>
+                                    <TextBlock Text="Create New Project Folder" FontWeight="Medium"/>
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+
+                        <!-- Inline Create Folder Panel (Collapsible) -->
+                        <Border x:Name="CreateFolderPanel" Visibility="Collapsed"
+                                BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
+                                Background="{ThemeResource MayasabaPanelBrush}"
+                                CornerRadius="{StaticResource MayasabaRadiusPanel}" Padding="20">
+                            <StackPanel Spacing="14">
+                                <TextBlock Text="Create a new project folder" FontSize="16" FontWeight="SemiBold"/>
+                                <TextBlock Text="Select an existing parent directory and enter a folder name. Only this single empty directory will be created."
+                                           FontSize="13" Foreground="{ThemeResource MayasabaMutedBrush}" TextWrapping="Wrap"/>
+
+                                <!-- Parent folder selection -->
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="Parent Location" FontSize="12" FontWeight="Medium" Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="ParentLocationBox" IsReadOnly="True" PlaceholderText="Select a parent folder..."/>
+                                        <Button Grid.Column="1" Click="OnBrowseParentFolder" Content="Browse..." Padding="16,8"
+                                                CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- New folder name input -->
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="New Folder Name" FontSize="12" FontWeight="Medium" Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                                    <TextBox x:Name="NewFolderNameBox" PlaceholderText="e.g. my-project"
+                                             TextChanged="OnNewFolderNameChanged"/>
+                                    <TextBlock x:Name="TargetPathPreview" FontSize="12" Foreground="{ThemeResource MayasabaMutedBrush}" TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="CreateFolderError" FontSize="12" Foreground="{ThemeResource MayasabaDangerBrush}"
+                                               Visibility="Collapsed" TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <!-- Creation action buttons -->
+                                <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right" Margin="0,4,0,0">
+                                    <Button Click="OnCancelCreateFolder" Content="Cancel" Padding="16,8"
+                                            CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                    <Button x:Name="CreateAndOpenButton" Click="OnCreateAndOpenFolder" Content="Create and Open"
+                                            IsEnabled="False" Padding="20,8"
+                                            CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                            Background="{ThemeResource MayasabaActionGradientBrush}" Foreground="White"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Draft Collision Panel (Collapsible) -->
+                        <Border x:Name="DraftCollisionPanel" Visibility="Collapsed"
+                                BorderBrush="{ThemeResource MayasabaAmberBrush}" BorderThickness="1.5"
+                                Background="{ThemeResource MayasabaPanelBrush}"
+                                CornerRadius="{StaticResource MayasabaRadiusPanel}" Padding="20">
+                            <StackPanel Spacing="12">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <FontIcon Glyph="&#xE7BA;" FontFamily="Segoe Fluent Icons" Foreground="{ThemeResource MayasabaAmberBrush}"/>
+                                    <TextBlock Text="Draft Conflict" FontSize="16" FontWeight="SemiBold"/>
+                                </StackPanel>
+                                <TextBlock Text="Both drafts are preserved. Keep the project draft, or move the selector draft into Chat and keep the old project draft here. An unresolved submission cannot be replaced."
+                                           TextWrapping="Wrap" FontSize="13" Foreground="{ThemeResource MayasabaMutedBrush}"/>
+
+                                <Grid ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" Spacing="4">
+                                        <TextBlock Text="Existing Project Draft" FontSize="12" FontWeight="Medium" Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                                        <TextBox x:Name="TargetDraftPreviewBox" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="100" AcceptsReturn="True"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Spacing="4">
+                                        <TextBlock Text="Selector Pre-binding Draft" FontSize="12" FontWeight="Medium" Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                                        <TextBox x:Name="PrebindDraftPreviewBox" IsReadOnly="True" TextWrapping="Wrap" MaxHeight="100" AcceptsReturn="True"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <StackPanel Spacing="10" HorizontalAlignment="Stretch" Margin="0,4,0,0">
+                                    <Button Click="OnCancelDraftCollision" Content="Cancel" Padding="16,8"
+                                            CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                    <Button x:Name="KeepTargetDraftButton" Click="OnKeepTargetDraft" Content="Keep Project Draft" Padding="16,8"
+                                            CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                    <Button x:Name="UsePrebindDraftButton" Click="OnUsePrebindDraft" Content="Use Selector Draft"
+                                            Background="{ThemeResource MayasabaActionGradientBrush}" Foreground="White" Padding="16,8"
+                                            CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Recent Projects Section -->
                         <Border BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
-                                Background="{ThemeResource MayasabaPanelBrush}" CornerRadius="17" Padding="18">
-                            <StackPanel Spacing="10">
+                                Background="{ThemeResource MayasabaPanelBrush}"
+                                CornerRadius="{StaticResource MayasabaRadiusPanel}" Padding="18">
+                            <StackPanel Spacing="12">
+                                <TextBlock Text="Recent Projects" FontSize="15" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="NoRecentProjectsText" Text="No recent projects yet."
+                                           FontSize="13" Foreground="{ThemeResource MayasabaMutedBrush}"
+                                           Visibility="Collapsed"/>
+                                <ListView x:Name="RecentProjectsList" SelectionMode="None" MaxHeight="340"
+                                          ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                          HorizontalContentAlignment="Stretch" AutomationProperties.Name="Recent projects"/>
+                                <StackPanel Orientation="Horizontal" Spacing="10">
+                                    <Button x:Name="PreviousRecentButton" Content="Previous projects" Click="OnRecentPrevious" IsEnabled="False"/>
+                                    <Button x:Name="NextRecentButton" Content="Next projects" Click="OnRecentNext" IsEnabled="False"/>
+                                </StackPanel>
+                                <Button x:Name="RetryStoreButton" Content="Retry opening local store" Click="OnRetryStore" Visibility="Collapsed"/>
+                                <StackPanel x:Name="RecoveryList" Spacing="10" AutomationProperties.Name="Folder creation recovery"/>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Pre-binding Composer Box -->
+                        <Border BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
+                                Background="{ThemeResource MayasabaPanelBrush}"
+                                CornerRadius="{StaticResource MayasabaRadiusComposer}" Padding="16">
+                            <StackPanel Spacing="8">
                                 <TextBlock Text="Draft a message before choosing a folder"
                                            FontSize="12" Foreground="{ThemeResource MayasabaMutedBrush}"/>
                                 <TextBox x:Name="PrebindDraftBox" PlaceholderText="Message Mayasaba..."
-                                         AcceptsReturn="True" TextWrapping="Wrap" MinHeight="100"
+                                         AcceptsReturn="True" TextWrapping="Wrap" MinHeight="80" MaxLength="16384"
+                                         AutomationProperties.Name="Unsent selector draft"
                                          TextChanged="OnPrebindDraftChanged"/>
                                 <Button Content="Send · choose a folder first" IsEnabled="False"
-                                        HorizontalAlignment="Right" CornerRadius="11"/>
+                                        HorizontalAlignment="Right" CornerRadius="{StaticResource MayasabaRadiusControl}"/>
                             </StackPanel>
                         </Border>
-                        <TextBlock FontSize="12" Foreground="{ThemeResource MayasabaMutedBrush}"
-                                   Text="CLI readiness does not gate folder selection."/>
+
+                        <StackPanel Spacing="4" AutomationProperties.Name="CLI readiness">
+                            <TextBlock Text="● Hermes Agent CLI · UNSUPPORTED" TextWrapping="Wrap"/>
+                            <TextBlock Text="● Kilo Code CLI · UNSUPPORTED" TextWrapping="Wrap"/>
+                            <TextBlock Text="● Claude Code CLI · UNSUPPORTED" TextWrapping="Wrap"/>
+                            <TextBlock FontSize="12" Foreground="{ThemeResource MayasabaMutedBrush}" TextWrapping="Wrap"
+                                       Text="Native probes are not implemented. Folder selection remains available."/>
+                        </StackPanel>
                     </StackPanel>
                 </Grid>
             </ScrollViewer>
@@ -366,7 +518,7 @@
                 </Border>
             </Grid>
         </Grid>
-        <InfoBar x:Name="Notice" Grid.Row="2" IsOpen="False" IsClosable="True"
+        <InfoBar x:Name="Notice" Grid.Row="2" IsOpen="False" IsClosable="True" AutomationProperties.LiveSetting="Polite"
                  Severity="Informational" Margin="18,5,18,10"/>
     </Grid>
 </Window>

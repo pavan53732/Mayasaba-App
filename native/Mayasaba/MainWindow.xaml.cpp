@@ -7,8 +7,12 @@
 #include <shobjidl_core.h>
 #include <winrt/Windows.System.h>
 #include <chrono>
+#include <coroutine>
 #include <cwctype>
 #include <limits>
+#include <winrt/Microsoft.UI.Windowing.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
 
 namespace winrt::Mayasaba::implementation
 {
@@ -19,20 +23,40 @@ namespace winrt::Mayasaba::implementation
 
     namespace
     {
+        auto resume_foreground(Microsoft::UI::Dispatching::DispatcherQueue const& queue)
+        {
+            struct awaiter
+            {
+                Microsoft::UI::Dispatching::DispatcherQueue queue;
+                bool await_ready() const noexcept { return queue ? queue.HasThreadAccess() : true; }
+                bool await_suspend(std::coroutine_handle<> handle)
+                {
+                    if (!queue) return false;
+                    bool ok = queue.TryEnqueue([handle]() { handle.resume(); });
+                    if (!ok)
+                    {
+                        // Dispatcher queue is shutting down or rejected enqueue.
+                        // Return false to resume immediately on background thread,
+                        // allowing subsequent 'if (windowClosed_ || selectorGeneration_ != gen) co_return;'
+                        // to cleanly exit without hanging or leaking.
+                        return false;
+                    }
+                    return true;
+                }
+                bool await_resume() const noexcept { return queue && queue.HasThreadAccess(); }
+            };
+            return awaiter{queue};
+        }
+
         std::string Utf8(std::wstring const& s) { return winrt::to_string(winrt::hstring{s}); }
         winrt::hstring Utf16(std::string const& s) { return winrt::to_hstring(s); }
         void SetVisible(FrameworkElement const& element, bool show)
         {
             element.Visibility(show ? Visibility::Visible : Visibility::Collapsed);
         }
-        std::string SubmissionId()
-        {
-            GUID value{};
-            winrt::check_hresult(CoCreateGuid(&value));
-            wchar_t buffer[40]{};
-            StringFromGUID2(value, buffer, 40);
-            return Utf8(buffer);
-        }
+        std::string SubmissionId() { return mayasaba::NewUuid(); }
+
+
 
         // Theme-aware brush lookup. Returns a safe fallback instead of throwing when a key is
         // absent, so a missing brand token can never take down the timeline.
@@ -100,33 +124,47 @@ namespace winrt::Mayasaba::implementation
                 }
             }
         });
+        SetVisible(WelcomeScreen(), false);
+        ShowNotice(L"Opening the local project store…");
+        auto closeWeak = get_weak();
+        AppWindow().Closing([closeWeak](auto const&, Microsoft::UI::Windowing::AppWindowClosingEventArgs const& e)
+        {
+            if (auto self=closeWeak.get(); self && !self->allowClose_)
+            { e.Cancel(true); self->NavigateAsync(true); }
+        });
+        ChooseFolderButton().IsEnabled(false);
+        CreateNewProjectButton().IsEnabled(false);
+        InitializeStoreAsync();
+    }
+
+    winrt::fire_and_forget MainWindow::InitializeStoreAsync()
+    {
+        auto keepAlive = get_strong();
+        auto uiQueue = DispatcherQueue();
+        std::unique_ptr<mayasaba::Storage> store;
+        bool hasProjects = false;
+        std::string draft, error;
         try
         {
-            storage_ = std::make_unique<mayasaba::Storage>(mayasaba::Storage::DefaultFile());
-            // A previously bound project opens directly at Chat (AGENTS.md section 5, UI-UX
-            // acceptance criteria 59 and 80): onboarding is never re-shown once a project is
-            // bound, and a known open project restores its timeline and docked composer.
-            // Screen 1 (Welcome) is the no-bound-root first-run path only. Restoration is not
-            // authorization: a relaunch still requires a fresh Start before any CLI session is
-            // initialized, and no work, draft submission or closure change is resumed here.
-            if (auto key = storage_->LastBoundProject())
-            {
-                if (storage_->Project(*key))
-                {
-                    activeProject_ = *key;
-                    ShowChat();
-                    return;
-                }
-            }
+            co_await selectorQueue_.Background();
+            store = std::make_unique<mayasaba::Storage>(mayasaba::Storage::DefaultFile());
+            hasProjects = store->HasAnyProjects();
+            draft = store->GetPrebindDraft();
         }
-        catch (std::exception const& e)
-        {
-            storage_.reset();
-            ShowNotice(L"SQLite startup failed. Folder binding and Send are blocked: " + Utf16(e.what()), true);
-        }
-        // No bound root: the mandatory first-run onboarding sequence, which still requires
-        // Open Folder before Chat.
-        ShowWelcome();
+        catch (std::exception const& e) { error = e.what(); }
+        if (!co_await resume_foreground(uiQueue)) co_return;
+        if (windowClosed_) co_return;
+        if (!error.empty()) { ShowFolder(SelectorContext::Startup); RetryStoreButton().Visibility(Visibility::Visible); ShowNotice(L"Store initialization blocked: " + Utf16(error) + L". Retry opening the store or Exit; no empty-list result is claimed.", true); co_return; }
+        storage_ = std::move(store);
+        prebindingDraft_ = Utf16(draft);
+        suppressPrebind_ = true;
+        PrebindDraftBox().Text(hstring{prebindingDraft_});
+        suppressPrebind_ = false;
+        ChooseFolderButton().IsEnabled(true);
+        CreateNewProjectButton().IsEnabled(true);
+        RetryStoreButton().Visibility(Visibility::Collapsed);
+        Notice().IsOpen(false);
+        if (hasProjects) ShowFolder(SelectorContext::Startup); else ShowWelcome();
     }
 
     // Motion is a status and affordance language, never ambience. The onboarding hero loops
@@ -177,6 +215,7 @@ namespace winrt::Mayasaba::implementation
                     if (auto const self = closedWeak.get())
                     {
                         self->windowClosed_ = true;
+                        ++self->selectorGeneration_;
                         self->draftTimer_.Stop();
                         self->animationsEnabled_ = false;
                         self->ApplyHeroMotion(false);
@@ -309,10 +348,13 @@ namespace winrt::Mayasaba::implementation
         Notice().Message(message);
         Notice().Severity(error ? InfoBarSeverity::Error : InfoBarSeverity::Informational);
         Notice().IsOpen(true);
+        if (auto peer=Automation::Peers::FrameworkElementAutomationPeer::FromElement(Notice()))
+            peer.RaiseAutomationEvent(Automation::Peers::AutomationEvents::LiveRegionChanged);
     }
 
     void MainWindow::ShowWelcome()
     {
+        ++selectorGeneration_;
         SetVisible(WelcomeScreen(), true);
         SetVisible(FolderScreen(), false);
         SetVisible(ChatScreen(), false);
@@ -321,22 +363,59 @@ namespace winrt::Mayasaba::implementation
         ApplyMotionPreference();
         NextButton().Focus(FocusState::Programmatic);
     }
-    void MainWindow::ShowFolder()
+    void MainWindow::ShowFolder(SelectorContext context)
     {
+        selectorContext_ = context;
+        recentOffset_=0;
+        ++selectorGeneration_;
         SetVisible(WelcomeScreen(), false);
         SetVisible(FolderScreen(), true);
         SetVisible(ChatScreen(), false);
         SetVisible(NativeFileMenu(), false);
         // The hero belongs to the welcome screen only; nothing ambient runs here.
         ApplyHeroMotion(false);
+
+        FolderBackButton().Visibility(context == SelectorContext::FirstRun ? Visibility::Visible : Visibility::Collapsed);
+        FolderExitButton().Visibility(context == SelectorContext::Startup ? Visibility::Visible : Visibility::Collapsed);
+        FolderCancelButton().Visibility(context == SelectorContext::Switching ? Visibility::Visible : Visibility::Collapsed);
+
+        CreateFolderPanel().Visibility(Visibility::Collapsed);
+        DraftCollisionPanel().Visibility(Visibility::Collapsed);
+
+        suppressPrebind_ = true;
         PrebindDraftBox().Text(hstring{prebindingDraft_});
+        suppressPrebind_ = false;
+
+        RefreshRecentProjects();
         ChooseFolderButton().Focus(FocusState::Programmatic);
     }
     void MainWindow::ShowChat()
     {
-        if (!storage_ || activeProject_.empty()) { ShowFolder(); return; }
-        auto project = storage_->Project(activeProject_);
-        if (!project) { activeProject_.clear(); ShowFolder(); return; }
+        if (!storage_ || activeProject_.empty()) { ShowFolder(SelectorContext::Startup); return; }
+        LoadChatAsync(activeProject_, ++selectorGeneration_);
+    }
+    winrt::fire_and_forget MainWindow::LoadChatAsync(std::string id, uint64_t gen)
+    {
+        auto keepAlive = get_strong();
+        auto uiQueue = DispatcherQueue();
+        std::optional<mayasaba::ProjectRecord> project;
+        std::optional<mayasaba::PendingSubmission> pending;
+        std::vector<mayasaba::Contribution> history;
+        std::string error;
+        try
+        {
+            co_await selectorQueue_.Background();
+            project = storage_->Project(id);
+            pending = storage_->Pending(id);
+            history = storage_->Contributions(id);
+        }
+        catch (std::exception const& e) { error = e.what(); }
+        if (!co_await resume_foreground(uiQueue)) co_return;
+        if (windowClosed_ || selectorGeneration_ != gen) co_return;
+        if (!error.empty() || !project) { ShowNotice(L"Chat restoration blocked: " + Utf16(error), true); co_return; }
+        activeProject_=id;
+        projectClosed_=project->closed;
+        historyCache_ = std::move(history);
         draftTimer_.Stop();
         SetVisible(WelcomeScreen(), false);
         SetVisible(FolderScreen(), false);
@@ -346,13 +425,13 @@ namespace winrt::Mayasaba::implementation
         ApplyHeroMotion(false);
         ProjectHeading().Text(Utf16(project->displayName));
         ProjectPathLabel().Text(Utf16(project->canonicalPath));
+        ToolTipService::SetToolTip(ProjectPathLabel(), box_value(Utf16(project->canonicalPath)));
         ProjectCondition().Text(project->closed ?
             L"CLOSED · Explicit Reopen Project required" : L"Bound · No working CLI session admitted");
         ReopenButton().Visibility(project->closed ? Visibility::Visible : Visibility::Collapsed);
         StartButton().IsEnabled(!project->closed);
         PauseButton().IsEnabled(!project->closed);
         StopButton().IsEnabled(!project->closed);
-        auto pending = storage_->Pending(activeProject_);
         pendingAttemptId_ = pending ? pending->id : "";
         pendingAttemptProject_ = pending ? activeProject_ : "";
         pendingAttemptBody_ = pending ? pending->body : "";
@@ -369,7 +448,7 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::RenderHistory()
     {
-        auto messages = storage_->Contributions(activeProject_);
+        auto const& messages = historyCache_;
         bool populated = !messages.empty();
         SetVisible(EmptyChatPanel(), !populated);
         SetVisible(HistoryScroller(), populated);
@@ -482,38 +561,157 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::PersistDraft()
     {
         if (suppressDraft_ || activeProject_.empty() || !storage_) return;
+        SaveProjectDraftAsync(activeProject_, Utf8(ComposerBox().Text().c_str()));
+    }
+    winrt::fire_and_forget MainWindow::SaveProjectDraftAsync(std::string id, std::string text)
+    {
+        auto keepAlive = get_strong();
+        auto uiQueue = DispatcherQueue();
+        std::string error;
         try
         {
-            if (storage_->Pending(activeProject_)) return; // protect staged immutable text
-            storage_->SaveDraft(activeProject_, Utf8(ComposerBox().Text().c_str())); }
-        catch (std::exception const& e)
-        { ShowNotice(L"Draft not confirmed saved: " + Utf16(e.what()), true); }
+            co_await selectorQueue_.Background();
+            if (!storage_->Pending(id)) storage_->SaveDraft(id, text);
+        }
+        catch (std::exception const& e) { error = e.what(); }
+        if (!co_await resume_foreground(uiQueue)) co_return;
+        if (!windowClosed_ && !error.empty()) ShowNotice(L"Draft not confirmed saved: " + Utf16(error), true);
+    }
+    void MainWindow::PersistPrebindDraft()
+    {
+        if (!storage_) return;
+        // TextChanged already queued every edit. Never enqueue stale display text
+        // again during cancellation or after a successful transfer.
     }
 
-    void MainWindow::OnWelcomeNext(IInspectable const&, RoutedEventArgs const&) { ShowFolder(); }
+    void MainWindow::OnWelcomeNext(IInspectable const&, RoutedEventArgs const&)
+    {
+        ShowFolder(SelectorContext::FirstRun);
+    }
+
+    // Escape is the keyboard equivalent of the welcome screen's single forward action: it
+    // advances to the mandatory open-folder screen, exactly as Next and Skip do. It is handled
+    // ONLY while the welcome screen is visible, so Escape keeps its own meaning everywhere
+    // else — Chat, an open flyout or dialog, and the native folder picker, which cancels
+    // itself. Escape skips the explanation only: it binds no folder and creates no root, so it
+    // can never reach Chat, which refuses without an authorized project.
+    void MainWindow::OnWelcomeKeyDown(IInspectable const&,
+        Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& e)
+    {
+        if (windowClosed_ || pickerOpen_ || e.Key() != Windows::System::VirtualKey::Escape)
+        {
+            return;
+        }
+        // Focus may sit on Next, on Skip, or on the screen itself; the event bubbles from all
+        // of them. The visibility guard keeps the handler inert once this screen is collapsed.
+        if (WelcomeScreen().Visibility() != Visibility::Visible)
+        {
+            return;
+        }
+        ShowFolder(SelectorContext::FirstRun); // the same action Next and Skip perform
+        e.Handled(true);
+    }
+
+    void MainWindow::OnFolderKeyDown(IInspectable const&,
+        Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& e)
+    {
+        if (windowClosed_ || pickerOpen_ || e.Key() != Windows::System::VirtualKey::Escape)
+        {
+            return;
+        }
+        if (FolderScreen().Visibility() != Visibility::Visible)
+        {
+            return;
+        }
+        if (CreateFolderPanel().Visibility() == Visibility::Visible)
+        {
+            ++selectorGeneration_;
+            CreateFolderPanel().Visibility(Visibility::Collapsed);
+            e.Handled(true);
+            return;
+        }
+        if (DraftCollisionPanel().Visibility() == Visibility::Visible)
+        {
+            ++selectorGeneration_;
+            DraftCollisionPanel().Visibility(Visibility::Collapsed);
+            collisionTargetProjectId_.clear();
+            e.Handled(true);
+            return;
+        }
+        if (selectorContext_ == SelectorContext::Switching && !activeProject_.empty())
+        {
+            OnCancelSwitch(nullptr, nullptr);
+            e.Handled(true);
+            return;
+        }
+        // FirstRun or Startup: Escape cannot reach Chat!
+        e.Handled(true);
+    }
+
     void MainWindow::OnWelcomeBack(IInspectable const&, RoutedEventArgs const&)
     {
-        prebindingDraft_ = PrebindDraftBox().Text().c_str();
+        PersistPrebindDraft();
         ShowWelcome();
     }
+
+    void MainWindow::ReturnToChat()
+    {
+        ++selectorGeneration_;
+        SetVisible(FolderScreen(),false); SetVisible(ChatScreen(),true); SetVisible(NativeFileMenu(),true);
+        if(returnFocus_ && returnFocus_.IsEnabled()) returnFocus_.Focus(FocusState::Programmatic);
+        else ComposerBox().Focus(FocusState::Programmatic);
+    }
+    void MainWindow::OnCancelSwitch(IInspectable const&, RoutedEventArgs const&)
+    {
+        if(selectorContext_==SelectorContext::Switching && !activeProject_.empty()) ReturnToChat();
+    }
+
+
     void MainWindow::OnPrebindDraftChanged(IInspectable const&, TextChangedEventArgs const&)
-    { prebindingDraft_ = PrebindDraftBox().Text().c_str(); }
+    {
+        if (suppressPrebind_ || !storage_) return;
+        prebindingDraft_ = PrebindDraftBox().Text().c_str();
+        SavePrebindDraftAsync(Utf8(prebindingDraft_), selectorGeneration_, storage_->ReservePrebindRevision());
+    }
+
+    winrt::fire_and_forget MainWindow::SavePrebindDraftAsync(std::string text, uint64_t gen, uint64_t revision)
+    {
+        auto keepAlive = get_strong();
+        auto uiQueue = DispatcherQueue();
+        std::string errMsg;
+        try
+        {
+            co_await selectorQueue_.Background();
+            if (storage_)
+            {
+                storage_->SavePrebindDraft(text, revision);
+            }
+        }
+        catch (std::exception const& ex)
+        {
+            errMsg = ex.what();
+        }
+        catch (...)
+        {
+            errMsg = "Unknown database error saving selector draft";
+        }
+
+        if (!errMsg.empty())
+        {
+            if (!co_await resume_foreground(uiQueue)) co_return;
+            if (windowClosed_ || selectorGeneration_ != gen) co_return;
+            ShowNotice(L"Selector draft save failed: " + Utf16(errMsg), true);
+        }
+    }
     void MainWindow::OnDraftChanged(IInspectable const&, TextChangedEventArgs const&)
     {
-        if (suppressDraft_) return;
-        bool open = false;
-        if (storage_ && !activeProject_.empty())
-        {
-            try
-            {
-                auto project = storage_->Project(activeProject_);
-                open = project && !project->closed;
-            }
-            catch (...) { open = false; }
-        }
-        SendButton().IsEnabled(open && !ComposerBox().Text().empty());
-        if (open) { draftTimer_.Stop(); draftTimer_.Start(); }
+        if(suppressDraft_) return;
+        bool open=storage_ && !activeProject_.empty() && !projectClosed_;
+        SendButton().IsEnabled(open && !ComposerBox().Text().empty() && !busy_);
+        if(open) { draftTimer_.Stop(); draftTimer_.Start(); }
     }
+
+
     void MainWindow::OnComposerKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& e)
     {
         if (e.Key() == Windows::System::VirtualKey::Enter &&
@@ -526,175 +724,321 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnSend(IInspectable const&, RoutedEventArgs const&) { SendCurrent(); }
     void MainWindow::SendCurrent()
     {
-        if (busy_ || !storage_ || activeProject_.empty()) return;
-        std::wstring text = ComposerBox().Text().c_str();
-        if (text.empty()) return;
-        auto project = storage_->Project(activeProject_);
-        if (!project || project->closed)
+        if(busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_) return;
+        auto text=Utf8(ComposerBox().Text().c_str()); if(text.empty()) return;
+        busy_=true; draftTimer_.Stop(); ComposerBox().IsReadOnly(true); SendButton().IsEnabled(false);
+        SubmitAsync(activeProject_,pendingAttemptId_.empty()?SubmissionId():pendingAttemptId_,text);
+    }
+    winrt::fire_and_forget MainWindow::SubmitAsync(std::string id,std::string submission,std::string text)
+    {
+        auto alive=get_strong(); auto ui=DispatcherQueue(); std::string error;
+        mayasaba::SaveDisposition result=mayasaba::SaveDisposition::Unknown;
+        try { co_await selectorQueue_.Background(); submission=storage_->StageSubmission(id,submission,text);
+            result=storage_->SaveContribution(id,submission,text); }
+        catch(std::exception const& e){error=e.what();}
+        if(!co_await resume_foreground(ui)) co_return;
+        if(windowClosed_ || activeProject_!=id) co_return;
+        busy_=false;
+        if(result==mayasaba::SaveDisposition::Saved || result==mayasaba::SaveDisposition::Duplicate)
+        { ShowChat(); ShowNotice(L"Message durably saved. CLI interpretation and replies are not yet implemented."); }
+        else { pendingAttemptId_=submission;pendingAttemptProject_=id;pendingAttemptBody_=text;
+            ComposerBox().IsReadOnly(true); SendButton().IsEnabled(true);SendButton().Content(box_value(L"Reconcile Send"));
+            ShowNotice(L"Submission not confirmed. Original draft and identity retained: "+Utf16(error),true); }
+    }
+
+
+
+    winrt::Windows::Foundation::IAsyncOperation<winrt::hstring> MainWindow::PickFolderDialogAsync()
+    {
+        auto alive=get_strong();
+        if(windowClosed_ || pickerOpen_) co_return hstring{};
+        pickerOpen_=true;
+        hstring result; std::exception_ptr failure;
+        try {
+            FolderPicker picker;picker.FileTypeFilter().Append(L"*");
+            Microsoft::UI::Xaml::Window window=*this;
+            HWND hwnd{};winrt::check_hresult(window.as<IWindowNative>()->get_WindowHandle(&hwnd));
+            winrt::check_hresult(picker.as<IInitializeWithWindow>()->Initialize(hwnd));
+            auto selected=co_await picker.PickSingleFolderAsync();
+            if(selected) result=selected.Path();
+        } catch(...) { failure=std::current_exception(); }
+        pickerOpen_=false;
+        if(failure) std::rethrow_exception(failure);
+        co_return result;
+    }
+
+
+    bool MainWindow::BeginSelection()
+    {
+        if (selectionBusy_ || !storage_ || windowClosed_) return false;
+        selectionBusy_ = true;
+        PrebindDraftBox().IsReadOnly(true);
+        ChooseFolderButton().IsEnabled(false);
+        CreateNewProjectButton().IsEnabled(false);
+        RecentProjectsList().IsEnabled(false);
+        CreateAndOpenButton().IsEnabled(false);
+        return true;
+    }
+    bool MainWindow::FinishSelection(uint64_t gen)
+    {
+        if (windowClosed_) return false;
+        selectionBusy_ = false;
+        PrebindDraftBox().IsReadOnly(false);
+        ChooseFolderButton().IsEnabled(storage_ != nullptr);
+        CreateNewProjectButton().IsEnabled(storage_ != nullptr);
+        RecentProjectsList().IsEnabled(true);
+        UpdateCreateFolderState();
+        if (selectorGeneration_ != gen)
         {
-            ShowNotice(L"Project closed. Explicitly reopen it before Send.", true);
-            return;
+            ShowNotice(L"Selection cancelled. Any operation already admitted was allowed to settle; recorded folder outcomes are preserved. No cancelled result changed the visible project.");
+            return false;
         }
-        std::wstring command = text;
-        auto begin = command.find_first_not_of(L" \t\r\n");
-        auto end = command.find_last_not_of(L" \t\r\n");
-        if (begin != std::wstring::npos) command = command.substr(begin, end-begin+1);
-        for (auto& c : command) c = static_cast<wchar_t>(towlower(c));
-        if (command == L"/start" || command == L"/pause" || command == L"/resume" || command == L"/stop")
-        {
-            ShowNotice(L"Control recognized; no native CLI execution is admitted until adapters and confinement are proven.", true);
-            return;
-        }
-        busy_ = true;
-        draftTimer_.Stop();
-        try
-        {
-            PersistDraft();
-            // Preserve the original ID even if COMMIT succeeded but its receipt was lost.
-            // The Store stages and reuses the exact pending bytes across restart.
-            std::string const payload = Utf8(text);
-            std::string submission;
-            if (pendingAttemptProject_ == activeProject_ && !pendingAttemptId_.empty())
-            {
-                if (pendingAttemptBody_ != payload)
-                    throw std::runtime_error("A different payload cannot replace an unresolved submission");
-                submission = pendingAttemptId_;
-            }
-            else
-            {
-                submission = storage_->StageSubmission(activeProject_, SubmissionId(), payload);
-                pendingAttemptId_ = submission;
-                pendingAttemptProject_ = activeProject_;
-                pendingAttemptBody_ = payload;
-            }
-            auto result = storage_->SaveContribution(activeProject_, submission, payload);
-            if (result == mayasaba::SaveDisposition::Saved ||
-                result == mayasaba::SaveDisposition::Duplicate)
-            {
-                pendingAttemptId_.clear();
-                pendingAttemptProject_.clear();
-                pendingAttemptBody_.clear();
-                suppressDraft_ = true;
-                ComposerBox().Text(L"");
-                suppressDraft_ = false;
-                ComposerBox().IsReadOnly(false);
-                SendButton().Content(winrt::box_value(hstring{L"Send →"}));
-                SendButton().IsEnabled(false);
-                RenderHistory();
-                ShowNotice(L"Message durably saved. CLI interpretation/replies are not yet implemented.");
-            }
-            else
-            {
-                ComposerBox().IsReadOnly(true);
-                SendButton().Content(winrt::box_value(hstring{L"Reconcile Send"}));
-                ShowNotice(result == mayasaba::SaveDisposition::Unknown ?
-                    L"Commit UNKNOWN. Reconcile with the exact stored submission identity; no new ID or payload is allowed." :
-                    L"Submission blocked. The original pending identity and draft were preserved.", true);
-            }
-        }
-        catch (std::exception const& e)
-        { ShowNotice(L"Submission not confirmed: " + Utf16(e.what()), true); }
-        busy_ = false;
+        return true;
     }
 
     winrt::fire_and_forget MainWindow::PickFolderAsync()
     {
-        auto keepAlive = get_strong();
-        try
-        {
-            PersistDraft();
-            std::wstring folderPath;
-            bool folderSelected = false;
-            try
-            {
-                FolderPicker picker;
-                picker.FileTypeFilter().Append(L"*");
-                Microsoft::UI::Xaml::Window window = *this;
-                HWND hwnd{};
-                winrt::check_hresult(window.as<IWindowNative>()->get_WindowHandle(&hwnd));
-                winrt::check_hresult(picker.as<IInitializeWithWindow>()->Initialize(hwnd));
-                auto selected = co_await picker.PickSingleFolderAsync();
-                if (selected)
-                {
-                    folderPath = selected.Path().c_str();
-                    folderSelected = true;
-                }
-                else
-                {
-                    co_return;
-                }
-            }
-            catch (...)
-            {
-                // Fallback to native Win32 IFileOpenDialog with FOS_PICKFOLDERS
-                Microsoft::UI::Xaml::Window window = *this;
-                HWND hwnd{};
-                if (SUCCEEDED(window.as<IWindowNative>()->get_WindowHandle(&hwnd)))
-                {
-                    winrt::com_ptr<IFileOpenDialog> dialog;
-                    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(dialog.put()))))
-                    {
-                        DWORD options{};
-                        if (SUCCEEDED(dialog->GetOptions(&options)))
-                        {
-                            dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-                            dialog->SetTitle(L"Select Folder");
-                            if (SUCCEEDED(dialog->Show(hwnd)))
-                            {
-                                winrt::com_ptr<IShellItem> item;
-                                if (SUCCEEDED(dialog->GetResult(item.put())))
-                                {
-                                    PWSTR pszPath = nullptr;
-                                    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &pszPath)) && pszPath)
-                                    {
-                                        folderPath = pszPath;
-                                        folderSelected = true;
-                                        CoTaskMemFree(pszPath);
-                                    }
-                                }
-                            }
-                            else
-                            {
-                                co_return; // user cancelled dialog
-                            }
-                        }
-                    }
-                }
-            }
+        if(!BeginSelection()) co_return;
+        auto alive=get_strong();auto gen=++selectorGeneration_; hstring path;std::string error;
+        try { path=co_await PickFolderDialogAsync(); } catch(winrt::hresult_error const& e){error=to_string(e.message());}
+        if(!FinishSelection(gen)) co_return;
+        if(!error.empty()){ShowNotice(L"Folder picker failed: "+Utf16(error),true);co_return;}
+        if(path.empty()){ChooseFolderButton().Focus(FocusState::Programmatic);co_return;}
+        mayasaba::SelectionRequest request;request.path=path.c_str(); SelectAsync(request);
+    }
+    void MainWindow::OpenProjectById(std::string const& id)
+    {
+        auto it=std::find_if(recentRecords_.begin(),recentRecords_.end(),[&](auto const& p){return p.id==id;});
+        if(it==recentRecords_.end()){RefreshRecentProjects();return;}
+        mayasaba::SelectionRequest request;request.action=mayasaba::SelectionAction::Recent;
+        request.projectId=it->domainId;request.expectedVersion=it->version;SelectAsync(request);
+    }
+    winrt::fire_and_forget MainWindow::LocateProjectAsync(std::string id)
+    {
+        auto it=std::find_if(recentRecords_.begin(),recentRecords_.end(),[&](auto const& p){return p.id==id;});
+        if(it==recentRecords_.end() || !BeginSelection()) co_return;
+        mayasaba::SelectionRequest request;request.action=mayasaba::SelectionAction::Locate;
+        request.projectId=it->domainId;request.expectedVersion=it->version;
+        auto alive=get_strong();auto gen=++selectorGeneration_;std::string error;hstring path;
+        try{path=co_await PickFolderDialogAsync();}catch(winrt::hresult_error const& e){error=to_string(e.message());}
+        if(!FinishSelection(gen)) co_return;
+        if(!error.empty()){ShowNotice(L"Locate picker failed: "+Utf16(error),true);co_return;}
+        if(path.empty()) co_return;
+        request.path=path.c_str();SelectAsync(request);
+    }
+    winrt::fire_and_forget MainWindow::SelectAsync(mayasaba::SelectionRequest request)
+    {
+        if(!BeginSelection())co_return;
+        auto alive=get_strong();auto ui=DispatcherQueue();uint64_t gen=++selectorGeneration_;
+        mayasaba::SelectionReceipt result;std::string error;
+        try{
+            co_await selectorQueue_.Background();
+            // This executable has no session-admission path; Start returns unsupported.
+            // A future runtime must supply current session/isolation evidence here.
+            result=mayasaba::ProjectService(*storage_).Select(request,mayasaba::SwitchObservation::NoAdmittedSessions,
+                [this,gen]{return selectorGeneration_.load()==gen;});
+        }catch(std::exception const& e){error=e.what();}
+        if(!co_await resume_foreground(ui))co_return;
+        if(!FinishSelection(gen))co_return;
+        if(!error.empty()) { ShowNotice(Utf16(error),true);RefreshRecentProjects();co_return; }
+        if(result.collision){
+            collisionRequest_=request;
+            collisionRequest_->expectedTargetDraft=result.project.draft;
+            collisionRequest_->expectedSelectorDraft=result.selectorDraft;
+            TargetDraftPreviewBox().Text(Utf16(result.pending?"An unresolved submission is locked for reconciliation.":result.project.draft));
+            PrebindDraftPreviewBox().Text(Utf16(result.selectorDraft));
+            UsePrebindDraftButton().IsEnabled(!result.pending);SetVisible(DraftCollisionPanel(),true);
+            KeepTargetDraftButton().Focus(FocusState::Programmatic);co_return;
+        }
+        prebindingDraft_=Utf16(result.selectorDraft);suppressPrebind_=true;
+        PrebindDraftBox().Text(hstring{prebindingDraft_});suppressPrebind_=false;
+        SetVisible(CreateFolderPanel(),false);SetVisible(DraftCollisionPanel(),false);collisionRequest_.reset();createRequest_.reset();
+        LoadChatAsync(result.project.id,++selectorGeneration_);
+        ShowNotice(L"Project selected. CLI readiness: unsupported because native probes are not implemented. No CLI session was started.");
+    }
 
-            if (!folderSelected || folderPath.empty()) co_return;
-            // The picker is a separate top-level window: the main window can close while it is
-            // open. This coroutine holds a strong reference, so the window cannot be destroyed
-            // under it, but Window.Closed may already have run its teardown. Never resume UI
-            // work after closure.
-            if (windowClosed_) co_return;
-            if (!storage_) { ShowNotice(L"Store unavailable; project cannot be bound.", true); co_return; }
-            auto root = mayasaba::ValidateProjectRoot(folderPath.c_str());
-            auto id = Utf8(root.stableIdentity);
-            storage_->BindProject(id, Utf8(root.displayName), Utf8(root.canonicalPath));
-            if (!prebindingDraft_.empty())
-            {
-                if (auto existing = storage_->Project(id); existing && existing->draft.empty())
-                    storage_->SaveDraft(id, Utf8(prebindingDraft_));
-                prebindingDraft_.clear();
-            }
-            // No CLI sessions can exist in this native slice; later builds must check
-            // independent isolation/cessation evidence BEFORE modifying activeProject_.
-            activeProject_ = id;
-            ShowChat();
-            ShowNotice(L"Project bound. No CLI was started and no repository scan occurred.");
-        }
-        catch (winrt::hresult_error const& e)
+
+    void MainWindow::OnToggleCreateFolder(IInspectable const&, RoutedEventArgs const&)
+    {
+        bool isVis = (CreateFolderPanel().Visibility() == Visibility::Visible);
+        CreateFolderPanel().Visibility(isVis ? Visibility::Collapsed : Visibility::Visible);
+        if (!isVis)
         {
-            if (!windowClosed_) ShowNotice(L"Picker failed: " + e.message(), true);
-        }
-        catch (std::exception const& e)
-        {
-            if (!windowClosed_) ShowNotice(L"Project root refused: " + Utf16(e.what()), true);
+            UpdateCreateFolderState();
+            NewFolderNameBox().Focus(FocusState::Programmatic);
         }
     }
+
+    void MainWindow::OnBrowseParentFolder(IInspectable const&, RoutedEventArgs const&)
+    {
+        auto weak=get_weak();
+        [](winrt::weak_ref<MainWindow> ref)->winrt::fire_and_forget {
+            auto self=ref.get();if(!self || !self->BeginSelection())co_return;
+            auto ui=self->DispatcherQueue();uint64_t gen=++self->selectorGeneration_;hstring path;std::string identity,error;
+            try {path=co_await self->PickFolderDialogAsync();
+                if(!path.empty()) {co_await self->selectorQueue_.Background();
+                    auto root=mayasaba::ValidateProjectRoot(path.c_str());identity=Utf8(root.stableIdentity);path=hstring{root.canonicalPath};}}
+            catch(winrt::hresult_error const& e){error=to_string(e.message());}
+            catch(std::exception const& e){error=e.what();}
+            if(!co_await resume_foreground(ui))co_return;
+            if(!self->FinishSelection(gen))co_return;
+            if(!error.empty()){self->ShowNotice(L"Parent selection failed: "+Utf16(error),true);co_return;}
+            if(!path.empty()){self->parentIdentity_=identity;self->ParentLocationBox().Text(path);self->createRequest_.reset();self->UpdateCreateFolderState();}
+        }(weak);
+    }
+
+
+    void MainWindow::OnNewFolderNameChanged(IInspectable const&, Controls::TextChangedEventArgs const&)
+    {
+        createRequest_.reset();
+        UpdateCreateFolderState();
+    }
+
+    void MainWindow::UpdateCreateFolderState()
+    {
+        auto parent = ParentLocationBox().Text();
+        auto name = NewFolderNameBox().Text();
+
+        if (parent.empty())
+        {
+            CreateFolderError().Visibility(Visibility::Collapsed);
+            TargetPathPreview().Text(L"");
+            CreateAndOpenButton().IsEnabled(false);
+            return;
+        }
+
+        if (name.empty())
+        {
+            CreateFolderError().Visibility(Visibility::Collapsed);
+            TargetPathPreview().Text(L"Will create in: " + parent);
+            CreateAndOpenButton().IsEnabled(false);
+            return;
+        }
+
+        auto err = mayasaba::ValidateSingleChildFolderName(name.c_str());
+        if (!err.empty())
+        {
+            CreateFolderError().Text(Utf16(err));
+            CreateFolderError().Visibility(Visibility::Visible);
+            TargetPathPreview().Text(L"");
+            CreateAndOpenButton().IsEnabled(false);
+            return;
+        }
+
+        std::filesystem::path target = std::filesystem::path(parent.c_str()) / name.c_str();
+        TargetPathPreview().Text(hstring{L"Will create: "} + target.wstring());
+
+        CreateFolderError().Visibility(Visibility::Collapsed);
+        CreateAndOpenButton().IsEnabled(!selectionBusy_ && !parentIdentity_.empty());
+    }
+
+    void MainWindow::OnCancelCreateFolder(IInspectable const&, RoutedEventArgs const&)
+    {
+        ++selectorGeneration_;
+        CreateFolderPanel().Visibility(Visibility::Collapsed);
+    }
+
+    void MainWindow::OnCreateAndOpenFolder(IInspectable const&, RoutedEventArgs const&)
+    {
+        OnCreateAndOpenFolderAsync();
+    }
+
+    winrt::fire_and_forget MainWindow::OnCreateAndOpenFolderAsync()
+    {
+        if(!createRequest_){mayasaba::SelectionRequest r;r.action=mayasaba::SelectionAction::Create;
+            r.path=ParentLocationBox().Text().c_str();r.child=NewFolderNameBox().Text().c_str();r.expectedParent=parentIdentity_;
+            r.creationOperation=r.operationId;createRequest_=r;}
+        SelectAsync(*createRequest_);co_return;
+    }
+    void MainWindow::OnCancelDraftCollision(IInspectable const&, RoutedEventArgs const&)
+    {++selectorGeneration_;SetVisible(DraftCollisionPanel(),false);collisionRequest_.reset();ChooseFolderButton().Focus(FocusState::Programmatic);}
+    void MainWindow::OnKeepTargetDraft(IInspectable const&, RoutedEventArgs const&)
+    {
+        if(!collisionRequest_)return;auto r=*collisionRequest_;r.operationId=SubmissionId();r.draftChoice=mayasaba::DraftChoice::KeepProject;
+        SetVisible(DraftCollisionPanel(),false);SelectAsync(r);
+    }
+    void MainWindow::OnUsePrebindDraft(IInspectable const&, RoutedEventArgs const&)
+    {
+        if(!collisionRequest_)return;auto r=*collisionRequest_;r.operationId=SubmissionId();r.draftChoice=mayasaba::DraftChoice::UseSelector;
+        SetVisible(DraftCollisionPanel(),false);SelectAsync(r);
+    }
+
+
+    void MainWindow::RefreshRecentProjects()
+    {
+        RefreshRecentProjectsAsync(selectorGeneration_);
+    }
+
+    winrt::fire_and_forget MainWindow::RefreshRecentProjectsAsync(uint64_t gen)
+    {
+        auto alive=get_strong();auto ui=DispatcherQueue();auto offset=recentOffset_;
+        if(!storage_){NoRecentProjectsText().Text(L"Project store unavailable.");SetVisible(NoRecentProjectsText(),true);co_return;}
+        NoRecentProjectsText().Text(L"Loading recorded projects…");SetVisible(NoRecentProjectsText(),true);
+        mayasaba::CrossProjectRecentProjectsResult result;std::vector<mayasaba::DirectoryOperationRecord> recovery;std::string error;
+        try{co_await selectorQueue_.Background();result=mayasaba::ProjectService(*storage_).Recent({20,offset});
+            recovery=storage_->UnreconciledDirectoryOperations();}
+        catch(std::exception const& e){error=e.what();}
+        if(!co_await resume_foreground(ui))co_return;
+        if(windowClosed_ || selectorGeneration_!=gen)co_return;
+        if(!error.empty() || !result.isComplete){NoRecentProjectsText().Text(L"Recent list unavailable: "+Utf16(error+result.errorMessage));co_return;}
+        recentRecords_=result.items;RecentProjectsList().Items().Clear();RecoveryList().Children().Clear();
+        PreviousRecentButton().IsEnabled(offset>0);NextRecentButton().IsEnabled(result.hasMore);
+        NoRecentProjectsText().Text(L"No recorded projects on this page. Open an existing folder to begin.");SetVisible(NoRecentProjectsText(),result.items.empty());
+        for(auto const& p:result.items){
+            StackPanel row;row.Spacing(6);row.HorizontalAlignment(HorizontalAlignment::Stretch);
+            auto text=[&](hstring const& value){TextBlock t;t.Text(value);t.TextWrapping(TextWrapping::Wrap);t.IsTextSelectionEnabled(true);row.Children().Append(t);};
+            text(Utf16(p.displayName)+(p.closed?L" · CLOSED · Read-only":L" · OPEN"));
+            text(Utf16(p.canonicalPath));text(L"Last opened: "+Utf16(p.lastOpenedAt.empty()?"Unknown":p.lastOpenedAt)+L" · Activity: unknown");
+            StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(8);auto weak=get_weak();auto id=p.id;
+            Button open;open.Content(box_value(p.closed?L"View history":L"Open project"));
+            Automation::AutomationProperties::SetName(open,L"Open project "+Utf16(p.displayName));
+            open.Click([weak,id](auto const&,auto const&){if(auto self=weak.get())self->OpenProjectById(id);});actions.Children().Append(open);
+            Button locate;locate.Content(box_value(L"Locate folder"));Automation::AutomationProperties::SetName(locate,L"Locate folder for "+Utf16(p.displayName));
+            locate.Click([weak,id](auto const&,auto const&){if(auto self=weak.get())self->LocateProjectAsync(id);});actions.Children().Append(locate);
+            row.Children().Append(actions);RecentProjectsList().Items().Append(row);
+        }
+        for(auto const& op:recovery){
+            StackPanel row;row.Spacing(5);TextBlock info;info.TextWrapping(TextWrapping::Wrap);
+            info.Text(Utf16(op.targetPath)+L" · "+Utf16(op.errorMessage)+L" · Operation "+Utf16(op.operationId));row.Children().Append(info);
+            if(op.state=="CREATED") {Button recover;recover.Content(box_value(L"Recheck and select created folder"));auto weak=get_weak();auto id=op.operationId;
+                recover.Click([weak,id](auto const&,auto const&){if(auto self=weak.get()){mayasaba::SelectionRequest r;r.action=mayasaba::SelectionAction::Recover;r.creationOperation=id;self->SelectAsync(r);}});row.Children().Append(recover);}
+            RecoveryList().Children().Append(row);
+        }
+    }
+    void MainWindow::OnRecentPrevious(IInspectable const&, RoutedEventArgs const&){if(recentOffset_>=20)recentOffset_-=20;RefreshRecentProjects();}
+    void MainWindow::OnRecentNext(IInspectable const&, RoutedEventArgs const&){recentOffset_+=20;RefreshRecentProjects();}
+    void MainWindow::OnRetryStore(IInspectable const&, RoutedEventArgs const&){InitializeStoreAsync();}
+
+
     void MainWindow::OnChooseFolder(IInspectable const&, RoutedEventArgs const&) { PickFolderAsync(); }
-    void MainWindow::OnSwitchProject(IInspectable const&, RoutedEventArgs const&) { PickFolderAsync(); }
+
+    void MainWindow::OnSwitchProject(IInspectable const&, RoutedEventArgs const&) { NavigateAsync(false); }
+    winrt::fire_and_forget MainWindow::NavigateAsync(bool exit)
+    {
+        if(navigationBusy_ || busy_ || windowClosed_)co_return;
+        if(!storage_){if(exit){allowClose_=true;Close();}co_return;}
+        navigationBusy_=true;auto alive=get_strong();auto ui=DispatcherQueue();
+        bool selectionPending=selectionBusy_;
+        if(selectionPending) ++selectorGeneration_;
+        auto id=activeProject_;auto draft=Utf8(ComposerBox().Text().c_str());auto prebind=Utf8(prebindingDraft_);
+        bool saveProject=!id.empty() && !projectClosed_;auto wasReadOnly=ComposerBox().IsReadOnly();
+        ComposerBox().IsReadOnly(true);PrebindDraftBox().IsReadOnly(true);draftTimer_.Stop();
+        returnFocus_=Input::FocusManager::GetFocusedElement(Content().as<FrameworkElement>().XamlRoot()).try_as<Control>();
+        std::string error;
+        try{co_await selectorQueue_.Background();
+            if(saveProject && !storage_->Pending(id))storage_->SaveDraft(id,draft);
+            if(!selectionPending)storage_->SavePrebindDraft(prebind);
+            prebind=storage_->GetPrebindDraft();}
+        catch(std::exception const& e){error=e.what();}
+        if(!co_await resume_foreground(ui))co_return;
+        if(windowClosed_)co_return;
+        navigationBusy_=false;ComposerBox().IsReadOnly(wasReadOnly);PrebindDraftBox().IsReadOnly(false);
+        if(!error.empty()){ShowNotice(L"Draft preservation failed; navigation was stopped: "+Utf16(error),true);co_return;}
+        prebindingDraft_=Utf16(prebind);
+        if(exit){++selectorGeneration_;allowClose_=true;Close();}
+        else ShowFolder(SelectorContext::Switching);
+    }
+
 
     void MainWindow::OnStart(IInspectable const&, RoutedEventArgs const&)
     {
@@ -711,36 +1055,26 @@ namespace winrt::Mayasaba::implementation
     // Explicit in-app exit for the whole application. The current draft is flushed first
     // so a confirmed Exit never loses the newest composer text; Close() then runs the same
     // Window.Closed teardown as the title-bar close (no separate shutdown path).
-    void MainWindow::OnExit(IInspectable const&, RoutedEventArgs const&)
+    void MainWindow::OnExit(IInspectable const&, RoutedEventArgs const&) { NavigateAsync(true); }
+
+
+    void MainWindow::OnCloseProject(IInspectable const&, RoutedEventArgs const&) { ChangeClosureAsync(true); }
+    void MainWindow::OnReopen(IInspectable const&, RoutedEventArgs const&) { ChangeClosureAsync(false); }
+    winrt::fire_and_forget MainWindow::ChangeClosureAsync(bool closed)
     {
-        PersistDraft();
-        Close();
+        if(busy_ || navigationBusy_ || !storage_ || activeProject_.empty())co_return;
+        auto alive=get_strong();auto ui=DispatcherQueue();auto id=activeProject_;auto text=Utf8(ComposerBox().Text().c_str());std::string error;
+        navigationBusy_=true;
+        try{co_await selectorQueue_.Background();auto p=storage_->Project(id);
+            if(!p)throw std::runtime_error("Project unavailable");
+            if(!p->closed && !storage_->Pending(id))storage_->SaveDraft(id,text);
+            if(!storage_->SetClosure(id,p->version,closed))throw std::runtime_error("Stale project version");}
+        catch(std::exception const& e){error=e.what();}
+        if(!co_await resume_foreground(ui))co_return;
+        if(windowClosed_)co_return;navigationBusy_=false;
+        if(!error.empty()){ShowNotice(Utf16(error),true);co_return;}ShowChat();
     }
-    void MainWindow::OnCloseProject(IInspectable const&, RoutedEventArgs const&)
-    {
-        if (!storage_ || activeProject_.empty()) return;
-        try
-        {
-            PersistDraft();
-            auto project = storage_->Project(activeProject_);
-            if (!project || !storage_->SetClosure(activeProject_, project->version, true))
-                throw std::runtime_error("Stale project version");
-            ShowChat();
-            ShowNotice(L"Project closed by explicit action; retained history remains visible.");
-        }
-        catch (std::exception const& e) { ShowNotice(L"Closure refused: " + Utf16(e.what()), true); }
-    }
-    void MainWindow::OnReopen(IInspectable const&, RoutedEventArgs const&)
-    {
-        if (!storage_ || activeProject_.empty()) return;
-        try
-        {
-            auto project = storage_->Project(activeProject_);
-            if (!project || !storage_->SetClosure(activeProject_, project->version, false))
-                throw std::runtime_error("Stale project version");
-            ShowChat();
-            ShowNotice(L"Project reopened. CLI Start was not authorized.");
-        }
-        catch (std::exception const& e) { ShowNotice(L"Reopen refused: " + Utf16(e.what()), true); }
-    }
+
+
+
 }
