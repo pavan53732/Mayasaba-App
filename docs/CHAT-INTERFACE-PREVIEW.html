@@ -514,7 +514,7 @@ $('message').addEventListener('input',function(){project().draft=this.value;comp
 $('message').addEventListener('keydown',function(e){var go=state.keyboardAccessible?e.key==='Enter'&&e.ctrlKey:e.key==='Enter'&&!e.shiftKey&&!e.ctrlKey;if(go){e.preventDefault();sendMessage();}});
 $('attachButton').addEventListener('click',function(){$('fileInput').click();});
 $('fileInput').addEventListener('change',function(){var next=Array.from(this.files);var total=project().files.reduce(function(a,b){return a+b.size;},0);
- if(project().files.length+next.length>20||next.some(function(f){return f.size>100*1024*1024;})||total+next.reduce(function(a,b){return a+b.size;},0)>500*1024*1024){toast('Attachment limit: 20 files, 100 MiB each, 500 MiB total.');this.value='';return;}
+ if(project().files.length+next.length>50||next.some(function(f){return f.size>100*1024*1024;})||total+next.reduce(function(a,b){return a+b.size;},0)>500*1024*1024){toast('Attachment limit: 50 files, 100 MiB each, 500 MiB total.');this.value='';return;}
  project().files=project().files.concat(next.map(function(f){return {name:f.name,size:f.size};}));renderFiles();toast('Files are named in the preview only; their bytes were not read, uploaded or persisted.');this.value='';});
 $('scenePicker').addEventListener('change',function(){setScene(this.value);});
 $('themePicker').addEventListener('change',function(){document.body.dataset.theme=this.value;toast('Preview theme changed. Project and draft preserved.');});

@@ -555,7 +555,7 @@ Users may select one or more local files with the native picker or drag them ont
 - read-only text/document preview when supported and English-safe; or
 - explicit preview-unavailable fallback.
 
-Enforce 20 files, 100 MiB per file, 500 MiB aggregate and 120 active seconds preparation. Archives remain opaque unless a separately authorized operation permits bounded extraction. Place an actionable error beside the rejected file. An exact technical filename may be shown unchanged with an English label; non-English prose previews remain unavailable and use English source metadata while authorized processing retains the original bytes.
+Enforce 50 files, 100 MiB per file, 500 MiB aggregate and 120 active seconds preparation. Archives remain opaque unless a separately authorized operation permits bounded extraction. Place an actionable error beside the rejected file. An exact technical filename may be shown unchanged with an English label; non-English prose previews remain unavailable and use English source metadata while authorized processing retains the original bytes.
 
 ### 8.2 Attachment lifecycle
 
@@ -1073,7 +1073,7 @@ At minimum, native automated and manual acceptance must cover:
 
 81. Explicit authority and controls: verify material approval, Close/Reopen, retention, destructive retirement and update activation require the exact version-bound labeled action. Plain “yes,” quoted/negated/conditional text and agent recommendations do nothing. Verify visible controls and standalone `/start`, `/pause`, `/resume`, `/stop`; mixed or keyword-containing prose is persisted normally and cannot trigger a control.
 
-82. Storage, draft and attachment policy: exercise 10 GiB capacity, 5 GiB reserve and 80% cleanup threshold. Verify only eligible disposable data is reclaimed and protected history, pending/uncertain contributions, drafts and required evidence remain. Restore a Windows-user-protected draft across switch/restart/Close, then explicitly discard it. Test 20 files, 100 MiB/file, 500 MiB aggregate, 120-second preparation and a source changed during copy; no incomplete contribution is persisted.
+82. Storage, draft and attachment policy: exercise 10 GiB capacity, 5 GiB reserve and 80% cleanup threshold. Verify only eligible disposable data is reclaimed and protected history, pending/uncertain contributions, drafts and required evidence remain. Restore a Windows-user-protected draft across switch/restart/Close, then explicitly discard it. Test 50 files, 100 MiB/file, 500 MiB aggregate, 120-second preparation and a source changed during copy; no incomplete contribution is persisted.
 
 83. Keyboard and mixed content: verify default Enter/Shift+Enter behavior and the persisted accessibility Ctrl+Enter mode without accidental submission. Preserve a user's submitted non-English text byte-faithfully only in that contribution's own user-message, history and details presentation with English metadata. Show exact necessary technical identifiers with English labels/provenance while blocking surrounding non-English agent prose and generated deliverables. Ambiguous generated-language admission withholds output and preserves source bytes.
 
