@@ -1,6 +1,8 @@
 # Mayasaba UI/UX Specification
 
-> **2026-10-15 approved navigation change:** Screen 2 is the reusable project selector. First binding: Welcome → selector → Chat. Later launches: selector → Chat. File → Switch Project returns to the selector. See [project selection contract](PROJECT-SELECTION.md). Native implementation remains pending.
+> **2026-10-15 approved navigation change:** Screen 2 is the reusable project selector. First binding: Welcome → selector → Chat. Later launches: selector → Chat. File → Switch Project returns to the selector. See [project selection contract](PROJECT-SELECTION.md).
+>
+> **2026-10-16 status:** the three-screen native UI (Welcome, Project selection, Chat) and its presentation wiring are implemented and locally verified in `native/`; see [the validation record](../native/LOCAL-VALIDATION.md). The native CLI adapters, session admission, three-agent reply orchestration, work authority, publication and MSI packaging remain **not implemented**, so the live three-agent workflow is still blocked.
 
 ## Document status
 
@@ -143,7 +145,7 @@ Routine heartbeats, queue operations, protocol envelopes and low-value progress 
 
 ## 4. Visual direction
 
-The visual idea is a **calm, luminous control room** — one evidence-backed conversation wrapped in a branded, gently animated surface. Depth, gradient and motion exist to make authority, provenance and state legible; they are never ambient decoration. Ordinary messages stay spacious in both light and dark themes, and controller cards keep a narrow semantic edge and precise status text so authority and proof remain recognizable without turning Chat into a grid of equal boxes. Brand expression is deliberate and finite: one logo mark, one brand ramp, one motion language, one icon set. Follow the current Windows app light/dark setting on launch and update the open window when that setting changes. Windows high contrast takes precedence over both palettes. Theme changes affect presentation only: they do not reset Chat, drafts, scroll position, focus, project binding, or controller state.
+The visual idea is a **calm, dimensional control room** across Welcome, Project selection and Chat. The user-approved 2026-10-16 visual amendment adds native hero perspective and a shared depth/motion system. Keep the existing indigo/violet identity and one readable conversation flow. Ordinary messages remain spacious; controller cards have a narrow semantic edge and precise status text. Use one logo mark, one brand ramp, one motion language and one vector icon set. Follow the Windows light/dark app setting on launch and live changes; high contrast takes precedence. Presentation changes preserve project binding, drafts, pending submission identity, caret, selection, focus, reading position and controller state. The [three-screen implementation guide](THREE-SCREEN-UX-IMPLEMENTATION.md) supplies the complete implementation sequence and acceptance matrix.
 
 ### Brand ramp and tokens
 
@@ -203,6 +205,8 @@ These are reference relationships, not literal colours to impose in high contras
 - Use an 18px corner radius for panels and cards, 11px for buttons and chips, 17px for the composer.
 - Separate surfaces with one-pixel `Border` lines **and** elevation; elevation is permitted under this direction.
 
+Use a 4/8/12/16/24/32 logical-unit spacing scale. Suggested text sizes are 36–44 for the responsive Welcome hero heading, 28–32 for screen titles, 18–20 for sections, 15–16 for conversation and 12–13 for supporting metadata. These are logical sizes, not fixed physical pixels; Windows text scaling takes precedence. Test 520 × 640 and 640 × 480 logical client sizes, ordinary desktop widths and 125/150/200% DPI. Shrink decorative space and stack controls before clipping actions or text. Keep full paths and long names inspectable through wrapping or keyboard-accessible disclosure.
+
 ### Gradients, depth and elevation
 
 Gradients are part of the brand and are permitted in exactly three places:
@@ -215,9 +219,11 @@ Two soft **radial ambient glows** (brand at 10–14% alpha) may sit behind hero 
 
 Elevation uses two levels: a resting card shadow, and a raised overlay shadow for temporary sheets, flyouts and the window frame. High contrast drops both.
 
+Place those levels over three perceptual planes: quiet application background, readable content/composer, and raised temporary details. Default implementation uses native XAML/composition transforms and shadows available in the pinned SDK. The three-node logo on Welcome and empty Chat may use perspective and layered edges; message text, code, project paths and evidence stay on stable reading planes. Screen 2 rows use small elevation/fill changes without rotation. No additional rendering engine or network asset is selected by this design. An unavailable effect uses the same static layout and controls, retains its limitation in the acceptance matrix, and never prevents interaction.
+
 ### Motion
 
-Motion is a **status and affordance language**, not ambience. Exactly these named motions are permitted:
+Motion is a **status and affordance language**. The 2026-10-16 amendment extends the original seven motions with DepthReveal, HoverLift and HeroTilt. Exactly these custom motions are permitted; ordinary native pressed-state feedback remains immediate:
 
 | Motion | Applied to | Behaviour |
 | --- | --- | --- |
@@ -225,13 +231,16 @@ Motion is a **status and affordance language**, not ambience. Exactly these name
 | `Appear` | inline detail expansion | fade in, opacity `0` → `1` |
 | `SlideIn` | newly inserted timeline entries | fade plus `translateX(20px)` → `0` |
 | `Dock` | the one composer moving from centred to docked | position and size transition after confirmed persistence |
-| `Levitate` | logo mark and agent orbs on onboarding | ±10px vertical float over ~5–6s |
+| `DepthReveal` | Welcome/empty-Chat hero and temporary raised surfaces | one small perspective/elevation settle; keep text planes stable, 260ms |
+| `HoverLift` | interactive surfaces, including project rows | small elevation change with equivalent visible keyboard focus, 120–160ms |
+| `HeroTilt` | optional Welcome/empty-Chat logo response | pointer-driven tilt bounded to ±4 degrees, 260ms settling; static equivalent on keyboard/touch |
+| `Levitate` | logo mark on Welcome and empty Chat | ±10px vertical float over ~5–6s |
 | `Glow` | ambient halo behind hero art | scale to 1.12, opacity to 0.68 |
-| `Orbit` | decorative orbit rings on onboarding | slow continuous rotation, 52s and 74s |
+| `Orbit` | decorative rings around Welcome/empty-Chat hero | slow continuous rotation, 52s and 74s |
 
-Base duration is **260ms** with easing `cubic-bezier(.18, .78, .2, 1)`. `Levitate`, `Glow` and `Orbit` are long-form ambient motions restricted to the onboarding screens and the empty-Chat hero; they must never appear behind timeline content, cards, or while work is running.
+Base duration is **260ms** with easing `cubic-bezier(.18, .78, .2, 1)`; HoverLift has the shorter duration above. Keep shared timing tokens and document API-specific easing mappings. `Levitate`, `Glow` and `Orbit` are restricted to visible idle Welcome/empty-Chat heroes. They stop when hidden, when conversation/work replaces the hero, and never appear on selector lists, behind timeline content/cards or while work is running. Restored history does not replay insertion motion. Every callback and animation is bounded by the current window, project, view and element lifetime.
 
-**Reduced motion is a hard rule.** When `UISettings.AnimationsEnabled` is false or the OS reduced-motion preference is set, every animation, transition and ambient loop is disabled and `Dock` becomes an instant reposition. A hung operation never shows an endless spinner or a continuous ambient animation; the status card names the real observed liveness instead.
+**Static presentation is a hard rule under reduced motion or high contrast.** When `UISettings.AnimationsEnabled` is false, its preference is unknown, the OS reduced-motion preference is set, or high contrast is active, disable every custom animation, transition and ambient loop; Dock is an instant reposition. Observe preference changes live and cancel active effects. High contrast also removes decorative gradients, shadows and perspective. Keep native focus/pressed feedback visible. A hung operation names actual observed liveness, its deadline/blocker and permitted recovery; it never spins indefinitely. Animation never delays Stop, gates service commands, clears a draft or implies a saved message, final reply or completed work. Prefer compositor transforms/opacity to per-frame layout invalidation, and record real frame/input measurements instead of an unmeasured FPS claim.
 
 ### Logo and iconography
 

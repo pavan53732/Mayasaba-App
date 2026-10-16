@@ -1,6 +1,8 @@
 # Mayasaba — complete user-visible screen diagrams
 
-> **2026-10-15 approved navigation change:** Screen 2 is the reusable project selector. First binding: Welcome → selector → Chat. Later launches: selector → Chat. File → Switch Project returns to the selector. See [project selection contract](PROJECT-SELECTION.md). Native implementation remains pending.
+> **2026-10-15 approved navigation change:** Screen 2 is the reusable project selector. First binding: Welcome → selector → Chat. Later launches: selector → Chat. File → Switch Project returns to the selector. See [project selection contract](PROJECT-SELECTION.md).
+>
+> **2026-10-16 status:** the three-screen native UI (Welcome, Project selection, Chat) and its presentation wiring are implemented and locally verified in `native/`; see [the validation record](../native/LOCAL-VALIDATION.md). The native CLI adapters, session admission, three-agent reply orchestration, work authority, publication and MSI packaging remain **not implemented**, so the live three-agent workflow is still blocked.
 
 ## Purpose and status
 

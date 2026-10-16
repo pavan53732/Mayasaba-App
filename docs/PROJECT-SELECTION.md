@@ -4,7 +4,7 @@ Derived implementation reference. The complete system description is authoritati
 
 ## Project selection contract — approved 2026-10-15
 
-This user-approved change supersedes the earlier direct-to-Chat launch rule. It changes documentation and the illustrative preview first; native implementation and runtime acceptance remain pending.
+This user-approved change supersedes the earlier direct-to-Chat launch rule. The selector is now implemented natively together with the Welcome and Chat screens; see [the validation record](../native/LOCAL-VALIDATION.md). The runtime acceptance that depends on the CLI adapters, session admission and three-agent reply orchestration remains pending and is not claimed.
 
 ### Launch and navigation
 
