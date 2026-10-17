@@ -51,9 +51,9 @@
         <x:Double x:Key="MayasabaProseMeasure">720</x:Double>
         <x:Double x:Key="MayasabaWideMeasure">880</x:Double>
 
-        <!-- Motion tokens live in Motion.h (MotionTokens). The XAML-declared ambient
-             storyboards in MainWindow.xaml keep their own inline durations because a
-             XAML Duration is not a usable shared resource. -->
+        <!-- Motion tokens live in Motion.h (MotionTokens), including the ambient
+             Levitate, Glow and Orbit periods. MotionController builds those loops
+             from the tokens, so no duration is duplicated in XAML. -->
 
         <!-- Elevation. Two levels: resting content and raised overlays.
              High contrast drops both (see the HighContrast dictionary). -->

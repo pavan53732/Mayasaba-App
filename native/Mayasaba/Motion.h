@@ -42,6 +42,19 @@ namespace mayasaba::ui
         static constexpr double OrbitInnerSeconds = 74.0;
     };
 
+    // The four ambient hero loops, addressed by the objects they animate. They are
+    // declared here rather than in XAML so the documented durations have exactly one
+    // source (MotionTokens) and every loop lives in the same lifecycle registry as
+    // the finite transitions. A missing target is simply skipped.
+    struct AmbientHero
+    {
+        winrt::Microsoft::UI::Xaml::DependencyObject levitate{nullptr};   // TranslateY
+        winrt::Microsoft::UI::Xaml::DependencyObject glowScale{nullptr};  // ScaleX/ScaleY
+        winrt::Microsoft::UI::Xaml::DependencyObject glowFade{nullptr};   // Opacity
+        winrt::Microsoft::UI::Xaml::DependencyObject orbitOuter{nullptr}; // Angle
+        winrt::Microsoft::UI::Xaml::DependencyObject orbitInner{nullptr}; // Angle
+    };
+
     // Elevation is dropped entirely in high contrast, so every call site goes
     // through this controller rather than setting Translation directly.
     class MotionController
@@ -109,6 +122,22 @@ namespace mayasaba::ui
         // Returns the hero to its resting rotation. Always safe to call.
         void ResetTilt(winrt::Microsoft::UI::Xaml::FrameworkElement const& element);
 
+        // ---- Ambient loops ---------------------------------------------------
+
+        // Starts the four hero loops (Levitate, Glow, OrbitOuter, OrbitInner) from
+        // the shared token durations. Idempotent while running, and a no-op when
+        // motion is not permitted, so a caller cannot start ambience behind a
+        // preference change. They live in their own registry rather than the finite
+        // one: a long-running loop must never be evicted by the bounded transition
+        // registry, and it has no end state to commit.
+        void StartAmbient(AmbientHero const& hero);
+
+        // Stops every ambient loop and releases its targets. Called when a screen
+        // hides, when motion stops being permitted and on teardown.
+        void StopAmbient() noexcept;
+
+        bool AmbientRunning() const noexcept { return ambientRunning_; }
+
         // ---- Elevation -------------------------------------------------------
 
         // z == 0 removes both the shadow and the depth translation.
@@ -133,10 +162,21 @@ namespace mayasaba::ui
             winrt::hstring const& property,
             double from, double to, double milliseconds, double delayMs = 0);
 
+        // A single forever loop with the documented sine easing. `seconds` is one
+        // direction; AutoReverse doubles the visible period.
+        winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard BuildAmbient(
+            winrt::Microsoft::UI::Xaml::DependencyObject const& target,
+            winrt::hstring const& property,
+            double from, double to, double seconds, bool autoReverse);
+
         winrt::Microsoft::UI::Xaml::Media::CompositeTransform EnsureTransform(
             winrt::Microsoft::UI::Xaml::FrameworkElement const& element);
 
         std::vector<winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard> tracked_;
+        // Ambient loops are kept apart from the bounded transition registry: they
+        // never complete, and evicting one would leave an unowned clock running.
+        std::vector<winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard> ambient_;
+        bool ambientRunning_{false};
         // A completion callback must never touch a destroyed controller. Every
         // handler holds this flag weakly and the destructor clears it first.
         std::shared_ptr<bool> alive_{std::make_shared<bool>(true)};

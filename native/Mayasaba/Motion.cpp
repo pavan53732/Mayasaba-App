@@ -31,6 +31,11 @@ namespace mayasaba::ui
             return std::chrono::milliseconds(static_cast<int64_t>(milliseconds));
         }
 
+        TimeSpan Seconds(double seconds)
+        {
+            return std::chrono::milliseconds(static_cast<int64_t>(seconds * 1000.0));
+        }
+
         double Clamp(double value, double low, double high)
         {
             return value < low ? low : (value > high ? high : value);
@@ -81,6 +86,7 @@ namespace mayasaba::ui
             }
         }
         tracked_.clear();
+        StopAmbient();
     }
 
     void MotionController::Prune()
@@ -136,6 +142,25 @@ namespace mayasaba::ui
         Storyboard::SetTarget(animation, target);
         Storyboard::SetTargetProperty(animation, property);
         board.Children().Append(animation);
+        return board;
+    }
+
+    Storyboard MotionController::BuildAmbient(DependencyObject const& target, hstring const& property,
+                                              double from, double to, double seconds, bool autoReverse)
+    {
+        Storyboard board{};
+        DoubleAnimation animation{};
+        animation.From(from);
+        animation.To(to);
+        animation.Duration(DurationHelper::FromTimeSpan(Seconds(seconds)));
+        animation.AutoReverse(autoReverse);
+        SineEase ease{};
+        ease.EasingMode(EasingMode::EaseInOut);
+        animation.EasingFunction(ease);
+        Storyboard::SetTarget(animation, target);
+        Storyboard::SetTargetProperty(animation, property);
+        board.Children().Append(animation);
+        board.RepeatBehavior(RepeatBehaviorHelper::Forever());
         return board;
     }
 
@@ -410,6 +435,72 @@ namespace mayasaba::ui
             });
             board.Begin();
         }
+    }
+
+    void MotionController::StartAmbient(AmbientHero const& hero)
+    {
+        if (!Allowed())
+        {
+            StopAmbient();
+            return;
+        }
+        if (ambientRunning_)
+        {
+            // Already running; re-entering a screen must not stack a second clock.
+            return;
+        }
+        ambient_.clear();
+        auto const add = [this](Storyboard const& board)
+        {
+            ambient_.push_back(board);
+            board.Begin();
+        };
+        // One direction is half the documented round trip for the AutoReverse loops.
+        if (hero.levitate)
+        {
+            add(BuildAmbient(hero.levitate, L"TranslateY", 0.0, -10.0,
+                             MotionTokens::LevitateSeconds / 2.0, true));
+        }
+        if (hero.glowScale)
+        {
+            add(BuildAmbient(hero.glowScale, L"ScaleX", 1.0, 1.12,
+                             MotionTokens::GlowSeconds / 2.0, true));
+            add(BuildAmbient(hero.glowScale, L"ScaleY", 1.0, 1.12,
+                             MotionTokens::GlowSeconds / 2.0, true));
+        }
+        if (hero.glowFade)
+        {
+            add(BuildAmbient(hero.glowFade, L"Opacity", 0.5, 0.68,
+                             MotionTokens::GlowSeconds / 2.0, true));
+        }
+        if (hero.orbitOuter)
+        {
+            add(BuildAmbient(hero.orbitOuter, L"Angle", 0.0, 360.0,
+                             MotionTokens::OrbitOuterSeconds, false));
+        }
+        if (hero.orbitInner)
+        {
+            add(BuildAmbient(hero.orbitInner, L"Angle", 360.0, 0.0,
+                             MotionTokens::OrbitInnerSeconds, false));
+        }
+        ambientRunning_ = !ambient_.empty();
+    }
+
+    void MotionController::StopAmbient() noexcept
+    {
+        for (auto const& board : ambient_)
+        {
+            try
+            {
+                if (board) board.Stop();
+            }
+            catch (...)
+            {
+                // Stopping is best effort; a failure here must not fault the window.
+            }
+        }
+        ambient_.clear();
+        ambientRunning_ = false;
     }
 
     void MotionController::ApplyElevation(FrameworkElement const& element, double z)

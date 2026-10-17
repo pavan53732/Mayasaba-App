@@ -112,13 +112,6 @@ namespace winrt::Mayasaba::implementation
         mayasaba::ui::MotionController motion_;
         // The virtualized timeline. Cards are built on realization.
         winrt::com_ptr<mayasaba::ui::TimelineRenderer> timeline_;
-        // The ambient onboarding hero storyboards. They run only while the OS
-        // animation setting is on AND high contrast is off AND the Welcome screen
-        // is visible, so no loop keeps running behind Chat.
-        Microsoft::UI::Xaml::Media::Animation::Storyboard heroLevitate_{nullptr};
-        Microsoft::UI::Xaml::Media::Animation::Storyboard heroGlow_{nullptr};
-        Microsoft::UI::Xaml::Media::Animation::Storyboard heroOrbitOuter_{nullptr};
-        Microsoft::UI::Xaml::Media::Animation::Storyboard heroOrbitInner_{nullptr};
         winrt::Windows::UI::ViewManagement::UISettings uiSettings_{nullptr};
         winrt::Windows::UI::ViewManagement::AccessibilitySettings accessibilitySettings_{nullptr};
         winrt::event_token animationsEnabledChangedToken_{};
@@ -163,6 +156,9 @@ namespace winrt::Mayasaba::implementation
 
         void ApplyMotionPreference();
         void ApplyHeroMotion(bool running);
+        void ApplyChatHeroMotion(bool running);
+        // Removes the stage perspective and the sculpted rotations in high contrast.
+        void ApplyHeroPerspective(bool decorative);
         void ApplyHighContrast();
         void RevokeMotionSubscription();
         void RevokeAccessibilitySubscription();

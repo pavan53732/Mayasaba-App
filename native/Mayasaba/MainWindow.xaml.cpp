@@ -315,22 +315,6 @@ namespace winrt::Mayasaba::implementation
             animationsEnabled_ = false;
         }
 
-        if (!heroLevitate_)
-        {
-            if (auto root = Content().try_as<FrameworkElement>())
-            {
-                auto const dictionary = root.Resources();
-                heroLevitate_ = dictionary.TryLookup(winrt::box_value(L"MayasabaHeroLevitate"))
-                    .try_as<Microsoft::UI::Xaml::Media::Animation::Storyboard>();
-                heroGlow_ = dictionary.TryLookup(winrt::box_value(L"MayasabaHeroGlow"))
-                    .try_as<Microsoft::UI::Xaml::Media::Animation::Storyboard>();
-                heroOrbitOuter_ = dictionary.TryLookup(winrt::box_value(L"MayasabaHeroOrbitOuter"))
-                    .try_as<Microsoft::UI::Xaml::Media::Animation::Storyboard>();
-                heroOrbitInner_ = dictionary.TryLookup(winrt::box_value(L"MayasabaHeroOrbitInner"))
-                    .try_as<Microsoft::UI::Xaml::Media::Animation::Storyboard>();
-            }
-        }
-
         motion_.SetAnimationsEnabled(animationsEnabled_);
         ApplyHighContrast();
         ApplyHeroMotion(WelcomeScreen().Visibility() == Visibility::Visible);
@@ -423,32 +407,42 @@ namespace winrt::Mayasaba::implementation
     }
 
     // Starts or stops every ambient hero loop. `running` is the caller's intent; the
-    // motion utility's guards (reduced motion OR high contrast) and a missing
-    // storyboard all force a stop, so no loop can keep running behind Chat.
+    // motion utility's guards (reduced motion OR high contrast) and a missing target
+    // all force a stop, so no loop can keep running behind Chat. The loops are built
+    // from MotionTokens inside MotionController, so their durations have one source
+    // and CancelAll stops them together with every finite transition.
     void MainWindow::ApplyHeroMotion(bool const running)
     {
-        auto const apply = [this, running](Microsoft::UI::Xaml::Media::Animation::Storyboard const& board)
+        if (!running || !motion_.Allowed())
         {
-            if (!board)
-            {
-                return;
-            }
-            if (running && motion_.Allowed())
-            {
-                if (board.GetCurrentState() == Microsoft::UI::Xaml::Media::Animation::ClockState::Stopped)
-                {
-                    board.Begin();
-                }
-            }
-            else
-            {
-                board.Stop();
-            }
-        };
-        apply(heroLevitate_);
-        apply(heroGlow_);
-        apply(heroOrbitOuter_);
-        apply(heroOrbitInner_);
+            motion_.StopAmbient();
+            return;
+        }
+        mayasaba::ui::AmbientHero hero;
+        hero.levitate = WelcomeHeroCoreTransform();
+        hero.glowScale = WelcomeHeroGlowTransform();
+        hero.glowFade = WelcomeHeroGlow();
+        hero.orbitOuter = WelcomeHeroOrbitOuterRotate();
+        hero.orbitInner = WelcomeHeroOrbitInnerRotate();
+        motion_.StartAmbient(hero);
+    }
+
+    // The empty-state Chat hero is the only other eligible idle hero. It runs the
+    // same bounded loops while Chat is visible and no contribution exists; the first
+    // realized card stops them, so ambience never sits behind conversation.
+    void MainWindow::ApplyChatHeroMotion(bool const running)
+    {
+        bool const eligible = running && ChatScreen().Visibility() == Visibility::Visible;
+        if (!eligible || !motion_.Allowed())
+        {
+            motion_.StopAmbient();
+            return;
+        }
+        mayasaba::ui::AmbientHero hero;
+        hero.levitate = EmptyHeroLevitate();
+        hero.glowScale = EmptyHeroGlowTransform();
+        hero.glowFade = EmptyChatGlow();
+        motion_.StartAmbient(hero);
     }
 
     // Decorative depth is removed entirely in high contrast: the extruded layers
@@ -475,6 +469,36 @@ namespace winrt::Mayasaba::implementation
         SetVisible(ComposerPlateEdge(), decorative);
         motion_.ApplyElevation(ComposerPanel(), (timeline_ && !timeline_->Empty()) ? 8.0 : 24.0);
         motion_.ApplyElevation(EmptyChatHero(), 0);
+        ApplyHeroPerspective(decorative);
+    }
+
+    // High contrast is a flat, unrotated mark: the stage perspective and the sculpted
+    // rotations are decoration, not information, so they are removed rather than
+    // merely dimmed. Restoring re-creates the same 900-depth stage.
+    void MainWindow::ApplyHeroPerspective(bool const decorative)
+    {
+        auto const setStage = [decorative](FrameworkElement const& element)
+        {
+            if (!element) return;
+            auto const current = element.Transform3D();
+            bool const hasPerspective = current && current.try_as<
+                Microsoft::UI::Xaml::Media::Media3D::PerspectiveTransform3D>();
+            if (decorative == hasPerspective) return;
+            if (decorative)
+            {
+                Microsoft::UI::Xaml::Media::Media3D::PerspectiveTransform3D perspective{};
+                perspective.Depth(900.0);
+                element.Transform3D(perspective);
+            }
+            else
+            {
+                element.Transform3D(nullptr);
+            }
+        };
+        setStage(WelcomeHeroStage());
+        setStage(EmptyHeroArt());
+        if (auto const core = WelcomeHeroCoreTransform()) core.Rotation(decorative ? -8.0 : 0.0);
+        if (auto const glyph = WelcomeHeroGlyphRotate()) glyph.Angle(decorative ? 8.0 : 0.0);
     }
 
     void MainWindow::CopyToClipboard(hstring const& text)
@@ -825,6 +849,7 @@ namespace winrt::Mayasaba::implementation
         ChatBottomSpacer().Height(populated ? ZeroLength() : StarLength());
         SetVisible(EmptyChatHero(), !populated);
         SetVisible(HistoryScroller(), populated);
+        ApplyChatHeroMotion(!populated);
 
         ApplyResponsiveLayout();
 

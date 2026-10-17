@@ -466,7 +466,7 @@ production store `%LOCALAPPDATA%\Mayasaba\mayasaba.db` was never opened, migrate
 | D-05 | Readable reply surfaces and layered detail expansion | PASS (fixture) | Opaque surfaces under text; `Appear` expansion; reading position retained. Live reply remains BLOCKED. |
 | D-06 | Smooth connected transitions that explain where content moved | PASS | `Dock` animates a compensating translate from the composer's previous bounds to its new ones; entrance motions are ordered and finite. Smoothness itself is unmeasured (see frame timing). |
 | D-07 | Bounded hero perspective and optional pointer tilt | PASS | `PerspectiveTransform3D Depth=900`, tilt clamped to ±4°, static equivalent retained. |
-| D-08 | Ambient effects only on visible idle heroes, stopped when hidden | PASS | CPU drop on hide; zero pixel change with the preference off. |
+| D-08 | Ambient effects only on visible idle heroes, stopped when hidden | PASS | Ambient loops exist only on the Welcome hero and the empty-Chat hero. The first persisted contribution stops the Chat loops (0 px changed across three consecutive frames); CPU drops when the screen hides; 0 px with the preference off. |
 | D-09 | Preference changes take effect live | PASS | Settings toggle applied to a running window in both directions. |
 | D-10 | High contrast uses system colours and removes decorative depth | PASS | 597 colours, no gradients or shadows, system border colour. |
 | D-11 | Lifecycle, teardown and stale-callback safety | PASS (source) | `CancelAll` on hide/close, both subscriptions revoked, weak references and generation guards on every callback. |
@@ -489,6 +489,36 @@ written to the store, and nothing in ordinary startup reads the variable.
   `run14-motion-temporal.sh`, `motion_verify.py`, `motion_settings4.py`, `cpu_lifecycle.py`,
   `cpu_startup.py`).
 - Build and test commands are those recorded in [README.md](README.md); no new build step exists.
+
+### Ambient lifecycle refactor (2026-10-18, follow-up)
+
+The ambient hero loops were moved out of XAML and into `MotionController` so one component owns
+their timing, their guard conditions and their teardown.
+
+- `MotionController` builds `Levitate`, `Glow` and `Orbit` from `MotionTokens` and keeps them in a
+  separate `ambient_` registry, so a long-running loop can never be evicted by the finite-transition
+  queue and `CancelAll()` stops both sets.
+- `MainWindow.xaml` no longer declares any ambient storyboard. The compiled `MainWindow.xbf` and
+  `App.xbf` contain zero occurrences of `MayasabaHeroLevitate`, confirming the loops are not XAML
+  resources that could outlive the screen.
+- Two hosts are eligible: the Welcome hero (`ApplyHeroMotion`) and the empty-Chat hero
+  (`ApplyChatHeroMotion`). The Chat host runs only while Chat is visible and `populated` is false;
+  `ApplyChatLayout` stops it as soon as a contribution exists.
+- Hide, motion-off, high contrast, teardown and project switch all reach the same `StopAmbient()`
+  path. No new timer, rendering callback or subscription was added.
+
+Measurements on the rebuilt binary (isolated stores, 1424x732 client, 125% DPI):
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Empty-Chat hero, animation effects on | 898 / 964 / 220 px changed against frame 1 | `dimensional-20261018b/empty-chat/E-empty-hero-1..4.png` |
+| Same region after the first persisted contribution | 0 / 0 / 0 px; heading removed | `dimensional-20261018b/empty-chat/E-after-send-1..4.png` |
+| Empty-Chat hero with animation effects off (`SPI_SETCLIENTAREAANIMATION = 0x1043`) | 0 / 0 / 0 px | `dimensional-20261018b/empty-chat/RM-empty-hero-1..4.png` |
+| Welcome hero, animation effects on | 2,794 / 4,948 / 5,433 px changed against frame 1 | `dimensional-20261018b/welcome-ambient/W-on-1..4.png` |
+| Welcome hero with animation effects off | 0 / 0 / 0 px | `dimensional-20261018b/welcome-ambient/W-off-1..4.png` |
+
+The Settings preference was restored to its original value after the run (`SPI_GETCLIENTAREAANIMATION`
+reads 1).
 
 ### What this does not establish
 
