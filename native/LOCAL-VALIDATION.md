@@ -356,7 +356,7 @@ Following the commit `cfdb7f6` code review, four additional findings and one per
    - Physical disk reads, file existence checks, handle queries, and cryptographic SHA-256 computation via BCrypt now execute *outside* the `mutex_` lock and outside the `BEGIN IMMEDIATE;` SQLite write transaction in `Storage::SaveContribution`.
    - Up to 500 MiB of physical file I/O is completed without holding the SQLite database write lock, eliminating write contention on `mayasaba.db` while preserving strict cryptographic admission guarantees.
 
-### Final Verification Results
+### Follow-up Hardening Verification Results
 
 | Verification Gate | Result | Evidence |
 | --- | --- | --- |
@@ -364,5 +364,36 @@ Following the commit `cfdb7f6` code review, four additional findings and one per
 | Contract Registry & Slice Schemas | PASS | `python native/tests/validate_contract_registry.py` passed 124/124 checks. |
 | Full Application Build | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). |
 | Production Store Hash | PASS | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified). |
+
+---
+
+## Native Attachment Pipeline — Verified-Byte Finalization Gate & Active-Time Accounting (2026-10-17 Milestone)
+
+Following the commit `9584118` code review, three critical architectural guarantees were hardened in `Storage.cpp`, `AttachmentService.h`, and `AttachmentService.cpp`:
+
+1. **Race Protection via Exclusive Write-Protected Admission Handles (`FILE_SHARE_READ`):**
+   - In `Storage::SaveContribution`, each staged attachment file is opened with `GENERIC_READ | FILE_WRITE_ATTRIBUTES` and exclusive write protection (`FILE_SHARE_READ` only; no `FILE_SHARE_WRITE`, no `FILE_SHARE_DELETE`).
+   - All handles remain held open in `openLocks` across Phase 1 (pre-transaction validation and hashing) and Phase 2 (SQLite write transaction), and are only released when `SaveContribution` exits.
+   - Any external process or concurrent thread attempting to write, truncate, delete, or replace the file during admission is immediately blocked with `ERROR_SHARING_VIOLATION`. The exact verified bytes are physically protected on disk through commit.
+2. **Pre-Commit Sealing Verification & Rollback Reversion:**
+   - Instead of unverified post-commit attribute setting, `Storage::SaveContribution` now applies `FILE_ATTRIBUTE_READONLY` via `SetFileInformationByHandle` and `SetFileAttributesW` directly before SQLite `COMMIT;`.
+   - The attribute is immediately re-verified with `GetFileAttributesW`. If setting or verifying read-only attributes fails, the transaction immediately rolls back and returns `SaveDisposition::Conflict`.
+   - If the transaction throws or fails, all sealed attributes are reverted back to `FILE_ATTRIBUTE_NORMAL` so drafts can still be retried.
+   - In `AttachmentService::ReconcileStagedFiles`, committed attachments are verified on startup/reconciliation; any committed file with cleared attributes is automatically re-sealed with `FILE_ATTRIBUTE_READONLY`.
+3. **Active-Time Clock Accounting Semantics:**
+   - Implemented `AttachmentService::DefaultActiveClock()` using Windows `QueryUnbiasedInterruptTime` (counting in 100ns units and strictly excluding time spent in system sleep or hibernation).
+   - Test 19A verifies active-time budget enforcement: when active CPU time reaches 121 seconds (> 120s budget), subsequent files cleanly transition to `AttachmentStatus::TimedOut`.
+   - Test 19B verifies suspension resilience: a 130-second system suspend/sleep leap does not consume the 120-second active budget; the batch succeeds with both files `AttachmentStatus::Ready`.
+   - Tests 21 and 22 verify the pre-commit sealing gate and crash/restart immutability recovery.
+
+### Final Verification Results
+
+| Verification Gate | Result | Evidence |
+| --- | --- | --- |
+| 19 Regression Groups (Tests 1–22) | PASS | `native/tests/bin/storage_tests.exe` executed all 22 tests cleanly with 0 failures. |
+| Contract Registry & Slice Schemas | PASS | `python native/tests/validate_contract_registry.py` passed 124/124 checks. |
+| Full Application Build | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). |
+| Production Store Hash | PASS | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified). |
+
 
 

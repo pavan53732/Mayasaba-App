@@ -92,6 +92,7 @@ namespace mayasaba
             std::vector<AttachmentCandidate> const& existingDraftAttachments) const;
 
         using SteadyClockFn = std::function<std::chrono::steady_clock::time_point()>;
+        static std::chrono::steady_clock::time_point DefaultActiveClock();
 
         // Batch preparation: chunked copy with single 120-second active-time deadline
         std::vector<AttachmentCandidate> PrepareBatch(
@@ -99,7 +100,7 @@ namespace mayasaba
             std::vector<std::wstring> const& candidatePaths,
             std::function<bool()> const& isCancelled = [] { return false; },
             uint32_t timeoutSeconds = PREPARATION_TIMEOUT_SECONDS,
-            SteadyClockFn clockFn = [] { return std::chrono::steady_clock::now(); });
+            SteadyClockFn clockFn = DefaultActiveClock);
 
         // Preparation slice: chunked copy to project staging, SHA-256 computation, and source integrity check
         AttachmentCandidate PrepareAttachment(
@@ -107,7 +108,7 @@ namespace mayasaba
             std::wstring const& sourcePath,
             std::function<bool()> const& isCancelled = [] { return false; },
             std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt,
-            SteadyClockFn clockFn = [] { return std::chrono::steady_clock::now(); });
+            SteadyClockFn clockFn = DefaultActiveClock);
 
         // Staging and Draft persistence
         void SaveDraftAttachments(std::string const& projectId, std::vector<AttachmentCandidate> const& attachments);

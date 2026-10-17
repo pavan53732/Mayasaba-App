@@ -268,6 +268,21 @@ namespace mayasaba
         return result;
     }
 
+    std::chrono::steady_clock::time_point AttachmentService::DefaultActiveClock()
+    {
+#ifdef _WIN32
+        ULONGLONG unbiasedTime100ns = 0;
+        // QueryUnbiasedInterruptTime counts in 100ns units and excludes time spent in sleep/hibernation
+        if (QueryUnbiasedInterruptTime(&unbiasedTime100ns))
+        {
+            return std::chrono::steady_clock::time_point(
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::nanoseconds(unbiasedTime100ns * 100)));
+        }
+#endif
+        return std::chrono::steady_clock::now();
+    }
+
     std::vector<AttachmentCandidate> AttachmentService::PrepareBatch(
         std::string const& projectId,
         std::vector<std::wstring> const& candidatePaths,
@@ -707,6 +722,17 @@ namespace mayasaba
             {
                 std::filesystem::path p = Utf8ToUtf16(c.storagePath);
                 trackedPaths.insert(to_lower(std::filesystem::weakly_canonical(p, ec).wstring()));
+#ifdef _WIN32
+                // Ensure committed files are sealed as read-only (crash/restart immutability recovery)
+                if (std::filesystem::exists(p, ec))
+                {
+                    DWORD attrs = GetFileAttributesW(p.c_str());
+                    if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_READONLY))
+                    {
+                        SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_READONLY);
+                    }
+                }
+#endif
             }
         }
 

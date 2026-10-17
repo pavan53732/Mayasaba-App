@@ -1035,8 +1035,27 @@ namespace mayasaba
         // P0: Enforce 50-file limit inside Storage boundary
         if (attachments.size() > 50) return SaveDisposition::Conflict;
 
-        // Phase 1: Pre-transaction validation and expensive cryptographic hashing
-        // This runs OUTSIDE the write transaction lock to avoid database contention on large files.
+        // Phase 1: Pre-transaction validation, exclusive write-protection locking, and cryptographic hashing
+        // Staged files are locked with FILE_SHARE_READ so that no concurrent process can modify, truncate, or overwrite them.
+#ifdef _WIN32
+        struct ProtectedFileLock
+        {
+            HANDLE handle{ INVALID_HANDLE_VALUE };
+            std::wstring path{};
+            bool sealed{ false };
+
+            ~ProtectedFileLock()
+            {
+                if (handle != INVALID_HANDLE_VALUE)
+                {
+                    CloseHandle(handle);
+                }
+            }
+        };
+
+        std::vector<std::unique_ptr<ProtectedFileLock>> openLocks;
+        openLocks.reserve(attachments.size());
+#endif
         uint64_t aggregateBytes = 0;
         for (auto const& att : attachments)
         {
@@ -1060,24 +1079,104 @@ namespace mayasaba
             }
 
 #ifdef _WIN32
-            // Verify physical existence, size and cryptographic hash before taking write lock
-            std::filesystem::path stagedP = Utf8ToWide(att.storagePath);
+            // Verified-byte admission lock: open with exclusive write protection (FILE_SHARE_READ only).
+            // This prevents any concurrent process or thread from modifying, truncating, deleting, or renaming the file.
+            std::wstring stagedW = Utf8ToWide(att.storagePath);
+            std::filesystem::path stagedP(stagedW);
             std::error_code ec;
             if (!std::filesystem::exists(stagedP, ec) || std::filesystem::is_directory(stagedP, ec))
             {
                 return SaveDisposition::Conflict;
             }
-            auto actualDiskSize = std::filesystem::file_size(stagedP, ec);
-            if (ec || actualDiskSize != att.fileSize)
+
+            HANDLE h = CreateFileW(stagedW.c_str(),
+                GENERIC_READ | FILE_WRITE_ATTRIBUTES,
+                FILE_SHARE_READ,
+                nullptr,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                nullptr);
+            if (h == INVALID_HANDLE_VALUE)
+            {
+                // If it is already read-only (e.g. during an identical replay check), open with FILE_ATTRIBUTE_READONLY
+                h = CreateFileW(stagedW.c_str(),
+                    GENERIC_READ | FILE_WRITE_ATTRIBUTES,
+                    FILE_SHARE_READ,
+                    nullptr,
+                    OPEN_EXISTING,
+                    FILE_ATTRIBUTE_READONLY,
+                    nullptr);
+            }
+            if (h == INVALID_HANDLE_VALUE)
             {
                 return SaveDisposition::Conflict;
             }
 
-            std::string computedHash = ComputeFileSha256(stagedP.wstring());
-            if (computedHash.empty() || computedHash != att.sha256)
+            LARGE_INTEGER sizeLi{};
+            if (!GetFileSizeEx(h, &sizeLi) || static_cast<uint64_t>(sizeLi.QuadPart) != att.fileSize)
             {
+                CloseHandle(h);
                 return SaveDisposition::Conflict;
             }
+
+            // Read directly through the protected handle to compute SHA-256
+            BCRYPT_ALG_HANDLE hAlg = nullptr;
+            NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+            if (!BCRYPT_SUCCESS(bStatus))
+            {
+                CloseHandle(h);
+                return SaveDisposition::Conflict;
+            }
+
+            DWORD hashObjSize = 0, dataLen = 0;
+            bStatus = BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, (PBYTE)&hashObjSize, sizeof(DWORD), &dataLen, 0);
+            if (!BCRYPT_SUCCESS(bStatus))
+            {
+                BCryptCloseAlgorithmProvider(hAlg, 0);
+                CloseHandle(h);
+                return SaveDisposition::Conflict;
+            }
+
+            std::vector<BYTE> hashObj(hashObjSize);
+            BCRYPT_HASH_HANDLE hHash = nullptr;
+            bStatus = BCryptCreateHash(hAlg, &hHash, hashObj.data(), hashObjSize, nullptr, 0, 0);
+            if (!BCRYPT_SUCCESS(bStatus))
+            {
+                BCryptCloseAlgorithmProvider(hAlg, 0);
+                CloseHandle(h);
+                return SaveDisposition::Conflict;
+            }
+
+            constexpr DWORD BUFFER_SIZE = 64 * 1024;
+            std::vector<BYTE> buffer(BUFFER_SIZE);
+            DWORD bytesRead = 0;
+            SetFilePointer(h, 0, nullptr, FILE_BEGIN);
+            while (ReadFile(h, buffer.data(), BUFFER_SIZE, &bytesRead, nullptr) && bytesRead > 0)
+            {
+                BCryptHashData(hHash, buffer.data(), bytesRead, 0);
+            }
+
+            BYTE hashBytes[32];
+            BCryptFinishHash(hHash, hashBytes, 32, 0);
+            BCryptDestroyHash(hHash);
+            BCryptCloseAlgorithmProvider(hAlg, 0);
+
+            std::ostringstream ss;
+            for (int i = 0; i < 32; ++i)
+            {
+                ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hashBytes[i]);
+            }
+            std::string computedHash = ss.str();
+            if (computedHash != att.sha256)
+            {
+                CloseHandle(h);
+                return SaveDisposition::Conflict;
+            }
+
+            auto lockPtr = std::make_unique<ProtectedFileLock>();
+            lockPtr->handle = h;
+            lockPtr->path = stagedW;
+            openLocks.push_back(std::move(lockPtr));
 #endif
         }
 
@@ -1209,6 +1308,26 @@ namespace mayasaba
                     Bind(ins.value,11,att.errorMessage);
                     Check(sqlite3_step(ins.value),db_);
                 }
+                // Verified-byte finalization gate: seal committed files and verify attribute before transaction commit
+#ifdef _WIN32
+                for (auto& lockPtr : openLocks)
+                {
+                    FILE_BASIC_INFO basicInfo{};
+                    if (GetFileInformationByHandleEx(lockPtr->handle, FileBasicInfo, &basicInfo, sizeof(basicInfo)))
+                    {
+                        basicInfo.FileAttributes |= FILE_ATTRIBUTE_READONLY;
+                        SetFileInformationByHandle(lockPtr->handle, FileBasicInfo, &basicInfo, sizeof(basicInfo));
+                    }
+                    SetFileAttributesW(lockPtr->path.c_str(), FILE_ATTRIBUTE_READONLY);
+                    DWORD attr = GetFileAttributesW(lockPtr->path.c_str());
+                    if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_READONLY))
+                    {
+                        Exec("ROLLBACK;");
+                        return SaveDisposition::Conflict;
+                    }
+                    lockPtr->sealed = true;
+                }
+#endif
             }
 
             {
@@ -1227,18 +1346,18 @@ namespace mayasaba
         }
         catch (...)
         {
+#ifdef _WIN32
+            for (auto& lockPtr : openLocks)
+            {
+                if (lockPtr->sealed)
+                {
+                    SetFileAttributesW(lockPtr->path.c_str(), FILE_ATTRIBUTE_NORMAL);
+                }
+            }
+#endif
             if (began) sqlite3_exec(db_,"ROLLBACK;",nullptr,nullptr,nullptr);
             return SaveDisposition::Unknown;
         }
-
-        // Phase 3: Post-commit sealing against modification
-#ifdef _WIN32
-        for (auto const& att : attachments)
-        {
-            std::filesystem::path stagedP = Utf8ToWide(att.storagePath);
-            SetFileAttributesW(stagedP.c_str(), FILE_ATTRIBUTE_READONLY);
-        }
-#endif
 
         return duplicate ? SaveDisposition::Duplicate : SaveDisposition::Saved;
     }

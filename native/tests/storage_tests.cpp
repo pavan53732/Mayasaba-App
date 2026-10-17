@@ -1150,9 +1150,10 @@ int main()
                 std::ofstream ofs2(fClock2); ofs2 << "Clock file 2 payload";
             }
 
+            // 19A. Active-time budget enforcement: when active CPU time actually reaches 120 active seconds
             auto mockNow = std::chrono::steady_clock::now();
             int clockCallCount = 0;
-            auto mockClock = [&]() {
+            auto mockExhaustedClock = [&]() {
                 clockCallCount++;
                 if (clockCallCount <= 4)
                 {
@@ -1161,21 +1162,40 @@ int main()
                 }
                 else
                 {
-                    // Simulate system suspend/resume: time jumps by 130 seconds across suspend (>120s limit)
-                    return mockNow + std::chrono::seconds(130);
+                    // Active CPU execution time reaches 121 seconds (exceeding 120s budget)
+                    return mockNow + std::chrono::seconds(121);
                 }
             };
 
-            auto clockResults = attService.PrepareBatch(projectClock,
+            auto clockResultsA = attService.PrepareBatch(projectClock,
                 { fClock1.wstring(), fClock2.wstring() },
                 [] { return false; },
                 120, // 120s budget
-                mockClock);
+                mockExhaustedClock);
 
-            EXPECT(clockResults.size() == 2);
-            EXPECT(clockResults[0].status == mayasaba::AttachmentStatus::Ready);
-            EXPECT(clockResults[1].status == mayasaba::AttachmentStatus::TimedOut);
-            EXPECT(clockResults[1].errorMessage.find("120-second") != std::string::npos);
+            EXPECT(clockResultsA.size() == 2);
+            EXPECT(clockResultsA[0].status == mayasaba::AttachmentStatus::Ready);
+            EXPECT(clockResultsA[1].status == mayasaba::AttachmentStatus::TimedOut);
+            EXPECT(clockResultsA[1].errorMessage.find("120-second") != std::string::npos);
+
+            // 19B. Suspension resilience: system sleep/hibernation (130s wall leap) does NOT consume active time
+            // Because active time measures unbiased execution time, 200ms active CPU time is well within 120s.
+            int sleepCallCount = 0;
+            auto mockSuspendedActiveClock = [&]() {
+                sleepCallCount++;
+                // Machine was suspended for 130 wall seconds, but active execution time only used 50ms per call
+                return mockNow + std::chrono::milliseconds(sleepCallCount * 50);
+            };
+
+            auto clockResultsB = attService.PrepareBatch(projectClock,
+                { fClock1.wstring(), fClock2.wstring() },
+                [] { return false; },
+                120, // 120s active budget
+                mockSuspendedActiveClock);
+
+            EXPECT(clockResultsB.size() == 2);
+            EXPECT(clockResultsB[0].status == mayasaba::AttachmentStatus::Ready);
+            EXPECT(clockResultsB[1].status == mayasaba::AttachmentStatus::Ready); // Did not time out!
 
             // 20. Manifest deterministic sorting and hashing performance
             std::vector<mayasaba::AttachmentRecord> manifestSet = { recOnly, recM1 };
@@ -1184,6 +1204,50 @@ int main()
             std::string manifest2 = mayasaba::Storage::ComputeAttachmentManifest(reversedSet);
             EXPECT(!manifest1.empty());
             EXPECT(manifest1 == manifest2); // Deterministic ordering
+
+            // 21. Verified-byte finalization gate: pre-commit sealing and write-lock protection
+            std::string const projectGate = "project-gate";
+            store.BindProject(projectGate, "Gate Project", "C:/Projects/Gate");
+            auto fGate = testFilesDir / "gate_file.txt";
+            {
+                std::ofstream ofs(fGate); ofs << "Gate payload bytes for verified-byte test";
+            }
+            auto gateCand = attService.PrepareAttachment(projectGate, fGate.wstring());
+            EXPECT(gateCand.status == mayasaba::AttachmentStatus::Ready);
+            EXPECT(!gateCand.stagedPath.empty());
+
+            // Prepare record for SaveContribution
+            mayasaba::AttachmentRecord recGate;
+            recGate.id = gateCand.id;
+            recGate.projectId = projectGate;
+            recGate.submissionId = "sub-gate-1";
+            recGate.fileName = gateCand.fileName;
+            recGate.fileSize = gateCand.fileSize;
+            recGate.sha256 = gateCand.sha256;
+            recGate.detectedType = gateCand.detectedType;
+            recGate.storagePath = WideToUtf8(gateCand.stagedPath);
+            recGate.status = "READY";
+
+            store.StageSubmission(projectGate, "sub-gate-1", "Gate contribution message");
+            auto gateDisp = store.SaveContribution(projectGate, "sub-gate-1", "Gate contribution message", { recGate });
+            EXPECT(gateDisp == mayasaba::SaveDisposition::Saved);
+
+            // Verify that the committed file is sealed (FILE_ATTRIBUTE_READONLY)
+            DWORD gateAttrs = GetFileAttributesW(gateCand.stagedPath.c_str());
+            EXPECT((gateAttrs & FILE_ATTRIBUTE_READONLY) != 0);
+
+            // 22. Crash/Restart immutability recovery: ReconcileStagedFiles restores read-only sealing
+            // Simulate external attribute tampering or crash before attribute flush
+            SetFileAttributesW(gateCand.stagedPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+            DWORD tamperedAttrs = GetFileAttributesW(gateCand.stagedPath.c_str());
+            EXPECT((tamperedAttrs & FILE_ATTRIBUTE_READONLY) == 0); // Readonly was cleared
+
+            // Run reconciliation
+            attService.ReconcileStagedFiles(projectGate);
+
+            // Verify ReconcileStagedFiles re-sealed the committed file
+            DWORD reconciledAttrs = GetFileAttributesW(gateCand.stagedPath.c_str());
+            EXPECT((reconciledAttrs & FILE_ATTRIBUTE_READONLY) != 0); // Re-sealed!
         }
 #endif
 
