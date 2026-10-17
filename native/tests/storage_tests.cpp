@@ -1051,6 +1051,139 @@ int main()
             store.StageSubmission(projectHuge, "sub-huge", "Over 500 MiB");
             auto hugeDisp = store.SaveContribution(projectHuge, "sub-huge", "Over 500 MiB", hugeAttBatch);
             EXPECT(hugeDisp == mayasaba::SaveDisposition::Conflict);
+
+            // 16. Independent 50-file limit enforcement inside Storage
+            std::string const project50 = "project-50-limit";
+            store.BindProject(project50, "50 Limit Project", "C:/Projects/Limit50");
+            std::vector<mayasaba::AttachmentRecord> fiftyOneAtts;
+            for (int i = 0; i < 51; ++i)
+            {
+                mayasaba::AttachmentRecord r;
+                r.id = "att-51-" + std::to_string(i);
+                r.projectId = project50;
+                r.submissionId = "sub-51";
+                r.fileName = "file.txt";
+                r.fileSize = 10;
+                r.sha256 = candOnly.sha256;
+                r.storagePath = WideToUtf8(candOnly.stagedPath);
+                fiftyOneAtts.push_back(r);
+            }
+            auto disp51 = store.SaveContribution(project50, "sub-51", "51 attachments", fiftyOneAtts);
+            EXPECT(disp51 == mayasaba::SaveDisposition::Conflict); // Independently enforced by Storage!
+            EXPECT(store.Contributions(project50).empty());
+
+            // 17. Submission identity and attachment manifest binding
+            std::string const projectManifest = "project-manifest";
+            store.BindProject(projectManifest, "Manifest Project", "C:/Projects/Manifest");
+            auto fileM1 = testFilesDir / "manifest_file1.txt";
+            {
+                std::ofstream ofs(fileM1); ofs << "Manifest payload 1";
+            }
+            auto candM1 = attService.PrepareAttachment(projectManifest, fileM1.wstring());
+            EXPECT(candM1.status == mayasaba::AttachmentStatus::Ready);
+            attService.SaveDraftAttachments(projectManifest, { candM1 });
+
+            std::string const subM1 = "sub-manifest-1";
+            store.StageSubmission(projectManifest, subM1, "Manifest submission");
+            mayasaba::AttachmentRecord recM1;
+            recM1.id = candM1.id;
+            recM1.projectId = projectManifest;
+            recM1.submissionId = subM1;
+            recM1.fileName = candM1.fileName;
+            recM1.fileSize = candM1.fileSize;
+            recM1.sha256 = candM1.sha256;
+            recM1.detectedType = candM1.detectedType;
+            recM1.storagePath = WideToUtf8(candM1.stagedPath);
+            recM1.sourcePath = WideToUtf8(candM1.originalPath);
+            recM1.status = "COMMITTED";
+
+            auto saveDispM1 = store.SaveContribution(projectManifest, subM1, "Manifest submission", { recM1 });
+            EXPECT(saveDispM1 == mayasaba::SaveDisposition::Saved);
+
+            // Replay with exact same attachment payload returns Duplicate
+            auto saveDispReplay = store.SaveContribution(projectManifest, subM1, "Manifest submission", { recM1 });
+            EXPECT(saveDispReplay == mayasaba::SaveDisposition::Duplicate);
+
+            // Replay with changed attachment payload returns Conflict (rejected, NOT duplicate)
+            auto recM1Altered = recM1;
+            recM1Altered.sha256 = "0000000000000000000000000000000000000000000000000000000000000000";
+            auto saveDispAltered = store.SaveContribution(projectManifest, subM1, "Manifest submission", { recM1Altered });
+            EXPECT(saveDispAltered == mayasaba::SaveDisposition::Conflict);
+
+            // Replay with omitted attachments returns Conflict
+            auto saveDispEmptyAtts = store.SaveContribution(projectManifest, subM1, "Manifest submission", {});
+            EXPECT(saveDispEmptyAtts == mayasaba::SaveDisposition::Conflict);
+
+            // 18. Staging identity, draft status validation and physical sealing
+            std::string const projectStaging = "project-staging";
+            store.BindProject(projectStaging, "Staging Project", "C:/Projects/Staging");
+            auto fileUnmanaged = testFilesDir / "unmanaged.txt";
+            {
+                std::ofstream ofs(fileUnmanaged); ofs << "Unmanaged foreign file";
+            }
+            uint64_t unmanagedSize = 0;
+            std::string unmanagedHash = mayasaba::AttachmentService::ComputeFileSha256(fileUnmanaged.wstring(), &unmanagedSize);
+            mayasaba::AttachmentRecord recUnmanaged;
+            recUnmanaged.id = "forged-id";
+            recUnmanaged.projectId = projectStaging;
+            recUnmanaged.submissionId = "sub-unmanaged";
+            recUnmanaged.fileName = "unmanaged.txt";
+            recUnmanaged.fileSize = unmanagedSize;
+            recUnmanaged.sha256 = unmanagedHash;
+            recUnmanaged.storagePath = WideToUtf8(fileUnmanaged.wstring());
+            recUnmanaged.status = "READY";
+            // Do NOT insert into draft_attachments; unmanaged attachment must be rejected
+            auto dispUnmanaged = store.SaveContribution(projectStaging, "sub-unmanaged", "Unmanaged submission", { recUnmanaged });
+            EXPECT(dispUnmanaged == mayasaba::SaveDisposition::Conflict);
+
+            // Verify committed attachment sealing on disk (FILE_ATTRIBUTE_READONLY)
+            DWORD m1Attrs = GetFileAttributesW(candM1.stagedPath.c_str());
+            EXPECT((m1Attrs & FILE_ATTRIBUTE_READONLY) != 0); // Sealed on disk!
+
+            // 19. Injectable active-time clock and suspend/resume simulation
+            std::string const projectClock = "project-clock";
+            store.BindProject(projectClock, "Clock Project", "C:/Projects/Clock");
+            auto fClock1 = testFilesDir / "clock_file1.txt";
+            auto fClock2 = testFilesDir / "clock_file2.txt";
+            {
+                std::ofstream ofs1(fClock1); ofs1 << "Clock file 1 payload";
+                std::ofstream ofs2(fClock2); ofs2 << "Clock file 2 payload";
+            }
+
+            auto mockNow = std::chrono::steady_clock::now();
+            int clockCallCount = 0;
+            auto mockClock = [&]() {
+                clockCallCount++;
+                if (clockCallCount <= 4)
+                {
+                    // Active elapsed time progression during batch start and file 1
+                    return mockNow + std::chrono::milliseconds(clockCallCount * 100);
+                }
+                else
+                {
+                    // Simulate system suspend/resume: time jumps by 130 seconds across suspend (>120s limit)
+                    return mockNow + std::chrono::seconds(130);
+                }
+            };
+
+            auto clockResults = attService.PrepareBatch(projectClock,
+                { fClock1.wstring(), fClock2.wstring() },
+                [] { return false; },
+                120, // 120s budget
+                mockClock);
+
+            EXPECT(clockResults.size() == 2);
+            EXPECT(clockResults[0].status == mayasaba::AttachmentStatus::Ready);
+            EXPECT(clockResults[1].status == mayasaba::AttachmentStatus::TimedOut);
+            EXPECT(clockResults[1].errorMessage.find("120-second") != std::string::npos);
+
+            // 20. Manifest deterministic sorting and hashing performance
+            std::vector<mayasaba::AttachmentRecord> manifestSet = { recOnly, recM1 };
+            std::string manifest1 = mayasaba::Storage::ComputeAttachmentManifest(manifestSet);
+            std::vector<mayasaba::AttachmentRecord> reversedSet = { recM1, recOnly };
+            std::string manifest2 = mayasaba::Storage::ComputeAttachmentManifest(reversedSet);
+            EXPECT(!manifest1.empty());
+            EXPECT(manifest1 == manifest2); // Deterministic ordering
         }
 #endif
 

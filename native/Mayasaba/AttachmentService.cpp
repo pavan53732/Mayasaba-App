@@ -272,9 +272,10 @@ namespace mayasaba
         std::string const& projectId,
         std::vector<std::wstring> const& candidatePaths,
         std::function<bool()> const& isCancelled,
-        uint32_t timeoutSeconds)
+        uint32_t timeoutSeconds,
+        SteadyClockFn clockFn)
     {
-        auto const batchStart = std::chrono::steady_clock::now();
+        auto const batchStart = clockFn();
         auto const batchDeadline = batchStart + std::chrono::seconds(timeoutSeconds);
 
         std::vector<AttachmentCandidate> results;
@@ -284,7 +285,7 @@ namespace mayasaba
         {
             if (isCancelled()) break;
 
-            if (std::chrono::steady_clock::now() >= batchDeadline)
+            if (clockFn() >= batchDeadline)
             {
                 AttachmentCandidate timedOutCand;
                 timedOutCand.id = NewUuid();
@@ -297,7 +298,7 @@ namespace mayasaba
                 continue;
             }
 
-            auto cand = PrepareAttachment(projectId, path, isCancelled, batchDeadline);
+            auto cand = PrepareAttachment(projectId, path, isCancelled, batchDeadline, clockFn);
             results.push_back(std::move(cand));
         }
         return results;
@@ -307,7 +308,8 @@ namespace mayasaba
         std::string const& projectId,
         std::wstring const& sourcePath,
         std::function<bool()> const& isCancelled,
-        std::optional<std::chrono::steady_clock::time_point> deadline)
+        std::optional<std::chrono::steady_clock::time_point> deadline,
+        SteadyClockFn clockFn)
     {
         AttachmentCandidate candidate;
         candidate.id = NewUuid();
@@ -442,7 +444,7 @@ namespace mayasaba
         constexpr DWORD BUFFER_SIZE = 64 * 1024;
         std::vector<BYTE> buffer(BUFFER_SIZE);
         uint64_t totalBytesRead = 0;
-        auto const startTime = std::chrono::steady_clock::now();
+        auto const startTime = clockFn();
         auto const effectiveDeadline = deadline.value_or(startTime + std::chrono::seconds(PREPARATION_TIMEOUT_SECONDS));
         bool timedOut = false;
         bool cancelled = false;
@@ -456,7 +458,7 @@ namespace mayasaba
                 break;
             }
 
-            if (std::chrono::steady_clock::now() >= effectiveDeadline)
+            if (clockFn() >= effectiveDeadline)
             {
                 timedOut = true;
                 break;
@@ -632,6 +634,9 @@ namespace mayasaba
                 std::error_code ec;
                 if (!c.stagedPath.empty() && std::filesystem::exists(c.stagedPath, ec))
                 {
+#ifdef _WIN32
+                    SetFileAttributesW(c.stagedPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+#endif
                     std::filesystem::remove(c.stagedPath, ec);
                 }
                 break;
@@ -648,6 +653,9 @@ namespace mayasaba
             std::error_code ec;
             if (!c.stagedPath.empty() && std::filesystem::exists(c.stagedPath, ec))
             {
+#ifdef _WIN32
+                SetFileAttributesW(c.stagedPath.c_str(), FILE_ATTRIBUTE_NORMAL);
+#endif
                 std::filesystem::remove(c.stagedPath, ec);
             }
         }
@@ -670,7 +678,11 @@ namespace mayasaba
             {
                 if (!d.storagePath.empty())
                 {
-                    std::filesystem::remove(Utf8ToUtf16(d.storagePath), ec);
+                    auto p = Utf8ToUtf16(d.storagePath);
+#ifdef _WIN32
+                    SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
+#endif
+                    std::filesystem::remove(p, ec);
                 }
                 storage_.RemoveDraftAttachment(projectId, d.id);
             }
@@ -709,6 +721,9 @@ namespace mayasaba
                     std::wstring canon = to_lower(std::filesystem::weakly_canonical(entry.path(), ec).wstring());
                     if (trackedPaths.find(canon) == trackedPaths.end())
                     {
+#ifdef _WIN32
+                        SetFileAttributesW(entry.path().c_str(), FILE_ATTRIBUTE_NORMAL);
+#endif
                         std::filesystem::remove(entry.path(), ec);
                     }
                 }

@@ -325,9 +325,44 @@ Following the initial native attachment milestone, five concrete review findings
 
 | Test suite / Gate | Verdict | Evidence |
 | --- | --- | --- |
-| Group 19 Native Regression (Tests 1–15) | PASS | `native/tests/bin/storage_tests.exe` executed all 19 test groups including 15 attachment and hardening cases. |
+| Group 19 Native Regression (Tests 1–20) | PASS | `native/tests/bin/storage_tests.exe` executed all 19 test groups including 20 attachment and hardening cases. |
 | Contract Registry Validation | PASS | `python native/tests/validate_contract_registry.py` reported 124/124 checks passing. |
 | Native WinUI 3 Compilation | PASS | `Mayasaba.vcxproj` built clean with MSBuild Release x64 (0 warnings, 0 errors). |
 | Tooling Compilation | PASS | `storage_tests.vcxproj` and `seed_store.vcxproj` built clean with MSBuild Release x64. |
 | Production DB Preservation | PASS | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 verified untouched: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
+
+---
+
+## Native Attachment Pipeline — Submission Identity, Manifest Binding and Sealing Hardening (2026-10-17 Follow-up)
+
+Following the commit `cfdb7f6` code review, four additional findings and one performance optimization were implemented and validated:
+
+1. **Submission Identity & Attachment Manifest Binding (P0):**
+   - In `Storage.h` and `Storage.cpp`, `pending_submissions` schema is extended with an `attachment_manifest` column.
+   - `Storage::ComputeAttachmentManifest` constructs an order-independent, canonical digest formatted as `attachment_id:file_size:sha256;` sorted deterministically by `attachment_id`.
+   - `Storage::StageSubmission` binds the complete draft attachment manifest into `pending_submissions`. Replays with identical text but different attachment counts, IDs, sizes, or SHA-256 digests are refused with `PendingSubmissionStatus::MismatchedPayload`.
+   - In `Storage::SaveContribution`, duplicate submission detection checks both message text and canonical attachment manifest of previously committed contributions. Resubmissions with altered payloads return `SaveDisposition::Conflict` instead of false duplicate detection.
+2. **Independent 50-File Count Storage Boundary (P0):**
+   - `Storage::SaveContribution` and `Storage::StageSubmission` independently enforce `attachments.size() <= 50`. Direct service calls and recovery paths bypassing UI controls are refused with `SaveDisposition::Conflict` or `PendingSubmissionStatus::MismatchedPayload` if the count exceeds 50 files.
+3. **Staging Identity, READY Draft Status & Physical File Sealing (P0):**
+   - `Storage::SaveContribution` validates that every supplied attachment corresponds to an active, project-owned record in `draft_attachments` with status `READY`, matching file size, matching SHA-256 digest, and canonical storage path.
+   - Unmanaged files, draft attachments from other projects, or drafts in `PREPARING`/`REJECTED` state are refused before transaction commit.
+   - On commit, `SaveContribution` removes draft records, pending submissions, and physically seals each committed file on disk with `SetFileAttributesW(..., FILE_ATTRIBUTE_READONLY)` so committed bytes cannot be modified in place.
+   - `AttachmentService::RemoveDraftAttachment`, `ClearDraftAttachments`, and `ReconcileStagedFiles` set `FILE_ATTRIBUTE_NORMAL` prior to deletion so sealed files can be cleanly removed during intentional purge.
+4. **Active-Time Clock Injection & Suspend/Resume Simulation (P1):**
+   - `AttachmentService::PrepareBatch` and `PrepareAttachment` accept an injectable `SteadyClockFn` (`std::function<std::chrono::steady_clock::time_point()>`).
+   - Automated test 19 in `storage_tests.cpp` exercises active-time progression and simulates a 130-second system suspend/resume leap, verifying that files prepared within active time reach `AttachmentStatus::Ready` while post-suspend files exceed the 120-second batch deadline and transition cleanly to `AttachmentStatus::TimedOut`.
+5. **Out-of-Transaction Pre-Hashing Performance Optimization:**
+   - Physical disk reads, file existence checks, handle queries, and cryptographic SHA-256 computation via BCrypt now execute *outside* the `mutex_` lock and outside the `BEGIN IMMEDIATE;` SQLite write transaction in `Storage::SaveContribution`.
+   - Up to 500 MiB of physical file I/O is completed without holding the SQLite database write lock, eliminating write contention on `mayasaba.db` while preserving strict cryptographic admission guarantees.
+
+### Final Verification Results
+
+| Verification Gate | Result | Evidence |
+| --- | --- | --- |
+| 19 Regression Groups (Tests 1–20) | PASS | `native/tests/bin/storage_tests.exe` executed all 20 tests cleanly. |
+| Contract Registry & Slice Schemas | PASS | `python native/tests/validate_contract_registry.py` passed 124/124 checks. |
+| Full Application Build | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). |
+| Production Store Hash | PASS | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified). |
+
 

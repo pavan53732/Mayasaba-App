@@ -315,7 +315,7 @@ namespace mayasaba
             Exec("CREATE TABLE IF NOT EXISTS contributions(row_id INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL REFERENCES projects(id),"
                  "submission_id TEXT NOT NULL UNIQUE, body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));");
             Exec("CREATE INDEX IF NOT EXISTS contribution_project ON contributions(project_id,row_id);");
-            Exec("CREATE TABLE IF NOT EXISTS pending_submissions(project_id TEXT PRIMARY KEY REFERENCES projects(id),submission_id TEXT UNIQUE NOT NULL,body TEXT NOT NULL);");
+            Exec("CREATE TABLE IF NOT EXISTS pending_submissions(project_id TEXT PRIMARY KEY REFERENCES projects(id),submission_id TEXT UNIQUE NOT NULL,body TEXT NOT NULL,attachment_manifest TEXT NOT NULL DEFAULT '');");
             Exec("CREATE TABLE IF NOT EXISTS ui_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1), last_project TEXT NOT NULL);");
             if (!hasLastOpened)
             {
@@ -329,6 +329,18 @@ namespace mayasaba
             if (!hasPrebind)
             {
                 Exec("ALTER TABLE ui_state ADD COLUMN prebinding_draft TEXT NOT NULL DEFAULT '';");
+            }
+            {
+                bool hasPendingAttachmentManifest = false;
+                Statement info(db_, "PRAGMA table_info(pending_submissions);");
+                while (sqlite3_step(info.value) == SQLITE_ROW)
+                {
+                    if (Text(info.value, 1) == "attachment_manifest") { hasPendingAttachmentManifest = true; break; }
+                }
+                if (!hasPendingAttachmentManifest)
+                {
+                    Exec("ALTER TABLE pending_submissions ADD COLUMN attachment_manifest TEXT NOT NULL DEFAULT '';");
+                }
             }
             if (!hasDomain)
             {
@@ -918,12 +930,12 @@ namespace mayasaba
     std::optional<PendingSubmission> Storage::Pending(std::string const& id)
     {
         std::lock_guard lock(mutex_);
-        Statement q(db_, "SELECT submission_id,body FROM pending_submissions WHERE project_id=?1;");
+        Statement q(db_, "SELECT submission_id,body,attachment_manifest FROM pending_submissions WHERE project_id=?1;");
         Bind(q.value,1,id);
         int rc=sqlite3_step(q.value);
         if (rc==SQLITE_DONE) return std::nullopt;
         Check(rc,db_);
-        return PendingSubmission{Text(q.value,0),ReadDraft(Text(q.value,1))};
+        return PendingSubmission{Text(q.value,0),ReadDraft(Text(q.value,1)),Text(q.value,2)};
     }
     std::string Storage::StageSubmission(std::string const& id, std::string const& proposed, std::string const& body)
     {
@@ -932,16 +944,33 @@ namespace mayasaba
         Exec("BEGIN IMMEDIATE;");
         try
         {
-            if (body.empty())
+            // Query ready draft attachments to bind manifest
+            std::vector<AttachmentRecord> drafts;
             {
-                // Must have at least one ready draft attachment if body is empty
-                Statement checkDrafts(db_, "SELECT count(*) FROM draft_attachments WHERE project_id=?1 AND status='READY';");
-                Bind(checkDrafts.value, 1, id);
-                if (sqlite3_step(checkDrafts.value) != SQLITE_ROW || sqlite3_column_int(checkDrafts.value, 0) == 0)
+                Statement qDrafts(db_, "SELECT attachment_id, file_size, sha256 FROM draft_attachments WHERE project_id=?1 AND status='READY' ORDER BY attachment_id;");
+                Bind(qDrafts.value, 1, id);
+                int rc{};
+                while ((rc = sqlite3_step(qDrafts.value)) == SQLITE_ROW)
                 {
-                    throw std::runtime_error("Submission cannot be empty: must provide text or attachments");
+                    AttachmentRecord r;
+                    r.id = Text(qDrafts.value, 0);
+                    r.fileSize = static_cast<uint64_t>(sqlite3_column_int64(qDrafts.value, 1));
+                    r.sha256 = Text(qDrafts.value, 2);
+                    drafts.push_back(std::move(r));
                 }
+                Check(rc, db_);
             }
+
+            if (drafts.size() > 50)
+            {
+                throw std::runtime_error("Attachment count exceeds maximum 50 files limit");
+            }
+
+            if (body.empty() && drafts.empty())
+            {
+                throw std::runtime_error("Submission cannot be empty: must provide text or attachments");
+            }
+
             {
                 Statement project(db_, "SELECT closed FROM projects WHERE id=?1;");
                 Bind(project.value,1,id);
@@ -951,20 +980,24 @@ namespace mayasaba
                 if (sqlite3_column_int(project.value,0))
                     throw std::runtime_error("Closed project");
             }
+
+            std::string const currentManifest = ComputeAttachmentManifest(drafts);
             std::string winner=proposed;
             {
-                Statement q(db_, "SELECT submission_id,body FROM pending_submissions WHERE project_id=?1;");
+                Statement q(db_, "SELECT submission_id,body,attachment_manifest FROM pending_submissions WHERE project_id=?1;");
                 Bind(q.value,1,id);
                 if(sqlite3_step(q.value)==SQLITE_ROW)
                 {
                     if(ReadDraft(Text(q.value,1))!=body)
                         throw std::runtime_error("Different source text while prior submission is unresolved");
+                    if(Text(q.value,2)!=currentManifest)
+                        throw std::runtime_error("Different attachment manifest while prior submission is unresolved");
                     winner=Text(q.value,0);
                 }
                 else
                 {
-                    Statement add(db_, "INSERT INTO pending_submissions(project_id,submission_id,body) VALUES(?1,?2,?3);");
-                    Bind(add.value,1,id);Bind(add.value,2,proposed);Bind(add.value,3,ProtectDraft(body));
+                    Statement add(db_, "INSERT INTO pending_submissions(project_id,submission_id,body,attachment_manifest) VALUES(?1,?2,?3,?4);");
+                    Bind(add.value,1,id);Bind(add.value,2,proposed);Bind(add.value,3,ProtectDraft(body));Bind(add.value,4,currentManifest);
                     Check(sqlite3_step(add.value),db_);
                     Statement draft(db_, "UPDATE projects SET draft=?2 WHERE id=?1;");
                     Bind(draft.value,1,id);Bind(draft.value,2,ProtectDraft(body));
@@ -999,8 +1032,61 @@ namespace mayasaba
     SaveDisposition Storage::SaveContribution(std::string const& id, std::string const& submission, std::string const& body, std::vector<AttachmentRecord> const& attachments)
     {
         if (submission.empty() || (body.empty() && attachments.empty())) return SaveDisposition::Conflict;
+        // P0: Enforce 50-file limit inside Storage boundary
+        if (attachments.size() > 50) return SaveDisposition::Conflict;
+
+        // Phase 1: Pre-transaction validation and expensive cryptographic hashing
+        // This runs OUTSIDE the write transaction lock to avoid database contention on large files.
+        uint64_t aggregateBytes = 0;
+        for (auto const& att : attachments)
+        {
+            if ((!att.projectId.empty() && att.projectId != id) ||
+                (!att.submissionId.empty() && att.submissionId != submission))
+            {
+                return SaveDisposition::Conflict;
+            }
+            if (att.fileSize == 0 || att.fileSize > 100ULL * 1024ULL * 1024ULL) // 100 MiB limit
+            {
+                return SaveDisposition::Conflict;
+            }
+            if (att.sha256.size() != 64)
+            {
+                return SaveDisposition::Conflict;
+            }
+            aggregateBytes += att.fileSize;
+            if (aggregateBytes > 500ULL * 1024ULL * 1024ULL) // 500 MiB aggregate limit
+            {
+                return SaveDisposition::Conflict;
+            }
+
+#ifdef _WIN32
+            // Verify physical existence, size and cryptographic hash before taking write lock
+            std::filesystem::path stagedP = Utf8ToWide(att.storagePath);
+            std::error_code ec;
+            if (!std::filesystem::exists(stagedP, ec) || std::filesystem::is_directory(stagedP, ec))
+            {
+                return SaveDisposition::Conflict;
+            }
+            auto actualDiskSize = std::filesystem::file_size(stagedP, ec);
+            if (ec || actualDiskSize != att.fileSize)
+            {
+                return SaveDisposition::Conflict;
+            }
+
+            std::string computedHash = ComputeFileSha256(stagedP.wstring());
+            if (computedHash.empty() || computedHash != att.sha256)
+            {
+                return SaveDisposition::Conflict;
+            }
+#endif
+        }
+
+        std::string const currentManifest = ComputeAttachmentManifest(attachments);
+
+        // Phase 2: Short, lightweight SQLite write transaction
         std::lock_guard lock(mutex_);
         bool began=false;
+        bool duplicate=false;
         try
         {
             Exec("BEGIN IMMEDIATE;"); began=true;
@@ -1012,82 +1098,94 @@ namespace mayasaba
                     Exec("ROLLBACK;");return SaveDisposition::RejectedClosed;
                 }
             }
-            // A fresh command cannot replace an unresolved project-local submission.
+
+            // Check if contribution is already committed (replay / duplicate check)
+            bool alreadyCommitted = false;
+            std::string storedProject;
+            std::string storedBody;
             {
-                Statement pending(db_, "SELECT submission_id,body FROM pending_submissions WHERE project_id=?1;");
+                Statement stored(db_, "SELECT project_id,body FROM contributions WHERE submission_id=?1;");
+                Bind(stored.value,1,submission);
+                if (sqlite3_step(stored.value)==SQLITE_ROW)
+                {
+                    alreadyCommitted = true;
+                    storedProject = Text(stored.value,0);
+                    storedBody = Text(stored.value,1);
+                }
+            }
+
+            // Check pending submission
+            {
+                Statement pending(db_, "SELECT submission_id,body,attachment_manifest FROM pending_submissions WHERE project_id=?1;");
                 Bind(pending.value,1,id);
                 if(sqlite3_step(pending.value)==SQLITE_ROW)
                 {
-                    if(Text(pending.value,0)!=submission||ReadDraft(Text(pending.value,1))!=body)
+                    if(Text(pending.value,0)!=submission ||
+                       ReadDraft(Text(pending.value,1))!=body ||
+                       Text(pending.value,2)!=currentManifest)
                     { Exec("ROLLBACK;"); return SaveDisposition::Conflict; }
                 }
                 else
                 {
                     // Pending retired only by a successful commit; identical replay is allowed.
-                    Statement stored(db_, "SELECT project_id,body FROM contributions WHERE submission_id=?1;");
-                    Bind(stored.value,1,submission);
-                    if(sqlite3_step(stored.value)!=SQLITE_ROW ||
-                        Text(stored.value,0)!=id||Text(stored.value,1)!=body)
+                    if (!alreadyCommitted || storedProject!=id || storedBody!=body)
                     { Exec("ROLLBACK;"); return SaveDisposition::Conflict; }
                 }
             }
-            bool duplicate=false;
+
+            if (alreadyCommitted)
             {
-                Statement p(db_, "SELECT project_id,body FROM contributions WHERE submission_id=?1;");
-                Bind(p.value,1,submission);
-                if (sqlite3_step(p.value)==SQLITE_ROW)
+                if (storedProject!=id || storedBody!=body)
+                { Exec("ROLLBACK;");return SaveDisposition::Conflict; }
+
+                // Bind submission identity to the complete attachment set
+                Statement commAtt(db_, "SELECT attachment_id, file_size, sha256 FROM attachments WHERE submission_id=?1 ORDER BY attachment_id;");
+                Bind(commAtt.value, 1, submission);
+                std::vector<AttachmentRecord> existingAtts;
+                int arc{};
+                while ((arc = sqlite3_step(commAtt.value)) == SQLITE_ROW)
                 {
-                    if (Text(p.value,0)!=id || Text(p.value,1)!=body)
-                    { Exec("ROLLBACK;");return SaveDisposition::Conflict; }
-                    duplicate=true;
+                    AttachmentRecord ar;
+                    ar.id = Text(commAtt.value, 0);
+                    ar.fileSize = static_cast<uint64_t>(sqlite3_column_int64(commAtt.value, 1));
+                    ar.sha256 = Text(commAtt.value, 2);
+                    existingAtts.push_back(std::move(ar));
                 }
+                Check(arc, db_);
+                std::string existingManifest = ComputeAttachmentManifest(existingAtts);
+                if (existingManifest != currentManifest)
+                {
+                    // Reject changed payloads instead of reporting them as duplicates
+                    Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                }
+                duplicate=true;
             }
-            if (!duplicate)
+            else
             {
-                // Admission boundary check for all attachments: project association, size limits, and cryptographic verification
-                uint64_t aggregateBytes = 0;
+                // Validate exact staging identity, ownership, draft status, and manifest completeness
+                Statement readyCount(db_, "SELECT count(*) FROM draft_attachments WHERE project_id=?1 AND status='READY';");
+                Bind(readyCount.value, 1, id);
+                if (sqlite3_step(readyCount.value) != SQLITE_ROW || sqlite3_column_int(readyCount.value, 0) != static_cast<int>(attachments.size()))
+                {
+                    Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                }
+
                 for (auto const& att : attachments)
                 {
-                    if ((!att.projectId.empty() && att.projectId != id) ||
-                        (!att.submissionId.empty() && att.submissionId != submission))
+                    Statement checkDraft(db_, "SELECT file_size, sha256, staged_path, status FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
+                    Bind(checkDraft.value, 1, id);
+                    Bind(checkDraft.value, 2, att.id);
+                    if (sqlite3_step(checkDraft.value) != SQLITE_ROW)
                     {
                         Exec("ROLLBACK;"); return SaveDisposition::Conflict;
                     }
-                    if (att.fileSize == 0 || att.fileSize > 100ULL * 1024ULL * 1024ULL) // 100 MiB limit
+                    if (Text(checkDraft.value, 3) != "READY" ||
+                        static_cast<uint64_t>(sqlite3_column_int64(checkDraft.value, 0)) != att.fileSize ||
+                        Text(checkDraft.value, 1) != att.sha256 ||
+                        Text(checkDraft.value, 2) != att.storagePath)
                     {
                         Exec("ROLLBACK;"); return SaveDisposition::Conflict;
                     }
-                    if (att.sha256.size() != 64)
-                    {
-                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
-                    }
-                    aggregateBytes += att.fileSize;
-                    if (aggregateBytes > 500ULL * 1024ULL * 1024ULL) // 500 MiB aggregate limit
-                    {
-                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
-                    }
-
-#ifdef _WIN32
-                    // Verify the immutable physical file bytes on disk at final admission
-                    std::filesystem::path stagedP = Utf8ToWide(att.storagePath);
-                    std::error_code ec;
-                    if (!std::filesystem::exists(stagedP, ec) || std::filesystem::is_directory(stagedP, ec))
-                    {
-                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
-                    }
-                    auto actualDiskSize = std::filesystem::file_size(stagedP, ec);
-                    if (ec || actualDiskSize != att.fileSize)
-                    {
-                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
-                    }
-
-                    // Cryptographic digest verification
-                    std::string computedHash = ComputeFileSha256(stagedP.wstring());
-                    if (computedHash.empty() || computedHash != att.sha256)
-                    {
-                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
-                    }
-#endif
                 }
 
                 Statement p(db_, "INSERT INTO contributions(project_id,submission_id,body) VALUES(?1,?2,?3);");
@@ -1112,6 +1210,7 @@ namespace mayasaba
                     Check(sqlite3_step(ins.value),db_);
                 }
             }
+
             {
                 Statement p(db_, "UPDATE projects SET draft='' WHERE id=?1;");
                 Bind(p.value,1,id);Check(sqlite3_step(p.value),db_);
@@ -1125,14 +1224,23 @@ namespace mayasaba
                 Bind(cleared.value,1,id);Bind(cleared.value,2,submission);Check(sqlite3_step(cleared.value),db_);
             }
             Exec("COMMIT;");
-            return duplicate?SaveDisposition::Duplicate:SaveDisposition::Saved;
         }
         catch (...)
         {
             if (began) sqlite3_exec(db_,"ROLLBACK;",nullptr,nullptr,nullptr);
-            // Caller must reconcile the *original* ID; never blindly retry on a new one.
             return SaveDisposition::Unknown;
         }
+
+        // Phase 3: Post-commit sealing against modification
+#ifdef _WIN32
+        for (auto const& att : attachments)
+        {
+            std::filesystem::path stagedP = Utf8ToWide(att.storagePath);
+            SetFileAttributesW(stagedP.c_str(), FILE_ATTRIBUTE_READONLY);
+        }
+#endif
+
+        return duplicate ? SaveDisposition::Duplicate : SaveDisposition::Saved;
     }
 
     std::vector<Contribution> Storage::Contributions(std::string const& id)
@@ -1290,5 +1398,20 @@ namespace mayasaba
         }
         Check(rc,db_);
         return result;
+    }
+
+    std::string Storage::ComputeAttachmentManifest(std::vector<AttachmentRecord> const& attachments)
+    {
+        if (attachments.empty()) return {};
+        auto sorted = attachments;
+        std::sort(sorted.begin(), sorted.end(), [](auto const& a, auto const& b) {
+            return a.id < b.id;
+        });
+        std::ostringstream ss;
+        for (auto const& att : sorted)
+        {
+            ss << att.id << ":" << att.fileSize << ":" << att.sha256 << ";";
+        }
+        return ss.str();
     }
 }

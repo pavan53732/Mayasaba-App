@@ -74,7 +74,7 @@ namespace mayasaba
         std::vector<AttachmentRecord> attachments{};
     };
     enum class SaveDisposition { Saved, Duplicate, Conflict, RejectedClosed, Unknown };
-    struct PendingSubmission { std::string id; std::string body; };
+    struct PendingSubmission { std::string id; std::string body; std::string attachmentManifest{}; };
 
     struct CrossProjectRecentProjectsQuery
     {
@@ -163,6 +163,7 @@ namespace mayasaba
         std::vector<AttachmentRecord> GetDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);
         std::vector<AttachmentRecord> GetCommittedAttachmentsForProject(std::string const& projectId);
+        static std::string ComputeAttachmentManifest(std::vector<AttachmentRecord> const& attachments);
 
     private:
         sqlite3* db_{nullptr};
