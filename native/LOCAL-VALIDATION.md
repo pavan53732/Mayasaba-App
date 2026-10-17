@@ -240,7 +240,7 @@ the explicitly identified fixture harness; it never proves live agent work.
 | UX-11 | PASS | Source inspection | The composer is never re-parented; Dock changes only row geometry, so text, caret, selection and focus survive. A live caret-position assertion was not automated. |
 | UX-12 | PASS | Agent-observed runtime | User bubble, agent reply and controller card have distinct anatomy, edges and accessible names. |
 | UX-13 | PASS | Fixture / Source inspection | Reply renderer handles headings, paragraphs, lists, quotes and fenced code with Copy; input bounded to 256 KiB and 4000 blocks. |
-| UX-14 | Fixture PASS / live BLOCKED | Fixture | Exactly one primary reply; details expose three contributions, the recorded writer and both peer reviews. No live owner record exists. |
+| UX-14 | BLOCKED | Fixture / Source inspection | Exactly one primary reply; details expose three contributions, the recorded writer and both peer reviews. Live owner record absent: no live three-agent reply orchestration exists. Fixture presentation proof is recorded separately and does not establish live capability. |
 | UX-15 | PASS | Source inspection | No provisional or raw stream is rendered; the reply path only renders a finalized record. No live non-English stream exists to test. |
 | UX-16 | Fixture PASS | Fixture | Waiting, Running, Blocked and Unknown are distinct titles, state labels and semantic edges. |
 | UX-17 | PASS | Agent-observed runtime / Source inspection | Start/Pause/Stop report unavailable truthfully; fixtures activate only via `MAYASABA_UI_FIXTURES`, carry a banner and never touch the store. |

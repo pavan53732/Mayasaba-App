@@ -88,6 +88,24 @@ Dependencies flow through declared interfaces. Lower layers do not depend on hig
 | 12 | Policy Engine | Authorize material actions and record denials | Infer authority from an agent, ACK, or factual observation |
 | 13 | SQLite Storage | Serialize SQL, migrations, transactions, integrity, and backup | Originate domain authority or imply filesystem publication succeeded |
 
+### Enhancement presentation components (subordinate contract)
+
+The 12 capabilities in `docs/MAYASABA-UX-CAPABILITY-ENHANCEMENT-CONTRACT.md` are projections over existing owners. Their WinUI components map into the existing layers without adding owners or state machines:
+
+| Component | Layer | Role |
+|---|---|---|
+| Action Center presenter | 1 Control Room UI | Render owner-provided action projections |
+| Search presenter | 1 Control Room UI | Display search results and source navigation |
+| Diff presenter | 1 Control Room UI | Display immutable staged-change comparisons |
+| Council comparison presenter | 1 Control Room UI | Visualize Council records |
+| Task graph presenter | 1 Control Room UI | Display task dependencies |
+| Evidence presenter | 1 Control Room UI | Trace owner/evidence identities |
+| Artifact preview presenter | 1 Control Room UI | Safely render supported types |
+| Recovery presenter | 1 Control Room UI | Display reconciliation evidence and actions |
+| Command palette presenter | 1 Control Room UI | Select existing typed commands |
+
+Query composition, validation, authorization and command routing for these components belong to layer 2 (Controller Application Services). Persistence remains layer 13. No new authoritative record owner is introduced.
+
 ### Layer dependency shape
 
 ```mermaid

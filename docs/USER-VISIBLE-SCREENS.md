@@ -413,6 +413,27 @@ questions, approvals, and protected evidence.    new Send waits for reopen.
 
 Closing is explicit and never follows from switching folders, inactivity, application exit, or a lifecycle label. A closed project's retained Chat remains readable. `Reopen Project` requires explicit authorization before any new submission and never silently resumes earlier work. The UI discloses any history lawfully retired under an opt-in retention policy. **File → Switch Project** remains available in the native application menu outside Chat and follows the picker and project-isolation flow above.
 
+## Where the 12 enhancement capabilities appear
+
+All capabilities are contextual surfaces inside the existing three screens. None adds a fourth screen, navigation rail, dashboard, or standalone page. Dense detail opens inline or in a temporary dismissible sheet that restores Chat focus and reading position.
+
+| Capability | Where it appears | Surface |
+|---|---|---|
+| UXE-01 Action Center | Chat: compact "Needs your attention" strip/region | Inline cards + temporary detail sheet |
+| UXE-02 Universal Search | Chat: compact search action | Temporary search sheet |
+| UXE-03 Native Diff Inspector | Chat: changed-files/evidence cards | Temporary diff sheet |
+| UXE-04 Smart Project Explorer | Screen 2 Project selection | Inline filtering + path inspection |
+| UXE-05 Council Comparison View | Chat: council/decision cards | Temporary comparison sheet |
+| UXE-06 Task Dependency View | Chat: task/plan cards | Temporary graph + list/tree sheet |
+| UXE-07 Evidence Timeline | Chat: any owner card "Why did this happen?" | Temporary timeline sheet |
+| UXE-08 Source-linked Research Viewer | Chat: research/evidence cards | Temporary comparison sheet |
+| UXE-09 Artifact Review | Chat: attachment/artifact chips and cards | Safe read-only preview (inline or sheet) |
+| UXE-10 Recovery Inspector | Chat: blocked/unknown/recovery cards | Temporary recovery sheet |
+| UXE-11 Command Palette | Chat: keyboard launcher over existing commands | Overlay returning to invoking control |
+| UXE-12 Project Evidence Export | Chat: authorized export action | Native save dialog + progress card |
+
+Each capability renders a truthful unavailable state when its owner service is not implemented; it never fabricates an empty queue or demonstration result.
+
 ## Shared behavior on every visible surface
 
 | Concern | What the user sees |

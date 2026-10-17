@@ -1097,6 +1097,34 @@ The [UX-01–UX-32 matrix](THREE-SCREEN-UX-IMPLEMENTATION.md#13-required-accepta
 
 Keep preview, isolated fixture, native interaction and live agent evidence identifiable. A renderer fixture does not prove three-agent participation or executed work. Missing runtime dependencies remain BLOCKED for that proof; unexercised visual/accessibility checks remain INCONCLUSIVE. This document defines required behavior and does not upgrade those results to PASS.
 
+## 21. Enhancement capability acceptance scenarios (88–99)
+
+These supplement scenarios 1–87 and the UX-01–UX-32 matrix. Each capability's full acceptance criteria are in `docs/MAYASABA-UX-CAPABILITY-ENHANCEMENT-CONTRACT.md`.
+
+88. Action Center: with pending questions, approvals, blocked/failed/unknown operations and recovery choices, verify the strip shows truthful items with type, explanation, affected operation, grounded urgency and one safe next action; project A items never appear in project B; dismissal does not complete the obligation; unavailable owner services render a truthful unavailable state, not an empty queue.
+
+89. Universal Search: verify query input, scope filters, results with source type/title/snippet/project/timestamps/provenance, keyboard selection and open-in-context; test exact/partial matches, large histories, empty results, deleted/unavailable sources, project isolation, stale indexes, keyboard navigation and memory usage; no arbitrary SQL or folder scanning; derived index is rebuildable and non-authoritative.
+
+90. Native Diff Inspector: verify temporary sheet with file identity, baseline/proposed revisions, added/removed/modified lines, unified/side-by-side comparison, originating task/requirement, applicable validation, publication eligibility/blockers; distinguish proposed/authorized/validated/published/certified; test new/modified/deleted/renamed/binary/large/stale files, conflicting edits, changed baseline, inaccessible evidence, publication denial; no second editing/publication path.
+
+91. Smart Project Explorer: verify local filtering by name/recorded path/open-closed status, easy full-path inspection, visual distinction of open/create/open-recent/locate/resolve, missing-vs-deleted distinction; test zero/one/dozens/hundreds, case-insensitive, long paths, missing paths, identity conflicts, paging, keyboard focus, cancellation; no whole-PC scan.
+
+92. Council Comparison View: verify three proposals, alternatives/tradeoffs, six directed critiques with targets/dispositions, rebuttals/revisions, shared assumptions/unresolved disagreements, source-linked evidence, synthesis/binding-decision status; test incomplete critiques, stale revisions, unavailable agents, contradicting evidence, disputed assumptions, missing synthesis review, valid rounds, blocked rounds; no private chain-of-thought; no majority-vote authority; no fixture-only live claim.
+
+93. Task Dependency View: verify task identity/objective, dependencies, assigned CLI, observed state, blockers/prerequisites, attempt/lease info where authorized, linked requirements/validation/evidence; compact graph plus accessible list/tree; test cycles/invalid graphs, blocked dependencies, stale leases, canceled work, superseded tasks, many-node performance, screen-reader equivalents; graph is not the only understanding path.
+
+94. Evidence Timeline: verify "Why did this happen?" progression with owner, identity, timestamp, evidence reference, known/unknown status per step; test missing evidence, uncertain commits, stale context, failed validation, partial publication, superseded outcomes, complete chains; absent steps marked unavailable/unverified; no fictional story from agent prose.
+
+95. Source-linked Research Viewer: verify research question, authorized scope, producing CLI, source title/origin, citation identity, freshness/verification, contradictory findings, remaining uncertainty grouped by question/claim; test stale sources, inaccessible citations, unsupported claims, conflicting evidence, duplicate sources, incomplete participation; no conflation of repeated claims with independent sources; no network access from viewer.
+
+96. Artifact Review: verify safe read-only preview for text/code/images/generated documents with name/type/size/digest/origin/managed identity/preview/verification-publication status/validation evidence; test valid/unsupported/oversized/corrupt/binary/multilingual/missing/tampered; no execution of scripts/macros/binaries; bounded limits; metadata-only card for unsafe; opening preview never modifies source.
+
+97. Recovery Inspector: verify operation/project identity, last known durable state, last observed physical state, uncertainty reason, recovery evidence, permitted next action, consequences; test restart, duplicated requests, competing action, stale identity, unavailable store, changed files; `UNKNOWN` never becomes automatic retry; unsafe operations stay blocked.
+
+98. Command Palette: verify keyboard access to search, authorized detail views, Switch Project, project info, pending Action Center items, supported evidence/artifact views, permitted typed commands; one documented accessible shortcut with alternatives; show project, command, availability, denial reason; test keyboard-only, focus restoration, unauthorized commands, changed selection, modal cancellation, conflicting shortcuts; no new authority or bypass.
+
+99. Project Evidence Export: verify authorized portable record with project/export identity, requirements/decisions, contributions, council/critique references, task/attempt records, validation, artifact identities/digests, publication evidence, omissions/redactions/unresolved outcomes; test unauthorized export, redaction, large history, tampered evidence, changed source data, interrupted writing, destination failure, deterministic integrity; not described as certified if evidence incomplete.
+
 ## 22. UX anti-patterns
 
 Do not introduce:

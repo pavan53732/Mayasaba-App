@@ -65,6 +65,7 @@ The repository is organized around the specification. Start with this README for
 | [README](./README.md) | The project overview and entry point you are reading |
 | [Contract index](./docs/contracts/README.md) | C01–C10 normative contracts, v1 shared schemas, canonical vectors, and adversarial fixtures |
 | [Implementation-readiness audit](./docs/IMPLEMENTATION-READINESS-AUDIT.md) | Documentation-closure evidence and the implementation/runtime proof boundary |
+| [UX and capability enhancement contract](./docs/MAYASABA-UX-CAPABILITY-ENHANCEMENT-CONTRACT.md) | Subordinate contract for the 12 productivity capabilities, milestones M0–M7, quality gates and change control |
 | [Contract completion register](./docs/CONTRACT-COMPLETION-REGISTER.md) | Closed documentation decisions, fixture coverage, and C10 implementation gates |
 
 **Repository guidance precedence:** the user's current explicit instruction, then the complete system description, then `AGENTS.md`, then the derived architecture/UI guides, then existing code, tests, schemas, and comments. This README summarizes the specification; it does not replace it. Record and resolve conflicts explicitly.
