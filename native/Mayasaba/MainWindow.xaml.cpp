@@ -1469,13 +1469,9 @@ namespace winrt::Mayasaba::implementation
         try
         {
             co_await selectorQueue_.Background();
-            for (size_t i = 0; i < candidatePaths.size(); ++i)
-            {
-                auto cand = attachmentService_->PrepareAttachment(projectId, candidatePaths[i],
-                    [this, gen] { return windowClosed_ || selectorGeneration_.load() != gen; });
-                cand.id = preparingIds[i];
-                prepared.push_back(std::move(cand));
-            }
+            prepared = attachmentService_->PrepareBatch(projectId, candidatePaths,
+                [this, gen] { return windowClosed_ || selectorGeneration_.load() != gen; },
+                mayasaba::PREPARATION_TIMEOUT_SECONDS);
         }
         catch (std::exception const& e)
         {
@@ -1490,15 +1486,13 @@ namespace winrt::Mayasaba::implementation
 
         attachmentsPreparing_ = false;
 
-        for (auto const& p : prepared)
+        size_t prepIdx = 0;
+        for (auto& d : draftAttachments_)
         {
-            for (auto& d : draftAttachments_)
+            if (prepIdx < prepared.size() && d.id == preparingIds[prepIdx])
             {
-                if (d.id == p.id)
-                {
-                    d = p;
-                    break;
-                }
+                d = std::move(prepared[prepIdx]);
+                prepIdx++;
             }
         }
 
@@ -1566,6 +1560,7 @@ namespace winrt::Mayasaba::implementation
     {
         if (busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_) return;
         if (attachmentsPreparing_) return;
+        uint64_t totalBytes = 0;
         for (auto const& att : draftAttachments_)
         {
             if (att.status != mayasaba::AttachmentStatus::Ready)
@@ -1573,6 +1568,12 @@ namespace winrt::Mayasaba::implementation
                 ShowNotice(L"Cannot send: one or more attachments require attention (source changed or missing). Remove or re-attach them to proceed.", true);
                 return;
             }
+            totalBytes += att.fileSize;
+        }
+        if (totalBytes > mayasaba::MAX_AGGREGATE_SIZE_BYTES)
+        {
+            ShowNotice(L"Cannot send: total attachment size exceeds the 500 MiB aggregate limit.", true);
+            return;
         }
         auto text = Utf8(ComposerBox().Text().c_str());
         if (text.empty() && draftAttachments_.empty()) return;
@@ -1586,11 +1587,13 @@ namespace winrt::Mayasaba::implementation
         mayasaba::SaveDisposition result = mayasaba::SaveDisposition::Unknown;
         bool wasFirstContribution = historyCache_.empty();
 
+        uint64_t totalBytes = 0;
         std::vector<mayasaba::AttachmentRecord> readyRecords;
         for (auto const& att : draftAttachments_)
         {
             if (att.status == mayasaba::AttachmentStatus::Ready)
             {
+                totalBytes += att.fileSize;
                 mayasaba::AttachmentRecord rec;
                 rec.id = att.id;
                 rec.projectId = id;
@@ -1604,6 +1607,14 @@ namespace winrt::Mayasaba::implementation
                 rec.status = "COMMITTED";
                 readyRecords.push_back(std::move(rec));
             }
+        }
+
+        if (totalBytes > mayasaba::MAX_AGGREGATE_SIZE_BYTES)
+        {
+            ShowNotice(L"Cannot send: total attachment size exceeds the 500 MiB aggregate limit.", true);
+            busy_ = false;
+            UpdateComposerState();
+            co_return;
         }
 
         try

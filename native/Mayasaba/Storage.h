@@ -162,6 +162,7 @@ namespace mayasaba
         void ClearDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);
+        std::vector<AttachmentRecord> GetCommittedAttachmentsForProject(std::string const& projectId);
 
     private:
         sqlite3* db_{nullptr};

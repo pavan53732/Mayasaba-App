@@ -1,7 +1,9 @@
 #include "AttachmentService.h"
+#include <cwctype>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_set>
 
 #ifdef _WIN32
 #include <bcrypt.h>
@@ -266,10 +268,46 @@ namespace mayasaba
         return result;
     }
 
+    std::vector<AttachmentCandidate> AttachmentService::PrepareBatch(
+        std::string const& projectId,
+        std::vector<std::wstring> const& candidatePaths,
+        std::function<bool()> const& isCancelled,
+        uint32_t timeoutSeconds)
+    {
+        auto const batchStart = std::chrono::steady_clock::now();
+        auto const batchDeadline = batchStart + std::chrono::seconds(timeoutSeconds);
+
+        std::vector<AttachmentCandidate> results;
+        results.reserve(candidatePaths.size());
+
+        for (auto const& path : candidatePaths)
+        {
+            if (isCancelled()) break;
+
+            if (std::chrono::steady_clock::now() >= batchDeadline)
+            {
+                AttachmentCandidate timedOutCand;
+                timedOutCand.id = NewUuid();
+                timedOutCand.originalPath = path;
+                std::filesystem::path p(path);
+                timedOutCand.fileName = Utf16ToUtf8(p.filename().wstring());
+                timedOutCand.status = AttachmentStatus::TimedOut;
+                timedOutCand.errorMessage = "Batch preparation exceeded the 120-second active timeout budget.";
+                results.push_back(std::move(timedOutCand));
+                continue;
+            }
+
+            auto cand = PrepareAttachment(projectId, path, isCancelled, batchDeadline);
+            results.push_back(std::move(cand));
+        }
+        return results;
+    }
+
     AttachmentCandidate AttachmentService::PrepareAttachment(
         std::string const& projectId,
         std::wstring const& sourcePath,
-        std::function<bool()> const& isCancelled)
+        std::function<bool()> const& isCancelled,
+        std::optional<std::chrono::steady_clock::time_point> deadline)
     {
         AttachmentCandidate candidate;
         candidate.id = NewUuid();
@@ -333,12 +371,27 @@ namespace mayasaba
         std::wstring stagedFileName = Utf8ToUtf16(candidate.id) + L"_" + srcP.filename().wstring();
         auto stagedFilePath = stagingDir / stagedFileName;
         candidate.stagedPath = stagedFilePath.wstring();
+        candidate.fileSize = static_cast<uint64_t>(initialSize.QuadPart);
+
+        // Persist durable preparation intent before copying bytes
+        AttachmentRecord intentRec;
+        intentRec.id = candidate.id;
+        intentRec.projectId = projectId;
+        intentRec.fileName = candidate.fileName;
+        intentRec.fileSize = candidate.fileSize;
+        intentRec.sha256 = "";
+        intentRec.detectedType = candidate.detectedType;
+        intentRec.storagePath = Utf16ToUtf8(candidate.stagedPath);
+        intentRec.sourcePath = Utf16ToUtf8(candidate.originalPath);
+        intentRec.status = "PREPARING";
+        storage_.SaveDraftAttachment(projectId, intentRec);
 
         HANDLE hDest = CreateFileW(stagedFilePath.c_str(), GENERIC_WRITE,
             0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hDest == INVALID_HANDLE_VALUE)
         {
             CloseHandle(hSource);
+            storage_.RemoveDraftAttachment(projectId, candidate.id);
             candidate.status = AttachmentStatus::Rejected;
             candidate.errorMessage = "Cannot create staging file for: " + candidate.fileName;
             return candidate;
@@ -351,6 +404,7 @@ namespace mayasaba
             CloseHandle(hDest);
             CloseHandle(hSource);
             std::filesystem::remove(stagedFilePath, ec);
+            storage_.RemoveDraftAttachment(projectId, candidate.id);
             candidate.status = AttachmentStatus::Rejected;
             candidate.errorMessage = "BCryptOpenAlgorithmProvider failed";
             return candidate;
@@ -364,6 +418,7 @@ namespace mayasaba
             CloseHandle(hDest);
             CloseHandle(hSource);
             std::filesystem::remove(stagedFilePath, ec);
+            storage_.RemoveDraftAttachment(projectId, candidate.id);
             candidate.status = AttachmentStatus::Rejected;
             candidate.errorMessage = "BCryptGetProperty failed";
             return candidate;
@@ -378,6 +433,7 @@ namespace mayasaba
             CloseHandle(hDest);
             CloseHandle(hSource);
             std::filesystem::remove(stagedFilePath, ec);
+            storage_.RemoveDraftAttachment(projectId, candidate.id);
             candidate.status = AttachmentStatus::Rejected;
             candidate.errorMessage = "BCryptCreateHash failed";
             return candidate;
@@ -387,6 +443,7 @@ namespace mayasaba
         std::vector<BYTE> buffer(BUFFER_SIZE);
         uint64_t totalBytesRead = 0;
         auto const startTime = std::chrono::steady_clock::now();
+        auto const effectiveDeadline = deadline.value_or(startTime + std::chrono::seconds(PREPARATION_TIMEOUT_SECONDS));
         bool timedOut = false;
         bool cancelled = false;
         bool writeFailed = false;
@@ -399,9 +456,7 @@ namespace mayasaba
                 break;
             }
 
-            auto const elapsedSec = std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::steady_clock::now() - startTime).count();
-            if (elapsedSec >= PREPARATION_TIMEOUT_SECONDS)
+            if (std::chrono::steady_clock::now() >= effectiveDeadline)
             {
                 timedOut = true;
                 break;
@@ -458,6 +513,7 @@ namespace mayasaba
         if (cancelled)
         {
             std::filesystem::remove(stagedFilePath, ec);
+            storage_.RemoveDraftAttachment(projectId, candidate.id);
             candidate.status = AttachmentStatus::Rejected;
             candidate.errorMessage = "Preparation cancelled";
             return candidate;
@@ -465,6 +521,7 @@ namespace mayasaba
         if (timedOut)
         {
             std::filesystem::remove(stagedFilePath, ec);
+            storage_.RemoveDraftAttachment(projectId, candidate.id);
             candidate.status = AttachmentStatus::TimedOut;
             candidate.errorMessage = "Attachment preparation exceeded 120 seconds active timeout.";
             return candidate;
@@ -472,6 +529,7 @@ namespace mayasaba
         if (writeFailed)
         {
             std::filesystem::remove(stagedFilePath, ec);
+            storage_.RemoveDraftAttachment(projectId, candidate.id);
             candidate.status = AttachmentStatus::Rejected;
             candidate.errorMessage = "Writing staging copy failed for " + candidate.fileName;
             return candidate;
@@ -479,6 +537,7 @@ namespace mayasaba
         if (sourceChanged)
         {
             std::filesystem::remove(stagedFilePath, ec);
+            storage_.RemoveDraftAttachment(projectId, candidate.id);
             candidate.status = AttachmentStatus::SourceChangedDuringPreparation;
             candidate.errorMessage = "Source file changed during preparation: " + candidate.fileName +
                 ". Please reselect or remove it.";
@@ -493,6 +552,13 @@ namespace mayasaba
         candidate.sha256 = ss.str();
         candidate.fileSize = totalBytesRead;
         candidate.status = AttachmentStatus::Ready;
+
+        AttachmentRecord readyRec = intentRec;
+        readyRec.fileSize = totalBytesRead;
+        readyRec.sha256 = candidate.sha256;
+        readyRec.status = "READY";
+        storage_.SaveDraftAttachment(projectId, readyRec);
+
         return candidate;
 #else
         candidate.status = AttachmentStatus::Rejected;
@@ -588,8 +654,71 @@ namespace mayasaba
         storage_.ClearDraftAttachments(projectId);
     }
 
+    void AttachmentService::ReconcileStagedFiles(std::string const& projectId)
+    {
+        std::error_code ec;
+        auto to_lower = [](std::wstring s) {
+            for (auto& ch : s) ch = static_cast<wchar_t>(::towlower(ch));
+            return s;
+        };
+
+        // 1. Remove interrupted PREPARING draft attachments (both file and DB record)
+        auto drafts = storage_.GetDraftAttachments(projectId);
+        for (auto const& d : drafts)
+        {
+            if (d.status == "PREPARING")
+            {
+                if (!d.storagePath.empty())
+                {
+                    std::filesystem::remove(Utf8ToUtf16(d.storagePath), ec);
+                }
+                storage_.RemoveDraftAttachment(projectId, d.id);
+            }
+        }
+
+        // 2. Collect all valid tracked storage paths for this project
+        std::unordered_set<std::wstring> trackedPaths;
+        auto remainingDrafts = storage_.GetDraftAttachments(projectId);
+        for (auto const& d : remainingDrafts)
+        {
+            if (!d.storagePath.empty())
+            {
+                std::filesystem::path p = Utf8ToUtf16(d.storagePath);
+                trackedPaths.insert(to_lower(std::filesystem::weakly_canonical(p, ec).wstring()));
+            }
+        }
+
+        auto committed = storage_.GetCommittedAttachmentsForProject(projectId);
+        for (auto const& c : committed)
+        {
+            if (!c.storagePath.empty())
+            {
+                std::filesystem::path p = Utf8ToUtf16(c.storagePath);
+                trackedPaths.insert(to_lower(std::filesystem::weakly_canonical(p, ec).wstring()));
+            }
+        }
+
+        // 3. Scan the project's staging directory and remove any untracked regular files
+        auto stagingDir = stagingRoot_ / "staging" / projectId;
+        if (std::filesystem::exists(stagingDir, ec) && std::filesystem::is_directory(stagingDir, ec))
+        {
+            for (auto const& entry : std::filesystem::directory_iterator(stagingDir, ec))
+            {
+                if (entry.is_regular_file(ec))
+                {
+                    std::wstring canon = to_lower(std::filesystem::weakly_canonical(entry.path(), ec).wstring());
+                    if (trackedPaths.find(canon) == trackedPaths.end())
+                    {
+                        std::filesystem::remove(entry.path(), ec);
+                    }
+                }
+            }
+        }
+    }
+
     std::vector<AttachmentCandidate> AttachmentService::ReverifyDraftAttachments(std::string const& projectId)
     {
+        ReconcileStagedFiles(projectId);
         auto candidates = LoadDraftAttachments(projectId);
         for (auto& c : candidates)
         {

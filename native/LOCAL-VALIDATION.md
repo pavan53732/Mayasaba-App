@@ -308,3 +308,26 @@ This reconciliation started from `e45332d` while native implementation continued
 | DOC-03: shared visual and acceptance vocabulary | PASS | Ten motion names agree between the specification and UI/UX; the guide contains exactly UX-01–UX-32, once each. |
 | DOC-04: existing registry/schema regression | PASS | `python native/tests/validate_contract_registry.py` reported 124 checks passing. This does not prove native behavior. |
 | DOC-05: documentation diff hygiene | PASS | Scoped `git diff --check` passed; native implementation changes are excluded from this documentation batch. |
+
+---
+
+## Native Attachment Pipeline — Integrity and Recovery Hardening (2026-10-17)
+
+Following the initial native attachment milestone, five concrete review findings were addressed and validated in the native C++20 core, storage layer, and WinUI 3 interface:
+
+1. **Attachment-only submissions (P0):** `Storage::StageSubmission` and `SaveContribution` now allow an empty text body when valid attachments are present, matching `MainWindow.xaml.cpp`'s UI enabling logic.
+2. **Cryptographic admission boundary verification (P0):** `Storage::SaveContribution` independently re-verifies each attachment's project association, single file size (<= 100 MiB), aggregate size (<= 500 MiB), physical staged existence, exact disk size, and computes SHA-256 via BCrypt on disk before committing to SQLite. Corrupted staged files trigger immediate rollback and return `SaveDisposition::Conflict`.
+3. **Interrupted preparation intent & orphan reconciliation (P0):** `AttachmentService::PrepareAttachment` writes a durable `PREPARING` record to `draft_attachments` before chunked copying begins. `AttachmentService::ReconcileStagedFiles(projectId)` runs at the start of `ReverifyDraftAttachments` and clears interrupted `PREPARING` drafts while deleting untracked files in the staging directory.
+4. **Batch-wide 120-second active-time budget (P1):** `AttachmentService::PrepareBatch` enforces a unified batch-wide deadline across all files, timing out subsequent files once the aggregate active budget is exhausted.
+5. **Pre-submission 500 MiB aggregate ceiling enforcement (P1):** Both `MainWindow.xaml.cpp` (`SendCurrent` and `SubmitAsync`) and `Storage::SaveContribution` strictly re-verify that total copied attachment bytes do not exceed `524,288,000` bytes (500 MiB).
+
+### Validation Summary
+
+| Test suite / Gate | Verdict | Evidence |
+| --- | --- | --- |
+| Group 19 Native Regression (Tests 1–15) | PASS | `native/tests/bin/storage_tests.exe` executed all 19 test groups including 15 attachment and hardening cases. |
+| Contract Registry Validation | PASS | `python native/tests/validate_contract_registry.py` reported 124/124 checks passing. |
+| Native WinUI 3 Compilation | PASS | `Mayasaba.vcxproj` built clean with MSBuild Release x64 (0 warnings, 0 errors). |
+| Tooling Compilation | PASS | `storage_tests.vcxproj` and `seed_store.vcxproj` built clean with MSBuild Release x64. |
+| Production DB Preservation | PASS | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 verified untouched: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
+

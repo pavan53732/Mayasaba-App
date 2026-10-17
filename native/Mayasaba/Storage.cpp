@@ -8,6 +8,7 @@
 #include <iomanip>
 #ifdef _WIN32
 #include <shlobj.h>
+#include <bcrypt.h>
 #endif
 
 namespace mayasaba
@@ -43,6 +44,69 @@ namespace mayasaba
             std::wstring w(size, L'\0');
             MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), size);
             return w;
+        }
+
+        inline std::string ComputeFileSha256(std::wstring const& path, uint64_t* outSize = nullptr)
+        {
+            HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hFile == INVALID_HANDLE_VALUE) return {};
+
+            LARGE_INTEGER size{};
+            if (!GetFileSizeEx(hFile, &size))
+            {
+                CloseHandle(hFile);
+                return {};
+            }
+            if (outSize) *outSize = static_cast<uint64_t>(size.QuadPart);
+
+            BCRYPT_ALG_HANDLE hAlg = nullptr;
+            NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
+            if (!BCRYPT_SUCCESS(status))
+            {
+                CloseHandle(hFile);
+                return {};
+            }
+
+            DWORD hashObjSize = 0, dataLen = 0;
+            status = BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, (PBYTE)&hashObjSize, sizeof(DWORD), &dataLen, 0);
+            if (!BCRYPT_SUCCESS(status))
+            {
+                BCryptCloseAlgorithmProvider(hAlg, 0);
+                CloseHandle(hFile);
+                return {};
+            }
+
+            std::vector<BYTE> hashObj(hashObjSize);
+            BCRYPT_HASH_HANDLE hHash = nullptr;
+            status = BCryptCreateHash(hAlg, &hHash, hashObj.data(), hashObjSize, nullptr, 0, 0);
+            if (!BCRYPT_SUCCESS(status))
+            {
+                BCryptCloseAlgorithmProvider(hAlg, 0);
+                CloseHandle(hFile);
+                return {};
+            }
+
+            constexpr DWORD BUFFER_SIZE = 64 * 1024;
+            std::vector<BYTE> buffer(BUFFER_SIZE);
+            DWORD bytesRead = 0;
+            while (ReadFile(hFile, buffer.data(), BUFFER_SIZE, &bytesRead, nullptr) && bytesRead > 0)
+            {
+                BCryptHashData(hHash, buffer.data(), bytesRead, 0);
+            }
+
+            BYTE hash[32];
+            BCryptFinishHash(hHash, hash, 32, 0);
+            BCryptDestroyHash(hHash);
+            BCryptCloseAlgorithmProvider(hAlg, 0);
+            CloseHandle(hFile);
+
+            std::ostringstream ss;
+            for (int i = 0; i < 32; ++i)
+            {
+                ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hash[i]);
+            }
+            return ss.str();
         }
 #endif
     }
@@ -863,11 +927,21 @@ namespace mayasaba
     }
     std::string Storage::StageSubmission(std::string const& id, std::string const& proposed, std::string const& body)
     {
-        if(id.empty()||proposed.empty()||body.empty()) throw std::runtime_error("Invalid submission");
+        if (id.empty() || proposed.empty()) throw std::runtime_error("Invalid submission");
         std::lock_guard lock(mutex_);
         Exec("BEGIN IMMEDIATE;");
         try
         {
+            if (body.empty())
+            {
+                // Must have at least one ready draft attachment if body is empty
+                Statement checkDrafts(db_, "SELECT count(*) FROM draft_attachments WHERE project_id=?1 AND status='READY';");
+                Bind(checkDrafts.value, 1, id);
+                if (sqlite3_step(checkDrafts.value) != SQLITE_ROW || sqlite3_column_int(checkDrafts.value, 0) == 0)
+                {
+                    throw std::runtime_error("Submission cannot be empty: must provide text or attachments");
+                }
+            }
             {
                 Statement project(db_, "SELECT closed FROM projects WHERE id=?1;");
                 Bind(project.value,1,id);
@@ -924,7 +998,7 @@ namespace mayasaba
 
     SaveDisposition Storage::SaveContribution(std::string const& id, std::string const& submission, std::string const& body, std::vector<AttachmentRecord> const& attachments)
     {
-        if (submission.empty() || body.empty()) return SaveDisposition::Conflict;
+        if (submission.empty() || (body.empty() && attachments.empty())) return SaveDisposition::Conflict;
         std::lock_guard lock(mutex_);
         bool began=false;
         try
@@ -970,6 +1044,52 @@ namespace mayasaba
             }
             if (!duplicate)
             {
+                // Admission boundary check for all attachments: project association, size limits, and cryptographic verification
+                uint64_t aggregateBytes = 0;
+                for (auto const& att : attachments)
+                {
+                    if ((!att.projectId.empty() && att.projectId != id) ||
+                        (!att.submissionId.empty() && att.submissionId != submission))
+                    {
+                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                    }
+                    if (att.fileSize == 0 || att.fileSize > 100ULL * 1024ULL * 1024ULL) // 100 MiB limit
+                    {
+                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                    }
+                    if (att.sha256.size() != 64)
+                    {
+                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                    }
+                    aggregateBytes += att.fileSize;
+                    if (aggregateBytes > 500ULL * 1024ULL * 1024ULL) // 500 MiB aggregate limit
+                    {
+                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                    }
+
+#ifdef _WIN32
+                    // Verify the immutable physical file bytes on disk at final admission
+                    std::filesystem::path stagedP = Utf8ToWide(att.storagePath);
+                    std::error_code ec;
+                    if (!std::filesystem::exists(stagedP, ec) || std::filesystem::is_directory(stagedP, ec))
+                    {
+                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                    }
+                    auto actualDiskSize = std::filesystem::file_size(stagedP, ec);
+                    if (ec || actualDiskSize != att.fileSize)
+                    {
+                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                    }
+
+                    // Cryptographic digest verification
+                    std::string computedHash = ComputeFileSha256(stagedP.wstring());
+                    if (computedHash.empty() || computedHash != att.sha256)
+                    {
+                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                    }
+#endif
+                }
+
                 Statement p(db_, "INSERT INTO contributions(project_id,submission_id,body) VALUES(?1,?2,?3);");
                 Bind(p.value,1,id); Bind(p.value,2,submission); Bind(p.value,3,body);
                 Check(sqlite3_step(p.value),db_);
@@ -1121,6 +1241,34 @@ namespace mayasaba
         std::lock_guard lock(mutex_);
         Statement q(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,created_at FROM attachments WHERE submission_id=?1 ORDER BY rowid;");
         Bind(q.value,1,submissionId);
+        std::vector<AttachmentRecord> result;
+        int rc=SQLITE_OK;
+        while ((rc=sqlite3_step(q.value))==SQLITE_ROW)
+        {
+            result.push_back({
+                Text(q.value,0),
+                Text(q.value,1),
+                Text(q.value,2),
+                Text(q.value,3),
+                static_cast<uint64_t>(sqlite3_column_int64(q.value,4)),
+                Text(q.value,5),
+                Text(q.value,6),
+                Text(q.value,7),
+                Text(q.value,8),
+                Text(q.value,9),
+                Text(q.value,10),
+                Text(q.value,11)
+            });
+        }
+        Check(rc,db_);
+        return result;
+    }
+
+    std::vector<AttachmentRecord> Storage::GetCommittedAttachmentsForProject(std::string const& projectId)
+    {
+        std::lock_guard lock(mutex_);
+        Statement q(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,created_at FROM attachments WHERE project_id=?1 ORDER BY rowid;");
+        Bind(q.value,1,projectId);
         std::vector<AttachmentRecord> result;
         int rc=SQLITE_OK;
         while ((rc=sqlite3_step(q.value))==SQLITE_ROW)

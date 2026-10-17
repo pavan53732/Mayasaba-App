@@ -91,17 +91,28 @@ namespace mayasaba
             std::vector<std::wstring> const& candidatePaths,
             std::vector<AttachmentCandidate> const& existingDraftAttachments) const;
 
+        // Batch preparation: chunked copy with single 120-second active-time deadline
+        std::vector<AttachmentCandidate> PrepareBatch(
+            std::string const& projectId,
+            std::vector<std::wstring> const& candidatePaths,
+            std::function<bool()> const& isCancelled = [] { return false; },
+            uint32_t timeoutSeconds = PREPARATION_TIMEOUT_SECONDS);
+
         // Preparation slice: chunked copy to project staging, SHA-256 computation, and source integrity check
         AttachmentCandidate PrepareAttachment(
             std::string const& projectId,
             std::wstring const& sourcePath,
-            std::function<bool()> const& isCancelled = [] { return false; });
+            std::function<bool()> const& isCancelled = [] { return false; },
+            std::optional<std::chrono::steady_clock::time_point> deadline = std::nullopt);
 
         // Staging and Draft persistence
         void SaveDraftAttachments(std::string const& projectId, std::vector<AttachmentCandidate> const& attachments);
         std::vector<AttachmentCandidate> LoadDraftAttachments(std::string const& projectId);
         void RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
         void ClearDraftAttachments(std::string const& projectId);
+
+        // Reconciles orphaned files in the project's staging directory and clears incomplete preparation intents
+        void ReconcileStagedFiles(std::string const& projectId);
 
         // Verification and crash recovery: checks that staged draft files exist and match recorded hashes
         std::vector<AttachmentCandidate> ReverifyDraftAttachments(std::string const& projectId);

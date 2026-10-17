@@ -854,6 +854,8 @@ int main()
 
             mayasaba::AttachmentRecord rec;
             rec.id = candidate.id;
+            rec.projectId = projectId;
+            rec.submissionId = subId;
             rec.fileName = candidate.fileName;
             rec.fileSize = candidate.fileSize;
             rec.sha256 = candidate.sha256;
@@ -877,6 +879,178 @@ int main()
             auto committedAtts = store.GetAttachmentsForContribution(subId);
             EXPECT(committedAtts.size() == 1);
             EXPECT(committedAtts[0].sha256 == candidate.sha256);
+
+            // 11. Attachment-only submission (empty text body)
+            auto fileOnly = testFilesDir / "file_only.txt";
+            {
+                std::ofstream ofs(fileOnly);
+                ofs << "Attachment only content without text message";
+            }
+            auto candOnly = attService.PrepareAttachment(projectId, fileOnly.wstring());
+            EXPECT(candOnly.status == mayasaba::AttachmentStatus::Ready);
+            attService.SaveDraftAttachments(projectId, { candOnly });
+
+            std::string const subOnlyId = "sub-att-only-1";
+            store.StageSubmission(projectId, subOnlyId, ""); // empty text succeeds because draft attachment is ready
+
+            mayasaba::AttachmentRecord recOnly;
+            recOnly.id = candOnly.id;
+            recOnly.projectId = projectId;
+            recOnly.submissionId = subOnlyId;
+            recOnly.fileName = candOnly.fileName;
+            recOnly.fileSize = candOnly.fileSize;
+            recOnly.sha256 = candOnly.sha256;
+            recOnly.detectedType = candOnly.detectedType;
+            recOnly.storagePath = WideToUtf8(candOnly.stagedPath);
+            recOnly.sourcePath = WideToUtf8(candOnly.originalPath);
+            recOnly.status = "COMMITTED";
+
+            auto saveDispOnly = store.SaveContribution(projectId, subOnlyId, "", { recOnly });
+            EXPECT(saveDispOnly == mayasaba::SaveDisposition::Saved);
+            auto contribsAfterOnly = store.Contributions(projectId);
+            EXPECT(contribsAfterOnly.size() == 2);
+            EXPECT(contribsAfterOnly[1].submissionId == subOnlyId);
+            EXPECT(contribsAfterOnly[1].body.empty());
+            EXPECT(contribsAfterOnly[1].attachments.size() == 1);
+            EXPECT(contribsAfterOnly[1].attachments[0].sha256 == candOnly.sha256);
+
+            // 12. Admission boundary verification: tampered bytes rejected by SaveContribution
+            auto tamperFile = testFilesDir / "tamper_test.txt";
+            {
+                std::ofstream ofs(tamperFile);
+                ofs << "Original bytes before admission check";
+            }
+            auto candTamper = attService.PrepareAttachment(projectId, tamperFile.wstring());
+            EXPECT(candTamper.status == mayasaba::AttachmentStatus::Ready);
+            attService.SaveDraftAttachments(projectId, { candTamper });
+
+            // Maliciously tamper with the staged file on disk before SaveContribution
+            {
+                std::ofstream ofs(candTamper.stagedPath, std::ios::trunc);
+                ofs << "TAMPERED BYTES ON DISK";
+            }
+
+            std::string const subTamperId = "sub-tamper-1";
+            store.StageSubmission(projectId, subTamperId, "Will be rejected at admission boundary");
+            mayasaba::AttachmentRecord recTamper;
+            recTamper.id = candTamper.id;
+            recTamper.projectId = projectId;
+            recTamper.submissionId = subTamperId;
+            recTamper.fileName = candTamper.fileName;
+            recTamper.fileSize = candTamper.fileSize;
+            recTamper.sha256 = candTamper.sha256; // records original SHA-256
+            recTamper.detectedType = candTamper.detectedType;
+            recTamper.storagePath = WideToUtf8(candTamper.stagedPath);
+            recTamper.sourcePath = WideToUtf8(candTamper.originalPath);
+            recTamper.status = "COMMITTED";
+
+            auto saveDispTamper = store.SaveContribution(projectId, subTamperId, "Will be rejected at admission boundary", { recTamper });
+            EXPECT(saveDispTamper == mayasaba::SaveDisposition::Conflict); // Rejected by cryptographic admission check!
+
+            // Verify that nothing was persisted to contributions or attachments
+            auto contribsAfterTamper = store.Contributions(projectId);
+            EXPECT(contribsAfterTamper.size() == 2); // still 2, tampered one was rolled back
+            auto tamperAtts = store.GetAttachmentsForContribution(subTamperId);
+            EXPECT(tamperAtts.empty());
+
+            // Restore valid content and retry with same submission ID: now succeeds durably!
+            {
+                std::ofstream ofs(candTamper.stagedPath, std::ios::trunc);
+                ofs << "Original bytes before admission check";
+            }
+            auto saveDispRetry = store.SaveContribution(projectId, subTamperId, "Will be rejected at admission boundary", { recTamper });
+            EXPECT(saveDispRetry == mayasaba::SaveDisposition::Saved);
+            EXPECT(store.Contributions(projectId).size() == 3);
+
+            // 13. Interrupted preparation intent and orphaned file reconciliation (ReconcileStagedFiles)
+            auto stagingDir = attService.StagingRoot() / "staging" / projectId;
+            fs::create_directories(stagingDir);
+
+            // Create an interrupted PREPARING draft
+            std::string const interruptedId = "interrupted-draft-id";
+            auto partialFilePath = stagingDir / (interruptedId + "_partial.tmp");
+            {
+                std::ofstream ofs(partialFilePath);
+                ofs << "Partial chunk written before crash";
+            }
+            mayasaba::AttachmentRecord interruptedRec;
+            interruptedRec.id = interruptedId;
+            interruptedRec.projectId = projectId;
+            interruptedRec.fileName = "partial.tmp";
+            interruptedRec.fileSize = 100;
+            interruptedRec.sha256 = "";
+            interruptedRec.detectedType = "unknown";
+            interruptedRec.storagePath = WideToUtf8(partialFilePath.wstring());
+            interruptedRec.sourcePath = "C:/fake/path.tmp";
+            interruptedRec.status = "PREPARING";
+            store.SaveDraftAttachment(projectId, interruptedRec);
+
+            // Also create an untracked orphaned file in staging
+            auto orphanFilePath = stagingDir / "orphaned_file_not_in_db.dat";
+            {
+                std::ofstream ofs(orphanFilePath);
+                ofs << "Orphan bytes not tracked anywhere";
+            }
+
+            EXPECT(fs::exists(partialFilePath));
+            EXPECT(fs::exists(orphanFilePath));
+            EXPECT(store.GetDraftAttachments(projectId).size() >= 1);
+
+            // Run reconciliation
+            attService.ReconcileStagedFiles(projectId);
+
+            // Verify: PREPARING draft removed from DB and disk
+            EXPECT(!fs::exists(partialFilePath));
+            EXPECT(!fs::exists(orphanFilePath));
+            auto remainingDrafts = store.GetDraftAttachments(projectId);
+            for (auto const& d : remainingDrafts)
+            {
+                EXPECT(d.id != interruptedId);
+            }
+
+            // 14. Batch-wide timeout budget (PrepareBatch)
+            auto timeoutFile1 = testFilesDir / "batch_timeout1.txt";
+            auto timeoutFile2 = testFilesDir / "batch_timeout2.txt";
+            {
+                std::ofstream ofs1(timeoutFile1); ofs1 << "Batch 1";
+                std::ofstream ofs2(timeoutFile2); ofs2 << "Batch 2";
+            }
+            // With 0-second timeout, subsequent files hit the batch budget deadline
+            auto batchTimeoutRes = attService.PrepareBatch(projectId,
+                { timeoutFile1.wstring(), timeoutFile2.wstring() },
+                [] { return false; },
+                0);
+            EXPECT(batchTimeoutRes.size() == 2);
+            bool hasTimeout = false;
+            for (auto const& r : batchTimeoutRes)
+            {
+                if (r.status == mayasaba::AttachmentStatus::TimedOut)
+                {
+                    hasTimeout = true;
+                    break;
+                }
+            }
+            EXPECT(hasTimeout);
+
+            // 15. Aggregate 500 MiB limit in SaveContribution
+            std::string const projectHuge = "project-huge";
+            store.BindProject(projectHuge, "Huge Project", "C:/Projects/Huge");
+            std::vector<mayasaba::AttachmentRecord> hugeAttBatch;
+            for (int i = 0; i < 6; ++i)
+            {
+                mayasaba::AttachmentRecord hr;
+                hr.id = "huge-" + std::to_string(i);
+                hr.projectId = projectHuge;
+                hr.submissionId = "sub-huge";
+                hr.fileName = "huge.bin";
+                hr.fileSize = 90ULL * 1024ULL * 1024ULL; // 6 * 90 = 540 MiB > 500 MiB
+                hr.storagePath = WideToUtf8(candOnly.stagedPath);
+                hr.sha256 = candOnly.sha256;
+                hugeAttBatch.push_back(hr);
+            }
+            store.StageSubmission(projectHuge, "sub-huge", "Over 500 MiB");
+            auto hugeDisp = store.SaveContribution(projectHuge, "sub-huge", "Over 500 MiB", hugeAttBatch);
+            EXPECT(hugeDisp == mayasaba::SaveDisposition::Conflict);
         }
 #endif
 
