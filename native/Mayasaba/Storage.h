@@ -51,11 +51,27 @@ namespace mayasaba
         std::string createdAt;
         std::string updatedAt;
     };
+    struct AttachmentRecord
+    {
+        std::string id;
+        std::string projectId;
+        std::string submissionId;
+        std::string fileName;
+        uint64_t fileSize{0};
+        std::string sha256;
+        std::string detectedType;
+        std::string storagePath;
+        std::string sourcePath;
+        std::string status; // "SELECTED", "PREPARING", "READY", "REJECTED", "COMMITTED"
+        std::string errorMessage;
+        std::string createdAt;
+    };
     struct Contribution
     {
         std::string submissionId;
         std::string body;
         std::string createdAt;
+        std::vector<AttachmentRecord> attachments{};
     };
     enum class SaveDisposition { Saved, Duplicate, Conflict, RejectedClosed, Unknown };
     struct PendingSubmission { std::string id; std::string body; };
@@ -135,8 +151,17 @@ namespace mayasaba
         std::optional<PendingSubmission> Pending(std::string const& projectId);
         bool SetClosure(std::string const& projectId, int expectedVersion, bool closed);
         SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body);
+        SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body, std::vector<AttachmentRecord> const& attachments);
         std::vector<Contribution> Contributions(std::string const& projectId);
         std::optional<std::string> LastBoundProject();
+        std::filesystem::path const& FilePath() const noexcept { return file_; }
+
+        // Attachment draft and committed persistence
+        void SaveDraftAttachment(std::string const& projectId, AttachmentRecord const& att);
+        void RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
+        void ClearDraftAttachments(std::string const& projectId);
+        std::vector<AttachmentRecord> GetDraftAttachments(std::string const& projectId);
+        std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);
 
     private:
         sqlite3* db_{nullptr};

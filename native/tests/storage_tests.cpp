@@ -1,7 +1,9 @@
 #include "../Mayasaba/Storage.h"
 #include "../Mayasaba/ProjectRoot.h"
 #include "../Mayasaba/ProjectService.h"
+#include "../Mayasaba/AttachmentService.h"
 #include "../Mayasaba/SerialQueue.h"
+#include <fstream>
 #include <future>
 #include <atomic>
 #include <chrono>
@@ -646,10 +648,240 @@ int main()
             EXPECT(stored.starts_with("dpapi1:") && stored.find("private selector text")==std::string::npos);
             sqlite3_finalize(q);sqlite3_close(raw);EXPECT(store.GetPrebindDraft()=="private selector text");
         }
+        // 19. Attachment service: selection, validation, 50-file limits, byte boundaries,
+        // chunked copy, SHA-256 verification, source change detection, draft persistence, recovery and atomic submission.
+        {
+            auto attDb = folder / "attachment_test.db";
+            auto attStaging = folder / "att_staging";
+            fs::create_directories(attStaging);
+            mayasaba::Storage store(attDb);
+            mayasaba::AttachmentService attService(store, attStaging);
+
+            std::string const projectId = "proj-att-1";
+            store.BindProject(projectId, "Attachment Project", "C:/Projects/AttTest");
+
+            auto testFilesDir = folder / "att_sources";
+            fs::create_directories(testFilesDir);
+
+            // 1. 49 files within byte limits -> Accept
+            std::vector<std::wstring> files49;
+            for (int i = 1; i <= 49; ++i)
+            {
+                auto p = testFilesDir / ("file_" + std::to_string(i) + ".txt");
+                std::ofstream ofs(p);
+                ofs << "Payload for file " << i << "\n";
+                ofs.close();
+                files49.push_back(p.wstring());
+            }
+            auto res49 = attService.ValidateCandidateBatch(files49, {});
+            EXPECT(res49.accepted);
+            EXPECT(res49.reason == mayasaba::ValidationFailureReason::None);
+            EXPECT(res49.validatedFiles.size() == 49);
+
+            // 2. 50 files within byte limits -> Accept
+            auto file50 = testFilesDir / "file_50.txt";
+            {
+                std::ofstream ofs(file50);
+                ofs << "Payload for file 50\n";
+            }
+            auto files50 = files49;
+            files50.push_back(file50.wstring());
+            auto res50 = attService.ValidateCandidateBatch(files50, {});
+            EXPECT(res50.accepted);
+            EXPECT(res50.reason == mayasaba::ValidationFailureReason::None);
+            EXPECT(res50.validatedFiles.size() == 50);
+
+            // 3. 51 files -> Reject
+            auto file51 = testFilesDir / "file_51.txt";
+            {
+                std::ofstream ofs(file51);
+                ofs << "Payload for file 51\n";
+            }
+            auto files51 = files50;
+            files51.push_back(file51.wstring());
+            auto res51 = attService.ValidateCandidateBatch(files51, {});
+            EXPECT(!res51.accepted);
+            EXPECT(res51.reason == mayasaba::ValidationFailureReason::TooManyFiles);
+            EXPECT(res51.errorMessage.find("51") != std::string::npos);
+            EXPECT(res51.errorMessage.find("50") != std::string::npos);
+
+            // Incremental batches: 49 existing + 2 new = 51 -> Reject
+            std::vector<mayasaba::AttachmentCandidate> existing49;
+            for (size_t i = 0; i < 49; ++i)
+            {
+                mayasaba::AttachmentCandidate c;
+                c.id = "cand-" + std::to_string(i);
+                c.fileName = "existing_" + std::to_string(i);
+                c.fileSize = 100;
+                c.status = mayasaba::AttachmentStatus::Ready;
+                existing49.push_back(c);
+            }
+            std::vector<std::wstring> twoNewFiles = { file50.wstring(), file51.wstring() };
+            auto resInc51 = attService.ValidateCandidateBatch(twoNewFiles, existing49);
+            EXPECT(!resInc51.accepted);
+            EXPECT(resInc51.reason == mayasaba::ValidationFailureReason::TooManyFiles);
+
+            // 4. File size limit: 100 MiB (104,857,600 bytes)
+            auto file100MiB = testFilesDir / "exact_100mib.bin";
+            {
+                HANDLE h = CreateFileW(file100MiB.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                EXPECT(h != INVALID_HANDLE_VALUE);
+                LARGE_INTEGER li; li.QuadPart = 100ULL * 1024ULL * 1024ULL; // 104,857,600
+                EXPECT(SetFilePointerEx(h, li, nullptr, FILE_BEGIN));
+                EXPECT(SetEndOfFile(h));
+                CloseHandle(h);
+            }
+            auto res100 = attService.ValidateCandidateBatch({ file100MiB.wstring() }, {});
+            EXPECT(res100.accepted);
+
+            auto file100MiBPlus = testFilesDir / "over_100mib.bin";
+            {
+                HANDLE h = CreateFileW(file100MiBPlus.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                EXPECT(h != INVALID_HANDLE_VALUE);
+                LARGE_INTEGER li; li.QuadPart = 100ULL * 1024ULL * 1024ULL + 1; // 104,857,601
+                EXPECT(SetFilePointerEx(h, li, nullptr, FILE_BEGIN));
+                EXPECT(SetEndOfFile(h));
+                CloseHandle(h);
+            }
+            auto resOver100 = attService.ValidateCandidateBatch({ file100MiBPlus.wstring() }, {});
+            EXPECT(!resOver100.accepted);
+            EXPECT(resOver100.reason == mayasaba::ValidationFailureReason::FileTooLarge);
+            EXPECT(resOver100.errorMessage.find("100 MiB") != std::string::npos);
+
+            // 5. Aggregate size limit: 500 MiB (524,288,000 bytes)
+            std::vector<mayasaba::AttachmentCandidate> existing400MiB;
+            for (int i = 0; i < 4; ++i)
+            {
+                mayasaba::AttachmentCandidate c;
+                c.id = "big-" + std::to_string(i);
+                c.fileSize = 100ULL * 1024ULL * 1024ULL;
+                existing400MiB.push_back(c);
+            }
+            auto res500Exact = attService.ValidateCandidateBatch({ file100MiB.wstring() }, existing400MiB);
+            EXPECT(res500Exact.accepted);
+
+            auto file60MiB = testFilesDir / "file_60mib.bin";
+            {
+                HANDLE h = CreateFileW(file60MiB.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                EXPECT(h != INVALID_HANDLE_VALUE);
+                LARGE_INTEGER li; li.QuadPart = 60ULL * 1024ULL * 1024ULL;
+                EXPECT(SetFilePointerEx(h, li, nullptr, FILE_BEGIN));
+                EXPECT(SetEndOfFile(h));
+                CloseHandle(h);
+            }
+            // 400 MiB + 60 MiB + 60 MiB = 520 MiB > 500 MiB
+            auto resAggOver = attService.ValidateCandidateBatch({ file60MiB.wstring(), file60MiB.wstring() }, existing400MiB);
+            EXPECT(!resAggOver.accepted);
+            EXPECT(resAggOver.reason == mayasaba::ValidationFailureReason::AggregateTooLarge);
+            EXPECT(resAggOver.errorMessage.find("500 MiB") != std::string::npos);
+
+            // 6. Empty file (0 bytes) -> Reject
+            auto emptyFile = testFilesDir / "empty.txt";
+            {
+                std::ofstream ofs(emptyFile);
+            }
+            auto resEmpty = attService.ValidateCandidateBatch({ emptyFile.wstring() }, {});
+            EXPECT(!resEmpty.accepted);
+            EXPECT(resEmpty.reason == mayasaba::ValidationFailureReason::EmptyFile);
+
+            // 7. Preparation: chunked copy & SHA-256 verification
+            auto prepFile = testFilesDir / "prep_test.txt";
+            std::string const payload = "The quick brown fox jumps over the lazy dog";
+            {
+                std::ofstream ofs(prepFile);
+                ofs << payload;
+            }
+            auto candidate = attService.PrepareAttachment(projectId, prepFile.wstring());
+            EXPECT(candidate.status == mayasaba::AttachmentStatus::Ready);
+            EXPECT(candidate.fileSize == payload.size());
+            EXPECT(!candidate.sha256.empty());
+            EXPECT(fs::exists(candidate.stagedPath));
+            // Known SHA-256 for "The quick brown fox jumps over the lazy dog":
+            // d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592
+            EXPECT(candidate.sha256 == "d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592");
+
+            // 8. Source changed during preparation -> Block Send
+            auto changingFile = testFilesDir / "changing_file.txt";
+            {
+                std::ofstream ofs(changingFile);
+                ofs << "Initial content before change";
+            }
+            auto candChanged = attService.PrepareAttachment(projectId, changingFile.wstring(), [&]() {
+                std::ofstream ofs(changingFile, std::ios::app);
+                ofs << " appended extra bytes during preparation!";
+                ofs.close();
+                return false;
+            });
+            EXPECT(candChanged.status == mayasaba::AttachmentStatus::SourceChangedDuringPreparation);
+            EXPECT(!candChanged.errorMessage.empty());
+            EXPECT(!fs::exists(candChanged.stagedPath));
+
+            // 9. Draft persistence and recovery across store reload
+            std::vector<mayasaba::AttachmentCandidate> draftBatch = { candidate };
+            attService.SaveDraftAttachments(projectId, draftBatch);
+
+            auto loadedDraft = attService.LoadDraftAttachments(projectId);
+            EXPECT(loadedDraft.size() == 1);
+            EXPECT(loadedDraft[0].id == candidate.id);
+            EXPECT(loadedDraft[0].sha256 == candidate.sha256);
+            EXPECT(loadedDraft[0].status == mayasaba::AttachmentStatus::Ready);
+
+            auto reverified = attService.ReverifyDraftAttachments(projectId);
+            EXPECT(reverified.size() == 1);
+            EXPECT(reverified[0].status == mayasaba::AttachmentStatus::Ready);
+
+            // Corrupt staged file: ReverifyDraftAttachments marks it Rejected
+            {
+                std::ofstream ofs(candidate.stagedPath, std::ios::trunc);
+                ofs << "tampered content!";
+            }
+            auto reverifiedCorrupt = attService.ReverifyDraftAttachments(projectId);
+            EXPECT(reverifiedCorrupt.size() == 1);
+            EXPECT(reverifiedCorrupt[0].status == mayasaba::AttachmentStatus::Rejected);
+
+            // Restore valid staged content
+            {
+                std::ofstream ofs(candidate.stagedPath, std::ios::trunc);
+                ofs << payload;
+            }
+            auto reverifiedFixed = attService.ReverifyDraftAttachments(projectId);
+            EXPECT(reverifiedFixed.size() == 1);
+            EXPECT(reverifiedFixed[0].status == mayasaba::AttachmentStatus::Ready);
+
+            // 10. Atomic submission with UserContribution
+            std::string const subId = "sub-att-1";
+            store.StageSubmission(projectId, subId, "Message with attachment");
+
+            mayasaba::AttachmentRecord rec;
+            rec.id = candidate.id;
+            rec.fileName = candidate.fileName;
+            rec.fileSize = candidate.fileSize;
+            rec.sha256 = candidate.sha256;
+            rec.detectedType = candidate.detectedType;
+            rec.storagePath = WideToUtf8(candidate.stagedPath);
+            rec.sourcePath = WideToUtf8(candidate.originalPath);
+            rec.status = "COMMITTED";
+
+            auto saveDisp = store.SaveContribution(projectId, subId, "Message with attachment", { rec });
+            EXPECT(saveDisp == mayasaba::SaveDisposition::Saved);
+
+            EXPECT(attService.LoadDraftAttachments(projectId).empty());
+
+            auto contribs = store.Contributions(projectId);
+            EXPECT(contribs.size() == 1);
+            EXPECT(contribs[0].submissionId == subId);
+            EXPECT(contribs[0].attachments.size() == 1);
+            EXPECT(contribs[0].attachments[0].fileName == candidate.fileName);
+            EXPECT(contribs[0].attachments[0].sha256 == candidate.sha256);
+
+            auto committedAtts = store.GetAttachmentsForContribution(subId);
+            EXPECT(committedAtts.size() == 1);
+            EXPECT(committedAtts[0].sha256 == candidate.sha256);
+        }
 #endif
 
         fs::remove_all(folder);
-        std::cout << "PASS: 18 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO)\n";
+        std::cout << "PASS: 19 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments)\n";
         return 0;
     }
     catch (std::exception const& e)

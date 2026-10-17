@@ -3,6 +3,7 @@
 #include "Storage.h"
 #include "SerialQueue.h"
 #include "ProjectService.h"
+#include "AttachmentService.h"
 #include "ProjectRoot.h"
 #include "Motion.h"
 #include "Timeline.h"
@@ -26,6 +27,7 @@ namespace winrt::Mayasaba::implementation
         void OnDraftChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::TextChangedEventArgs const&);
         void OnComposerKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnSend(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnAttachFiles(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnStart(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnPause(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnStop(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
@@ -87,6 +89,14 @@ namespace winrt::Mayasaba::implementation
         std::string pendingAttemptProject_;
         std::string pendingAttemptBody_;
         Microsoft::UI::Xaml::DispatcherTimer draftTimer_{nullptr};
+
+        std::unique_ptr<mayasaba::AttachmentService> attachmentService_;
+        std::vector<mayasaba::AttachmentCandidate> draftAttachments_;
+        bool attachmentsPreparing_{false};
+        winrt::fire_and_forget AttachFilesAsync();
+        void RenderAttachmentChips();
+        void RemoveDraftAttachment(std::string const& id);
+        void UpdateComposerState();
 
         // ------------------------------------------------------------------
         // Presentation state. None of this is domain state: it never gates an

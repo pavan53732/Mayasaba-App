@@ -291,6 +291,24 @@ namespace mayasaba
                  "target_path TEXT NOT NULL, state TEXT NOT NULL, observed_identity TEXT,"
                  "error_message TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),"
                  "updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));");
+
+            Exec("CREATE TABLE IF NOT EXISTS draft_attachments("
+                 "attachment_id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),"
+                 "file_name TEXT NOT NULL, file_size INTEGER NOT NULL, sha256 TEXT NOT NULL,"
+                 "detected_type TEXT NOT NULL, staged_path TEXT NOT NULL, source_path TEXT NOT NULL,"
+                 "status TEXT NOT NULL, error_message TEXT NOT NULL DEFAULT '',"
+                 "created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));");
+            Exec("CREATE INDEX IF NOT EXISTS draft_attachment_project ON draft_attachments(project_id);");
+
+            Exec("CREATE TABLE IF NOT EXISTS attachments("
+                 "attachment_id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id),"
+                 "submission_id TEXT NOT NULL REFERENCES contributions(submission_id),"
+                 "file_name TEXT NOT NULL, file_size INTEGER NOT NULL, sha256 TEXT NOT NULL,"
+                 "detected_type TEXT NOT NULL, storage_path TEXT NOT NULL, source_path TEXT NOT NULL,"
+                 "status TEXT NOT NULL, error_message TEXT NOT NULL DEFAULT '',"
+                 "created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));");
+            Exec("CREATE INDEX IF NOT EXISTS attachment_submission ON attachments(submission_id);");
+            Exec("CREATE INDEX IF NOT EXISTS attachment_project ON attachments(project_id);");
             if(schemaVersion<3)
             {
                 auto protectColumn=[&](char const* select,char const* update)
@@ -901,6 +919,11 @@ namespace mayasaba
     }
     SaveDisposition Storage::SaveContribution(std::string const& id, std::string const& submission, std::string const& body)
     {
+        return SaveContribution(id, submission, body, {});
+    }
+
+    SaveDisposition Storage::SaveContribution(std::string const& id, std::string const& submission, std::string const& body, std::vector<AttachmentRecord> const& attachments)
+    {
         if (submission.empty() || body.empty()) return SaveDisposition::Conflict;
         std::lock_guard lock(mutex_);
         bool began=false;
@@ -950,10 +973,32 @@ namespace mayasaba
                 Statement p(db_, "INSERT INTO contributions(project_id,submission_id,body) VALUES(?1,?2,?3);");
                 Bind(p.value,1,id); Bind(p.value,2,submission); Bind(p.value,3,body);
                 Check(sqlite3_step(p.value),db_);
+
+                // Atomically link verified attachments to this submission
+                for (auto const& att : attachments)
+                {
+                    Statement ins(db_, "INSERT INTO attachments(attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11);");
+                    Bind(ins.value,1,att.id);
+                    Bind(ins.value,2,id);
+                    Bind(ins.value,3,submission);
+                    Bind(ins.value,4,att.fileName);
+                    sqlite3_bind_int64(ins.value,5,static_cast<sqlite3_int64>(att.fileSize));
+                    Bind(ins.value,6,att.sha256);
+                    Bind(ins.value,7,att.detectedType);
+                    Bind(ins.value,8,att.storagePath);
+                    Bind(ins.value,9,att.sourcePath);
+                    Bind(ins.value,10,"COMMITTED");
+                    Bind(ins.value,11,att.errorMessage);
+                    Check(sqlite3_step(ins.value),db_);
+                }
             }
             {
                 Statement p(db_, "UPDATE projects SET draft='' WHERE id=?1;");
                 Bind(p.value,1,id);Check(sqlite3_step(p.value),db_);
+            }
+            {
+                Statement clrDraft(db_, "DELETE FROM draft_attachments WHERE project_id=?1;");
+                Bind(clrDraft.value,1,id);Check(sqlite3_step(clrDraft.value),db_);
             }
             {
                 Statement cleared(db_, "DELETE FROM pending_submissions WHERE project_id=?1 AND submission_id=?2;");
@@ -969,6 +1014,7 @@ namespace mayasaba
             return SaveDisposition::Unknown;
         }
     }
+
     std::vector<Contribution> Storage::Contributions(std::string const& id)
     {
         std::lock_guard lock(mutex_);
@@ -977,7 +1023,123 @@ namespace mayasaba
         std::vector<Contribution> result;
         int rc=SQLITE_OK;
         while ((rc=sqlite3_step(p.value))==SQLITE_ROW)
-            result.push_back({Text(p.value,0),Text(p.value,1),Text(p.value,2)});
+        {
+            Contribution c{Text(p.value,0),Text(p.value,1),Text(p.value,2)};
+            Statement att(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,created_at FROM attachments WHERE submission_id=?1 ORDER BY rowid;");
+            Bind(att.value,1,c.submissionId);
+            int attRc=SQLITE_OK;
+            while ((attRc=sqlite3_step(att.value))==SQLITE_ROW)
+            {
+                c.attachments.push_back({
+                    Text(att.value,0),
+                    Text(att.value,1),
+                    Text(att.value,2),
+                    Text(att.value,3),
+                    static_cast<uint64_t>(sqlite3_column_int64(att.value,4)),
+                    Text(att.value,5),
+                    Text(att.value,6),
+                    Text(att.value,7),
+                    Text(att.value,8),
+                    Text(att.value,9),
+                    Text(att.value,10),
+                    Text(att.value,11)
+                });
+            }
+            result.push_back(std::move(c));
+        }
+        Check(rc,db_);
+        return result;
+    }
+
+    void Storage::SaveDraftAttachment(std::string const& projectId, AttachmentRecord const& att)
+    {
+        std::lock_guard lock(mutex_);
+        CheckWriteCapacity();
+        Statement q(db_, "INSERT INTO draft_attachments(attachment_id,project_id,file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message) "
+                         "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) "
+                         "ON CONFLICT(attachment_id) DO UPDATE SET file_size=excluded.file_size,sha256=excluded.sha256,staged_path=excluded.staged_path,status=excluded.status,error_message=excluded.error_message;");
+        Bind(q.value,1,att.id);
+        Bind(q.value,2,projectId);
+        Bind(q.value,3,att.fileName);
+        sqlite3_bind_int64(q.value,4,static_cast<sqlite3_int64>(att.fileSize));
+        Bind(q.value,5,att.sha256);
+        Bind(q.value,6,att.detectedType);
+        Bind(q.value,7,att.storagePath);
+        Bind(q.value,8,att.sourcePath);
+        Bind(q.value,9,att.status);
+        Bind(q.value,10,att.errorMessage);
+        Check(sqlite3_step(q.value),db_);
+    }
+
+    void Storage::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
+    {
+        std::lock_guard lock(mutex_);
+        Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
+        Bind(q.value,1,projectId);
+        Bind(q.value,2,attachmentId);
+        Check(sqlite3_step(q.value),db_);
+    }
+
+    void Storage::ClearDraftAttachments(std::string const& projectId)
+    {
+        std::lock_guard lock(mutex_);
+        Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1;");
+        Bind(q.value,1,projectId);
+        Check(sqlite3_step(q.value),db_);
+    }
+
+    std::vector<AttachmentRecord> Storage::GetDraftAttachments(std::string const& projectId)
+    {
+        std::lock_guard lock(mutex_);
+        Statement q(db_, "SELECT attachment_id,project_id,'',file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,created_at FROM draft_attachments WHERE project_id=?1 ORDER BY rowid;");
+        Bind(q.value,1,projectId);
+        std::vector<AttachmentRecord> result;
+        int rc=SQLITE_OK;
+        while ((rc=sqlite3_step(q.value))==SQLITE_ROW)
+        {
+            result.push_back({
+                Text(q.value,0),
+                Text(q.value,1),
+                Text(q.value,2),
+                Text(q.value,3),
+                static_cast<uint64_t>(sqlite3_column_int64(q.value,4)),
+                Text(q.value,5),
+                Text(q.value,6),
+                Text(q.value,7),
+                Text(q.value,8),
+                Text(q.value,9),
+                Text(q.value,10),
+                Text(q.value,11)
+            });
+        }
+        Check(rc,db_);
+        return result;
+    }
+
+    std::vector<AttachmentRecord> Storage::GetAttachmentsForContribution(std::string const& submissionId)
+    {
+        std::lock_guard lock(mutex_);
+        Statement q(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,created_at FROM attachments WHERE submission_id=?1 ORDER BY rowid;");
+        Bind(q.value,1,submissionId);
+        std::vector<AttachmentRecord> result;
+        int rc=SQLITE_OK;
+        while ((rc=sqlite3_step(q.value))==SQLITE_ROW)
+        {
+            result.push_back({
+                Text(q.value,0),
+                Text(q.value,1),
+                Text(q.value,2),
+                Text(q.value,3),
+                static_cast<uint64_t>(sqlite3_column_int64(q.value,4)),
+                Text(q.value,5),
+                Text(q.value,6),
+                Text(q.value,7),
+                Text(q.value,8),
+                Text(q.value,9),
+                Text(q.value,10),
+                Text(q.value,11)
+            });
+        }
         Check(rc,db_);
         return result;
     }

@@ -10,6 +10,7 @@
 // shows a precise unavailable state instead of inventing a record.
 
 #include "Motion.h"
+#include "Storage.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -83,6 +84,7 @@ namespace mayasaba::ui
         // A silent insert is a refreshed condition card, not new conversation. It
         // must not replay an insertion transition on every refresh.
         bool silentInsert{false};
+        std::vector<AttachmentRecord> attachments{};
     };
 
     // Renders the timeline. Owns an observable item source of stable indices so

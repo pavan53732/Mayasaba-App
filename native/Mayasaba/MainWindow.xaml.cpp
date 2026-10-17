@@ -259,6 +259,7 @@ namespace winrt::Mayasaba::implementation
         if (windowClosed_) co_return;
         if (!error.empty()) { ShowFolder(SelectorContext::Startup); RetryStoreButton().Visibility(Visibility::Visible); ShowNotice(L"Store initialization blocked: " + Utf16(error) + L". Retry opening the store or Exit; no empty-list result is claimed.", true); co_return; }
         storage_ = std::move(store);
+        attachmentService_ = std::make_unique<mayasaba::AttachmentService>(*storage_);
         ChooseFolderButton().IsEnabled(true);
         CreateNewProjectButton().IsEnabled(true);
         RetryStoreButton().Visibility(Visibility::Collapsed);
@@ -603,8 +604,17 @@ namespace winrt::Mayasaba::implementation
         ComposerBox().Text(Utf16(pending ? pending->body : project->draft));
         suppressDraft_ = false;
         ComposerBox().IsReadOnly(project->closed || pending.has_value());
-        SendButton().Content(winrt::box_value(hstring{pending ? L"Reconcile Send" : L"Send →"}));
-        SendButton().IsEnabled(!project->closed && (pending.has_value() || !project->draft.empty()));
+        if (attachmentService_)
+        {
+            draftAttachments_ = attachmentService_->ReverifyDraftAttachments(activeProject_);
+            RenderAttachmentChips();
+        }
+        else
+        {
+            draftAttachments_.clear();
+            RenderAttachmentChips();
+        }
+        UpdateComposerState();
         if (pending) ShowNotice(L"A previous Send is unresolved. Its exact text and submission identity are locked; use Reconcile Send.");
 
         // A restored project opens in its final layout immediately: no entrance
@@ -641,6 +651,7 @@ namespace winrt::Mayasaba::implementation
             entry.author = "You";
             entry.timestamp = item.createdAt.empty() ? std::string{"saved"} : LocalStamp(item.createdAt);
             entry.body = item.body;
+            entry.attachments = item.attachments;
             entries.push_back(std::move(entry));
         }
         return entries;
@@ -1172,14 +1183,372 @@ namespace winrt::Mayasaba::implementation
 
 
 
-    void MainWindow::OnDraftChanged(IInspectable const&, TextChangedEventArgs const&)
+    void MainWindow::UpdateComposerState()
     {
-        if(suppressDraft_) return;
-        bool open=storage_ && !activeProject_.empty() && !projectClosed_;
-        SendButton().IsEnabled(open && !ComposerBox().Text().empty() && !busy_);
-        if(open) { draftTimer_.Stop(); draftTimer_.Start(); }
+        if (windowClosed_) return;
+        bool const open = storage_ && !activeProject_.empty() && !projectClosed_;
+        bool const hasPending = !pendingAttemptId_.empty();
+
+        if (hasPending)
+        {
+            SendButton().Content(winrt::box_value(hstring{L"Reconcile Send"}));
+            SendButton().IsEnabled(open && !busy_);
+            AttachButton().IsEnabled(false);
+            return;
+        }
+
+        SendButton().Content(winrt::box_value(hstring{L"Send →"}));
+
+        bool const canAttach = open && !busy_ && !attachmentsPreparing_ && (draftAttachments_.size() < mayasaba::MAX_ATTACHMENT_COUNT);
+        AttachButton().IsEnabled(canAttach);
+
+        if (!open || busy_ || attachmentsPreparing_)
+        {
+            SendButton().IsEnabled(false);
+            return;
+        }
+
+        bool hasInvalidAttachment = false;
+        for (auto const& att : draftAttachments_)
+        {
+            if (att.status != mayasaba::AttachmentStatus::Ready)
+            {
+                hasInvalidAttachment = true;
+                break;
+            }
+        }
+
+        if (hasInvalidAttachment)
+        {
+            SendButton().IsEnabled(false);
+            return;
+        }
+
+        bool const hasText = !ComposerBox().Text().empty();
+        bool const hasAttachments = !draftAttachments_.empty();
+        SendButton().IsEnabled(hasText || hasAttachments);
     }
 
+    void MainWindow::RenderAttachmentChips()
+    {
+        if (draftAttachments_.empty())
+        {
+            AttachmentChipsScroller().Visibility(Visibility::Collapsed);
+            AttachmentChipsPanel().Children().Clear();
+            return;
+        }
+
+        AttachmentChipsScroller().Visibility(Visibility::Visible);
+        AttachmentChipsPanel().Children().Clear();
+
+        for (auto const& att : draftAttachments_)
+        {
+            Border chip{};
+            chip.CornerRadius(CornerRadius{8});
+            chip.Padding(Thickness{8, 4, 6, 4});
+            chip.Background(Token(L"MayasabaSecondaryBrush"));
+            chip.BorderBrush(Token(L"MayasabaBorderBrush"));
+            chip.BorderThickness(Thickness{1});
+
+            StackPanel content{};
+            content.Orientation(Orientation::Horizontal);
+            content.Spacing(6);
+            content.VerticalAlignment(VerticalAlignment::Center);
+
+            TextBlock statusDot{};
+            statusDot.FontSize(11);
+            statusDot.VerticalAlignment(VerticalAlignment::Center);
+
+            if (att.status == mayasaba::AttachmentStatus::Preparing)
+            {
+                statusDot.Text(L"◌");
+                statusDot.Foreground(Token(L"MayasabaAmberBrush"));
+            }
+            else if (att.status == mayasaba::AttachmentStatus::Ready)
+            {
+                statusDot.Text(L"●");
+                statusDot.Foreground(Token(L"MayasabaMintBrush"));
+            }
+            else if (att.status == mayasaba::AttachmentStatus::SourceChangedDuringPreparation)
+            {
+                statusDot.Text(L"⚠");
+                statusDot.Foreground(Token(L"MayasabaDangerBrush"));
+            }
+            else
+            {
+                statusDot.Text(L"✕");
+                statusDot.Foreground(Token(L"MayasabaDangerBrush"));
+            }
+            content.Children().Append(statusDot);
+
+            TextBlock nameText{};
+            nameText.Text(Utf16(att.fileName));
+            nameText.FontSize(12);
+            nameText.FontFamily(FontFamily{L"Cascadia Mono"});
+            nameText.MaxWidth(160);
+            nameText.TextTrimming(TextTrimming::CharacterEllipsis);
+            nameText.VerticalAlignment(VerticalAlignment::Center);
+            nameText.Foreground(Token(L"MayasabaInkBrush"));
+            content.Children().Append(nameText);
+
+            TextBlock sizeText{};
+            if (att.status == mayasaba::AttachmentStatus::Preparing)
+            {
+                sizeText.Text(L"preparing…");
+                sizeText.Foreground(Token(L"MayasabaAmberBrush"));
+            }
+            else if (att.status == mayasaba::AttachmentStatus::SourceChangedDuringPreparation)
+            {
+                sizeText.Text(L"source changed");
+                sizeText.Foreground(Token(L"MayasabaDangerBrush"));
+            }
+            else if (att.status == mayasaba::AttachmentStatus::TimedOut)
+            {
+                sizeText.Text(L"timed out");
+                sizeText.Foreground(Token(L"MayasabaDangerBrush"));
+            }
+            else if (att.status == mayasaba::AttachmentStatus::Rejected)
+            {
+                sizeText.Text(L"rejected");
+                sizeText.Foreground(Token(L"MayasabaDangerBrush"));
+            }
+            else
+            {
+                sizeText.Text(Utf16(mayasaba::AttachmentService::FormatFileSize(att.fileSize)));
+                sizeText.Foreground(Token(L"MayasabaMutedBrush"));
+            }
+            sizeText.FontSize(11);
+            sizeText.VerticalAlignment(VerticalAlignment::Center);
+            content.Children().Append(sizeText);
+
+            Button removeBtn{};
+            removeBtn.Content(box_value(L"✕"));
+            removeBtn.FontSize(10);
+            removeBtn.Padding(Thickness{4, 1, 4, 1});
+            removeBtn.CornerRadius(CornerRadius{4});
+            removeBtn.Background(SolidColorBrush{});
+            removeBtn.BorderThickness(Thickness{0});
+            removeBtn.VerticalAlignment(VerticalAlignment::Center);
+            Automation::AutomationProperties::SetName(removeBtn, L"Remove " + Utf16(att.fileName));
+
+            bool canRemove = !busy_ && pendingAttemptId_.empty() && !attachmentsPreparing_;
+            removeBtn.IsEnabled(canRemove);
+
+            auto weak = get_weak();
+            auto attId = att.id;
+            removeBtn.Click([weak, attId](auto const&, auto const&)
+            {
+                if (auto self = weak.get())
+                {
+                    self->RemoveDraftAttachment(attId);
+                }
+            });
+            content.Children().Append(removeBtn);
+
+            chip.Child(content);
+            AttachmentChipsPanel().Children().Append(chip);
+        }
+    }
+
+    void MainWindow::RemoveDraftAttachment(std::string const& id)
+    {
+        if (busy_ || navigationBusy_ || activeProject_.empty() || projectClosed_) return;
+        if (!pendingAttemptId_.empty())
+        {
+            ShowNotice(L"Cannot modify attachments while an unresolved submission is locked for reconciliation.", true);
+            return;
+        }
+
+        auto it = std::remove_if(draftAttachments_.begin(), draftAttachments_.end(),
+            [&](auto const& a) { return a.id == id; });
+        draftAttachments_.erase(it, draftAttachments_.end());
+
+        if (attachmentService_)
+        {
+            attachmentService_->RemoveDraftAttachment(activeProject_, id);
+        }
+
+        RenderAttachmentChips();
+        UpdateComposerState();
+    }
+
+    void MainWindow::OnAttachFiles(IInspectable const&, RoutedEventArgs const&)
+    {
+        AttachFilesAsync();
+    }
+
+    winrt::fire_and_forget MainWindow::AttachFilesAsync()
+    {
+        if (windowClosed_ || busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_)
+        {
+            co_return;
+        }
+        if (attachmentsPreparing_) co_return;
+        if (draftAttachments_.size() >= mayasaba::MAX_ATTACHMENT_COUNT)
+        {
+            ShowNotice(L"Attachment limit reached: maximum 50 files allowed per contribution.", true);
+            co_return;
+        }
+
+        FileOpenPicker picker;
+        picker.FileTypeFilter().Append(L"*");
+        Microsoft::UI::Xaml::Window window = *this;
+        HWND hwnd{};
+        winrt::check_hresult(window.as<IWindowNative>()->get_WindowHandle(&hwnd));
+        winrt::check_hresult(picker.as<IInitializeWithWindow>()->Initialize(hwnd));
+        pickerOpen_ = true;
+        Windows::Foundation::Collections::IVectorView<Windows::Storage::StorageFile> files{nullptr};
+        try
+        {
+            files = co_await picker.PickMultipleFilesAsync();
+        }
+        catch (std::exception const& e)
+        {
+            pickerOpen_ = false;
+            ShowNotice(L"File picker failed: " + Utf16(e.what()), true);
+            co_return;
+        }
+        catch (winrt::hresult_error const& e)
+        {
+            pickerOpen_ = false;
+            ShowNotice(L"File picker failed: " + e.message(), true);
+            co_return;
+        }
+        pickerOpen_ = false;
+        if (!files || files.Size() == 0)
+        {
+            co_return;
+        }
+
+        std::vector<std::wstring> candidatePaths;
+        candidatePaths.reserve(files.Size());
+        for (uint32_t i = 0; i < files.Size(); ++i)
+        {
+            candidatePaths.push_back(std::wstring{files.GetAt(i).Path().c_str()});
+        }
+
+        if (!attachmentService_)
+        {
+            ShowNotice(L"Attachment service unavailable.", true);
+            co_return;
+        }
+
+        auto validationResult = attachmentService_->ValidateCandidateBatch(candidatePaths, draftAttachments_);
+        if (!validationResult.accepted)
+        {
+            ShowNotice(Utf16(validationResult.errorMessage), true);
+            co_return;
+        }
+
+        attachmentsPreparing_ = true;
+        UpdateComposerState();
+
+        std::vector<std::string> preparingIds;
+        preparingIds.reserve(validationResult.validatedFiles.size());
+        for (auto const& meta : validationResult.validatedFiles)
+        {
+            mayasaba::AttachmentCandidate cand;
+            cand.id = mayasaba::NewUuid();
+            cand.fileName = meta.fileName;
+            cand.fileSize = meta.fileSize;
+            cand.detectedType = meta.detectedType;
+            cand.originalPath = meta.originalPath;
+            cand.status = mayasaba::AttachmentStatus::Preparing;
+            preparingIds.push_back(cand.id);
+            draftAttachments_.push_back(cand);
+        }
+        RenderAttachmentChips();
+
+        auto alive = get_strong();
+        auto ui = DispatcherQueue();
+        auto projectId = activeProject_;
+        uint64_t gen = selectorGeneration_.load();
+
+        std::vector<mayasaba::AttachmentCandidate> prepared;
+        std::string prepError;
+        try
+        {
+            co_await selectorQueue_.Background();
+            for (size_t i = 0; i < candidatePaths.size(); ++i)
+            {
+                auto cand = attachmentService_->PrepareAttachment(projectId, candidatePaths[i],
+                    [this, gen] { return windowClosed_ || selectorGeneration_.load() != gen; });
+                cand.id = preparingIds[i];
+                prepared.push_back(std::move(cand));
+            }
+        }
+        catch (std::exception const& e)
+        {
+            prepError = e.what();
+        }
+
+        if (!co_await resume_foreground(ui)) co_return;
+        if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != gen)
+        {
+            co_return;
+        }
+
+        attachmentsPreparing_ = false;
+
+        for (auto const& p : prepared)
+        {
+            for (auto& d : draftAttachments_)
+            {
+                if (d.id == p.id)
+                {
+                    d = p;
+                    break;
+                }
+            }
+        }
+
+        attachmentService_->SaveDraftAttachments(activeProject_, draftAttachments_);
+
+        RenderAttachmentChips();
+        UpdateComposerState();
+
+        if (!prepError.empty())
+        {
+            ShowNotice(L"Attachment preparation error: " + Utf16(prepError), true);
+        }
+        else
+        {
+            bool hasProblem = false;
+            for (auto const& p : prepared)
+            {
+                if (p.status == mayasaba::AttachmentStatus::SourceChangedDuringPreparation)
+                {
+                    ShowNotice(L"Source file '" + Utf16(p.fileName) + L"' was modified during preparation. Send is blocked until removed or re-attached.", true);
+                    hasProblem = true;
+                    break;
+                }
+                else if (p.status == mayasaba::AttachmentStatus::TimedOut)
+                {
+                    ShowNotice(L"Attachment preparation timed out for '" + Utf16(p.fileName) + L"'.", true);
+                    hasProblem = true;
+                    break;
+                }
+                else if (p.status != mayasaba::AttachmentStatus::Ready)
+                {
+                    ShowNotice(L"Attachment preparation failed for '" + Utf16(p.fileName) + L"': " + Utf16(p.errorMessage), true);
+                    hasProblem = true;
+                    break;
+                }
+            }
+            if (!hasProblem)
+            {
+                ShowNotice(L"Attachments prepared and verified (SHA-256 computed).");
+            }
+        }
+    }
+
+    void MainWindow::OnDraftChanged(IInspectable const&, TextChangedEventArgs const&)
+    {
+        if (suppressDraft_) return;
+        UpdateComposerState();
+        bool open = storage_ && !activeProject_.empty() && !projectClosed_;
+        if (open) { draftTimer_.Stop(); draftTimer_.Start(); }
+    }
 
     void MainWindow::OnComposerKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& e)
     {
@@ -1190,28 +1559,73 @@ namespace winrt::Mayasaba::implementation
             SendCurrent();
         }
     }
+
     void MainWindow::OnSend(IInspectable const&, RoutedEventArgs const&) { SendCurrent(); }
+
     void MainWindow::SendCurrent()
     {
-        if(busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_) return;
-        auto text=Utf8(ComposerBox().Text().c_str()); if(text.empty()) return;
-        busy_=true; draftTimer_.Stop(); ComposerBox().IsReadOnly(true); SendButton().IsEnabled(false);
-        SubmitAsync(activeProject_,pendingAttemptId_.empty()?SubmissionId():pendingAttemptId_,text);
+        if (busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_) return;
+        if (attachmentsPreparing_) return;
+        for (auto const& att : draftAttachments_)
+        {
+            if (att.status != mayasaba::AttachmentStatus::Ready)
+            {
+                ShowNotice(L"Cannot send: one or more attachments require attention (source changed or missing). Remove or re-attach them to proceed.", true);
+                return;
+            }
+        }
+        auto text = Utf8(ComposerBox().Text().c_str());
+        if (text.empty() && draftAttachments_.empty()) return;
+        busy_ = true; draftTimer_.Stop(); ComposerBox().IsReadOnly(true); SendButton().IsEnabled(false); AttachButton().IsEnabled(false);
+        SubmitAsync(activeProject_, pendingAttemptId_.empty() ? SubmissionId() : pendingAttemptId_, text);
     }
-    winrt::fire_and_forget MainWindow::SubmitAsync(std::string id,std::string submission,std::string text)
+
+    winrt::fire_and_forget MainWindow::SubmitAsync(std::string id, std::string submission, std::string text)
     {
-        auto alive=get_strong(); auto ui=DispatcherQueue(); std::string error;
-        mayasaba::SaveDisposition result=mayasaba::SaveDisposition::Unknown;
+        auto alive = get_strong(); auto ui = DispatcherQueue(); std::string error;
+        mayasaba::SaveDisposition result = mayasaba::SaveDisposition::Unknown;
         bool wasFirstContribution = historyCache_.empty();
-        try { co_await selectorQueue_.Background(); submission=storage_->StageSubmission(id,submission,text);
-            result=storage_->SaveContribution(id,submission,text); }
-        catch(std::exception const& e){error=e.what();}
-        if(!co_await resume_foreground(ui)) co_return;
-        if(windowClosed_ || activeProject_!=id) co_return;
-        busy_=false;
-        if(result==mayasaba::SaveDisposition::Saved || result==mayasaba::SaveDisposition::Duplicate)
+
+        std::vector<mayasaba::AttachmentRecord> readyRecords;
+        for (auto const& att : draftAttachments_)
+        {
+            if (att.status == mayasaba::AttachmentStatus::Ready)
+            {
+                mayasaba::AttachmentRecord rec;
+                rec.id = att.id;
+                rec.projectId = id;
+                rec.submissionId = submission;
+                rec.fileName = att.fileName;
+                rec.fileSize = att.fileSize;
+                rec.sha256 = att.sha256;
+                rec.detectedType = att.detectedType;
+                rec.storagePath = Utf8(att.stagedPath);
+                rec.sourcePath = Utf8(att.originalPath);
+                rec.status = "COMMITTED";
+                readyRecords.push_back(std::move(rec));
+            }
+        }
+
+        try
+        {
+            co_await selectorQueue_.Background();
+            submission = storage_->StageSubmission(id, submission, text);
+            result = storage_->SaveContribution(id, submission, text, readyRecords);
+        }
+        catch (std::exception const& e)
+        {
+            error = e.what();
+        }
+
+        if (!co_await resume_foreground(ui)) co_return;
+        if (windowClosed_ || activeProject_ != id) co_return;
+        busy_ = false;
+
+        if (result == mayasaba::SaveDisposition::Saved || result == mayasaba::SaveDisposition::Duplicate)
         {
             pendingAttemptId_.clear(); pendingAttemptProject_.clear(); pendingAttemptBody_.clear();
+            draftAttachments_.clear();
+            RenderAttachmentChips();
             // A confirmed save is the only thing that may move the composer, and it
             // moves only on the first one. Failed or uncertain persistence never
             // reaches here, so the recoverable draft stays centred and unacknowledged.
@@ -1219,9 +1633,13 @@ namespace winrt::Mayasaba::implementation
             ShowChat();
             ShowNotice(L"Message durably saved. Agent replies are unavailable in this build; no interpretation, reply or completion is claimed.");
         }
-        else { pendingAttemptId_=submission;pendingAttemptProject_=id;pendingAttemptBody_=text;
-            ComposerBox().IsReadOnly(true); SendButton().IsEnabled(true);SendButton().Content(box_value(L"Reconcile Send"));
-            ShowNotice(L"Submission not confirmed. Original draft and identity retained: "+Utf16(error),true); }
+        else
+        {
+            pendingAttemptId_ = submission; pendingAttemptProject_ = id; pendingAttemptBody_ = text;
+            ComposerBox().IsReadOnly(true);
+            UpdateComposerState();
+            ShowNotice(L"Submission not confirmed. Original draft and identity retained: " + Utf16(error), true);
+        }
     }
 
 

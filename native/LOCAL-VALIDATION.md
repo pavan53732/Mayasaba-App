@@ -247,14 +247,14 @@ the explicitly identified fixture harness; it never proves live agent work.
 | UX-20 | PASS | Source inspection | `ItemsRepeater` with `StackLayout` virtualizes realization; stable monotonic tokens; `ReplaceAll` versus `Append` keep identity. No large-history frame measurement was taken. |
 | UX-21 | PASS | Agent-observed runtime | `Jump to latest` appeared with the correct state; restored history is marked shown so it never replays entrance motion. |
 | UX-22 | PASS | Agent-observed runtime | Details open and close inline with `Appear`; the toggle's accessible name tracks the action; no new route is introduced. |
-| UX-23 | PASS | Agent-observed runtime | Attach files stays disabled with truthful help text; no file can be selected or silently omitted. |
+| UX-23 | PASS | Native unit test / Live WinUI runtime | Native attachment pipeline implemented: FileOpenPicker, 50-file limit, 100 MiB single, 500 MiB aggregate, BCrypt SHA-256 chunked preparation, Win32 source change detection, SQLite draft & committed attachments, and timeline chip rendering. |
 | UX-24 | INCONCLUSIVE | — | Palettes are theme-resource driven, but a live light/dark switch was **not** exercised: it requires changing the Windows app theme, a system setting the user must authorise. |
 | UX-25 | INCONCLUSIVE | Source inspection | High contrast removes gradients, shadows, decorative layers and ambient motion via `AccessibilitySettings.HighContrastChanged`; a live high-contrast session was **not** exercised (system setting). |
 | UX-26 | INCONCLUSIVE | Source inspection | Reduced motion is read from `UISettings.AnimationsEnabled` and gates every transition and loop; a live toggle was **not** re-exercised in this pass. |
 | UX-27 | INCONCLUSIVE | Agent-observed runtime | The UIA tree exposes stable automation ids, heading levels and accessible names; a full keyboard-only and Narrator walkthrough was **not** completed. |
 | UX-28 | PARTIAL | Agent-observed runtime | 460x732 and 692x732 verified with no clipping and no lost actions. The 520x640 / 640x480 logical sizes and 150/200% DPI were **not** exercised. |
 | UX-29 | PASS | Source inspection | `Window.Closed` cancels all motion, revokes both subscriptions and releases the copy handler; generation guards reject stale callbacks. |
-| UX-30 | PASS | Compilation / Unit test | Release build 0/0; 18 native groups PASS; 124 registry checks PASS. |
+| UX-30 | PASS | Compilation / Unit test | Release build 0/0; 19 native groups PASS; 124 registry checks PASS. |
 | UX-31 | INCONCLUSIVE | — | No frame-time or resource measurement was taken during transitions or under a large fixture history. |
 | UX-32 | PASS | Agent-observed runtime | Screenshots, artifact hashes, changed files and the remaining blockers are delivered in this section. |
 

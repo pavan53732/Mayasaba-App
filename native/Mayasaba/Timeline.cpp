@@ -40,6 +40,17 @@ namespace mayasaba::ui
             return block;
         }
 
+        std::string FormatBytes(uint64_t bytes)
+        {
+            std::ostringstream ss;
+            ss << std::fixed << std::setprecision(1);
+            if (bytes < 1024ULL) ss << bytes << " B";
+            else if (bytes < 1024ULL * 1024ULL) ss << (static_cast<double>(bytes) / 1024.0) << " KB";
+            else if (bytes < 1024ULL * 1024ULL * 1024ULL) ss << (static_cast<double>(bytes) / (1024.0 * 1024.0)) << " MB";
+            else ss << (static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0)) << " GB";
+            return ss.str();
+        }
+
         // A small semantic status dot. The caller always renders the matching
         // status text beside it, so colour is never the only carrier of meaning.
         Microsoft::UI::Xaml::Shapes::Ellipse Dot(Brush const& fill, double size)
@@ -344,6 +355,49 @@ namespace mayasaba::ui
             TextBlock body = Label(to_hstring(entry.body), 15.5, ink);
             body.IsTextSelectionEnabled(true);
             content.Children().Append(body);
+
+            if (!entry.attachments.empty())
+            {
+                StackPanel attList{};
+                attList.Spacing(6);
+                attList.Margin(Thickness{0, 6, 0, 0});
+                for (auto const& att : entry.attachments)
+                {
+                    Border chip{};
+                    chip.Background(Token(L"MayasabaPanelBrush"));
+                    chip.BorderBrush(Token(L"MayasabaBorderBrush"));
+                    chip.BorderThickness(Thickness{1});
+                    chip.CornerRadius(CornerRadius{8});
+                    chip.Padding(Thickness{10, 6, 10, 6});
+
+                    StackPanel chipContent{};
+                    chipContent.Orientation(Orientation::Horizontal);
+                    chipContent.Spacing(8);
+
+                    chipContent.Children().Append(Dot(Token(L"MayasabaBrandBrush"), 7));
+
+                    TextBlock nameBlock = Label(to_hstring(att.fileName), 12, ink);
+                    nameBlock.FontWeight(SemiBold());
+                    chipContent.Children().Append(nameBlock);
+
+                    std::string sizeStr = FormatBytes(att.fileSize);
+                    chipContent.Children().Append(Label(to_hstring(sizeStr), 11, muted));
+
+                    if (!att.sha256.empty())
+                    {
+                        std::string shortDigest = "sha256:" + att.sha256.substr(0, 8) + "...";
+                        TextBlock digestBlock = Label(to_hstring(shortDigest), 10.5, soft);
+                        digestBlock.FontFamily(MonoFont());
+                        chipContent.Children().Append(digestBlock);
+                    }
+
+                    chip.Child(chipContent);
+                    Automation::AutomationProperties::SetName(chip,
+                        to_hstring("Attachment: " + att.fileName + ", " + FormatBytes(att.fileSize)));
+                    attList.Children().Append(chip);
+                }
+                content.Children().Append(attList);
+            }
 
             Border bubble{};
             bubble.Background(Token(L"MayasabaBrandQuietBrush"));

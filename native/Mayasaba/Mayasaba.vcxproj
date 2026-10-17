@@ -92,7 +92,7 @@
       user32.lib supplies GetKeyState (keyboard state for the Send shortcut).
       shell32.lib supplies SHGetKnownFolderPath (per-user storage location).
     -->
-    <Link><AdditionalDependencies>user32.lib;shell32.lib;winsqlite3.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><AdditionalDependencies>user32.lib;shell32.lib;winsqlite3.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml" />
@@ -107,6 +107,7 @@
     <ClInclude Include="Storage.h" />
     <ClInclude Include="ProjectRoot.h" />
     <ClInclude Include="ProjectService.h" />
+    <ClInclude Include="AttachmentService.h" />
     <ClInclude Include="SerialQueue.h" />
     <ClInclude Include="NativeIds.h" />
     <ClInclude Include="ProtectedDraft.h" />
@@ -123,9 +124,10 @@
     <ClCompile Include="RichText.cpp" />
     <ClCompile Include="Timeline.cpp" />
     <ClCompile Include="Fixtures.cpp" />
-    <!-- Portable storage and direct Win32 root helper do not include pch.h. -->
+    <!-- Portable storage, project root and attachment service do not include pch.h. -->
     <ClCompile Include="Storage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ProjectRoot.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="AttachmentService.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
