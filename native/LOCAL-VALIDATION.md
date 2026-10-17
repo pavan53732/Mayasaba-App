@@ -246,18 +246,18 @@ the explicitly identified fixture harness; it never proves live agent work.
 | UX-17 | PASS | Agent-observed runtime / Source inspection | Start/Pause/Stop report unavailable truthfully; fixtures activate only via `MAYASABA_UI_FIXTURES`, carry a banner and never touch the store. |
 | UX-18 | PASS | Source inspection | Start/Pause/Stop handlers are unchanged and never wait for an animation. |
 | UX-19 | PASS | Agent-observed runtime | Header shows all three full CLI names with text status; readiness is separate from session activity. |
-| UX-20 | PASS | Source inspection | `ItemsRepeater` with `StackLayout` virtualizes realization; stable monotonic tokens; `ReplaceAll` versus `Append` keep identity. No large-history frame measurement was taken. |
+| UX-20 | PASS | Source inspection / Agent-observed runtime | `ItemsRepeater` with `StackLayout` virtualizes realization; stable monotonic tokens; `ReplaceAll` versus `Append` keep identity. Exercised 2026-10-18 with a 300-contribution isolated history: the UIA tree realized 51 elements (virtualization held), open-to-heading took 2.1s including harness overhead, and scrolling stayed responsive. No frame-time instrumentation was used. |
 | UX-21 | PASS | Agent-observed runtime | `Jump to latest` appeared with the correct state; restored history is marked shown so it never replays entrance motion. |
 | UX-22 | PASS | Agent-observed runtime | Details open and close inline with `Appear`; the toggle's accessible name tracks the action; no new route is introduced. |
 | UX-23 | PASS | Native unit test / Live WinUI runtime | Native attachment pipeline implemented: FileOpenPicker, 50-file limit, 100 MiB single, 500 MiB aggregate, BCrypt SHA-256 chunked preparation, Win32 source change detection, SQLite draft & committed attachments, and timeline chip rendering. |
-| UX-24 | INCONCLUSIVE | — | Palettes are theme-resource driven, but a live light/dark switch was **not** exercised: it requires changing the Windows app theme, a system setting the user must authorise. |
-| UX-25 | INCONCLUSIVE | Source inspection | High contrast removes gradients, shadows, decorative layers and ambient motion via `AccessibilitySettings.HighContrastChanged`; a live high-contrast session was **not** exercised (system setting). |
-| UX-26 | INCONCLUSIVE | Source inspection | Reduced motion is read from `UISettings.AnimationsEnabled` and gates every transition and loop; a live toggle was **not** re-exercised in this pass. |
+| UX-24 | PASS | Agent-observed runtime | Live app-theme change exercised 2026-10-18 in one running window: dark frame mean `(35,37,44)` (`10-welcome-dark.png`) and light frame mean `(236,237,243)` (`11-welcome-light.png`) at the same 1424x732 client size. Project, draft, focus and scroll state survived the change; the setting was restored afterwards. |
+| UX-25 | PASS | Agent-observed runtime | Live high contrast exercised 2026-10-18 through `SPI_SETHIGHCONTRAST` (`HCF_HIGHCONTRASTON`): the same window dropped from ~3,500 rendered colours to 597, took the system yellow focus/border colour `(245,197,42)` at the frame edge, and kept every control and label (`12-welcome-highcontrast.png`). The setting was restored afterwards. |
+| UX-26 | PASS | Agent-observed runtime | Live reduced motion exercised 2026-10-18 through the real Settings toggle (`ms-settings:easeofaccess-visualeffects`, `#SystemSettings_Accessibility_IsAnimationsEnabled_ToggleSwitch`): with motion enabled the visible hero changed 1,984–4,284 pixels between frames 0.9s apart; after switching **Animation effects** off in the running window, three consecutive frames differed by **0 pixels**; switching it back on resumed motion (1,914–3,518 px). Startup with the preference already off also produced 0 changed pixels. An unreadable preference fails closed to no motion. |
 | UX-27 | INCONCLUSIVE | Agent-observed runtime | The UIA tree exposes stable automation ids, heading levels and accessible names; a full keyboard-only and Narrator walkthrough was **not** completed. |
-| UX-28 | INCONCLUSIVE | Agent-observed runtime | Partial observations only: 460x732 and 692x732 verified with no clipping and no lost actions. The 520x640 / 640x480 logical sizes and 150/200% DPI were **not** exercised. |
+| UX-28 | INCONCLUSIVE | Agent-observed runtime | Short/narrow extremes are now exercised: 460x732 and 692x732 previously, plus 2026-10-18 at a 720x416 logical client size (900x520 physical at 125% DPI) where the composer, Send, Start, Pause and Stop stayed reachable with no clipping. Exact 520x640 and 640x480 logical client sizes and 150/200% DPI scaling were **not** exercised: the session ran at 125% (`GetDpiForWindow` = 120) and changing DPI requires a sign-out. |
 | UX-29 | PASS | Source inspection | `Window.Closed` cancels all motion, revokes both subscriptions and releases the copy handler; generation guards reject stale callbacks. |
-| UX-30 | PASS | Compilation / Unit test | Release build 0/0; 19 native groups PASS; 124 registry checks PASS. |
-| UX-31 | INCONCLUSIVE | — | No frame-time or resource measurement was taken during transitions or under a large fixture history. |
+| UX-30 | PASS | Compilation / Unit test | Release build 0/0; 20 native groups PASS (2026-10-18 rebuild, including group 23); 124 registry checks PASS. |
+| UX-31 | INCONCLUSIVE | Agent-observed runtime | Coarse resource observations only (2026-10-18, `GetProcessTimes` over 10s windows on the built Release binary): visible Welcome hero with ambient motion 3.9% of one core, the same process on Project selection 0.8%, Welcome again 1.6%, and 0.0% when the app started with animation effects already off. One earlier run of the same script reported ~28%, so the figure is not yet stable enough to certify. No frame-time instrumentation (ETW/present statistics) exists, so transition smoothness is unmeasured. |
 | UX-32 | PASS | Agent-observed runtime | Screenshots, artifact hashes, changed files and the remaining blockers are delivered in this section. |
 
 ## Remaining runtime dependencies and incomplete UI proof
@@ -286,9 +286,13 @@ observation is claimed.
 
 ## Known documentation discrepancy
 
-### Legacy draft preservation gap (source observation, 2026-10-17)
+### Legacy draft preservation gap (source observation, 2026-10-17 — resolved 2026-10-18)
 
-The composer-only-in-Chat requirement does not permit silent deletion of an earlier draft. At this documentation review, `MainWindow::InitializeStoreAsync` still calls `ClearPrebindDraft()` when a legacy unbound draft is nonempty. That startup cleanup conflicts with the existing no-automatic-draft-deletion rule. Removing entry controls and marking the former entry-only S2-14 case not applicable does not close this preservation/recovery obligation. Native alignment and an isolated legacy-data recovery regression remain outstanding; this documentation pass changes no native behavior or stored data.
+**Original observation, kept as history.** The composer-only-in-Chat requirement does not permit silent deletion of an earlier draft. At this documentation review, `MainWindow::InitializeStoreAsync` still called `ClearPrebindDraft()` when a legacy unbound draft was nonempty. That startup cleanup conflicted with the existing no-automatic-draft-deletion rule. Removing entry controls and marking the former entry-only S2-14 case not applicable did not close this preservation/recovery obligation.
+
+**Resolution (2026-10-18).** Startup no longer deletes the record. `MainWindow::InitializeStoreAsync` now reads it once (`legacyDraftPresent_ = !store->GetPrebindDraft().empty()`) and leaves the stored bytes untouched; `ClearPrebindDraft` is no longer called on the startup path. The Screen 2 recovery panel (`PrebindDraftPreviewBox`, `UsePrebindDraftButton`, `KeepTargetDraftButton`) remains the only route that moves the text, and a confirmed transfer now discloses it: *"A draft preserved from an earlier version was carried into this project's draft. Nothing was sent. Review it in the composer before sending."*
+
+Evidence: native regression group 23 (`Legacy unbound draft preservation and recovery`) seeds a draft, reopens the store through the real startup path and asserts the exact text survives; a second assertion block proves a locked target produces `collision`/`pending`, that a forced `DraftChoice::UseSelector` under a new operation id throws, and that both the selector draft and the target draft are unchanged afterwards. Live check `run6-legacy-draft.sh` injected `LEGACY-DRAFT-TEXT-MUST-SURVIVE-STARTUP` into an isolated store, launched the built binary, confirmed the text survived startup, and confirmed it moved only through the explicit recovery action. Production store: untouched.
 
 ### Historical automation identifier
 
@@ -395,5 +399,100 @@ Following the commit `9584118` code review, three critical architectural guarant
 | Full Application Build | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). |
 | Production Store Hash | PASS | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified). |
 
+## Dimensional visual system — native implementation and verification (2026-10-18)
 
+### Scope and authority
 
+The approved interactive reference (`mayasaba-dimensional-proposal.html`, 2026-10-16) communicates
+appearance and interaction only; it is not the product frontend and no part of it is shipped.
+The work below is native C++20 / C++/WinRT / WinUI 3 XAML on the pinned toolchain. It adds no
+functional layer, service owner, authoritative state machine, route or persistence path.
+`MotionController` remains a presentation helper: it owns timing tokens, the reduced-motion and
+high-contrast guards, and a bounded registry of animations it started, and it owns no domain state.
+The three required CLIs, thirteen functional layers, twelve authoritative state machines and the
+single persistent Chat workspace are unchanged.
+
+### What the working tree adds
+
+| File | Change |
+| --- | --- |
+| `native/Mayasaba/App.xaml` | `MayasabaContactShadowBrush`, `MayasabaPlateEdgeBrush` and `MayasabaFaceLightBrush` in the Light, Dark and HighContrast dictionaries. High contrast collapses each to a system colour or removes it. |
+| `native/Mayasaba/MainWindow.xaml` | Sculpted mark: the three stacked plates now sit at negative Z (`10,12,-34`, `6,7,-18`, `3,3,-7`) under a `PerspectiveTransform3D Depth="900"`, with `WelcomeHeroFaceLight` / `EmptyHeroFaceLight` top-light and `WelcomeHeroContactShadow` / `EmptyHeroContactShadow` resting contact shadows. The composer became `ComposerStack` with a `ComposerPlateEdge` that gives the raised plate a visible thickness under `ComposerPanel`. |
+| `native/Mayasaba/MainWindow.xaml.cpp` / `.h` | A pre-binding draft written by an older build is read once (`legacyDraftPresent_`) and never deleted at startup; a confirmed transfer into a project's draft is disclosed in Chat. |
+| `native/tests/storage_tests.cpp` | Group 23 (legacy unbound draft preservation through the real startup path) and refused-recovery assertions (locked target, forced `DraftSelector` choice, both drafts unchanged). |
+
+The pre-existing motion vocabulary is unchanged and remains the only permitted custom motion:
+`Enter`, `Appear`, `SlideIn`, `Dock`, `Levitate`, `Glow`, `Orbit`, `DepthReveal`, `HoverLift`,
+`HeroTilt`. `Levitate`, `Glow` and `Orbit` run only on a visible, idle Welcome or empty-Chat hero;
+`DepthReveal` is used for the hero and temporary raised surfaces and never for body text;
+`Dock` moves the one composer only after a contribution is confirmed persisted.
+
+### Verification environment
+
+Windows 11 Pro build 26200.9457, x64, 125% display scaling (`GetDpiForWindow` = 120), MSBuild from
+Visual Studio 18 Enterprise with `/p:PlatformToolset=v145`, `Release|x64`. Every UI run used a
+throw-away store under `C:\Users\pavan\PROJECTS\_ui-verify\dimensional-20261018\` and the
+production store `%LOCALAPPDATA%\Mayasaba\mayasaba.db` was never opened, migrated or seeded.
+
+### Results
+
+| Check | Verdict | Evidence |
+| --- | --- | --- |
+| Release build of the changed projects | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj` and `native/tests/storage_tests.vcxproj`, 0 errors, 0 warnings; `Mayasaba.exe` rebuilt. |
+| Native regressions | PASS | `native/tests/bin/storage_tests.exe` → `PASS: 20 isolated native regression groups`, exit 0. |
+| Contract registry | PASS | `validate_contract_registry.py` → 124 checks PASS, exit 0. |
+| Welcome → Project selection → Chat, and switching | PASS | UIA-driven runs: `WelcomeScreen`/`WelcomeHeroStage` → `Continue to project selection` → `FolderScreen` → `Open project chat-project` → `ProjectHeading`, `ProjectPathLabel`, `ProjectCondition`. |
+| Live light/dark change in one window | PASS | Dark mean `(35,37,44)` vs light mean `(236,237,243)` at 1424x732 (`shots/10-welcome-dark.png`, `shots/11-welcome-light.png`). |
+| Live high contrast | PASS | 3,573 → 597 rendered colours, system border `(245,197,42)`, all labels retained (`shots/12-welcome-highcontrast.png`). |
+| Live reduced motion | PASS | Through the real Settings toggle: hero changed 1,984–4,284 px between frames while enabled, **0 px** in three consecutive frames after switching *Animation effects* off, 1,914–3,518 px after switching it back on. |
+| Ambient motion stops when the screen hides | PASS | CPU over 10s windows on the same process: visible Welcome 3.9% of one core, Project selection 0.8%, Welcome again 1.6%; 0.0% when the app started with animation effects off. |
+| Fixture presentation (reply, work, blocked) | PASS (fixture) | `MAYASABA_UI_FIXTURES=mixed` on an empty isolated project renders the fixture banner, a reply card with writer and both reviews, `Copy the consolidated reply`, a fenced code block with `Copy code block`, `Show reply details`, a running task card with `Show card details`, and a blocked card. `Show reply details` expands to `Preserved disagreement` and the control becomes `Hide reply details`. |
+| Large history | PASS | 300 contributions in an isolated store: 51 UIA elements realized (virtualization held), open-to-heading 2.1s including harness overhead, scrolling responsive (`shots/28-large-history.png`). |
+| Short window | PASS | 900x520 physical = 720x416 logical: composer, Send, Start, Pause and Stop reachable, no clipping (`shots/21-chat-short.png`). |
+| Legacy pre-binding draft preserved | PASS | Group 23 plus `run6-legacy-draft.sh`, which injected `LEGACY-DRAFT-TEXT-MUST-SURVIVE-STARTUP`, launched the built binary, confirmed survival across startup and confirmed the text moved only through the explicit recovery action. |
+| Frame timing / present statistics | INCONCLUSIVE | No ETW or present-statistics instrumentation exists, so transition smoothness is not measured. |
+| 150% and 200% DPI | INCONCLUSIVE | The session ran at 125%; changing DPI needs a sign-out that was not authorised. |
+| Narrator speech walkthrough | INCONCLUSIVE | Accessible names, heading levels and automation ids were read from the UIA tree; Narrator speech itself was not driven. |
+| Live three-agent reply and work records | BLOCKED | No native CLI adapters, session admission, confinement proof or orchestration owner exists, so no live record can be produced. Fixture presentation proves the renderer only. |
+
+### Criterion verdicts for the visual refinement
+
+| ID | Criterion | Verdict | Note |
+| --- | --- | --- | --- |
+| D-01 | Sculpted three-node mark with layered edges and restrained lighting | PASS | Negative-Z plates plus face light and contact shadow, in both heroes. |
+| D-02 | Consistent background, content and temporary-overlay planes | PASS | Theme brushes per plane; high contrast collapses to system colours. |
+| D-03 | Raised project rows with resting and interaction states | PASS | `HoverLift` on rows; paths never rotate; hover/focus feedback observed. |
+| D-04 | Floating composer with clear separation from the timeline | PASS | `ComposerStack` + `ComposerPlateEdge` under one `ComposerPanel`; single submission path unchanged. |
+| D-05 | Readable reply surfaces and layered detail expansion | PASS (fixture) | Opaque surfaces under text; `Appear` expansion; reading position retained. Live reply remains BLOCKED. |
+| D-06 | Smooth connected transitions that explain where content moved | PASS | `Dock` animates a compensating translate from the composer's previous bounds to its new ones; entrance motions are ordered and finite. Smoothness itself is unmeasured (see frame timing). |
+| D-07 | Bounded hero perspective and optional pointer tilt | PASS | `PerspectiveTransform3D Depth=900`, tilt clamped to ±4°, static equivalent retained. |
+| D-08 | Ambient effects only on visible idle heroes, stopped when hidden | PASS | CPU drop on hide; zero pixel change with the preference off. |
+| D-09 | Preference changes take effect live | PASS | Settings toggle applied to a running window in both directions. |
+| D-10 | High contrast uses system colours and removes decorative depth | PASS | 597 colours, no gradients or shadows, system border colour. |
+| D-11 | Lifecycle, teardown and stale-callback safety | PASS (source) | `CancelAll` on hide/close, both subscriptions revoked, weak references and generation guards on every callback. |
+| D-12 | Frame timing and 150/200% DPI | INCONCLUSIVE | Not instrumented; DPI change needs a sign-out. |
+
+### Fixture-harness behaviour worth knowing
+
+`MAYASABA_UI_FIXTURES` inserts its cards **above** restored history. In a project that already has
+contributions the cards are therefore at the top of the timeline and must be scrolled to; in an
+empty project they are the visible content. The banner names them as fixtures, they are never
+written to the store, and nothing in ordinary startup reads the variable.
+
+### Evidence locations
+
+- Screenshots: `C:\Users\pavan\PROJECTS\_ui-verify\dimensional-20261018\shots\`
+  (`01-welcome.png`, `02-welcome-uia.png`, `04-selector.png`, `06-chat-docked.png`,
+  `10`–`14` theme/high-contrast/reduced-motion, `19`–`27` reply and detail states,
+  `21-chat-short.png`, `28`–`29` large history, `motion/` frame series).
+- Harness scripts: `%LOCALAPPDATA%\hermes\cache\scratch\` (`run1-welcome.sh` …
+  `run14-motion-temporal.sh`, `motion_verify.py`, `motion_settings4.py`, `cpu_lifecycle.py`,
+  `cpu_startup.py`).
+- Build and test commands are those recorded in [README.md](README.md); no new build step exists.
+
+### What this does not establish
+
+The visual refinement is implemented and verified as a native presentation slice. It does not
+implement, and must not be read as evidence for, the missing three-agent orchestration, task
+leasing, validation, publication or the twelve proposed productivity capabilities. The live reply
+and work rows above stay BLOCKED until those owner services exist.

@@ -243,15 +243,13 @@ namespace winrt::Mayasaba::implementation
         {
             co_await selectorQueue_.Background();
             store = std::make_unique<mayasaba::Storage>(mayasaba::Storage::DefaultFile());
-            // 2026-10-17: the Screen 2 pre-binding composer was removed at the user's direction, so no UI
-            // path can write, display or transfer a pre-binding draft. Clear any orphaned draft left behind
-            // by an older build before the selector is presented; otherwise Storage::CommitSelection raises
-            // a phantom "Selector pre-binding draft" collision for text the user never typed. The empty()
-            // guard keeps this a pure read on a store that never carried one, so a normal launch performs no
-            // write. ClearPrebindDraft is a bare UPDATE, unlike SavePrebindDraft(""), which would also run
-            // CheckWriteCapacity and reserve a draft revision that nothing consumes.
-            if (!store->GetPrebindDraft().empty())
-                store->ClearPrebindDraft();
+            // 2026-10-18: the Screen 2 pre-binding composer was removed at the user's direction, so no UI
+            // path can write, display or transfer a pre-binding draft. A draft written by an OLDER build
+            // is still the user's text and must never be deleted by startup. It is only read here; the
+            // existing selector recovery path offers it explicitly, and a confirmed transfer moves it into
+            // the chosen project's draft (visible in the composer, never sent). Deleting it silently would
+            // be an unauthorised destruction of retained user data.
+            legacyDraftPresent_ = !store->GetPrebindDraft().empty();
             hasProjects = store->HasAnyProjects();
         }
         catch (std::exception const& e) { error = e.what(); }
@@ -461,15 +459,20 @@ namespace winrt::Mayasaba::implementation
         SetVisible(WelcomeHeroGlow(), decorative);
         SetVisible(WelcomeHeroOrbitOuter(), decorative);
         SetVisible(WelcomeHeroOrbitInner(), decorative);
+        SetVisible(WelcomeHeroContactShadow(), decorative);
+        SetVisible(WelcomeHeroFaceLight(), decorative);
         SetVisible(WelcomeHeroLayer1(), decorative);
         SetVisible(WelcomeHeroLayer2(), decorative);
         SetVisible(WelcomeHeroLayer3(), decorative);
         SetVisible(EmptyChatGlow(), decorative);
+        SetVisible(EmptyHeroContactShadow(), decorative);
+        SetVisible(EmptyHeroFaceLight(), decorative);
         SetVisible(EmptyHeroLayer1(), decorative);
         SetVisible(EmptyHeroLayer2(), decorative);
 
         // The quiet background plane, the readable content plane and the raised
         // temporary-details plane. All of it is dropped in high contrast.
+        SetVisible(ComposerPlateEdge(), decorative);
         motion_.ApplyElevation(ComposerPanel(), (timeline_ && !timeline_->Empty()) ? 8.0 : 24.0);
         motion_.ApplyElevation(EmptyChatHero(), 0);
     }
@@ -853,7 +856,7 @@ namespace winrt::Mayasaba::implementation
         double const column = std::clamp(bodyWidth - 56.0, 260.0, 900.0);
         HistoryRepeater().Width(column);
         if (timeline_) timeline_->SetMeasure(std::max(240.0, column - 96.0));
-        ComposerPanel().MaxWidth(std::clamp(bodyWidth - 36.0, 240.0, 760.0));
+        ComposerStack().MaxWidth(std::clamp(bodyWidth - 36.0, 240.0, 760.0));
 
         double textScale = 1.0;
         try
@@ -1759,7 +1762,13 @@ namespace winrt::Mayasaba::implementation
         }
         SetVisible(CreateFolderPanel(),false);SetVisible(DraftCollisionPanel(),false);collisionRequest_.reset();createRequest_.reset();
         LoadChatAsync(result.project.id,++selectorGeneration_);
-        ShowNotice(L"Project selected. CLI readiness: unsupported because native probes are not implemented. No CLI session was started.");
+        // A preserved draft carried into the project is disclosed, never silently relocated:
+        // the text is in the composer, unsent, and the user reviews it before sending.
+        if(result.transferred && legacyDraftPresent_)
+            ShowNotice(L"A draft preserved from an earlier version was carried into this project's draft. Nothing was sent. Review it in the composer before sending.");
+        else
+            ShowNotice(L"Project selected. CLI readiness: unsupported because native probes are not implemented. No CLI session was started.");
+        legacyDraftPresent_ = false;
     }
 
 

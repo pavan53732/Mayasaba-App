@@ -83,6 +83,9 @@ namespace winrt::Mayasaba::implementation
         std::string activeProject_;
         SelectorContext selectorContext_{SelectorContext::FirstRun};
         std::string collisionTargetProjectId_;
+        // True when the store already held a pre-binding draft written by an older build.
+        // It is disclosed once when that text is carried into a project, and never deleted.
+        bool legacyDraftPresent_{false};
         bool suppressDraft_{false};
         bool busy_{false};
         std::string pendingAttemptId_;

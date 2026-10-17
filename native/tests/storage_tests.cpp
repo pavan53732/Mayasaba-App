@@ -1251,8 +1251,108 @@ int main()
         }
 #endif
 
+        // 23. Legacy unbound draft preservation and recovery (2026-10-18).
+        // A pre-binding draft written by an older build is retained user data. Startup must only
+        // read it; the selector must offer it explicitly; and no path may delete or overwrite it.
+        {
+            std::string const preserved = "Legacy selector text that must survive every startup and selection.";
+            auto legacyDb = folder / "legacy-draft.db";
+            {
+                mayasaba::Storage seed(legacyDb);
+                seed.SavePrebindDraft(preserved);
+                EXPECT(seed.GetPrebindDraft() == preserved);
+            }
+            // Reopening the store is the actual startup path: construction, migration and the
+            // recent-project query must leave the preserved bytes untouched.
+            {
+                mayasaba::Storage reopened(legacyDb);
+                EXPECT(reopened.GetPrebindDraft() == preserved);
+                EXPECT(reopened.RecentProjects().empty());
+                EXPECT(reopened.HasAnyProjects() == false);
+                EXPECT(reopened.GetPrebindDraft() == preserved); // still intact after every startup read
+            }
+            auto legacyRoot = folder / "legacy-draft-root";
+            fs::create_directory(legacyRoot);
+            {
+                mayasaba::Storage store(legacyDb);
+                mayasaba::ProjectService service(store);
+                auto noSessions = mayasaba::SwitchObservation::NoAdmittedSessions;
+                mayasaba::SelectionRequest open;
+                open.path = legacyRoot.wstring();
+                auto recovered = service.Select(open, noSessions);
+                // A confirmed selection recovers the text into the project draft and only then
+                // clears the preserved slot, so a failed commit can never lose the only copy.
+                EXPECT(recovered.transferred);
+                EXPECT(recovered.project.draft == preserved);
+                EXPECT(store.GetPrebindDraft().empty());
+                auto durable = store.Project(recovered.project.id);
+                EXPECT(durable && durable->draft == preserved);
+            }
+            // A project that already carries a draft must never silently lose either copy.
+            {
+                mayasaba::Storage store(folder / "legacy-collision.db");
+                mayasaba::ProjectService service(store);
+                auto noSessions = mayasaba::SwitchObservation::NoAdmittedSessions;
+                auto collisionRoot = folder / "legacy-collision-root";
+                fs::create_directory(collisionRoot);
+                mayasaba::SelectionRequest open;
+                open.path = collisionRoot.wstring();
+                auto bound = service.Select(open, noSessions);
+                std::string const projectDraft = "Project draft that must survive";
+                std::string const legacyDraft = "Legacy draft that must survive";
+                store.SaveDraft(bound.project.id, projectDraft);
+                store.SavePrebindDraft(legacyDraft);
+                auto current = store.Project(bound.project.id).value();
+                mayasaba::SelectionRequest recent;
+                recent.action = mayasaba::SelectionAction::Recent;
+                recent.projectId = current.domainId;
+                recent.expectedVersion = current.version;
+                auto collision = service.Select(recent, noSessions);
+                EXPECT(collision.collision);
+                EXPECT(!collision.transferred);
+                EXPECT(collision.selectorDraft == legacyDraft);
+                EXPECT(store.GetPrebindDraft() == legacyDraft);
+                EXPECT(store.Project(bound.project.id)->draft == projectDraft);
+                // "Keep project draft" is the explicit choice to leave the preserved text alone.
+                auto keep = recent;
+                keep.operationId = mayasaba::NewUuid();
+                keep.draftChoice = mayasaba::DraftChoice::KeepProject;
+                auto kept = service.Select(keep, noSessions);
+                EXPECT(!kept.transferred);
+                EXPECT(store.GetPrebindDraft() == legacyDraft);
+                EXPECT(store.Project(bound.project.id)->draft == projectDraft);
+                // An unresolved submission locks the target: recovery is refused, both copies stay.
+                store.StageSubmission(bound.project.id, mayasaba::NewUuid(), "Unresolved submission");
+                current = store.Project(bound.project.id).value();
+                mayasaba::SelectionRequest locked;
+                locked.action = mayasaba::SelectionAction::Recent;
+                locked.projectId = current.domainId;
+                locked.expectedVersion = current.version;
+                auto lockedCollision = service.Select(locked, noSessions);
+                EXPECT(lockedCollision.collision);
+                EXPECT(lockedCollision.pending);
+                EXPECT(store.GetPrebindDraft() == legacyDraft);
+                // The refused recovery must not alter whatever the locked target now holds.
+                auto const lockedDraft = store.Project(bound.project.id)->draft;
+                bool refused = false;
+                try
+                {
+                    auto force = locked;
+                    force.operationId = mayasaba::NewUuid();
+                    force.draftChoice = mayasaba::DraftChoice::UseSelector;
+                    force.expectedSelectorDraft = lockedCollision.selectorDraft;
+                    force.expectedTargetDraft = lockedCollision.project.draft;
+                    service.Select(force, noSessions);
+                }
+                catch (std::exception const&) { refused = true; }
+                EXPECT(refused);
+                EXPECT(store.GetPrebindDraft() == legacyDraft);
+                EXPECT(store.Project(bound.project.id)->draft == lockedDraft);
+            }
+        }
+
         fs::remove_all(folder);
-        std::cout << "PASS: 19 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments)\n";
+        std::cout << "PASS: 20 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation)\n";
         return 0;
     }
     catch (std::exception const& e)

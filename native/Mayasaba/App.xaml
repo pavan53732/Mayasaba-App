@@ -218,6 +218,22 @@
               <GradientStop Color="#FF5957C7" Offset="0"/>
               <GradientStop Color="#FF9273EE" Offset="1"/>
             </LinearGradientBrush>
+            <!-- Contact shadow: the resting cue under a lifted mark. Decorative only,
+                 removed in high contrast, and never under reading text. -->
+            <RadialGradientBrush x:Key="MayasabaContactShadowBrush" MappingMode="RelativeToBoundingBox"
+                                 Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+              <GradientStop Color="#3D25284F" Offset="0"/>
+              <GradientStop Color="#0025284F" Offset="1"/>
+            </RadialGradientBrush>
+            <!-- The solid lower edge of a raised plate (composer, project rows).
+                 It reads as thickness under the surface rather than a glow. -->
+            <SolidColorBrush x:Key="MayasabaPlateEdgeBrush" Color="#FFE1E3EF"/>
+            <!-- Restrained top-light on the sculpted brand face. -->
+            <LinearGradientBrush x:Key="MayasabaFaceLightBrush" StartPoint="0,0" EndPoint="0.45,1">
+              <GradientStop Color="#59FFFFFF" Offset="0"/>
+              <GradientStop Color="#0AFFFFFF" Offset="0.55"/>
+              <GradientStop Color="#1F382D7E" Offset="1"/>
+            </LinearGradientBrush>
           </ResourceDictionary>
 
           <ResourceDictionary x:Key="Dark">
@@ -266,6 +282,17 @@
               <GradientStop Color="#FFA5A1FF" Offset="0"/>
               <GradientStop Color="#FFBBA0FF" Offset="1"/>
             </LinearGradientBrush>
+            <RadialGradientBrush x:Key="MayasabaContactShadowBrush" MappingMode="RelativeToBoundingBox"
+                                 Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="0.5" RadiusY="0.5">
+              <GradientStop Color="#73000000" Offset="0"/>
+              <GradientStop Color="#00000000" Offset="1"/>
+            </RadialGradientBrush>
+            <SolidColorBrush x:Key="MayasabaPlateEdgeBrush" Color="#FF2D3244"/>
+            <LinearGradientBrush x:Key="MayasabaFaceLightBrush" StartPoint="0,0" EndPoint="0.45,1">
+              <GradientStop Color="#4DFFFFFF" Offset="0"/>
+              <GradientStop Color="#00FFFFFF" Offset="0.55"/>
+              <GradientStop Color="#26000000" Offset="1"/>
+            </LinearGradientBrush>
           </ResourceDictionary>
 
           <!-- High contrast: system colours only. Every gradient collapses to a solid
@@ -304,6 +331,9 @@
             <SolidColorBrush x:Key="MayasabaActionGradientBrush" Color="{ThemeResource SystemColorHighlightColor}"/>
             <SolidColorBrush x:Key="MayasabaAmbientGlowBrush" Color="{ThemeResource SystemColorWindowColor}"/>
             <SolidColorBrush x:Key="MayasabaHeadlineAccentBrush" Color="{ThemeResource SystemColorWindowTextColor}"/>
+            <SolidColorBrush x:Key="MayasabaContactShadowBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaPlateEdgeBrush" Color="{ThemeResource SystemColorWindowColor}"/>
+            <SolidColorBrush x:Key="MayasabaFaceLightBrush" Color="{ThemeResource SystemColorWindowColor}"/>
           </ResourceDictionary>
         </ResourceDictionary.ThemeDictionaries>
       </ResourceDictionary>

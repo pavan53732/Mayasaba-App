@@ -163,40 +163,56 @@
                                     </Ellipse.RenderTransform>
                                 </Ellipse>
 
+                                <!-- Contact shadow: the sculpture has to rest on something. Painted
+                                     before the mark, removed with every other decorative cue. -->
+                                <Ellipse x:Name="WelcomeHeroContactShadow" Width="168" Height="32"
+                                         HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                         Margin="0,0,0,10"
+                                         Fill="{ThemeResource MayasabaContactShadowBrush}"/>
+
                                 <Grid x:Name="WelcomeHeroMark" Width="138" Height="138"
                                       HorizontalAlignment="Center" VerticalAlignment="Center">
                                     <Grid.Transform3D>
                                         <CompositeTransform3D x:Name="WelcomeHeroTilt"/>
                                     </Grid.Transform3D>
-                                    <!-- Layered extruded edges. Decorative depth only; collapsed in
-                                         high contrast and never a carrier of meaning. -->
+                                    <!-- Real extruded slices: every edge sits at a negative Z behind the
+                                         face under the stage perspective, so the mark is genuinely
+                                         three-dimensional rather than an offset outline. Decorative
+                                         depth only; collapsed in high contrast and never a carrier
+                                         of meaning. -->
                                     <Border x:Name="WelcomeHeroLayer3" Width="92" Height="92"
-                                            CornerRadius="27" Translation="10,12,0"
-                                            Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.18"/>
+                                            CornerRadius="27" Translation="10,12,-34"
+                                            Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.20"/>
                                     <Border x:Name="WelcomeHeroLayer2" Width="92" Height="92"
-                                            CornerRadius="27" Translation="6,7,0"
-                                            Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.32"/>
+                                            CornerRadius="27" Translation="6,7,-18"
+                                            Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.36"/>
                                     <Border x:Name="WelcomeHeroLayer1" Width="92" Height="92"
-                                            CornerRadius="27" Translation="3,3,0"
-                                            Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.48"/>
+                                            CornerRadius="27" Translation="3,3,-7"
+                                            Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.52"/>
                                     <Border x:Name="WelcomeHeroCore" Width="92" Height="92" CornerRadius="27"
                                             Background="{ThemeResource MayasabaBrandGradientBrush}">
                                         <Border.RenderTransform>
                                             <CompositeTransform x:Name="WelcomeHeroCoreTransform" Rotation="-8"/>
                                         </Border.RenderTransform>
-                                        <Viewbox Margin="13">
-                                            <Canvas Width="72" Height="72">
-                                                <Canvas.RenderTransform>
-                                                    <RotateTransform Angle="8"/>
-                                                </Canvas.RenderTransform>
-                                                <Path Data="M14,48 L14,25 C14,17 20,15 26,19 L36,26 L46,19 C52,15 58,17 58,25 L58,48"
-                                                      Stroke="White" StrokeThickness="7" StrokeLineJoin="Round"
-                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                                <Ellipse Width="10" Height="10" Canvas.Left="11" Canvas.Top="48" Fill="White"/>
-                                                <Ellipse Width="10" Height="10" Canvas.Left="31" Canvas.Top="29" Fill="White"/>
-                                                <Ellipse Width="10" Height="10" Canvas.Left="51" Canvas.Top="48" Fill="White"/>
-                                            </Canvas>
-                                        </Viewbox>
+                                        <Grid>
+                                            <!-- Restrained top-left key light so the face reads as a solid.
+                                                 Dropped entirely in high contrast. -->
+                                            <Border x:Name="WelcomeHeroFaceLight" CornerRadius="27"
+                                                    Background="{ThemeResource MayasabaFaceLightBrush}"/>
+                                            <Viewbox Margin="13">
+                                                <Canvas Width="72" Height="72">
+                                                    <Canvas.RenderTransform>
+                                                        <RotateTransform Angle="8"/>
+                                                    </Canvas.RenderTransform>
+                                                    <Path Data="M14,48 L14,25 C14,17 20,15 26,19 L36,26 L46,19 C52,15 58,17 58,25 L58,48"
+                                                          Stroke="White" StrokeThickness="7" StrokeLineJoin="Round"
+                                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                                    <Ellipse Width="10" Height="10" Canvas.Left="11" Canvas.Top="48" Fill="White"/>
+                                                    <Ellipse Width="10" Height="10" Canvas.Left="31" Canvas.Top="29" Fill="White"/>
+                                                    <Ellipse Width="10" Height="10" Canvas.Left="51" Canvas.Top="48" Fill="White"/>
+                                                </Canvas>
+                                            </Viewbox>
+                                        </Grid>
                                     </Border>
                                 </Grid>
                             </Grid>
@@ -655,29 +671,37 @@
                             </Grid.Transform3D>
                             <Ellipse x:Name="EmptyChatGlow" Width="176" Height="130"
                                      Fill="{ThemeResource MayasabaAmbientGlowBrush}" Opacity="0.45"/>
+                            <Ellipse x:Name="EmptyHeroContactShadow" Width="112" Height="22"
+                                     HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                                     Margin="0,0,0,6"
+                                     Fill="{ThemeResource MayasabaContactShadowBrush}"/>
                             <Grid x:Name="EmptyHeroMark" Width="96" Height="96"
                                   HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <Grid.Transform3D>
                                     <CompositeTransform3D x:Name="EmptyHeroTilt"/>
                                 </Grid.Transform3D>
                                 <Border x:Name="EmptyHeroLayer1" Width="76" Height="76" CornerRadius="24"
-                                        Translation="8,9,0"
-                                        Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.26"/>
+                                        Translation="8,9,-26"
+                                        Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.30"/>
                                 <Border x:Name="EmptyHeroLayer2" Width="76" Height="76" CornerRadius="24"
-                                        Translation="4,4,0"
-                                        Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.48"/>
+                                        Translation="4,4,-12"
+                                        Background="{ThemeResource MayasabaDepthEdgeBrush}" Opacity="0.52"/>
                                 <Border Width="76" Height="76" CornerRadius="24"
                                         Background="{ThemeResource MayasabaBrandGradientBrush}">
-                                    <Viewbox Margin="11">
-                                        <Canvas Width="72" Height="72">
-                                            <Path Data="M14,48 L14,25 C14,17 20,15 26,19 L36,26 L46,19 C52,15 58,17 58,25 L58,48"
-                                                  Stroke="White" StrokeThickness="7" StrokeLineJoin="Round"
-                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                                            <Ellipse Width="10" Height="10" Canvas.Left="11" Canvas.Top="48" Fill="White"/>
-                                            <Ellipse Width="10" Height="10" Canvas.Left="31" Canvas.Top="29" Fill="White"/>
-                                            <Ellipse Width="10" Height="10" Canvas.Left="51" Canvas.Top="48" Fill="White"/>
-                                        </Canvas>
-                                    </Viewbox>
+                                    <Grid>
+                                        <Border x:Name="EmptyHeroFaceLight" CornerRadius="24"
+                                                Background="{ThemeResource MayasabaFaceLightBrush}"/>
+                                        <Viewbox Margin="11">
+                                            <Canvas Width="72" Height="72">
+                                                <Path Data="M14,48 L14,25 C14,17 20,15 26,19 L36,26 L46,19 C52,15 58,17 58,25 L58,48"
+                                                      Stroke="White" StrokeThickness="7" StrokeLineJoin="Round"
+                                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                                <Ellipse Width="10" Height="10" Canvas.Left="11" Canvas.Top="48" Fill="White"/>
+                                                <Ellipse Width="10" Height="10" Canvas.Left="31" Canvas.Top="29" Fill="White"/>
+                                                <Ellipse Width="10" Height="10" Canvas.Left="51" Canvas.Top="48" Fill="White"/>
+                                            </Canvas>
+                                        </Viewbox>
+                                    </Grid>
                                 </Border>
                             </Grid>
                         </Grid>
@@ -696,7 +720,14 @@
                          caret, selection, prepared attachments and focus survive the Dock. -->
                     <StackPanel x:Name="ComposerHost" Grid.Row="2" Margin="18,0,18,16"
                                 HorizontalAlignment="Stretch">
-                        <Border x:Name="ComposerPanel" MaxWidth="760" HorizontalAlignment="Center"
+                        <Grid x:Name="ComposerStack" MaxWidth="760" HorizontalAlignment="Center">
+                        <!-- The solid lower edge that makes the composer read as a floating
+                             plate instead of a flat bar. It carries no meaning, so it is
+                             dropped in high contrast along with the rest of the elevation. -->
+                        <Border x:Name="ComposerPlateEdge" VerticalAlignment="Bottom" Margin="7,0,7,0"
+                                Height="26" CornerRadius="{StaticResource MayasabaRadiusComposer}"
+                                Background="{ThemeResource MayasabaPlateEdgeBrush}"/>
+                        <Border x:Name="ComposerPanel"
                                 Padding="13" CornerRadius="{StaticResource MayasabaRadiusComposer}"
                                 Background="{ThemeResource MayasabaPanelBrush}"
                                 BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1">
@@ -734,6 +765,7 @@
                                 </Grid>
                             </StackPanel>
                         </Border>
+                        </Grid>
                     </StackPanel>
                 </Grid>
             </Grid>

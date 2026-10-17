@@ -14,6 +14,11 @@
 - Windows per-user SQLite store using the OS `winsqlite3` library, a single-writer instance mutex, WAL and `synchronous=FULL`. Project identity and version-guarded closed/reopened flag, per-project unsent drafts, and immutable keyed contributions are persisted.
 - Exactly one native Chat composer moves from the empty center to a docked position once history is confirmed. Restoration shows project-specific history; no invented agent reply is displayed.
 - Persistent Start/Pause/Stop header controls and visible per-CLI `UNSUPPORTED` readiness, with truthful explanations instead of simulated native CLI actions. Exact standalone slash controls are recognized but **not dispatched** until the adapters are proven safe.
+- Dimensional presentation across all three screens: three-plate sculpted mark at negative Z under a 900-depth perspective, face light and contact shadows, a raised composer plate, and the ten named motions from `Motion.h`. Depth, elevation and ambient loops are presentation only; they never carry status, authority or domain state. See [LOCAL-VALIDATION.md](LOCAL-VALIDATION.md#dimensional-visual-system--native-implementation-and-verification-2026-10-18) for the criterion verdicts and evidence.
+
+### Fixture harness
+
+`MAYASABA_UI_FIXTURES=mixed` (with an isolated `MAYASABA_STORE_PATH`) renders the reply, running-task, blocked and unknown presentation states so the renderer can be exercised without any agent runtime. The cards carry a visible fixture banner, are inserted above restored history (so in a project with history they sit at the top of the timeline), are never written to the store, and are never read by ordinary startup. A fixture proves the renderer and its controls only; it is not evidence of live agent work.
 
 ## Still missing — NOT an end-to-end application
 
