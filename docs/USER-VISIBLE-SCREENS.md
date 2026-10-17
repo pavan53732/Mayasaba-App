@@ -2,15 +2,17 @@
 
 > **2026-10-15 approved navigation change:** Screen 2 is the reusable project selector. First binding: Welcome → selector → Chat. Later launches: selector → Chat. File → Switch Project returns to the selector. See [project selection contract](PROJECT-SELECTION.md).
 >
-> **2026-10-16 status:** the three-screen native UI (Welcome, Project selection, Chat) and its presentation wiring are implemented and locally verified in `native/`; see [the validation record](../native/LOCAL-VALIDATION.md). The native CLI adapters, session admission, three-agent reply orchestration, work authority, publication and MSI packaging remain **not implemented**, so the live three-agent workflow is still blocked.
+> **2026-10-17 evidence status:** the [native validation record](../native/LOCAL-VALIDATION.md) reports implementation and local observations, including fixture-rendered replies/work. It also retains incomplete theme, motion, accessibility and performance checks. Live three-agent participation, work authority and publication require their own runtime proof. The [three-screen guide](THREE-SCREEN-UX-IMPLEMENTATION.md) defines the complete visual scope and UX-01–UX-32 criteria.
 
 ## Purpose and status
 
-This is the single visual reference for what a person sees from first launch through a completed or blocked project. It describes the intended **native Windows interface**, not a working implementation. The [complete system description](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) is authoritative; [UI-UX.md](./UI-UX.md) supplies the detailed behavior and acceptance rules. The [interactive preview](./CHAT-INTERFACE-PREVIEW.html) illustrates the three main screens and composer movement with sample data.
+This is the single diagram reference for what a person sees from first launch through a completed or blocked project. It defines required **native Windows presentation**; the diagrams themselves certify no runtime result. The [complete system description](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) is authoritative; [UI-UX.md](./UI-UX.md) supplies behavior and acceptance rules. The [interactive preview](./CHAT-INTERFACE-PREVIEW.html) uses sample data and may lag the current native visual requirements.
 
 There are **three main screens**: Welcome, Project selection, and Chat. Welcome appears until the first root is bound; Screen 2 Project selection also appears on later launches and project switching. Chat is the only persistent workspace. The later diagrams are **states within Chat**, not extra pages, routes, tabs, or dashboards. Text in square brackets represents a control. Names, paths, statuses, messages, and evidence in the diagrams are illustrative; the product must show current observed values. `Show details` means inline expansion or a temporary, dismissible sheet when the content is too large.
 
 ## End-to-end journey
+
+All three screens share the same three-node mark, typography, spacing, light/dark/high-contrast resources and ten-motion vocabulary. Welcome and empty Chat may carry a dimensional hero. Project paths, messages, code and evidence stay on stable reading planes; row/composer/detail elevation supplies restrained depth. Reduced motion, unknown animation preference or high contrast disables custom transitions and loops. High contrast uses system colors without decorative perspective, gradients or shadows. See [the shared visual rules](UI-UX.md#4-visual-direction).
 
 ```text
 FIRST BINDING: Screen 1 Welcome -- Next / Skip / Escape --> Screen 2
@@ -45,6 +47,7 @@ The native Windows application menu is outside all three screen content areas. O
 +--------------------------------------------------------------------------+
 |                                                                          |
 |       Welcome to Mayasaba                                                |
+|       Dimensional three-node hero; smaller at short window heights       |
 |                                                                          |
 |       Mayasaba coordinates the coding CLIs already on your PC and        |
 |       checks their work before calling it done.                          |
@@ -60,11 +63,15 @@ The native Windows application menu is outside all three screen content areas. O
 
 `Next`, `Skip`, and Escape advance to screen 2. Skip dismisses the explanation only; it cannot skip folder binding. Each CLI entry shows its own observed `CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, or `PROBE_FAILED` status with name, text, dot, and accessible name. The illustrated `CHECKING` values are examples.
 
+The action footer stays reachable outside the scrollable explanation. The native hero can use DepthReveal, optional bounded HeroTilt and slow idle Levitate/Glow/Orbit; loops stop when hidden or disallowed by preferences. Text and actions do not depend on motion.
+
 ## Screen 2 — Project selection
 
 ```text
 +--------------------------------------------------------------------+
 | Mayasaba                 Open a project                             |
+| Hermes Agent CLI: [status]   Kilo Code CLI: [status]                  |
+| Claude Code CLI: [status]  (each status is an observed projection)   |
 |                                                                    |
 | [Open existing folder]       [Create new project folder]             |
 |                                                                    |
@@ -83,6 +90,8 @@ The native Windows application menu is outside all three screen content areas. O
 Recent rows query recorded projects, sorted by last successful open; they do not scan the PC. Selection revalidates the root and opens Chat only after safe binding. Closed history stays read-only. Missing or mismatched paths cannot inherit another identity. Creation explicitly creates only the requested empty folder; no Git, scans, installations or agent work follow. Preserve drafts on failure and cancellation. See [the complete selector contract](PROJECT-SELECTION.md) for recovery and authority rules.
 
 ### Native picker and rejected folder
+
+Selection uses smaller decoration than Welcome. Rows lift subtly on hover with equivalent visible keyboard focus; full paths remain inspectable and never tilt. Folder actions stack at narrow widths, and create/recovery details preserve focus and the scroll anchor. No transition shows success before the service confirms binding.
 
 ```text
 SCREEN 2 REMAINS VISIBLE             NATIVE WINDOWS DIRECTORY PICKER
@@ -114,6 +123,7 @@ NATIVE WINDOWS APPLICATION MENU (outside Chat)
 |                                                                          |
 |                                                                          |
 |                   What would you like to work on?                        |
+|                   Smaller dimensional brand hero                         |
 |                                                                          |
 |                 +--------------------------------------+                 |
 |                 | Message Mayasaba...                   |                |
@@ -130,7 +140,7 @@ The one composer is centered while this project has no confirmed saved user cont
 ```text
 NATIVE APP MENU, OUTSIDE CHAT: [File] -> [Switch Project]
                                    │
-                   Screen 2 Project selection (modal presentation)
+                   Screen 2 Project selection presentation
                    [Recent projects] [Open existing] [Create new]
                                    │
              +---------------------+----------------------+
@@ -412,6 +422,9 @@ Closing is explicit and never follows from switching folders, inactivity, applic
 | Restart after interrupted work | Persisted history returns; uncertain physical effects show reconciling or unknown until checked. |
 | Full local application storage | At 10 GiB or below the 5 GiB free-space reserve, reclaim only eligible disposable bytes and block unsafe new storage; never delete protected history, drafts, pending data, or required evidence. |
 | Light, dark, and Windows high contrast | Readable surfaces and status text; changing theme preserves project, draft, focus, and scroll position. |
+| Depth and motion | Hero perspective on Welcome/empty Chat; stable paths/text/evidence; reduced motion and high contrast use static equivalents. Hidden views release loops and obsolete callbacks. |
+| Reading and details | Adaptive hero/composer placement, virtualized history, selectable rich replies/code, contextual Copy and Show details, and Jump to latest without forced scrolling while reading. |
+| Demonstration versus live results | Sample replies/work are labelled isolated fixtures. Production surfaces use owner records and exact unavailable/blocker states; no fixture implies live participation or verified work. |
 | Keyboard and screen reader | Logical focus, visible focus ring, named controls and states, meaningful announcements, and return focus from details. |
 | Privacy and English-only output | No credentials, tokens, private reasoning, unrelated process output, or unverified non-English agent prose. Required non-English generated prose is blocked with an English explanation. The user's own submitted contribution remains exact only in its user-message/history view with English labels; generated output does not repeat it. The smallest exact technical-identity token may remain unchanged when correctness requires it, with English labels and provenance. |
 

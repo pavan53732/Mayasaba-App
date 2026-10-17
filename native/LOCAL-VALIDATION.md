@@ -1,5 +1,7 @@
 # Local native validation — Mayasaba native WinUI slice
 
+> **Documentation reconciliation, 2026-10-17:** this file contains reports from multiple implementation passes, not a fresh verification of every current source file. Read the dated scope, artifact identity and evidence class for each result. The [three-screen requirements](../docs/THREE-SCREEN-UX-IMPLEMENTATION.md) remain separate from the observations below. UX-24–UX-28 and UX-31 still have unexercised theme/accessibility/size/performance checks; fixture replies/work do not prove live CLI operation. The user reconfirmed that the composer belongs only in bound-project Chat. Removing draft entry does not authorize deleting any retained legacy draft data; its preservation/recovery requires separate evidence.
+
 > **Status: Screen 2 slice ACCEPTED (29/29 applicable PASS, 1 N/A).** Criteria S2-01 through S2-13 and S2-15 through S2-30 for the native Screen 2 project selector slice are verified with native unit tests, contract registry validation, and live WinUI 3 runtime observation under active interaction (including high-DPI scaling and live reduced-motion preference toggling). S2-14 is recorded as NOT_APPLICABLE (2026-10-17) following the approved permanent removal of the Screen 2 pre-binding draft composer. Per repository rules, this certifies the native Screen 2 selector slice; whole-product gating (CLI adapters, council orchestration, MSI packaging) remains separate.
 
 **Scope.** This report covers the native C++20 / C++/WinRT / WinUI 3 starting slice under `native/Mayasaba/` and unit test runner `native/tests/storage_tests.cpp`. It is **not** certification of the complete Mayasaba application: the three CLI adapters, orchestration, work authority, publication, accessibility acceptance and MSI packaging are not implemented, so no whole-product acceptance is claimed anywhere below.
@@ -252,15 +254,16 @@ the explicitly identified fixture harness; it never proves live agent work.
 | UX-25 | INCONCLUSIVE | Source inspection | High contrast removes gradients, shadows, decorative layers and ambient motion via `AccessibilitySettings.HighContrastChanged`; a live high-contrast session was **not** exercised (system setting). |
 | UX-26 | INCONCLUSIVE | Source inspection | Reduced motion is read from `UISettings.AnimationsEnabled` and gates every transition and loop; a live toggle was **not** re-exercised in this pass. |
 | UX-27 | INCONCLUSIVE | Agent-observed runtime | The UIA tree exposes stable automation ids, heading levels and accessible names; a full keyboard-only and Narrator walkthrough was **not** completed. |
-| UX-28 | PARTIAL | Agent-observed runtime | 460x732 and 692x732 verified with no clipping and no lost actions. The 520x640 / 640x480 logical sizes and 150/200% DPI were **not** exercised. |
+| UX-28 | INCONCLUSIVE | Agent-observed runtime | Partial observations only: 460x732 and 692x732 verified with no clipping and no lost actions. The 520x640 / 640x480 logical sizes and 150/200% DPI were **not** exercised. |
 | UX-29 | PASS | Source inspection | `Window.Closed` cancels all motion, revokes both subscriptions and releases the copy handler; generation guards reject stale callbacks. |
 | UX-30 | PASS | Compilation / Unit test | Release build 0/0; 19 native groups PASS; 124 registry checks PASS. |
 | UX-31 | INCONCLUSIVE | — | No frame-time or resource measurement was taken during transitions or under a large fixture history. |
 | UX-32 | PASS | Agent-observed runtime | Screenshots, artifact hashes, changed files and the remaining blockers are delivered in this section. |
 
-## Remaining blockers (not UI-slice blockers)
+## Remaining runtime dependencies and incomplete UI proof
 
-The three-screen UI slice is implemented and verified as above. The **live three-agent
+The three-screen UI slice has native implementation and the scoped observations above;
+the INCONCLUSIVE rows remain incomplete acceptance work. The **live three-agent
 application workflow** remains BLOCKED by these named missing dependencies:
 
 - Native Hermes Agent CLI / Kilo Code CLI / Claude Code CLI probes and adapters.
@@ -283,7 +286,25 @@ observation is claimed.
 
 ## Known documentation discrepancy
 
+### Legacy draft preservation gap (source observation, 2026-10-17)
+
+The composer-only-in-Chat requirement does not permit silent deletion of an earlier draft. At this documentation review, `MainWindow::InitializeStoreAsync` still calls `ClearPrebindDraft()` when a legacy unbound draft is nonempty. That startup cleanup conflicts with the existing no-automatic-draft-deletion rule. Removing entry controls and marking the former entry-only S2-14 case not applicable does not close this preservation/recovery obligation. Native alignment and an isolated legacy-data recovery regression remain outstanding; this documentation pass changes no native behavior or stored data.
+
+### Historical automation identifier
+
 The Screen 2 acceptance table above lists `#SkipButton` as an observed automation id. At
 `3ffd482` the Welcome screen's Skip button had no `x:Name`, so that element could not have
 been addressed by that id. This refinement adds `x:Name="SkipButton"`, so the id now exists;
 the historical row should be read as describing the current source.
+
+## Documentation-only checks (2026-10-17)
+
+This reconciliation started from `e45332d` while native implementation continued separately. These results concern the documentation changes, not a newly built executable or fresh UI/CLI runtime acceptance.
+
+| Criterion | Verdict | Evidence |
+| --- | --- | --- |
+| DOC-01: consistent three-screen navigation and composer placement | PASS | Authoritative description, AGENTS, C01, UI/UX, selector guide, screen diagrams and implementation guide align with the user's Chat-only composer confirmation. Stale positive selector-draft instructions were removed. |
+| DOC-02: local references resolve | PASS | Checked 175 local Markdown file/anchor references across the changed documentation; no missing target or anchor. |
+| DOC-03: shared visual and acceptance vocabulary | PASS | Ten motion names agree between the specification and UI/UX; the guide contains exactly UX-01–UX-32, once each. |
+| DOC-04: existing registry/schema regression | PASS | `python native/tests/validate_contract_registry.py` reported 124 checks passing. This does not prove native behavior. |
+| DOC-05: documentation diff hygiene | PASS | Scoped `git diff --check` passed; native implementation changes are excluded from this documentation batch. |

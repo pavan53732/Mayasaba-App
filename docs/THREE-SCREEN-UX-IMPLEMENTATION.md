@@ -1,6 +1,6 @@
 # Mayasaba — all three screens, motion, depth and Chat UX
 
-**Derived implementation guide · approved visual scope, 16 October 2026**
+**Derived implementation guide · visual scope approved 16 October 2026; composer rule reconciled 17 October 2026**
 
 This guide specifies the native UI work and its acceptance criteria. It does not certify that the work is implemented. The [complete system description](./Mayasaba%20%E2%80%94%20Complete%20System%20Description%20%28for%20AI%20agents%29.md) is authoritative; the [UI/UX reference](UI-UX.md), [screen diagrams](USER-VISIBLE-SCREENS.md) and [project selection contract](PROJECT-SELECTION.md) describe the same three-screen experience. UX-01–UX-32 below supplement existing contract and safety checks. Implementation reports must state the source revision and evidence category for every result.
 
@@ -9,7 +9,7 @@ This guide specifies the native UI work and its acceptance criteria. It does not
 Implement a complete native UI/UX refinement across **all three screens**:
 
 1. **Welcome** — first-run introduction, identity, dimensional hero and three-CLI status.
-2. **Project selection** — recent projects, Open existing folder, explicit Create new project folder, drafts, collisions and recovery.
+2. **Project selection** — recent projects, Open existing folder, explicit Create new project folder, project-draft preservation and recovery; no composer.
 3. **Chat** — empty state, one composer, messages, consolidated agent replies, agent details, work progress, blockers and recovery.
 
 The user explicitly wants richer, polished animations and 3D styling across the complete experience. Deliver working native C++20/WinUI 3 changes and local verification. A website, screenshot, concept, or stylesheet alone does not complete this assignment.
@@ -57,7 +57,7 @@ The previously inspected executable was `native/Mayasaba/bin/x64/Release/Mayasab
 
 Preserve staged, unstaged and untracked work. Do not reset, replace the entire main window from an older revision, clean the repository, rewrite a production store, or terminate an app another person is using. A different process committed the prior batch during earlier work; inspect changes rather than assuming ownership. Follow repository commit/push rules; the standing documentation-only authorization does not authorize committing a mixed native implementation batch.
 
-## 4. Current implementation facts to verify
+## 4. Historical starting facts and current evidence
 
 Primary paths:
 
@@ -67,7 +67,7 @@ Primary paths:
 - `native/Mayasaba/NativeIds.h`, `ProtectedDraft.h`.
 - `native/tests/storage_tests.cpp`, `storage_tests.vcxproj`, `validate_contract_registry.py`.
 
-Findings at the reviewed baseline:
+Historical findings at `3ffd482` (before the subsequent native refinement and attachment milestone):
 
 - Welcome and selector are tall scrollable layouts. Welcome actions were partly below the visible area of an approximately 1139 × 586 captured native window.
 - Screen 2 supports real selection/create/recents/recovery wiring. Preserve its behavior while refining layout.
@@ -165,16 +165,16 @@ Name · open/closed · observed activity
 Canonical path · last opened                [Open] [Locate]
 ...virtualized/paged records...
 
-Unsent draft retained here                       [Send disabled]
+No composer, attachment entry or Send control on this screen
 ```
 
 - First-run uses Back; later startup uses Exit; switching uses Cancel. Preserve their distinct semantics.
 - On wide windows, align primary actions together and provide a readable recent list. On narrow windows, stack them.
 - Show actual project name, inspectable canonical path, known last-opened time, open/closed status and genuine activity. Unknown activity stays unknown.
 - Empty lists should explain the first useful action. Avoid emphasizing inactive pagination controls when no second page exists.
-- Keep create and draft-conflict forms inline or in existing temporary surfaces. Every form has a clear heading, action, cancellation and precise error.
+- Keep create and recovery forms inline or in existing temporary surfaces. Every form has a clear heading, action, cancellation and precise error.
 - Recovery controls name the operation and only offer demonstrated safe actions.
-- Keep the prebinding draft available, with a clear “Choose a project to send” explanation. Do not submit it implicitly.
+- Message entry belongs only in bound-project Chat (user confirmation, 2026-10-17). Welcome and Screen 2 have no composer, attachment-entry control or Send control. Preserve the old project's draft while selecting; never submit or transfer it.
 
 ### Motion and depth
 
@@ -185,14 +185,14 @@ Unsent draft retained here                       [Send disabled]
 
 ### Preserve all existing Screen 2 safety behavior
 
-Read and retain S2-01 through S2-30 from the earlier handoff. In particular:
+Retain applicable S2-01–S2-30 regressions from the [native validation record](../native/LOCAL-VALIDATION.md#current-acceptance-matrix-s2-01-through-s2-30). S2-14 is historical for removed pre-binding draft entry; project-draft isolation and uncertain-send safeguards still apply. In particular:
 
 - Explicit selection every later launch; no auto last-project binding.
 - Native picker cancellation/failure preserves the active binding and drafts.
 - Recent/Open/Locate bind the correct domain identity and validate filesystem identity; aliases or replacement directories must not inherit unrelated history.
 - Closed projects stay closed and readable until explicit Reopen.
 - Safe switching never retargets running sessions or silently stops work; unknown isolation/supervision blocks the switch.
-- A/B/prebinding drafts stay separate; collision choices preserve both; pending uncertain sends cannot be overwritten.
+- A/B drafts stay separate and pending uncertain sends cannot be overwritten. Screen 2 creates, loads and transfers no unbound draft. Legacy unbound draft data stays protected until explicit recovery/discard; removing its entry control does not authorize deletion.
 - Explicit creation creates exactly one requested empty child under a validated parent, with durable intent before effect and original idempotency identity on replay.
 - Unknown create outcomes are reconciled, never blindly retried, adopted or deleted.
 - No selected-folder scan, Git initialization, template files, CLI configuration writes or provider use.
@@ -362,7 +362,7 @@ Create and maintain a matrix using PASS, FAIL, INCONCLUSIVE, BLOCKED or justifie
 | UX-04 | Dimensional Welcome hero is native, has bounded lifecycle and static accessible alternatives. |
 | UX-05 | Screen 2 handles recents, empty/loading/error states, paging, full paths and closed status truthfully. |
 | UX-06 | Picker, cancel, Locate, explicit creation and recovery preserve all applicable S2-01–S2-30 invariants. |
-| UX-07 | Prebinding/A/B drafts, collision choices and uncertain sends survive navigation, restart and failures. |
+| UX-07 | A/B drafts and uncertain sends survive navigation, restart and failures; no composer exists before binding, and legacy unbound draft data remains protected for explicit recovery/discard. |
 | UX-08 | Screen 2 motion never reports selection success before the service receipt or changes creation effects. |
 | UX-09 | Empty Chat has one unobscured composer with adaptive hero layout; no fixed-offset collision at tested sizes. |
 | UX-10 | First confirmed save performs connected Dock; failed/unknown save retains the correct recoverable draft/identity. |
@@ -410,6 +410,6 @@ Final response should say what changed on **each of the three screens**, what wa
 
 The repository [interactive preview](CHAT-INTERFACE-PREVIEW.html) is an illustrative navigation/composer reference with sample data. It predates this visual refinement and may not demonstrate the new depth or motion requirements. Preview screenshots and fixture content are not evidence of running agents or completed native acceptance.
 
-The user selected a richer depth direction during the 2026-10-16 review. The implementation requirements are fully described here and in UI-UX.md; no external personal file is required to interpret this guide. Use the readable conversation flow with hero depth and restrained elevation throughout all three screens. Keep the actual Mayasaba mark and one unified native implementation.
+The latest preview selection is the Conversation direction; the user also requested richer native animation and 3D across all three screens. Keep the readable Conversation layout and apply the bounded depth treatment specified here. The implementation requirements are fully described here and in UI-UX.md; no external personal file is required to interpret this guide. Use the readable conversation flow with hero depth and restrained elevation throughout all three screens. Keep the actual Mayasaba mark and one unified native implementation.
 
-This documentation amendment records requirements only. All UX-01–UX-32 implementation results remain unverified by this documentation change. Record actual PASS, FAIL or BLOCKED outcomes in a source-identified native validation report. A missing runtime dependency can block live-work proof while the renderer is verified with isolated fixtures; report those results separately.
+This documentation amendment records requirements only. Native implementation and fixture/runtime observations were subsequently recorded in [LOCAL-VALIDATION.md](../native/LOCAL-VALIDATION.md); UX-24–UX-28 and UX-31 still include unexercised visual/accessibility/performance checks in that report. This documentation reconciliation does not rerun or certify those checks. Record actual PASS, FAIL, INCONCLUSIVE, BLOCKED or justified NOT_APPLICABLE outcomes in a source-identified native validation report. A missing runtime dependency can block live-work proof while the renderer is verified with isolated fixtures; report those results separately.

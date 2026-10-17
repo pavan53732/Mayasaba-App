@@ -1,6 +1,6 @@
 # Mayasaba Architecture
 
-> **2026-10-15 approved navigation change:** Screen 2 is the reusable project selector. First binding: Welcome → selector → Chat. Later launches: selector → Chat. File → Switch Project returns to the selector. See [project selection contract](PROJECT-SELECTION.md). Native implementation remains pending.
+> **Current screen contract:** First binding uses Welcome → Project selection → Chat; later launches and File → Switch Project use the selector. The [selector contract](PROJECT-SELECTION.md) and [three-screen visual guide](THREE-SCREEN-UX-IMPLEMENTATION.md) refine this presentation. Consult the [native validation record](../native/LOCAL-VALIDATION.md) for implementation evidence and outstanding checks.
 
 ## Document status
 
@@ -192,6 +192,8 @@ Closure is a durable Project-service `ProjectClosure` record, not a lifecycle ph
 
 The WinUI layer calls typed C++ commands and queries on application services and receives immutable projections. It never uses MCF-v2 as a UI transport.
 
+The [three-screen visual refinement](THREE-SCREEN-UX-IMPLEMENTATION.md) belongs entirely to this presentation boundary. Shared XAML resources, native motion helpers, rich-text rendering and virtualized timeline components project existing owner records. They introduce no owner, authoritative machine, persistence path or scheduling authority. Animation completion cannot acknowledge a bind/save, finalize a reply, certify work or delay immediate Pause/Stop. Keep bounded service/parsing/I/O work off the dispatcher; validate stable project/turn/operation references and reject callbacks from obsolete view generations. Tear down animation and preference subscriptions with their view/window lifetime. Isolated renderer fixtures must be explicitly labelled and unavailable during ordinary production startup.
+
 Important command flows include:
 
 - open or switch the authorized project folder;
@@ -217,7 +219,9 @@ Routine controller traffic stays hidden. Cards are emitted for user-relevant cha
 
 ## 7. Startup, folder binding, and Chat flow
 
-With no bound project, the UI shows the first-run onboarding sequence — screen 1 welcome (what Mayasaba is, plus the reminder that the user installs, authenticates and updates the three CLIs themselves, with the truthful status indicator) and screen 2 open folder — and remains on it until a project root is bound. **Next** advances from welcome to open folder, **Back** returns to welcome during first-run introduction only; switching offers Cancel instead, binding a folder opens Chat immediately without a second Next action, and **Skip** or **Escape** skip only the explanation to the mandatory open-folder screen: there is no route to Chat without a bound project root. CLI readiness never gates any screen or Chat itself; the single precondition for Chat is the bound root. Onboarding is UI presentation state only — it creates no record, state machine, owner or route. Mayasaba installs nothing into the selected folder or anywhere else; folder binding never installs, updates or configures a CLI.
+Until the first successful binding, the UI shows the first-run onboarding sequence — screen 1 welcome (what Mayasaba is, plus the reminder that the user installs, authenticates and updates the three CLIs themselves, with the truthful status indicator) and screen 2 open folder — and remains on it until a project root is bound. **Next** advances from welcome to open folder, **Back** returns to welcome during first-run introduction only; switching offers Cancel instead, binding a folder opens Chat immediately without a second Next action, and **Skip** or **Escape** skip only the explanation to the mandatory open-folder screen: there is no route to Chat without a bound project root. CLI readiness never gates any screen or Chat itself; the single precondition for Chat is the bound root. Onboarding is UI presentation state only — it creates no record, state machine, owner or route. Mayasaba installs nothing into the selected folder or anywhere else; folder binding never installs, updates or configures a CLI.
+
+Every subsequent launch begins at Screen 2 without binding the last root. Welcome is not automatically repeated. Welcome and Project selection contain no composer or Send control; one composer appears only in bound-project Chat. Project drafts remain isolated, and selector navigation never transfers, sends or discards them.
 
 ```mermaid
 sequenceDiagram
@@ -229,11 +233,11 @@ sequenceDiagram
     participant Policy as Policy Engine
     participant Project as Project service
 
-    UI->>UI: Show onboarding screen 1 (welcome) when no project is bound
+    UI->>UI: Welcome until first successful binding; otherwise Project selection
     App->>Agents: Start bounded non-mutating readiness probes
     UI->>App: Query readiness projection
     App-->>UI: Current readiness projection without blocking onboarding
-    Note over UI: Skip/Escape advance to the mandatory open-folder screen
+    Note over UI: Welcome Skip/Escape advance to selection; neither prelude has a composer
     User->>UI: Choose Windows folder
     UI->>App: Open folder command
     App->>Workspace: Validate canonical root and workspace boundary

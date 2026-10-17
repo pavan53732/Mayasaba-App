@@ -35,11 +35,17 @@ Closed projects remain listed. Selecting one opens retained history read-only; i
 
 Project drafts remain attached to their original project. Opening the selector never copies the active project's draft or attachments into another project. No selection submits a message.
 
-**2026-10-17 amendment (user-directed): the pre-binding draft composer was removed from Screen 2.** Screen 2 no longer offers a draft box; a message is typed in Chat once a project is bound. The storage-level pre-binding draft APIs remain and stay covered by the native suite, but no UI path writes one, so the selector neither loads, displays nor transfers a pre-binding draft.
+**2026-10-17 amendment (user-directed): the pre-binding draft composer was removed from Screen 2.** Screen 2 no longer offers a draft box; a message is typed in Chat once a project is bound. The user reconfirmed composer-only-in-Chat placement on 2026-10-17, and the authoritative specification now records it. Storage-level legacy APIs do not authorize a new entry path: the selector neither loads, displays nor transfers an unbound draft. Preserve any legacy unbound draft data until explicit recovery/discard; removal of the UI is not permission to delete it.
 
 Changing the active binding still requires the existing isolation, pause and bounded-reconciliation rules. Missing proof keeps the candidate unbound and the old project authoritative; restore the old Chat with the precise blocker. Selection never silently stops active work, merges histories, retargets sessions, closes or reopens a project. Background supervision and immediate control handling remain active during selection.
 
 The list, selection and drafts never depend on CLI readiness. Successful binding refreshes bounded non-mutating detection of all three CLIs but launches no working session. Screen 3 retains no folder control inside Chat. Start/Stop and retained same-run project Start permissions keep their existing semantics.
+
+### Shared visual treatment
+
+Use the [three-screen visual system](UI-UX.md#4-visual-direction) and [implementation guide](THREE-SCREEN-UX-IMPLEMENTATION.md#7-screen-2--project-selection). Keep the three named readiness entries in a compact header region; primary folder actions and recent records take precedence over decoration. Stack actions at narrow widths, keep full paths inspectable, and show loading, empty, storage-error and rejected-selection states distinctly. Empty lists do not emphasize inactive paging controls. No visual state invents a recent project, live activity or successful binding.
+
+Project rows use small fill/elevation changes with a keyboard focus equivalent and stable text. Create/recovery details use Appear; successful selection can transition only after the owning service confirms binding. Cancellation restores the previous focus/reading position. Reduced motion or high contrast gives the same controls and results instantly, with system colors in high contrast. Verify short/narrow sizes, increased text, 125/150/200% DPI and live preference changes under UX-05–UX-08 and UX-24–UX-29. Motion never changes root validation, creation effects, draft ownership or safe-switch authority.
 
 ### Acceptance additions
 

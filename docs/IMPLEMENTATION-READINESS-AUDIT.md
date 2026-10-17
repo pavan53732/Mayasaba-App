@@ -1,10 +1,16 @@
 # Mayasaba — implementation-readiness audit
 
-> **2026-10-15 project-selector amendment:** [Approved Screen 2 contract](PROJECT-SELECTION.md) replaces automatic last-project Chat startup with explicit selection on later launches, adds recent projects and explicit empty-folder creation, and routes File → Switch Project through the selector. This amendment is documentation/preview only: native UI, recent-list query metadata, create-folder typed command/fixtures and recovery proof remain pending. Earlier launch validation applies to the previous requirement and does not certify this amendment.
+> **2026-10-17 screen documentation reconciliation:** [Project selection](PROJECT-SELECTION.md) and the [three-screen guide](THREE-SCREEN-UX-IMPLEMENTATION.md) define Welcome → selector → Chat on first binding, selector on later launches/switching, composer only in bound-project Chat, and shared native depth/motion. Native selector/UI code and reported observations now exist; the [validation record](../native/LOCAL-VALIDATION.md) retains incomplete checks. Earlier “documentation/preview only” wording is superseded for source presence, without certifying every contract or runtime gate.
 
 **Audit status: BASELINE DOCUMENTATION CLOSED; PROJECT-SELECTOR CONTRACT EXTENSIONS PENDING; PARTIAL NATIVE IMPLEMENTATION AND LOCAL WINDOWS VALIDATION IN PROGRESS.**
 
-This audit reconciles the authoritative specification, AGENTS, architecture, UI/UX, user-visible screens, C01–C11 contracts and v1 shared schemas. It records closure of the baseline documentation-stage ambiguity inventory; the project-selector amendment above adds pending command and query contract work. A partial native C++20 / WinUI 3 desktop slice exists under native/ and is undergoing local Windows validation, but end-to-end orchestration, CLI adapters, publication, and MSI packaging remain to be completed.
+This audit reconciles the authoritative specification, AGENTS, architecture, UI/UX, user-visible screens, C01–C11 contracts and v1 shared schemas. Its baseline closure figures below are historical; the dated amendment above records the current screen scope. It records closure of the baseline documentation-stage ambiguity inventory; the project-selector amendment above adds pending command and query contract work. A partial native C++20 / WinUI 3 desktop slice exists under native/ and is undergoing local Windows validation, but end-to-end orchestration, CLI adapters, publication, and MSI packaging remain to be completed.
+
+## Three-screen amendment and evidence boundary
+
+The 2026-10-16 visual amendment and 2026-10-17 composer confirmation are recorded in the authoritative specification and derived screen references. They add no owner, authoritative state machine, route, work authorization or contract pack. UX-01–UX-32 supplement the existing implementation gates; they do not replace closed schemas, durable receipts, service ownership or safe filesystem/process proof.
+
+Native presentation and attachment milestones are recorded separately from live three-agent operation. The current validation report still lists incomplete theme/high-contrast/reduced-motion, keyboard/Narrator, size/DPI and performance checks; reply/work fixtures cannot prove actual CLI participation, authorization, execution or publication. This documentation reconciliation establishes no additional native runtime result.
 
 ## Closure meaning
 

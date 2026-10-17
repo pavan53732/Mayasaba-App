@@ -12,7 +12,7 @@
 
 | Case | Initial fact | Only approved controller meaning | Forbidden |
 | --- | --- | --- | --- |
-| C01-01 | No bound authorized project root | Welcome has no composer; Open Folder supports an unsent draft and disabled Send | Saving a contribution |
+| C01-01 | No bound authorized project root | Welcome and Project selection have no composer, attachment entry or Send control; message entry begins only in bound-project Chat (user confirmation, 2026-10-17) | Saving a contribution or silently transferring/deleting a legacy unbound draft |
 | C01-02 | Project root bound and open; zero CLIs or no Start | Send attempts one contribution persist, agent processing waits | CLI readiness gating Send or auto-Start |
 | C01-03 | Bound project CLOSED | Readable history; explicit authorized Reopen Project before new Send | Reopening by root selection or Start |
 | C01-04 | Selected attachment still preparing | Retain same submission identity/draft through bounded whole-set byte verification | Silent omission or partial persist |
