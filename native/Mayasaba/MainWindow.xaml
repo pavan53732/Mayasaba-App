@@ -562,7 +562,7 @@
                 <Border Grid.Row="0" Background="{ThemeResource MayasabaPanelBrush}"
                         BorderBrush="{ThemeResource MayasabaBorderBrush}"
                         BorderThickness="0,0,0,1" Padding="22,14">
-                    <Grid ColumnSpacing="14" RowSpacing="7">
+                    <Grid x:Name="ChatHeaderGrid" ColumnSpacing="14" RowSpacing="7">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
@@ -570,8 +570,9 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <Grid ColumnSpacing="12" VerticalAlignment="Center">
+                        <Grid x:Name="ChatHeaderIdentityPanel" ColumnSpacing="12" VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
@@ -602,40 +603,39 @@
                                            Foreground="{ThemeResource MayasabaMutedBrush}"/>
                             </StackPanel>
                         </Grid>
-                        <!-- Narrow-window safety: identity and controls share row 0 (identity is
-                             star-sized and ellipsis-trimmed, never collapsed); the CLI status line
-                             owns row 1 at full width so it keeps every full CLI name visible. -->
-                        <StackPanel Grid.Row="0" Grid.Column="1" HorizontalAlignment="Right">
-                            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                                <Button x:Name="SearchMessagesButton" Click="OnSearchMessagesClick"
-                                        Padding="13,7" CornerRadius="11"
-                                        AutomationProperties.Name="Search saved user messages"
-                                        AutomationProperties.AcceleratorKey="Control F">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon Glyph="&#xE721;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
-                                        <TextBlock Text="Search"/>
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="StartButton" Content="Start" Click="OnStart" Padding="15,7"
-                                        CornerRadius="11"
-                                        AutomationProperties.HelpText="Starts all three project-scoped CLI sessions. Currently blocked because no native adapter exists."/>
-                                <Button x:Name="PauseButton" Content="Pause" Click="OnPause" Padding="15,7" CornerRadius="11"/>
-                                <Button x:Name="StopButton" Content="Stop" Click="OnStop" Padding="15,7" CornerRadius="11"
-                                        AutomationProperties.HelpText="Immediate control. Never waits for an animation or a reply."/>
-                                <Button x:Name="ReopenButton" Content="Reopen Project" Click="OnReopen"
-                                        Visibility="Collapsed" CornerRadius="11" Padding="15,7"/>
-                                <Button Content="•••" AutomationProperties.Name="More project actions"
-                                        CornerRadius="11" Padding="13,7">
-                                    <Button.Flyout>
-                                        <MenuFlyout>
-                                            <MenuFlyoutItem Text="CLI diagnostics" Click="OnDiagnostics"/>
-                                            <MenuFlyoutItem Text="Close Project" Click="OnCloseProject"/>
-                                        </MenuFlyout>
-                                    </Button.Flyout>
-                                </Button>
-                                <Button x:Name="ExitButton" Content="Exit" Click="OnExit" Padding="15,7"
-                                        CornerRadius="11" AutomationProperties.Name="Exit Mayasaba"/>
-                            </StackPanel>
+                        <!-- Responsive layout: on wide screens, identity and controls share row 0;
+                             on narrow screens (<760px), controls move to row 1 so project identity
+                             never starves or collapses to 0 width. -->
+                        <StackPanel x:Name="ChatHeaderActionsPanel" Grid.Row="0" Grid.Column="1"
+                                    Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                            <Button x:Name="SearchMessagesButton" Click="OnSearchMessagesClick"
+                                    Padding="13,7" CornerRadius="11"
+                                    AutomationProperties.Name="Search saved user messages"
+                                    AutomationProperties.AcceleratorKey="Control F">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE721;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
+                                    <TextBlock Text="Search"/>
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="StartButton" Content="Start" Click="OnStart" Padding="15,7"
+                                    CornerRadius="11"
+                                    AutomationProperties.HelpText="Starts all three project-scoped CLI sessions. Currently blocked because no native adapter exists."/>
+                            <Button x:Name="PauseButton" Content="Pause" Click="OnPause" Padding="15,7" CornerRadius="11"/>
+                            <Button x:Name="StopButton" Content="Stop" Click="OnStop" Padding="15,7" CornerRadius="11"
+                                    AutomationProperties.HelpText="Immediate control. Never waits for an animation or a reply."/>
+                            <Button x:Name="ReopenButton" Content="Reopen Project" Click="OnReopen"
+                                    Visibility="Collapsed" CornerRadius="11" Padding="15,7"/>
+                            <Button Content="•••" AutomationProperties.Name="More project actions"
+                                    CornerRadius="11" Padding="13,7">
+                                <Button.Flyout>
+                                    <MenuFlyout>
+                                        <MenuFlyoutItem Text="CLI diagnostics" Click="OnDiagnostics"/>
+                                        <MenuFlyoutItem Text="Close Project" Click="OnCloseProject"/>
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                            </Button>
+                            <Button x:Name="ExitButton" Content="Exit" Click="OnExit" Padding="15,7"
+                                    CornerRadius="11" AutomationProperties.Name="Exit Mayasaba"/>
                         </StackPanel>
                         <StackPanel x:Name="ChatReadinessPanel" Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="15"
                                     HorizontalAlignment="Right" AutomationProperties.Name="CLI readiness">

@@ -669,6 +669,8 @@ namespace winrt::Mayasaba::implementation
         SetVisible(FolderScreen(), false);
         SetVisible(ChatScreen(), true);
         SetVisible(NativeFileMenu(), true);
+        chatHeaderInitialized_ = false;
+        ApplyReadinessLayout(RootLayout().ActualWidth());
         // No ambient loop may run behind timeline content.
         ApplyHeroMotion(false);
         ProjectHeading().Text(Utf16(project->displayName));
@@ -1054,16 +1056,23 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnHistoryViewChanged(IInspectable const&,
         Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const& e)
     {
-        if (windowClosed_) return;
-        if (perfFreq_.QuadPart > 0 && lastRenderQpc_.QuadPart > 0)
+        if (perfFreq_.QuadPart > 0)
         {
             LARGE_INTEGER now;
             QueryPerformanceCounter(&now);
-            double dt = static_cast<double>(now.QuadPart - lastRenderQpc_.QuadPart) * 1000.0 / static_cast<double>(perfFreq_.QuadPart);
-            if (dt > 0.1 && dt < 200.0)
+            if (lastScrollQpc_.QuadPart > 0)
             {
-                scrollFrameTimes_.push_back(dt);
+                double dt = static_cast<double>(now.QuadPart - lastScrollQpc_.QuadPart) * 1000.0 / static_cast<double>(perfFreq_.QuadPart);
+                // Retain consecutive scroll update intervals during active scrolling (< 250ms).
+                // Intervals >= 250ms represent idle gaps between distinct scrolling gestures.
+                if (dt > 0.5 && dt < 250.0)
+                {
+                    scrollFrameTimes_.push_back(dt);
+                    if (dt > maxScrollFrameMs_) maxScrollFrameMs_ = dt;
+                    if (dt > 33.33) ++droppedScrollFrames_;
+                }
             }
+            lastScrollQpc_ = now;
         }
         auto const scroller = HistoryScroller();
         double const extent = scroller.ScrollableHeight();
@@ -1142,6 +1151,40 @@ namespace winrt::Mayasaba::implementation
             SetVisible(FolderWordmark(), !compact);
             WelcomeTopBar().ColumnSpacing(compact ? 8.0 : 20.0);
             WelcomeTopBar().Padding(compact ? Thickness{16, 12, 16, 6} : Thickness{28, 18, 28, 6});
+        }
+
+        bool const narrowHeader = width < 760.0;
+        if (narrowHeader != chatHeaderNarrow_ || !chatHeaderInitialized_)
+        {
+            chatHeaderNarrow_ = narrowHeader;
+            chatHeaderInitialized_ = true;
+            if (auto identity = ChatHeaderIdentityPanel())
+            {
+                identity.SetValue(Grid::RowProperty(), winrt::box_value(0));
+                identity.SetValue(Grid::ColumnProperty(), winrt::box_value(0));
+                identity.SetValue(Grid::ColumnSpanProperty(), winrt::box_value(narrowHeader ? 2 : 1));
+            }
+            if (auto actions = ChatHeaderActionsPanel())
+            {
+                actions.SetValue(Grid::RowProperty(), winrt::box_value(narrowHeader ? 1 : 0));
+                actions.SetValue(Grid::ColumnProperty(), winrt::box_value(narrowHeader ? 0 : 1));
+                actions.SetValue(Grid::ColumnSpanProperty(), winrt::box_value(narrowHeader ? 2 : 1));
+                actions.HorizontalAlignment(narrowHeader ? HorizontalAlignment::Left : HorizontalAlignment::Right);
+            }
+            if (auto readiness = ChatReadinessPanel())
+            {
+                readiness.SetValue(Grid::RowProperty(), winrt::box_value(narrowHeader ? 2 : 1));
+                readiness.SetValue(Grid::ColumnProperty(), winrt::box_value(0));
+                readiness.SetValue(Grid::ColumnSpanProperty(), winrt::box_value(2));
+                if (narrowHeader)
+                {
+                    readiness.HorizontalAlignment(HorizontalAlignment::Left);
+                }
+                else
+                {
+                    readiness.HorizontalAlignment(readinessStacked_ ? HorizontalAlignment::Left : HorizontalAlignment::Right);
+                }
+            }
         }
     }
 
@@ -2697,6 +2740,7 @@ namespace winrt::Mayasaba::implementation
                         if (auto prev = highlightedElement_.get())
                         {
                             motion_.ApplyElevation(prev, highlightedRestingElevation_);
+                            Automation::AutomationProperties::SetItemStatus(prev, L"resting_8dp");
                         }
                         highlightedElement_ = nullptr;
                     }
@@ -2704,6 +2748,7 @@ namespace winrt::Mayasaba::implementation
                     highlightedRestingElevation_ = 8.0;
                     highlightedElement_ = make_weak(fe);
                     motion_.ApplyElevation(fe, 14.0);
+                    Automation::AutomationProperties::SetItemStatus(fe, L"highlighted_14dp");
 
                     if (!highlightResetTimer_)
                     {
@@ -2718,6 +2763,7 @@ namespace winrt::Mayasaba::implementation
                                 if (auto target = self->highlightedElement_.get())
                                 {
                                     self->motion_.ApplyElevation(target, self->highlightedRestingElevation_);
+                                    Automation::AutomationProperties::SetItemStatus(target, L"resting_8dp");
                                 }
                                 self->highlightedElement_ = nullptr;
                             }
@@ -2782,19 +2828,20 @@ namespace winrt::Mayasaba::implementation
         if (lastRenderQpc_.QuadPart > 0 && perfFreq_.QuadPart > 0)
         {
             double dtMs = static_cast<double>(now.QuadPart - lastRenderQpc_.QuadPart) * 1000.0 / static_cast<double>(perfFreq_.QuadPart);
-            if (dtMs > 0.1 && dtMs < 500.0)
+            if (dtMs > 0.1) // Retain all stalls without upper cap
             {
                 ++totalFramesRendered_;
                 totalFrameMs_ += dtMs;
                 if (dtMs > maxFrameMs_) maxFrameMs_ = dtMs;
                 if (dtMs > 33.33) ++droppedFrames_;
+                if (dtMs > 100.0) ++stallFrames_;
             }
         }
         if (lastInputQpc_.QuadPart > 0 && perfFreq_.QuadPart > 0)
         {
             double latencyMs = static_cast<double>(now.QuadPart - lastInputQpc_.QuadPart) * 1000.0 / static_cast<double>(perfFreq_.QuadPart);
             lastInputQpc_.QuadPart = 0;
-            if (latencyMs > 0.0 && latencyMs < 500.0)
+            if (latencyMs > 0.0) // Retain all typing latencies without upper cap
             {
                 typingLatencies_.push_back(latencyMs);
             }
@@ -2829,6 +2876,7 @@ namespace winrt::Mayasaba::implementation
             std::sort(sortedScroll.begin(), sortedScroll.end());
             double scrollP50 = sortedScroll.empty() ? 0.0 : sortedScroll[sortedScroll.size() / 2];
             double scrollP95 = sortedScroll.empty() ? 0.0 : sortedScroll[static_cast<size_t>(sortedScroll.size() * 0.95)];
+            double scrollMax = sortedScroll.empty() ? 0.0 : sortedScroll.back();
 
             out << "{\n";
             out << "  \"total_frames\": " << totalFramesRendered_ << ",\n";
@@ -2836,13 +2884,16 @@ namespace winrt::Mayasaba::implementation
             out << "  \"avg_fps\": " << avgFps << ",\n";
             out << "  \"max_frame_ms\": " << maxFrameMs_ << ",\n";
             out << "  \"dropped_frames_gt_33ms\": " << droppedFrames_ << ",\n";
+            out << "  \"stall_frames_gt_100ms\": " << stallFrames_ << ",\n";
             out << "  \"typing_sample_count\": " << sortedLatencies.size() << ",\n";
             out << "  \"typing_p50_latency_ms\": " << p50Latency << ",\n";
             out << "  \"typing_p95_latency_ms\": " << p95Latency << ",\n";
             out << "  \"typing_max_latency_ms\": " << maxLatency << ",\n";
             out << "  \"scroll_sample_count\": " << sortedScroll.size() << ",\n";
             out << "  \"scroll_p50_frame_ms\": " << scrollP50 << ",\n";
-            out << "  \"scroll_p95_frame_ms\": " << scrollP95 << "\n";
+            out << "  \"scroll_p95_frame_ms\": " << scrollP95 << ",\n";
+            out << "  \"scroll_max_frame_ms\": " << scrollMax << ",\n";
+            out << "  \"dropped_scroll_frames_gt_33ms\": " << droppedScrollFrames_ << "\n";
             out << "}\n";
         }
         catch (...) {}

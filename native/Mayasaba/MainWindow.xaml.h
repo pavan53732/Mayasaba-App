@@ -128,9 +128,13 @@ namespace winrt::Mayasaba::implementation
         LARGE_INTEGER perfFreq_{};
         LARGE_INTEGER lastRenderQpc_{};
         LARGE_INTEGER lastInputQpc_{};
+        LARGE_INTEGER lastScrollQpc_{};
         uint64_t totalFramesRendered_{0};
         uint64_t droppedFrames_{0};
+        uint64_t stallFrames_{0};
+        uint64_t droppedScrollFrames_{0};
         double maxFrameMs_{0.0};
+        double maxScrollFrameMs_{0.0};
         double totalFrameMs_{0.0};
         std::vector<double> typingLatencies_;
         std::vector<double> scrollFrameTimes_;
@@ -172,6 +176,8 @@ namespace winrt::Mayasaba::implementation
         bool heroArtVisible_{true};
         bool readinessStacked_{false};
         bool narrowLayout_{false};
+        bool chatHeaderNarrow_{false};
+        bool chatHeaderInitialized_{false};
 
         // Reading stability. `following_` is true only while the reader is at the
         // end of the timeline; `unseen_` counts entries appended since then.

@@ -2,8 +2,10 @@ import os
 import sys
 import time
 import json
+import sqlite3
 import subprocess
 import ctypes
+from ctypes import wintypes
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
 
@@ -19,9 +21,18 @@ WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_CLOSE = 0x0010
 WM_MOUSEWHEEL = 0x020A
+WM_DPICHANGED = 0x02E0
 VK_ESCAPE = 0x1B
 VK_PRIOR = 0x21
 VK_NEXT = 0x22
+
+class RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", wintypes.LONG),
+        ("top", wintypes.LONG),
+        ("right", wintypes.LONG),
+        ("bottom", wintypes.LONG),
+    ]
 
 def log(msg):
     sys.stdout.buffer.write(f"[ACCEPTANCE] {msg}\n".encode("utf-8", errors="replace"))
@@ -35,9 +46,15 @@ def find_by_aid(parent, aid):
 
 def find_by_name(parent, name):
     for d in parent.descendants():
-        if d.window_text() == name:
+        if d.window_text() == name or d.element_info.name == name:
             return d
     return None
+
+def get_item_status(element):
+    try:
+        return getattr(element.element_info.element, "CurrentItemStatus", "")
+    except Exception:
+        return ""
 
 def send_key_to_window(win_handle, vk_code):
     input_hwnds = []
@@ -55,11 +72,23 @@ def send_key_to_window(win_handle, vk_code):
 
 def main():
     log("=================================================================")
-    log("STARTING FULL NATIVE UI ACCEPTANCE AND PERFORMANCE VERIFICATION")
+    log("STARTING STRENGTHENED NATIVE UI ACCEPTANCE AND PERF VERIFICATION")
     log("=================================================================")
     log(f"Executable: {EXE_PATH}")
     log(f"Store:      {STORE_PATH}")
     log(f"Perf log:   {PERF_LOG_PATH}")
+
+    # Ensure store schema is in clean state before launch
+    try:
+        conn = sqlite3.connect(STORE_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contributions_test_broken';")
+        if cur.fetchone():
+            conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
+            conn.commit()
+        conn.close()
+    except Exception as e:
+        log(f"Notice during store schema check: {e}")
 
     if os.path.exists(PERF_LOG_PATH):
         try:
@@ -123,8 +152,8 @@ def main():
             return 1
         log("PASS: Text filtering accurately isolates 'alpha' and excludes 'beta'.")
 
-        # 1.3 Failed-query recovery on Screen 2: type non-matching string, then recover
-        log("Testing non-matching query 'nonexistent_project_query_xyz' on Screen 2...")
+        # 1.3 Zero-results query on Screen 2: type non-matching string
+        log("Testing non-matching zero-result query 'nonexistent_project_query_xyz' on Screen 2...")
         filter_box.set_edit_text("nonexistent_project_query_xyz")
         time.sleep(1.0)
         count_text = count_label.window_text() if count_label else ""
@@ -132,7 +161,11 @@ def main():
         if "0 matching projects" not in count_text:
             log(f"FAIL: Expected '0 matching projects' for non-matching query, got '{count_text}'")
             return 1
-        log("PASS: Non-matching project filter truthfully displays '0 matching projects'.")
+        no_recent = find_by_aid(win, "NoRecentProjectsText")
+        if not no_recent or not no_recent.is_visible():
+            log("FAIL: NoRecentProjectsText should be visible when 0 projects match")
+            return 1
+        log("PASS: Zero-matching project filter truthfully displays '0 matching projects' and NoRecentProjectsText.")
 
         # 1.4 Escape key clears filter and restores full list
         log("Sending Escape key to clear filter...")
@@ -308,30 +341,67 @@ def main():
             return 1
         log("PASS: Query change immediately cleared stale items and rendered fresh 11 matches.")
 
-        # 2.4 Failed-query recovery in search UI
-        log("\nTesting failed search query 'no_matching_messages_expected_999'...")
+        # 2.4 Zero-matches test (nonexistent query text)
+        log("\nTesting zero-match search query 'no_matching_messages_expected_999'...")
         search_box.set_edit_text("no_matching_messages_expected_999")
         time.sleep(1.5)
         s_nomatch = status_text.window_text() if status_text else ""
-        log(f"No match status: '{s_nomatch}'")
+        log(f"Zero-match status: '{s_nomatch}'")
         if "No saved user messages match your query" not in s_nomatch:
             log(f"FAIL: Expected 'No saved user messages match your query', got '{s_nomatch}'")
             return 1
+        log("PASS: Zero-match query correctly displays 'No saved user messages match your query'.")
 
-        log("Testing immediate query recovery back to 'contribution 1'...")
+        # 2.5 ACTUAL DATABASE QUERY FAILURE & RECOVERY
+        log("\n--- Testing ACTUAL Database Query Failure & Recovery ---")
+        log("Simulating SQLite query failure by temporarily altering schema...")
+        conn = sqlite3.connect(STORE_PATH)
+        conn.execute("ALTER TABLE contributions RENAME TO contributions_test_broken;")
+        conn.commit()
+        conn.close()
+
+        log("Submitting query while database table is broken...")
+        search_box.set_edit_text("trigger_database_error")
+        time.sleep(1.5)
+
+        s_fail = status_text.window_text() if status_text else ""
+        log(f"Failure status text: '{s_fail}'")
+        if "Search failed:" not in s_fail or "no such table: contributions" not in s_fail:
+            log(f"FAIL: Expected 'Search failed: no such table: contributions', got '{s_fail}'")
+            # Restore schema before returning failure
+            conn = sqlite3.connect(STORE_PATH)
+            conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
+            conn.commit()
+            conn.close()
+            return 1
+
+        results_list = find_by_aid(win, "SearchResultsList")
+        items_count = len(results_list.children()) if results_list else 0
+        if items_count > 0:
+            log(f"FAIL: Search results should be cleared on query failure, found {items_count} items")
+            return 1
+        log("PASS: Actual database query failure was truthfully caught and displayed ('Search failed: no such table: contributions').")
+
+        log("Restoring database table schema...")
+        conn = sqlite3.connect(STORE_PATH)
+        conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
+        conn.commit()
+        conn.close()
+
+        log("Submitting valid query after database restoration to verify recovery...")
         search_box.set_edit_text("contribution 1")
         time.sleep(1.5)
         s_recovered = status_text.window_text() if status_text else ""
         log(f"Recovered query status: '{s_recovered}'")
-        if "Showing" not in s_recovered:
-            log(f"FAIL: Expected valid matches after failed query recovery, got '{s_recovered}'")
+        if "Showing 11 of 11 matching messages" not in s_recovered:
+            log(f"FAIL: Expected 'Showing 11 of 11 matching messages' after recovery, got '{s_recovered}'")
             return 1
-        log("PASS: Search UI cleanly recovers from empty results when a valid query is resumed.")
+        log("PASS: Search UI cleanly recovered from actual database query failure once database was restored.")
 
         # =========================================================================
-        # PHASE 3: OLDER MESSAGE NAVIGATION, SCROLLING & HIGHLIGHT RESET
+        # PHASE 3: OLDER MESSAGE NAVIGATION, FOCUS & HIGHLIGHT RESET
         # =========================================================================
-        log("\n--- PHASE 3: Older Message Navigation & Highlight Reset ---")
+        log("\n--- PHASE 3: Older Message Navigation, Focus & Highlight Reset ---")
         log("Setting query to exact target: 'Seeded contribution 5.'...")
         search_box.set_edit_text("Seeded contribution 5.")
         time.sleep(1.5)
@@ -365,9 +435,63 @@ def main():
             log("FAIL: HistoryScroller not found")
             return 1
 
-        log("Waiting 2.0s for highlight reset timer to restore resting elevation (8 dp)...")
+        # Locate the targeted message card among realized timeline items
+        scroller_rect = scroller.rectangle()
+        realized_groups = [c for c in scroller.children() if c.element_info.control_type == "Group"]
+        log(f"Realized message groups in timeline: {len(realized_groups)}")
+        if len(realized_groups) == 0:
+            log("FAIL: No realized message cards found in HistoryScroller")
+            return 1
+
+        # Check for card that has "highlighted_14dp" item_status or keyboard focus
+        highlighted_card = None
+        for c in realized_groups:
+            status = get_item_status(c)
+            if status == "highlighted_14dp":
+                highlighted_card = c
+                break
+
+        if not highlighted_card:
+            # Fallback: check if any card has keyboard focus
+            for c in realized_groups:
+                if c.has_keyboard_focus():
+                    highlighted_card = c
+                    break
+
+        if not highlighted_card:
+            log("FAIL: Navigated card was not highlighted or focused")
+            return 1
+
+        card_rect = highlighted_card.rectangle()
+        initial_status = get_item_status(highlighted_card)
+        log(f"Navigated card status immediately after navigation: '{initial_status}'")
+        log(f"Navigated card bounds: L{card_rect.left}, T{card_rect.top}, R{card_rect.right}, B{card_rect.bottom}")
+        log(f"Scroller bounds:       L{scroller_rect.left}, T{scroller_rect.top}, R{scroller_rect.right}, B{scroller_rect.bottom}")
+
+        # Check visibility and viewport position
+        if not highlighted_card.is_visible():
+            log("FAIL: Navigated card is not marked visible")
+            return 1
+        if card_rect.top < scroller_rect.top - 20 or card_rect.bottom > scroller_rect.bottom + 60:
+            log("FAIL: Navigated card was not scrolled within the visible viewport bounds")
+            return 1
+        log("PASS: Target message card successfully brought into view within the active viewport.")
+
+        # Check initial highlight status
+        if initial_status != "highlighted_14dp":
+            log(f"FAIL: Expected initial item_status 'highlighted_14dp', got '{initial_status}'")
+            return 1
+        log("PASS: Target card verified with item_status='highlighted_14dp' (14.0 dp elevation).")
+
+        log("Waiting 2.0s for highlight reset timer (1.5s interval) to execute...")
         time.sleep(2.0)
-        log("PASS: Message 5 navigated, brought into view, focused, and highlight reset safely completed.")
+
+        status_after = get_item_status(highlighted_card)
+        log(f"Navigated card status after reset timer: '{status_after}'")
+        if status_after != "resting_8dp":
+            log(f"FAIL: Expected item_status to reset to 'resting_8dp', got '{status_after}'")
+            return 1
+        log("PASS: Highlight reset timer verified: card safely returned to 'resting_8dp' resting elevation.")
 
         # =========================================================================
         # PHASE 4: PROJECT SWITCHING DURING SEARCH
@@ -431,86 +555,202 @@ def main():
         composer_box = find_by_aid(win, "ComposerBox")
         send_btn = find_by_aid(win, "SendButton")
         start_btn = find_by_aid(win, "StartButton")
+        pause_btn = find_by_aid(win, "PauseButton")
+        stop_btn = find_by_aid(win, "StopButton")
+        search_icon_btn = find_by_aid(win, "SearchMessagesButton")
 
-        composer_name = composer_box.element_info.name if composer_box else ""
-        send_name = send_btn.element_info.name if send_btn else ""
-        start_name = start_btn.element_info.name if start_btn else ""
-
-        log(f"ComposerBox accessible name: '{composer_name}'")
-        log(f"SendButton accessible name: '{send_name}'")
-        log(f"StartButton accessible name: '{start_name}'")
-
-        if not composer_box or not send_btn or not start_btn:
-            log("FAIL: Essential Chat controls missing UIA elements")
+        if not composer_box or not send_btn or not start_btn or not pause_btn or not stop_btn or not search_icon_btn:
+            log("FAIL: One or more critical Chat controls missing from UIA tree")
             return 1
-        log("PASS: UIA accessible names verified on composer and control plane buttons.")
 
-        log("Testing responsive narrow-window adaptation (width 520px)...")
-        rect = win.rectangle()
-        orig_width = rect.width()
-        orig_height = rect.height()
+        # Strict accessible name assertions
+        composer_name = composer_box.element_info.name
+        send_name = send_btn.element_info.name
+        start_name = start_btn.element_info.name
+        pause_name = pause_btn.element_info.name
+        stop_name = stop_btn.element_info.name
+        search_name = search_icon_btn.element_info.name
 
-        user32.MoveWindow(win.handle, rect.left, rect.top, 520, orig_height, True)
+        log(f"ComposerBox accessible name:          '{composer_name}'")
+        log(f"SendButton accessible name:           '{send_name}'")
+        log(f"StartButton accessible name:          '{start_name}'")
+        log(f"PauseButton accessible name:          '{pause_name}'")
+        log(f"StopButton accessible name:           '{stop_name}'")
+        log(f"SearchMessagesButton accessible name: '{search_name}'")
+
+        if "Chat message" not in composer_name and "Composer" not in composer_name:
+            log(f"FAIL: ComposerBox accessible name invalid: '{composer_name}'")
+            return 1
+        if "Send" not in send_name:
+            log(f"FAIL: SendButton accessible name invalid: '{send_name}'")
+            return 1
+        if start_name != "Start":
+            log(f"FAIL: StartButton accessible name expected 'Start', got '{start_name}'")
+            return 1
+        if pause_name != "Pause":
+            log(f"FAIL: PauseButton accessible name expected 'Pause', got '{pause_name}'")
+            return 1
+        if stop_name != "Stop":
+            log(f"FAIL: StopButton accessible name expected 'Stop', got '{stop_name}'")
+            return 1
+        if "Search" not in search_name:
+            log(f"FAIL: SearchMessagesButton accessible name invalid: '{search_name}'")
+            return 1
+        log("PASS: Strict UIA accessible names verified across all interactive controls.")
+
+        # Narrow Window Adaptation & Clipping Verification (520px Width)
+        log("\nTesting responsive narrow-window adaptation (width 520px) and measuring clipping...")
+        win_rect_orig = win.rectangle()
+        orig_width = win_rect_orig.width()
+        orig_height = win_rect_orig.height()
+
+        user32.MoveWindow(win.handle, win_rect_orig.left, win_rect_orig.top, 520, orig_height, True)
         time.sleep(1.0)
 
-        readiness_panel = find_by_aid(win, "ChatReadinessPanel")
-        log(f"ChatReadinessPanel found in 520px window: {readiness_panel is not None}")
-        if not readiness_panel:
-            log("FAIL: ChatReadinessPanel missing after resize")
-            return 1
-        log("PASS: Window adapted cleanly to 520px width without layout faults or clipping.")
+        narrow_rect = win.rectangle()
+        log(f"Narrow window bounds: L{narrow_rect.left}, T{narrow_rect.top}, R{narrow_rect.right}, B{narrow_rect.bottom} (Width: {narrow_rect.width()})")
 
+        # Check each critical control for horizontal clipping or negative/zero dimensions
+        controls_to_check = [
+            ("ProjectHeading", find_by_aid(win, "ProjectHeading")),
+            ("ProjectPathLabel", find_by_aid(win, "ProjectPathLabel")),
+            ("ChatReadinessPanel", find_by_aid(win, "ChatReadinessPanel")),
+            ("ComposerBox", find_by_aid(win, "ComposerBox")),
+            ("SendButton", find_by_aid(win, "SendButton")),
+            ("StartButton", find_by_aid(win, "StartButton")),
+            ("HistoryScroller", find_by_aid(win, "HistoryScroller")),
+        ]
+
+        for name, ctrl in controls_to_check:
+            if not ctrl:
+                log(f"FAIL: Control '{name}' missing in 520px narrow window")
+                return 1
+            cr = ctrl.rectangle()
+            log(f"  {name:20s}: L{cr.left}, T{cr.top}, R{cr.right}, B{cr.bottom} (W={cr.width()}, H={cr.height()})")
+            if cr.width() <= 0 or cr.height() <= 0:
+                log(f"FAIL: Control '{name}' collapsed to zero dimensions in narrow layout")
+                return 1
+            # Control right and left edges must not exceed window client area (excluding scroll extent)
+            if name != "HistoryScroller":
+                if cr.right > narrow_rect.right + 15:
+                    log(f"FAIL: Control '{name}' clipped off right edge (Right={cr.right} > WinRight={narrow_rect.right})")
+                    return 1
+                if cr.left < narrow_rect.left - 15:
+                    log(f"FAIL: Control '{name}' clipped off left edge (Left={cr.left} < WinLeft={narrow_rect.left})")
+                    return 1
+
+        log("PASS: 520px narrow layout measured: zero controls clipped or collapsed.")
+
+        # Restore window size
         log(f"Restoring window size to {orig_width}x{orig_height}...")
-        user32.MoveWindow(win.handle, rect.left, rect.top, orig_width, orig_height, True)
+        user32.MoveWindow(win.handle, win_rect_orig.left, win_rect_orig.top, orig_width, orig_height, True)
         time.sleep(1.0)
 
-        log("Performing rapid hover sweeps across realized message cards...")
+        # Rapid Hover Sweeps (asserting cards actually exercised)
+        log("\nPerforming rapid hover sweeps across realized message cards...")
         scroller = find_by_aid(win, "HistoryScroller")
-        if scroller:
-            cards = [c for c in scroller.children() if c.element_info.control_type == "Group"]
-            log(f"Realized message cards: {len(cards)}")
-            for c in cards[:12]:
-                try:
-                    c.set_focus()
-                except Exception:
-                    pass
-                time.sleep(0.03)
-        log("PASS: Rapid hover/focus sweeps completed with zero access violations or pointer lockups.")
+        if not scroller:
+            log("FAIL: HistoryScroller not found for hover sweeps")
+            return 1
+
+        cards = [c for c in scroller.children() if c.element_info.control_type == "Group"]
+        log(f"Realized message cards count: {len(cards)}")
+        if len(cards) < 4:
+            log(f"FAIL: Insufficient message cards realized ({len(cards)}) to validate hover sweeps (need >= 4)")
+            return 1
+
+        hovered_count = 0
+        for c in cards[:8]:
+            try:
+                c.set_focus()
+                hovered_count += 1
+            except Exception:
+                pass
+            time.sleep(0.04)
+
+        log(f"Cards successfully exercised in rapid sweep: {hovered_count}")
+        if hovered_count < 4:
+            log(f"FAIL: Only {hovered_count} cards were exercised in hover sweep")
+            return 1
+        log("PASS: Rapid hover/focus sweeps verified across realized cards with zero pointer lockup or crash.")
 
         # =========================================================================
-        # PHASE 6: ACTUAL UI PERFORMANCE MEASUREMENT
+        # PHASE 6: MULTI-DPI DISPLAY SCALING SIMULATION (150% & 200%)
         # =========================================================================
-        log("\n--- PHASE 6: UI Performance Profiling (Typing, Scrolling, Frames) ---")
+        log("\n--- PHASE 6: Multi-DPI Display Scaling Simulation (150% and 200%) ---")
+        curr_rect = win.rectangle()
+
+        # 150% DPI (144 DPI)
+        dpi150 = 144
+        w150 = int(curr_rect.width() * 144 / 120)
+        h150 = int(curr_rect.height() * 144 / 120)
+        sug_rect_150 = RECT(curr_rect.left, curr_rect.top, curr_rect.left + w150, curr_rect.top + h150)
+        log("Sending WM_DPICHANGED 150% (144 DPI)...")
+        user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi150 << 16) | dpi150, ctypes.byref(sug_rect_150))
+        time.sleep(1.0)
+        r150 = win.rectangle()
+        log(f"Window bounds at 150% DPI: L{r150.left}, T{r150.top}, R{r150.right}, B{r150.bottom}")
+        if r150.width() <= 0 or r150.height() <= 0:
+            log("FAIL: Window collapsed after 150% DPI change")
+            return 1
+        log("PASS: 150% DPI transition handled cleanly.")
+
+        # 200% DPI (192 DPI)
+        dpi200 = 192
+        w200 = int(curr_rect.width() * 192 / 120)
+        h200 = int(curr_rect.height() * 192 / 120)
+        sug_rect_200 = RECT(curr_rect.left, curr_rect.top, curr_rect.left + w200, curr_rect.top + h200)
+        log("Sending WM_DPICHANGED 200% (192 DPI)...")
+        user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi200 << 16) | dpi200, ctypes.byref(sug_rect_200))
+        time.sleep(1.0)
+        r200 = win.rectangle()
+        log(f"Window bounds at 200% DPI: L{r200.left}, T{r200.top}, R{r200.right}, B{r200.bottom}")
+        if r200.width() <= 0 or r200.height() <= 0:
+            log("FAIL: Window collapsed after 200% DPI change")
+            return 1
+        log("PASS: 200% DPI transition handled cleanly.")
+
+        # Restore baseline 120 DPI (125%)
+        dpi120 = 120
+        sug_rect_120 = RECT(curr_rect.left, curr_rect.top, curr_rect.right, curr_rect.bottom)
+        user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi120 << 16) | dpi120, ctypes.byref(sug_rect_120))
+        time.sleep(1.0)
+        log("PASS: Display DPI restored to baseline.")
+
+        # =========================================================================
+        # PHASE 7: ACTUAL UI PERFORMANCE PROFILING (UNCAPPED STALL RETENTION)
+        # =========================================================================
+        log("\n--- PHASE 7: UI Performance Profiling (Uncapped Stalls & Consecutive Scroll) ---")
 
         log("Typing test keystrokes into ComposerBox to measure input presentation latency...")
         composer_box = find_by_aid(win, "ComposerBox")
         if composer_box:
-            for text in ["Performance", " measurement", " test", " keystrokes."]:
+            for text in ["Performance", " measurement", " keystroke", " latency", " profiling."]:
                 composer_box.set_edit_text(text)
                 time.sleep(0.08)
         time.sleep(1.0)
 
-        log("Scrolling HistoryScroller via mouse wheel to record scroll frame times...")
+        log("Scrolling HistoryScroller via consecutive mouse wheel events to measure consecutive scroll frames...")
         rect = win.rectangle()
         cx = (rect.left + rect.right) // 2
         cy = (rect.top + rect.bottom) // 2
         lparam = (cy << 16) | (cx & 0xFFFF)
-        for _ in range(12):
+        for _ in range(15):
             user32.PostMessageW(win.handle, WM_MOUSEWHEEL, 120 << 16, lparam)
             time.sleep(0.04)
-        for _ in range(12):
+        for _ in range(15):
             user32.PostMessageW(win.handle, WM_MOUSEWHEEL, (-120 & 0xFFFF) << 16, lparam)
             time.sleep(0.04)
         time.sleep(1.5)
 
-        log("Cleanly closing application via WM_CLOSE to flush UI performance log...")
+        log("Cleanly closing application via WM_CLOSE to flush complete performance log...")
         user32.PostMessageW(win.handle, WM_CLOSE, 0, 0)
         time.sleep(2.5)
 
         # =========================================================================
-        # PHASE 7: PERFORMANCE METRICS ANALYSIS
+        # PHASE 8: PERFORMANCE METRICS ANALYSIS (TRUTHFUL DATA REPORTING)
         # =========================================================================
-        log("\n--- PHASE 7: Performance Metrics Analysis ---")
+        log("\n--- PHASE 8: Empirical Performance Metrics Analysis ---")
         if not os.path.exists(PERF_LOG_PATH):
             log(f"FAIL: Perf log file '{PERF_LOG_PATH}' was not created")
             return 1
@@ -518,20 +758,23 @@ def main():
         with open(PERF_LOG_PATH, "r", encoding="utf-8") as f:
             perf_data = json.load(f)
 
-        log("Empirical UI Performance Measurements recorded from WinUI 3 CompositionTarget:")
-        log(f"  Total frames rendered:     {perf_data.get('total_frames')}")
-        log(f"  Average frame time:        {perf_data.get('avg_frame_ms'):.2f} ms ({perf_data.get('avg_fps'):.1f} FPS)")
-        log(f"  Max frame time:            {perf_data.get('max_frame_ms'):.2f} ms")
-        log(f"  Dropped frames (>33.3ms):  {perf_data.get('dropped_frames_gt_33ms')}")
-        log(f"  Typing samples:            {perf_data.get('typing_sample_count')}")
-        log(f"  Typing p50 latency:        {perf_data.get('typing_p50_latency_ms'):.2f} ms")
-        log(f"  Typing p95 latency:        {perf_data.get('typing_p95_latency_ms'):.2f} ms")
-        log(f"  Typing max latency:        {perf_data.get('typing_max_latency_ms'):.2f} ms")
-        log(f"  Scroll samples:            {perf_data.get('scroll_sample_count')}")
-        log(f"  Scroll p50 frame time:     {perf_data.get('scroll_p50_frame_ms'):.2f} ms")
-        log(f"  Scroll p95 frame time:     {perf_data.get('scroll_p95_frame_ms'):.2f} ms")
+        log("Empirical UI Performance Measurements recorded from WinUI 3 CompositionTarget (NO stalls discarded):")
+        log(f"  Total frames rendered:         {perf_data.get('total_frames')}")
+        log(f"  Average frame time:            {perf_data.get('avg_frame_ms'):.2f} ms ({perf_data.get('avg_fps'):.1f} FPS)")
+        log(f"  Max frame time:                {perf_data.get('max_frame_ms'):.2f} ms")
+        log(f"  Dropped frames (>33.3ms):      {perf_data.get('dropped_frames_gt_33ms')}")
+        log(f"  Stall frames (>100.0ms):       {perf_data.get('stall_frames_gt_100ms')}")
+        log(f"  Typing samples:                {perf_data.get('typing_sample_count')}")
+        log(f"  Typing p50 latency:            {perf_data.get('typing_p50_latency_ms'):.2f} ms")
+        log(f"  Typing p95 latency:            {perf_data.get('typing_p95_latency_ms'):.2f} ms")
+        log(f"  Typing max latency:            {perf_data.get('typing_max_latency_ms'):.2f} ms")
+        log(f"  Scroll samples:                {perf_data.get('scroll_sample_count')}")
+        log(f"  Scroll p50 frame time:         {perf_data.get('scroll_p50_frame_ms'):.2f} ms")
+        log(f"  Scroll p95 frame time:         {perf_data.get('scroll_p95_frame_ms'):.2f} ms")
+        log(f"  Scroll max frame time:         {perf_data.get('scroll_max_frame_ms'):.2f} ms")
+        log(f"  Dropped scroll frames (>33ms): {perf_data.get('dropped_scroll_frames_gt_33ms')}")
 
-        if perf_data.get("total_frames", 0) < 30:
+        if perf_data.get("total_frames", 0) < 50:
             log("FAIL: Insufficient frames rendered during test session")
             return 1
         if perf_data.get("avg_frame_ms", 999.0) > 33.33:
@@ -543,11 +786,23 @@ def main():
                 return 1
 
         log("\n=================================================================")
-        log("ALL NATIVE UI ACCEPTANCE AND PERFORMANCE VERIFICATIONS PASSED!")
+        log("ALL STRENGTHENED NATIVE UI ACCEPTANCE VERIFICATIONS PASSED!")
         log("=================================================================\n")
         return 0
 
     finally:
+        # Guarantee schema restoration if test aborted midway
+        try:
+            conn = sqlite3.connect(STORE_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contributions_test_broken';")
+            if cur.fetchone():
+                conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
+                conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
         if proc.poll() is None:
             log("Terminating Mayasaba.exe test process...")
             proc.terminate()
