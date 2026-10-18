@@ -52,6 +52,7 @@ namespace winrt::Mayasaba::implementation
         void OnRecentFilterTextChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::TextChangedEventArgs const&);
         void OnClearRecentFilter(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnRecentStatusFilterChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
+        void OnRecentFilterBoxKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnChatKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnSearchMessagesClick(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnSearchQueryChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::TextChangedEventArgs const&);
@@ -117,6 +118,26 @@ namespace winrt::Mayasaba::implementation
         std::string pendingAttemptProject_;
         std::string pendingAttemptBody_;
         Microsoft::UI::Xaml::DispatcherTimer draftTimer_{nullptr};
+        Microsoft::UI::Xaml::DispatcherTimer highlightResetTimer_{nullptr};
+        winrt::weak_ref<Microsoft::UI::Xaml::FrameworkElement> highlightedElement_{nullptr};
+        double highlightedRestingElevation_{0.0};
+
+        // UI-thread frame presentation and typing latency measurement
+        winrt::event_token renderingToken_{};
+        std::string perfLogPath_;
+        LARGE_INTEGER perfFreq_{};
+        LARGE_INTEGER lastRenderQpc_{};
+        LARGE_INTEGER lastInputQpc_{};
+        uint64_t totalFramesRendered_{0};
+        uint64_t droppedFrames_{0};
+        double maxFrameMs_{0.0};
+        double totalFrameMs_{0.0};
+        std::vector<double> typingLatencies_;
+        std::vector<double> scrollFrameTimes_;
+        void InitPerfMeasurement();
+        void RecordInputEvent();
+        void OnRendering(IInspectable const& sender, IInspectable const& args);
+        void FlushPerfLog();
 
         std::unique_ptr<mayasaba::AttachmentService> attachmentService_;
         std::vector<mayasaba::AttachmentCandidate> draftAttachments_;

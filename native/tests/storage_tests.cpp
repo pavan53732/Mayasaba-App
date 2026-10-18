@@ -1815,6 +1815,71 @@ int main()
                 EXPECT(failController.MatchCount() == 0);
                 EXPECT(!failController.CanLoadMore());
                 EXPECT(!failController.ShouldShowLoadMoreButton());
+
+                // Complete recovery from failure: user clears or types new valid query
+                auto recoverReq = failController.SetQuery("Sequential");
+                EXPECT(recoverReq.has_value());
+                EXPECT(failController.LastErrorMessage().empty()); // Error cleared on new query
+                EXPECT(failController.IsLoading());
+
+                mayasaba::MessageSearchQuery dbQueryRecover{recoverReq->projectId, recoverReq->queryText, recoverReq->limit, recoverReq->offset};
+                auto resRecover = store.SearchUserMessages(dbQueryRecover);
+                EXPECT(resRecover.isComplete);
+                EXPECT(resRecover.matches.size() == 20);
+
+                bool recoverApplied = failController.ApplyResult(
+                    recoverReq->generation, recoverReq->queryText, recoverReq->projectId, recoverReq->isAppend, resRecover);
+                EXPECT(recoverApplied);
+                EXPECT(!failController.IsLoading());
+                EXPECT(failController.MatchCount() == 20);
+                EXPECT(failController.TotalMatches() == 50);
+                EXPECT(failController.CanLoadMore());
+                EXPECT(failController.ShouldShowLoadMoreButton());
+            }
+
+            // Test 15: Rapid typing bursts under sustained input
+            {
+                mayasaba::SearchController burstController;
+                burstController.Open(pD);
+                auto r1 = burstController.SetQuery("item 1");
+                auto r2 = burstController.SetQuery("item 10");
+                auto r3 = burstController.SetQuery("item 100");
+                EXPECT(r3.has_value());
+                EXPECT(burstController.QueryText() == "item 100");
+
+                // Out of order arrivals from r1 and r2 must be rejected
+                mayasaba::MessageSearchResult dummyRes;
+                dummyRes.isComplete = true;
+                dummyRes.totalMatches = 1;
+                dummyRes.matches.push_back(mayasaba::MessageMatch{"sub_1", "body", "2026-10-15T00:00:00Z"});
+
+                EXPECT(!burstController.ApplyResult(r1->generation, r1->queryText, r1->projectId, false, dummyRes));
+                EXPECT(!burstController.ApplyResult(r2->generation, r2->queryText, r2->projectId, false, dummyRes));
+                EXPECT(burstController.MatchCount() == 0);
+
+                // Only current generation r3 accepted
+                EXPECT(burstController.ApplyResult(r3->generation, r3->queryText, r3->projectId, false, dummyRes));
+                EXPECT(burstController.MatchCount() == 1);
+            }
+
+            // Test 16: Close during active search query immediately drops in-flight results
+            {
+                mayasaba::SearchController closeController;
+                closeController.Open(pD);
+                auto req = closeController.SetQuery("Sequential");
+                EXPECT(req.has_value());
+                EXPECT(closeController.IsLoading());
+
+                // User closes search panel before background query finishes
+                closeController.Close();
+                EXPECT(!closeController.IsOpen());
+                EXPECT(!closeController.IsLoading());
+
+                // Stale result arriving after close must be rejected
+                mayasaba::MessageSearchQuery q{req->projectId, req->queryText, req->limit, req->offset};
+                auto res = store.SearchUserMessages(q);
+                EXPECT(!closeController.ApplyResult(req->generation, req->queryText, req->projectId, req->isAppend, res));
+                EXPECT(closeController.MatchCount() == 0);
             }
         }
 

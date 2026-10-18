@@ -13,6 +13,7 @@
 #include <chrono>
 #include <coroutine>
 #include <cwctype>
+#include <fstream>
 #include <limits>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
@@ -209,6 +210,21 @@ namespace winrt::Mayasaba::implementation
                 self->windowClosed_ = true;
                 ++self->selectorGeneration_;
                 self->draftTimer_.Stop();
+                if (self->highlightResetTimer_)
+                {
+                    self->highlightResetTimer_.Stop();
+                    if (auto target = self->highlightedElement_.get())
+                    {
+                        self->motion_.ApplyElevation(target, self->highlightedRestingElevation_);
+                    }
+                    self->highlightedElement_ = nullptr;
+                }
+                if (self->renderingToken_.value != 0)
+                {
+                    Microsoft::UI::Xaml::Media::CompositionTarget::Rendering(self->renderingToken_);
+                    self->renderingToken_.value = 0;
+                }
+                self->FlushPerfLog();
                 self->animationsEnabled_ = false;
                 self->motion_.CancelAll();
                 self->ApplyHeroMotion(false);
@@ -224,10 +240,18 @@ namespace winrt::Mayasaba::implementation
         CreateNewProjectButton().IsEnabled(false);
         ApplyMotionPreference();
         InitializeStoreAsync();
+        InitPerfMeasurement();
     }
 
     MainWindow::~MainWindow()
     {
+        if (highlightResetTimer_) highlightResetTimer_.Stop();
+        if (renderingToken_.value != 0)
+        {
+            try { Microsoft::UI::Xaml::Media::CompositionTarget::Rendering(renderingToken_); } catch (...) {}
+            renderingToken_.value = 0;
+        }
+        FlushPerfLog();
         RevokeMotionSubscription();
         RevokeAccessibilitySubscription();
     }
@@ -529,6 +553,15 @@ namespace winrt::Mayasaba::implementation
     // The explanatory copy is never animated run by run.
     void MainWindow::ShowWelcome()
     {
+        if (highlightResetTimer_)
+        {
+            highlightResetTimer_.Stop();
+            if (auto target = highlightedElement_.get())
+            {
+                motion_.ApplyElevation(target, highlightedRestingElevation_);
+            }
+            highlightedElement_ = nullptr;
+        }
         ++selectorGeneration_;
         motion_.CancelAll();
         SetVisible(WelcomeScreen(), true);
@@ -551,6 +584,15 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::ShowFolder(SelectorContext context)
     {
+        if (highlightResetTimer_)
+        {
+            highlightResetTimer_.Stop();
+            if (auto target = highlightedElement_.get())
+            {
+                motion_.ApplyElevation(target, highlightedRestingElevation_);
+            }
+            highlightedElement_ = nullptr;
+        }
         CloseSearch();
         searchController_.Close();
         searchController_.SetActiveProject("");
@@ -582,6 +624,15 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::ShowChat()
     {
+        if (highlightResetTimer_)
+        {
+            highlightResetTimer_.Stop();
+            if (auto target = highlightedElement_.get())
+            {
+                motion_.ApplyElevation(target, highlightedRestingElevation_);
+            }
+            highlightedElement_ = nullptr;
+        }
         CloseSearch();
         searchController_.Close();
         searchController_.SetActiveProject(activeProject_);
@@ -1004,6 +1055,16 @@ namespace winrt::Mayasaba::implementation
         Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const& e)
     {
         if (windowClosed_) return;
+        if (perfFreq_.QuadPart > 0 && lastRenderQpc_.QuadPart > 0)
+        {
+            LARGE_INTEGER now;
+            QueryPerformanceCounter(&now);
+            double dt = static_cast<double>(now.QuadPart - lastRenderQpc_.QuadPart) * 1000.0 / static_cast<double>(perfFreq_.QuadPart);
+            if (dt > 0.1 && dt < 200.0)
+            {
+                scrollFrameTimes_.push_back(dt);
+            }
+        }
         auto const scroller = HistoryScroller();
         double const extent = scroller.ScrollableHeight();
         bool const atEnd = extent > 0.0 && (extent - scroller.VerticalOffset()) <= 24.0;
@@ -1184,6 +1245,15 @@ namespace winrt::Mayasaba::implementation
             collisionTargetProjectId_.clear();
             e.Handled(true);
             return;
+        }
+        if (!recentFilterText_.empty())
+        {
+            if (auto box = RecentProjectsFilterBox())
+            {
+                box.Text(L"");
+                e.Handled(true);
+                return;
+            }
         }
         if (selectorContext_ == SelectorContext::Switching && !activeProject_.empty())
         {
@@ -1574,6 +1644,7 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnDraftChanged(IInspectable const&, TextChangedEventArgs const&)
     {
         if (suppressDraft_) return;
+        RecordInputEvent();
         UpdateComposerState();
         bool open = storage_ && !activeProject_.empty() && !projectClosed_;
         if (open) { draftTimer_.Stop(); draftTimer_.Start(); }
@@ -1921,6 +1992,7 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnRecentFilterTextChanged(IInspectable const&, Controls::TextChangedEventArgs const&)
     {
         if (!storage_) return;
+        RecordInputEvent();
         recentFilterText_ = Utf8(RecentProjectsFilterBox().Text().c_str());
         recentOffset_ = 0;
         if (auto b = RecentProjectsClearFilterButton())
@@ -1932,7 +2004,25 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnClearRecentFilter(IInspectable const&, RoutedEventArgs const&)
     {
         if (auto box = RecentProjectsFilterBox())
+        {
             box.Text(L"");
+            try { box.Focus(FocusState::Programmatic); } catch (...) {}
+        }
+    }
+
+    void MainWindow::OnRecentFilterBoxKeyDown(IInspectable const&, Input::KeyRoutedEventArgs const& e)
+    {
+        if (e.Key() == Windows::System::VirtualKey::Escape)
+        {
+            if (!recentFilterText_.empty())
+            {
+                if (auto box = RecentProjectsFilterBox())
+                {
+                    box.Text(L"");
+                    e.Handled(true);
+                }
+            }
+        }
     }
 
     void MainWindow::OnRecentStatusFilterChanged(IInspectable const&, Controls::SelectionChangedEventArgs const&)
@@ -2210,6 +2300,7 @@ namespace winrt::Mayasaba::implementation
     {
         if(navigationBusy_ || busy_ || windowClosed_)co_return;
         if(!storage_){if(exit){allowClose_=true;Close();}co_return;}
+        CloseSearch();
         navigationBusy_=true;auto alive=get_strong();auto ui=DispatcherQueue();
         bool selectionPending=selectionBusy_;
         if(selectionPending) ++selectorGeneration_;
@@ -2364,6 +2455,7 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::OnSearchQueryChanged(IInspectable const&, Controls::TextChangedEventArgs const&)
     {
+        RecordInputEvent();
         std::string const text = Utf8(MessageSearchBox().Text().c_str());
         ClearSearchButton().Visibility(text.empty() ? Visibility::Collapsed : Visibility::Visible);
 
@@ -2386,6 +2478,7 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnClearSearchQuery(IInspectable const&, RoutedEventArgs const&)
     {
         MessageSearchBox().Text(L"");
+        try { MessageSearchBox().Focus(FocusState::Programmatic); } catch (...) {}
     }
 
     void MainWindow::OnCloseSearch(IInspectable const&, RoutedEventArgs const&)
@@ -2568,6 +2661,7 @@ namespace winrt::Mayasaba::implementation
             itemGrid.Children().Append(openBtn);
 
             itemBorder.Child(itemGrid);
+            Automation::AutomationProperties::SetName(itemBorder, L"Saved user message. " + Utf16(match.submissionId));
             SearchResultsList().Items().Append(itemBorder);
         }
     }
@@ -2594,7 +2688,42 @@ namespace winrt::Mayasaba::implementation
                 element.StartBringIntoView();
                 if (auto fe = element.try_as<FrameworkElement>())
                 {
-                    motion_.ApplyElevation(fe, 14);
+                    fe.IsTabStop(true);
+                    try { fe.Focus(FocusState::Programmatic); } catch (...) {}
+
+                    if (highlightResetTimer_)
+                    {
+                        highlightResetTimer_.Stop();
+                        if (auto prev = highlightedElement_.get())
+                        {
+                            motion_.ApplyElevation(prev, highlightedRestingElevation_);
+                        }
+                        highlightedElement_ = nullptr;
+                    }
+
+                    highlightedRestingElevation_ = 8.0;
+                    highlightedElement_ = make_weak(fe);
+                    motion_.ApplyElevation(fe, 14.0);
+
+                    if (!highlightResetTimer_)
+                    {
+                        highlightResetTimer_ = DispatcherTimer();
+                        highlightResetTimer_.Interval(std::chrono::milliseconds(1500));
+                        auto weak = get_weak();
+                        highlightResetTimer_.Tick([weak](auto const&, auto const&)
+                        {
+                            if (auto self = weak.get())
+                            {
+                                self->highlightResetTimer_.Stop();
+                                if (auto target = self->highlightedElement_.get())
+                                {
+                                    self->motion_.ApplyElevation(target, self->highlightedRestingElevation_);
+                                }
+                                self->highlightedElement_ = nullptr;
+                            }
+                        });
+                    }
+                    highlightResetTimer_.Start();
                 }
             }
         }
@@ -2615,6 +2744,108 @@ namespace winrt::Mayasaba::implementation
         {
             NavigateToMessage(subId);
         }
+    }
+
+    void MainWindow::InitPerfMeasurement()
+    {
+        QueryPerformanceFrequency(&perfFreq_);
+        wchar_t buf[MAX_PATH] = {0};
+        DWORD len = GetEnvironmentVariableW(L"MAYASABA_PERF_LOG", buf, MAX_PATH);
+        if (len > 0)
+        {
+            perfLogPath_ = Utf8(buf);
+            QueryPerformanceCounter(&lastRenderQpc_);
+            auto weak = get_weak();
+            renderingToken_ = Microsoft::UI::Xaml::Media::CompositionTarget::Rendering(
+                [weak](IInspectable const& sender, IInspectable const& args)
+                {
+                    if (auto self = weak.get())
+                    {
+                        self->OnRendering(sender, args);
+                    }
+                });
+        }
+    }
+
+    void MainWindow::RecordInputEvent()
+    {
+        if (perfFreq_.QuadPart > 0)
+        {
+            QueryPerformanceCounter(&lastInputQpc_);
+        }
+    }
+
+    void MainWindow::OnRendering(IInspectable const&, IInspectable const&)
+    {
+        LARGE_INTEGER now;
+        QueryPerformanceCounter(&now);
+        if (lastRenderQpc_.QuadPart > 0 && perfFreq_.QuadPart > 0)
+        {
+            double dtMs = static_cast<double>(now.QuadPart - lastRenderQpc_.QuadPart) * 1000.0 / static_cast<double>(perfFreq_.QuadPart);
+            if (dtMs > 0.1 && dtMs < 500.0)
+            {
+                ++totalFramesRendered_;
+                totalFrameMs_ += dtMs;
+                if (dtMs > maxFrameMs_) maxFrameMs_ = dtMs;
+                if (dtMs > 33.33) ++droppedFrames_;
+            }
+        }
+        if (lastInputQpc_.QuadPart > 0 && perfFreq_.QuadPart > 0)
+        {
+            double latencyMs = static_cast<double>(now.QuadPart - lastInputQpc_.QuadPart) * 1000.0 / static_cast<double>(perfFreq_.QuadPart);
+            lastInputQpc_.QuadPart = 0;
+            if (latencyMs > 0.0 && latencyMs < 500.0)
+            {
+                typingLatencies_.push_back(latencyMs);
+            }
+        }
+        lastRenderQpc_ = now;
+    }
+
+    void MainWindow::FlushPerfLog()
+    {
+        if (perfLogPath_.empty()) return;
+        try
+        {
+            std::ofstream out(perfLogPath_);
+            if (!out.is_open()) return;
+
+            double avgFrameMs = (totalFramesRendered_ > 0) ? (totalFrameMs_ / totalFramesRendered_) : 0.0;
+            double avgFps = (avgFrameMs > 0.0) ? (1000.0 / avgFrameMs) : 0.0;
+
+            std::vector<double> sortedLatencies = typingLatencies_;
+            std::sort(sortedLatencies.begin(), sortedLatencies.end());
+            double p50Latency = 0.0;
+            double p95Latency = 0.0;
+            double maxLatency = 0.0;
+            if (!sortedLatencies.empty())
+            {
+                p50Latency = sortedLatencies[sortedLatencies.size() / 2];
+                p95Latency = sortedLatencies[static_cast<size_t>(sortedLatencies.size() * 0.95)];
+                maxLatency = sortedLatencies.back();
+            }
+
+            std::vector<double> sortedScroll = scrollFrameTimes_;
+            std::sort(sortedScroll.begin(), sortedScroll.end());
+            double scrollP50 = sortedScroll.empty() ? 0.0 : sortedScroll[sortedScroll.size() / 2];
+            double scrollP95 = sortedScroll.empty() ? 0.0 : sortedScroll[static_cast<size_t>(sortedScroll.size() * 0.95)];
+
+            out << "{\n";
+            out << "  \"total_frames\": " << totalFramesRendered_ << ",\n";
+            out << "  \"avg_frame_ms\": " << avgFrameMs << ",\n";
+            out << "  \"avg_fps\": " << avgFps << ",\n";
+            out << "  \"max_frame_ms\": " << maxFrameMs_ << ",\n";
+            out << "  \"dropped_frames_gt_33ms\": " << droppedFrames_ << ",\n";
+            out << "  \"typing_sample_count\": " << sortedLatencies.size() << ",\n";
+            out << "  \"typing_p50_latency_ms\": " << p50Latency << ",\n";
+            out << "  \"typing_p95_latency_ms\": " << p95Latency << ",\n";
+            out << "  \"typing_max_latency_ms\": " << maxLatency << ",\n";
+            out << "  \"scroll_sample_count\": " << sortedScroll.size() << ",\n";
+            out << "  \"scroll_p50_frame_ms\": " << scrollP50 << ",\n";
+            out << "  \"scroll_p95_frame_ms\": " << scrollP95 << "\n";
+            out << "}\n";
+        }
+        catch (...) {}
     }
 
 }

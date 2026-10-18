@@ -505,6 +505,7 @@
                                         <TextBox x:Name="RecentProjectsFilterBox"
                                                  PlaceholderText="Filter recent projects by name or path..."
                                                  TextChanged="OnRecentFilterTextChanged"
+                                                 PreviewKeyDown="OnRecentFilterBoxKeyDown"
                                                  AutomationProperties.Name="Filter recent projects"/>
                                         <Button x:Name="RecentProjectsClearFilterButton" Grid.Column="1"
                                                 Click="OnClearRecentFilter" Content="Clear" Visibility="Collapsed"
@@ -684,7 +685,7 @@
                                 </StackPanel>
                                 <Button x:Name="CloseSearchButton" Grid.Column="1" Click="OnCloseSearch"
                                         Padding="10,6" CornerRadius="{StaticResource MayasabaRadiusControl}"
-                                        AutomationProperties.Name="Close search (Escape)">
+                                        AutomationProperties.Name="Close search overlay (Escape)">
                                     <FontIcon Glyph="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
                                 </Button>
                             </Grid>
@@ -698,12 +699,12 @@
                                 <TextBox x:Name="MessageSearchBox"
                                          PlaceholderText="Search saved user messages in this project..."
                                          TextChanged="OnSearchQueryChanged"
-                                         KeyDown="OnSearchBoxKeyDown"
+                                         PreviewKeyDown="OnSearchBoxKeyDown"
                                          AutomationProperties.Name="Search query input"/>
                                 <Button x:Name="ClearSearchButton" Grid.Column="1" Click="OnClearSearchQuery"
-                                        Content="Clear" Visibility="Collapsed" Padding="12,6"
-                                        CornerRadius="{StaticResource MayasabaRadiusControl}"
-                                        AutomationProperties.Name="Clear search query"/>
+                                         Content="Clear" Visibility="Collapsed" Padding="12,6"
+                                         CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                         AutomationProperties.Name="Clear search query"/>
                             </Grid>
 
                             <!-- Search status label -->
@@ -724,7 +725,8 @@
                             <Button x:Name="SearchLoadMoreButton" Click="OnSearchLoadMore"
                                     Content="Load more results" Visibility="Collapsed"
                                     HorizontalAlignment="Center" Padding="14,6"
-                                    CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                    CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                    AutomationProperties.Name="Load more matching messages"/>
                         </StackPanel>
                     </Border>
 
