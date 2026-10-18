@@ -183,6 +183,14 @@ No composer, attachment entry or Send control on this screen
 - A successful selection may use a short connected transition into Chat after the durable bind succeeds. It must not delay action availability or impersonate success before commit.
 - Cancel restores the previous Chat view without replaying the whole conversation animation.
 
+### Recent projects filtering
+
+Screen 2 integrates compact local filtering directly above the recent projects list:
+- **Controls:** `RecentProjectsFilterBox` with clear action (`RecentProjectsClearFilterButton`), status filter dropdown (`RecentProjectsStatusFilter`: All / Open / Closed), and truthful count label (`RecentProjectsFilterCountLabel`).
+- **Pre-pagination querying:** Filter queries execute across all recorded projects in the SQLite store before computing pagination offsets, ensuring matches beyond the visible page are found.
+- **SQL safety:** Parameterized queries with `ESCAPE '\'` treat `%`, `_`, and `\` as literal search characters.
+- **Async generation protection:** In-flight queries carry `recentQueryGeneration_` to discard stale results from earlier keystrokes or cancelled navigation.
+
 ### Preserve all existing Screen 2 safety behavior
 
 Retain applicable S2-01–S2-30 regressions from the [native validation record](../native/LOCAL-VALIDATION.md#current-acceptance-matrix-s2-01-through-s2-30). S2-14 is historical for removed pre-binding draft entry; project-draft isolation and uncertain-send safeguards still apply. In particular:
@@ -204,17 +212,25 @@ Retain applicable S2-01–S2-30 regressions from the [native validation record](
 
 - Chat remains the only persistent workspace. No new dashboard, permanent project rail, tabs or standalone Agents/Tasks pages.
 - Keep File → Switch Project in the native application menu outside Chat.
-- Compact header: project identity and inspectable path, lifecycle/condition, three full CLI readiness entries, Start/Pause/Stop, overflow and Exit. Keep Stop reachable during every operation.
+- Compact header: project identity and inspectable path, lifecycle/condition, three full CLI readiness entries, Start/Pause/Stop, `[Search messages]` (`Ctrl+F`), overflow and Exit. Keep Stop reachable during every operation.
 - Separate CLI readiness from session activity. Do not use a green READY dot to imply a working session or approved task.
 - Group the empty-state hero, invitation and the one composer through adaptive layout. Eliminate the independent 190/135 fixed-offset arrangement.
 - Use a smaller dimensional logo than Welcome. Stop ambient hero motion as soon as conversation/work replaces the empty state.
 - Copy should invite action: “What would you like to work on?” with a short explanation of current capabilities or waiting state when relevant.
 
+### Saved-message search in Chat (Ctrl+F)
+
+- **Search interaction:** Activated via `Ctrl+F` shortcut or `SearchMessagesButton` in the Chat header. Opens overlay `MessageSearchPanel` (`Canvas.ZIndex="20"`) without losing composer text, caret, attachments or reading position.
+- **Query boundary:** Parameterized SQL queries pre-pagination (`Storage::SearchUserMessages`) matching confirmed persisted user messages in the current project (`row_id ASC`), clamped limit (1..100) and offset, with literal `%` and `_` escaping.
+- **English-only presentation invariant (§5):** Every result shows `[Saved user message — select to open in conversation]` with timestamp and identity. Original user text is displayed only in its permitted conversation/history view; ASCII is not treated as proof of English.
+- **Navigation by identity:** Selecting a match or pressing Enter closes the panel, navigates via `StartBringIntoView()` to the original message in the timeline by its durable `submissionId`, and applies a brief elevation highlight.
+- **Lifecycle:** Escape dismisses the overlay and restores prior focus; leaving or switching projects immediately closes search and clears pending queries.
+
 ### Composer and saved messages
 
 - Preserve one composer instance and one SubmitUserContribution path for first and later messages.
 - On a confirmed first saved contribution, animate the same composer from center to the bottom. Preserve text, caret, selection, focus and any prepared attachments. Failed/uncertain persistence keeps the recoverable draft and its original identity; do not visually acknowledge a saved message.
-- Render user messages with clear author/time/persistence state and selectable text. Use subtle brand tint and comfortable line length.
+- Render user messages as asymmetric speech bubbles (`CornerRadius="16,16,5,16"`, `MayasabaQuietBrush`), with clear author/time/persistence state and selectable text. Use subtle brand tint, soft card shadow, and comfortable line length.
 - Provide multiline input, clear Send feedback, the documented Enter behavior and alternate accessibility preference. Changing that preference never submits text.
 - When real attachment service is available, show file chips with preparing/verified/rejected states and removal. Enforce its all-or-nothing submission rules and bounds. Otherwise explain unavailability visibly and accessibly; never accept or silently omit files through a decorative button.
 - Drafts and histories must remain project-specific across navigation and restart.
@@ -225,7 +241,7 @@ Implement native reusable presentation for:
 
 - readable paragraphs, headings, lists, quotes and safe code blocks;
 - Copy actions and inspectable, source-linked file/evidence references;
-- one finalized primary answer, with unobtrusive attribution;
+- one finalized primary answer with layered dimensional presentation: lower plate edge (`MayasabaPlateEdgeBrush`), mini brand monogram badge (`M`), title/subtitle stack, bottom author perspective avatar badges (`H`, `K`, `C` circles with "Three perspectives"), quiet action buttons ("Show details", "Copy reply"), and soft secondary details panel (`MayasabaSecondaryBrush`, radius 12);
 - provisional, waiting, blocked and final states that remain distinct;
 - expandable agent contributions/reviews and preserved disagreement.
 
@@ -276,7 +292,7 @@ Implement motion as a reusable **UI presentation utility**, not a new service ow
 | DepthReveal | Hero/temporary raised surface; small perspective/elevation settle | 260 ms, no repeated text tilt |
 | HoverLift | Interactive surface elevation cue; focus-equivalent treatment | 120–160 ms |
 | Press feedback | Native pressed response; immediate cancellation-safe feedback | Native control behavior |
-| HeroTilt | Welcome/empty hero only, maximum approximately ±4° | 260 ms settling |
+| HeroTilt | Welcome/empty hero only; rotates dynamically around resting perspective (15°, -22°, -9°) by up to ±4°, returns smoothly | 260 ms settling |
 | Levitate / Glow / Orbit | Existing hero-only long-form effects | Retain documented 5–6 s / 52 s / 74 s bounds |
 
 Use the existing base easing `cubic-bezier(.18,.78,.2,1)` where supported by the selected native animation API. Keep one shared timing/token source. Document any API-specific mapping instead of asserting an exact curve that was not implemented.

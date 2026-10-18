@@ -1,4 +1,5 @@
 #include "../Mayasaba/Storage.h"
+#include "../Mayasaba/SearchController.h"
 #include "../Mayasaba/ProjectRoot.h"
 #include "../Mayasaba/ProjectService.h"
 #include "../Mayasaba/AttachmentService.h"
@@ -9,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -1351,8 +1353,473 @@ int main()
             }
         }
 
+        // 21. Recent-projects query filtering across recorded projects (Milestone 2)
+        {
+            auto const dbFile = folder / "filter_recents.db";
+            mayasaba::Storage store(dbFile);
+
+            auto pAlpha = store.BindProject(mayasaba::NewUuid(), "Alpha Project", "C:\\Projects\\Alpha", "id_alpha");
+            auto pBeta = store.BindProject(mayasaba::NewUuid(), "Beta Project", "C:\\Projects\\Beta_Test%20", "id_beta");
+            auto pGamma = store.BindProject(mayasaba::NewUuid(), "Gamma Spec_Special", "C:\\Projects\\Gamma_Special", "id_gamma");
+            auto pDelta = store.BindProject(mayasaba::NewUuid(), "Delta Special 100%", "C:\\Projects\\Delta%100", "id_delta");
+            auto pEtoile = store.BindProject(mayasaba::NewUuid(), "Étoile Project", "C:\\Projects\\Étoile", "id_etoile");
+
+            auto betaRecord = store.Project(pBeta).value();
+            store.SetClosure(pBeta, betaRecord.version, true);
+
+            for (int i = 0; i < 25; ++i)
+            {
+                std::string num = (i < 10 ? "0" : "") + std::to_string(i);
+                store.BindProject(mayasaba::NewUuid(), "P_" + num, "C:\\Dummy\\P_" + num, "id_dummy_" + num);
+            }
+
+            // Test 1: Empty filter & Status::All -> returns first page of 20, totalMatching = 30, hasMore = true
+            {
+                mayasaba::CrossProjectRecentProjectsQuery q;
+                q.pageSize = 20;
+                q.offset = 0;
+                auto res = store.QueryRecentProjects(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.items.size() == 20);
+                EXPECT(res.totalMatching == 30);
+                EXPECT(res.hasMore);
+            }
+
+            // Test 2: Name filter substring match -> "Alpha"
+            {
+                mayasaba::CrossProjectRecentProjectsQuery q;
+                q.filterText = "Alpha";
+                auto res = store.QueryRecentProjects(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.items.size() == 1);
+                EXPECT(res.totalMatching == 1);
+                EXPECT(!res.hasMore);
+                EXPECT(res.items[0].displayName == "Alpha Project");
+            }
+
+            // Test 3: Path filter match -> "Beta_Test"
+            {
+                mayasaba::CrossProjectRecentProjectsQuery q;
+                q.filterText = "Beta_Test";
+                auto res = store.QueryRecentProjects(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.items.size() == 1);
+                EXPECT(res.totalMatching == 1);
+                EXPECT(res.items[0].displayName == "Beta Project");
+            }
+
+            // Test 4: Literal special character '%' matching
+            {
+                mayasaba::CrossProjectRecentProjectsQuery q;
+                q.filterText = "%";
+                auto res = store.QueryRecentProjects(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.items.size() == 2);
+                EXPECT(res.totalMatching == 2);
+            }
+
+            // Test 5: Literal special character '_' matching
+            {
+                mayasaba::CrossProjectRecentProjectsQuery q;
+                q.filterText = "_";
+                q.pageSize = 50;
+                auto res = store.QueryRecentProjects(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.totalMatching == 27);
+            }
+
+            // Test 6: Status filtering
+            {
+                mayasaba::CrossProjectRecentProjectsQuery q;
+                q.statusFilter = mayasaba::ProjectStatusFilter::Open;
+                q.pageSize = 50;
+                auto res = store.QueryRecentProjects(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.totalMatching == 29);
+                for (auto const& item : res.items)
+                {
+                    EXPECT(!item.closed);
+                }
+            }
+            {
+                mayasaba::CrossProjectRecentProjectsQuery q;
+                q.statusFilter = mayasaba::ProjectStatusFilter::Closed;
+                auto res = store.QueryRecentProjects(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.items.size() == 1);
+                EXPECT(res.totalMatching == 1);
+                EXPECT(res.items[0].displayName == "Beta Project");
+                EXPECT(res.items[0].closed);
+            }
+
+            // Test 7: Paging with offset
+            {
+                mayasaba::CrossProjectRecentProjectsQuery q;
+                q.filterText = "P_";
+                q.pageSize = 10;
+                q.offset = 0;
+                auto page1 = store.QueryRecentProjects(q);
+                EXPECT(page1.items.size() == 10);
+                EXPECT(page1.totalMatching == 25);
+                EXPECT(page1.hasMore);
+
+                q.offset = 20;
+                auto page3 = store.QueryRecentProjects(q);
+                EXPECT(page3.items.size() == 5);
+                EXPECT(page3.totalMatching == 25);
+                EXPECT(!page3.hasMore);
+            }
+
+            // Test 8: Nonexistent match
+            {
+                mayasaba::CrossProjectRecentProjectsQuery q;
+                q.filterText = "Nonexistent_Pattern_XYZ";
+                auto res = store.QueryRecentProjects(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.items.empty());
+                EXPECT(res.totalMatching == 0);
+                EXPECT(!res.hasMore);
+            }
+        }
+
+        // 22. Saved-message search in Chat with project isolation and bounded queries (Milestone 3)
+        {
+            auto const dbFile = folder / "search_messages.db";
+            mayasaba::Storage store(dbFile);
+
+            auto pA = store.BindProject(mayasaba::NewUuid(), "Project A", "C:\\Projects\\A", "id_a");
+            auto pB = store.BindProject(mayasaba::NewUuid(), "Project B", "C:\\Projects\\B", "id_b");
+
+            auto saveHelper = [&](std::string const& proj, std::string const& id, std::string const& body) {
+                store.StageSubmission(proj, id, body);
+                auto disp = store.SaveContribution(proj, id, body);
+                EXPECT(disp == mayasaba::SaveDisposition::Saved);
+            };
+
+            auto subA1 = mayasaba::NewUuid();
+            saveHelper(pA, subA1, "Hello world, this is a test contribution");
+            auto subA2 = mayasaba::NewUuid();
+            saveHelper(pA, subA2, "Search indexing with special chars: 100% complete and verified_safe");
+            auto subA3 = mayasaba::NewUuid();
+            saveHelper(pA, subA3, "Another message containing keyword: Apple");
+            auto subA4 = mayasaba::NewUuid();
+            saveHelper(pA, subA4, "Bonjour tout le monde, message en français");
+
+            auto subB1 = mayasaba::NewUuid();
+            saveHelper(pB, subB1, "Hello world in Project B");
+            auto subB2 = mayasaba::NewUuid();
+            saveHelper(pB, subB2, "Keyword: Apple in project B");
+
+            store.StageSubmission(pA, mayasaba::NewUuid(), "Pending submission with secret keyword Apple");
+            store.SaveDraft(pA, "Unsaved draft containing Apple");
+
+            // Test 1: Empty query
+            {
+                mayasaba::MessageSearchQuery q;
+                q.projectId = pA;
+                q.queryText = "";
+                auto res = store.SearchUserMessages(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.matches.empty());
+                EXPECT(res.totalMatches == 0);
+            }
+
+            // Test 2: Substring search in Project A
+            {
+                mayasaba::MessageSearchQuery q;
+                q.projectId = pA;
+                q.queryText = "Hello world";
+                auto res = store.SearchUserMessages(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.matches.size() == 1);
+                EXPECT(res.totalMatches == 1);
+                EXPECT(res.matches[0].submissionId == subA1);
+            }
+
+            // Test 3: Project isolation - keyword "Apple" in Project A returns only Project A message
+            {
+                mayasaba::MessageSearchQuery q;
+                q.projectId = pA;
+                q.queryText = "Apple";
+                auto res = store.SearchUserMessages(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.matches.size() == 1);
+                EXPECT(res.totalMatches == 1);
+                EXPECT(res.matches[0].submissionId == subA3);
+            }
+
+            // Test 4: Project isolation - keyword "Apple" in Project B returns only Project B message
+            {
+                mayasaba::MessageSearchQuery q;
+                q.projectId = pB;
+                q.queryText = "Apple";
+                auto res = store.SearchUserMessages(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.matches.size() == 1);
+                EXPECT(res.totalMatches == 1);
+                EXPECT(res.matches[0].submissionId == subB2);
+            }
+
+            // Test 5: Pending submissions and drafts are strictly excluded
+            {
+                mayasaba::MessageSearchQuery q;
+                q.projectId = pA;
+                q.queryText = "secret";
+                auto res = store.SearchUserMessages(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.matches.empty());
+                EXPECT(res.totalMatches == 0);
+
+                q.queryText = "Unsaved draft";
+                auto res2 = store.SearchUserMessages(q);
+                EXPECT(res2.isComplete);
+                EXPECT(res2.matches.empty());
+                EXPECT(res2.totalMatches == 0);
+            }
+
+            // Test 6: Literal special characters '%' and '_'
+            {
+                mayasaba::MessageSearchQuery q;
+                q.projectId = pA;
+                q.queryText = "100%";
+                auto res = store.SearchUserMessages(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.matches.size() == 1);
+                EXPECT(res.matches[0].submissionId == subA2);
+
+                q.queryText = "verified_safe";
+                auto res2 = store.SearchUserMessages(q);
+                EXPECT(res2.isComplete);
+                EXPECT(res2.matches.size() == 1);
+                EXPECT(res2.matches[0].submissionId == subA2);
+            }
+
+            // Test 7: Non-ASCII character search
+            {
+                mayasaba::MessageSearchQuery q;
+                q.projectId = pA;
+                q.queryText = "français";
+                auto res = store.SearchUserMessages(q);
+                EXPECT(res.isComplete);
+                EXPECT(res.matches.size() == 1);
+                EXPECT(res.matches[0].submissionId == subA4);
+            }
+
+            // Test 8: Monotonic ordering and pagination
+            auto pC = store.BindProject(mayasaba::NewUuid(), "Project C", "C:\\Projects\\C", "id_c");
+            for (int i = 0; i < 25; ++i)
+            {
+                saveHelper(pC, mayasaba::NewUuid(), "Batch message item " + std::to_string(i));
+            }
+            {
+                mayasaba::MessageSearchQuery q;
+                q.projectId = pC;
+                q.queryText = "Batch message";
+                q.limit = 10;
+                q.offset = 0;
+                auto page1 = store.SearchUserMessages(q);
+                EXPECT(page1.isComplete);
+                EXPECT(page1.matches.size() == 10);
+                EXPECT(page1.totalMatches == 25);
+                EXPECT(page1.hasMore);
+
+                q.offset = 20;
+                auto page3 = store.SearchUserMessages(q);
+                EXPECT(page3.isComplete);
+                EXPECT(page3.matches.size() == 5);
+                EXPECT(page3.totalMatches == 25);
+                EXPECT(!page3.hasMore);
+            }
+
+            // Test 9: Clamping of limit and offset
+            {
+                mayasaba::MessageSearchQuery q;
+                q.projectId = pC;
+                q.queryText = "Batch message";
+                q.limit = 0;
+                auto res = store.SearchUserMessages(q);
+                EXPECT(res.matches.size() == 20);
+
+                q.limit = 500;
+                auto res2 = store.SearchUserMessages(q);
+                EXPECT(res2.matches.size() == 25);
+            }
+
+            // Test 10: Production SearchController sequential 3-page pagination across 50 items
+            // Drives the actual production mayasaba::SearchController logic against the real SQLite storage engine.
+            auto pD = store.BindProject(mayasaba::NewUuid(), "Project D", "C:\\Projects\\D", "id_d");
+            for (int i = 0; i < 50; ++i)
+            {
+                char buf[64];
+                snprintf(buf, sizeof(buf), "Sequential item %02d payload", i);
+                saveHelper(pD, mayasaba::NewUuid(), buf);
+            }
+
+            mayasaba::SearchController controller;
+            controller.Open(pD);
+            EXPECT(controller.IsOpen());
+            EXPECT(!controller.IsLoading());
+            EXPECT(controller.MatchCount() == 0);
+
+            // Page 1: SetQuery("Sequential item")
+            auto req1 = controller.SetQuery("Sequential item");
+            EXPECT(req1.has_value());
+            EXPECT(req1->offset == 0);
+            EXPECT(req1->limit == 20);
+            EXPECT(!req1->isAppend);
+            EXPECT(controller.IsLoading());
+
+            mayasaba::MessageSearchQuery dbQuery1{req1->projectId, req1->queryText, req1->limit, req1->offset};
+            auto res1 = store.SearchUserMessages(dbQuery1);
+            EXPECT(res1.isComplete);
+            EXPECT(res1.matches.size() == 20);
+            EXPECT(res1.totalMatches == 50);
+
+            bool applied1 = controller.ApplyResult(req1->generation, req1->queryText, req1->projectId, req1->isAppend, res1);
+            EXPECT(applied1);
+            EXPECT(!controller.IsLoading());
+            EXPECT(controller.MatchCount() == 20);
+            EXPECT(controller.TotalMatches() == 50);
+            EXPECT(controller.CanLoadMore());
+            EXPECT(controller.ShouldShowLoadMoreButton());
+
+            // Page 2: RequestLoadMore() click #1
+            auto req2 = controller.RequestLoadMore();
+            EXPECT(req2.has_value());
+            EXPECT(req2->offset == 20); // Exact accumulated size!
+            EXPECT(req2->isAppend);
+            EXPECT(controller.IsLoading());
+            EXPECT(!controller.CanLoadMore()); // Cannot click Load More while query is loading
+
+            mayasaba::MessageSearchQuery dbQuery2{req2->projectId, req2->queryText, req2->limit, req2->offset};
+            auto res2 = store.SearchUserMessages(dbQuery2);
+            EXPECT(res2.isComplete);
+            EXPECT(res2.matches.size() == 20);
+
+            bool applied2 = controller.ApplyResult(req2->generation, req2->queryText, req2->projectId, req2->isAppend, res2);
+            EXPECT(applied2);
+            EXPECT(!controller.IsLoading());
+            EXPECT(controller.MatchCount() == 40);
+            EXPECT(controller.TotalMatches() == 50);
+            EXPECT(controller.CanLoadMore());
+            EXPECT(controller.ShouldShowLoadMoreButton());
+
+            // Page 3: RequestLoadMore() click #2
+            // Verifies offset is 40 (not 60 which was the previous bug).
+            auto req3 = controller.RequestLoadMore();
+            EXPECT(req3.has_value());
+            EXPECT(req3->offset == 40);
+            EXPECT(req3->isAppend);
+            EXPECT(controller.IsLoading());
+
+            mayasaba::MessageSearchQuery dbQuery3{req3->projectId, req3->queryText, req3->limit, req3->offset};
+            auto res3 = store.SearchUserMessages(dbQuery3);
+            EXPECT(res3.isComplete);
+            EXPECT(res3.matches.size() == 10);
+
+            bool applied3 = controller.ApplyResult(req3->generation, req3->queryText, req3->projectId, req3->isAppend, res3);
+            EXPECT(applied3);
+            EXPECT(!controller.IsLoading());
+            EXPECT(controller.MatchCount() == 50);
+            EXPECT(controller.TotalMatches() == 50);
+            EXPECT(!controller.CanLoadMore()); // All 50 items loaded
+            EXPECT(!controller.ShouldShowLoadMoreButton()); // Load more button must collapse
+
+            // Verify exact sequential continuity and uniqueness across all 50 items
+            std::set<std::string> seenIds;
+            for (size_t i = 0; i < 50; ++i)
+            {
+                EXPECT(seenIds.insert(controller.Matches()[i].submissionId).second);
+            }
+
+            // Test 11: Reopening search resets pagination to page 0 (does not start on offset 40)
+            controller.Close();
+            EXPECT(!controller.IsOpen());
+            EXPECT(controller.MatchCount() == 0);
+            EXPECT(controller.CurrentOffset() == 0);
+
+            controller.Open(pD);
+            EXPECT(controller.IsOpen());
+            auto reopenReq = controller.ReopenWithExistingQuery();
+            EXPECT(reopenReq.has_value());
+            EXPECT(reopenReq->offset == 0); // Must be offset 0, NOT offset 40!
+            EXPECT(!reopenReq->isAppend);
+
+            mayasaba::MessageSearchQuery dbQueryReopen{reopenReq->projectId, reopenReq->queryText, reopenReq->limit, reopenReq->offset};
+            auto resReopen = store.SearchUserMessages(dbQueryReopen);
+            EXPECT(resReopen.isComplete);
+            EXPECT(resReopen.matches.size() == 20);
+
+            bool appliedReopen = controller.ApplyResult(reopenReq->generation, reopenReq->queryText, reopenReq->projectId, reopenReq->isAppend, resReopen);
+            EXPECT(appliedReopen);
+            EXPECT(controller.MatchCount() == 20);
+            // Matches 0..19 are present, identical to page 1
+            EXPECT(controller.Matches()[0].submissionId == res1.matches[0].submissionId);
+            EXPECT(controller.Matches()[19].submissionId == res1.matches[19].submissionId);
+
+            // Test 12: Changing query invalidates stale paging and prevents mixing results
+            // Query 1: "Sequential" is active with 20 matches.
+            EXPECT(controller.CanLoadMore());
+            // User types new query "Apple"
+            auto reqNewQuery = controller.SetQuery("Apple");
+            EXPECT(reqNewQuery.has_value());
+            EXPECT(reqNewQuery->queryText == "Apple");
+            EXPECT(reqNewQuery->offset == 0);
+            // Immediately upon typing, old results are cleared and stale paging is disabled:
+            EXPECT(controller.MatchCount() == 0);
+            EXPECT(!controller.CanLoadMore());
+            EXPECT(!controller.ShouldShowLoadMoreButton());
+            EXPECT(!controller.RequestLoadMore().has_value()); // Attempting Load More returns nullopt!
+
+            // If an old query result from previous generation arrives late, ApplyResult rejects it:
+            bool staleApplied = controller.ApplyResult(reopenReq->generation, reopenReq->queryText, reopenReq->projectId, reopenReq->isAppend, resReopen);
+            EXPECT(!staleApplied);
+            EXPECT(controller.MatchCount() == 0); // Old matches were NOT injected
+
+            // Apply valid results for "Apple"
+            mayasaba::MessageSearchQuery dbQueryApple{reqNewQuery->projectId, reqNewQuery->queryText, reqNewQuery->limit, reqNewQuery->offset};
+            auto resApple = store.SearchUserMessages(dbQueryApple);
+            bool appleApplied = controller.ApplyResult(reqNewQuery->generation, reqNewQuery->queryText, reqNewQuery->projectId, reqNewQuery->isAppend, resApple);
+            EXPECT(appleApplied);
+
+            // Test 13: Project switching cancels active query and rejects cross-project results
+            auto pE = store.BindProject(mayasaba::NewUuid(), "Project E", "C:\\Projects\\E", "id_e");
+            controller.SetActiveProject(pE);
+            EXPECT(controller.MatchCount() == 0);
+
+            // Stale result from Project D arriving after switch is rejected:
+            bool crossProjectApplied = controller.ApplyResult(reqNewQuery->generation, "Apple", pD, false, resApple);
+            EXPECT(!crossProjectApplied);
+            EXPECT(controller.MatchCount() == 0);
+
+            // Test 14: Failed query error-handling path
+            // When an active background query encounters a failure (isComplete = false), ApplyResult
+            // must accept the result (return true), mark isLoading_ = false, record the error message,
+            // clear matches, and disable Load more so the UI can truthfully present the failure.
+            {
+                mayasaba::SearchController failController;
+                failController.Open(pD);
+                auto failReq = failController.SetQuery("Trigger failure");
+                EXPECT(failReq.has_value());
+                EXPECT(failController.IsLoading());
+
+                mayasaba::MessageSearchResult failedResult;
+                failedResult.isComplete = false;
+                failedResult.errorMessage = "Simulated I/O failure";
+
+                bool accepted = failController.ApplyResult(
+                    failReq->generation, failReq->queryText, failReq->projectId, failReq->isAppend, failedResult);
+                EXPECT(accepted); // Must be accepted so UI displays the failure!
+                EXPECT(!failController.IsLoading());
+                EXPECT(failController.LastErrorMessage() == "Simulated I/O failure");
+                EXPECT(failController.MatchCount() == 0);
+                EXPECT(!failController.CanLoadMore());
+                EXPECT(!failController.ShouldShowLoadMoreButton());
+            }
+        }
+
         fs::remove_all(folder);
-        std::cout << "PASS: 20 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation)\n";
+        std::cout << "PASS: 22 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search)\n";
         return 0;
     }
     catch (std::exception const& e)

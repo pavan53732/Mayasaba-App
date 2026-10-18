@@ -7,6 +7,7 @@
 #include "ProjectRoot.h"
 #include "Motion.h"
 #include "Timeline.h"
+#include "SearchController.h"
 #include <memory>
 #include <string>
 #include <winrt/Windows.Foundation.h>
@@ -48,6 +49,17 @@ namespace winrt::Mayasaba::implementation
         void OnRecentPrevious(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnRecentNext(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnRetryStore(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnRecentFilterTextChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::TextChangedEventArgs const&);
+        void OnClearRecentFilter(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnRecentStatusFilterChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
+        void OnChatKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
+        void OnSearchMessagesClick(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnSearchQueryChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::TextChangedEventArgs const&);
+        void OnClearSearchQuery(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnCloseSearch(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnSearchBoxKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
+        void OnSearchResultItemClick(IInspectable const&, Microsoft::UI::Xaml::Controls::ItemClickEventArgs const&);
+        void OnSearchLoadMore(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         // Presentation-only handlers introduced by the three-screen refinement.
         void OnHeroPointerMoved(IInspectable const&, Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&);
         void OnHeroPointerExited(IInspectable const&, Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&);
@@ -71,6 +83,19 @@ namespace winrt::Mayasaba::implementation
         bool projectClosed_{false}, navigationBusy_{false}, allowClose_{false}, pickerOpen_{false};
         size_t recentOffset_{0};
         std::vector<mayasaba::ProjectRecord> recentRecords_;
+        std::string recentFilterText_;
+        mayasaba::ProjectStatusFilter recentStatusFilter_{mayasaba::ProjectStatusFilter::All};
+        uint64_t recentQueryGeneration_{0};
+        size_t recentTotalMatching_{0};
+
+        mayasaba::SearchController searchController_;
+        Microsoft::UI::Xaml::Controls::Control searchReturnFocus_{nullptr};
+        void OpenSearch();
+        void CloseSearch();
+        winrt::fire_and_forget ExecuteSearchAsync(mayasaba::SearchPageRequest req);
+        void RenderSearchResults(bool isAppend);
+        void NavigateToMessage(std::string const& submissionId);
+
         std::optional<mayasaba::SelectionRequest> collisionRequest_, createRequest_;
         std::string parentIdentity_;
         Microsoft::UI::Xaml::Controls::Control returnFocus_{nullptr};

@@ -4,7 +4,7 @@
 
 **Scope:** Proposed and approved enhancements to the native three-screen Chat control room. Implementation status of each capability is stated per feature; documentation completion is not runtime acceptance.
 
-**Precedence:** Authoritative system description → AGENTS.md → this contract → derived UI/architecture guides → code/tests.
+**Precedence:** User's current explicit instruction → Authoritative system description → AGENTS.md → ARCHITECTURE.md / UI-UX.md → this subordinate contract → code/tests.
 
 ---
 
@@ -40,9 +40,9 @@ Runtime acceptance uses only `PASS`, `FAIL`, `INCONCLUSIVE`, `BLOCKED`, `NOT_APP
 | ID | Capability | Priority | Status | Primary dependency |
 |---|---|---|---|---|
 | UXE-01 | Action Center in Chat | P0 | PROPOSED | Available owner records |
-| UXE-02 | Universal Search | P0 | PROPOSED | Typed query service + records |
+| UXE-02 | Universal Search | P0 | IMPLEMENTED (saved user messages subset; native acceptance incomplete) | Current project contributions; remaining scope PROPOSED |
 | UXE-03 | Native Diff Inspector | P0 | PROPOSED | Staged-change records (Workspace Manager) |
-| UXE-04 | Smart Project Explorer | P1 | PROPOSED | Existing project records |
+| UXE-04 | Smart Project Explorer | P1 | IMPLEMENTED (Screen 2 filtering subset; native acceptance incomplete) | Local project registry; remaining scope PROPOSED |
 | UXE-05 | Council Comparison View | P1 | PROPOSED | Council/Decision/Evidence records |
 | UXE-06 | Task Dependency View | P1 | PROPOSED | Task/DAG Engine records |
 | UXE-07 | Evidence Timeline | P1 | PROPOSED | Event/Evidence/owner records |
@@ -89,6 +89,8 @@ Status values above reflect documentation; runtime capability is `BLOCKED` until
 ### UXE-02 — Universal Search (P0)
 
 **Objective.** Compact search within Chat over authorized, project-scoped records.
+
+**Status & Implemented Scope (2026-10-18):** `IMPLEMENTED (native acceptance incomplete)` for current-project saved user messages. The native WinUI 3 interface provides `Ctrl+F` and `SearchMessagesButton` in the Chat header, opening an overlay `MessageSearchPanel` (`Canvas.ZIndex="20"`) with `MessageSearchBox`, clear action, `SearchResultsList`, neutral English provenance labels for all results, with original text available in its permitted conversation/history view, and BringIntoView navigation by durable submission identity with visual elevation highlight. Storage implements `SearchUserMessages` executing parameterized SQL (`LIKE ? ESCAPE '\'`) pre-pagination across all project contributions, deterministic ordering (`row_id ASC`), and input/result clamping. Other authorized owner-record scopes remain `PROPOSED`. Drafts, pending submissions, raw CLI output and private agent traffic remain excluded; this status does not authorize expanding search into them.
 
 **Scope (enable only when records available).** Saved conversation; approved requirements/decisions; task identifiers/statuses; file/artifact metadata; evidence/validation references; controller events for the selected project.
 
@@ -137,6 +139,8 @@ Status values above reflect documentation; runtime capability is `BLOCKED` until
 ### UXE-04 — Smart Project Explorer (P1)
 
 **Objective.** Extend Project Selection with local filtering and path inspection.
+
+**Status & Implemented Scope (2026-10-18):** `IMPLEMENTED (native acceptance incomplete)` for Screen 2 Recent Projects filtering. The native WinUI 3 interface provides `RecentProjectsFilterBox`, `RecentProjectsClearFilterButton`, and `RecentProjectsStatusFilter` (`All`, `Open`, `Closed`) on Screen 2. Filtering matches project names and canonical paths across the full authorized registry pre-pagination via `Storage::QueryRecentProjects` using parameterized SQL (`LIKE ? ESCAPE '\'`) with literal `%` and `_` escaping. Asynchronous queries are protected by `recentQueryGeneration_` against out-of-order execution, stale completions, and UI overwrites. Full-path tooltips and keyboard navigation are supported. Whole-PC discovery, external filesystem scanning, and folder tree exploration remain excluded; remaining scope remains `PROPOSED`.
 
 **User experience.** Filter recorded recent projects by name, recorded canonical path, open/closed status. Easy full-path inspection via keyboard and pointer. Visually distinguish: open existing folder, explicitly create new project folder, open recorded recent project, locate moved project, resolve missing/mismatched identity. Distinguish missing path from deleted record.
 

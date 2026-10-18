@@ -115,6 +115,7 @@
     <ClInclude Include="RichText.h" />
     <ClInclude Include="Timeline.h" />
     <ClInclude Include="Fixtures.h" />
+    <ClInclude Include="SearchController.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>

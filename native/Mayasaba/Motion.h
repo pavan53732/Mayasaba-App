@@ -35,6 +35,11 @@ namespace mayasaba::ui
         // depends on it and keyboard/touch users receive the same information.
         static constexpr double MaxTiltDegrees = 4.0;
         static constexpr double TiltPerspective = 900.0;
+        // Hero resting 3D perspective orientation from the approved dimensional proposal:
+        // rotateX(15deg) rotateY(-22deg) rotateZ(-9deg)
+        static constexpr double RestingRotationX = 15.0;
+        static constexpr double RestingRotationY = -22.0;
+        static constexpr double RestingRotationZ = -9.0;
         // Long-form ambient bounds retained from the closed motion list.
         static constexpr double LevitateSeconds = 5.7;
         static constexpr double GlowSeconds = 6.0;
@@ -177,6 +182,18 @@ namespace mayasaba::ui
         // never complete, and evicting one would leave an unowned clock running.
         std::vector<winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard> ambient_;
         bool ambientRunning_{false};
+        // Active tilt storyboard and generation guard for pointer tilt on the brand hero.
+        winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard activeTiltBoard_{nullptr};
+        uint64_t tiltGeneration_{0};
+        // Per-target active hover storyboard and generation tracking. Distinguishes targets
+        // so animating or unlifting row A is never stopped by row B starting an animation.
+        struct ActiveHover
+        {
+            winrt::weak_ref<winrt::Microsoft::UI::Xaml::FrameworkElement> element{nullptr};
+            winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard board{nullptr};
+            uint64_t generation{0};
+        };
+        std::vector<ActiveHover> activeHovers_;
         // A completion callback must never touch a destroyed controller. Every
         // handler holds this flag weakly and the destructor clears it first.
         std::shared_ptr<bool> alive_{std::make_shared<bool>(true)};

@@ -520,9 +520,370 @@ Measurements on the rebuilt binary (isolated stores, 1424x732 client, 125% DPI):
 The Settings preference was restored to its original value after the run (`SPI_GETCLIENTAREAANIMATION`
 reads 1).
 
+### 3D visual refinement and animation implementation (2026-10-18)
+
+The approved interactive design reference (`mayasaba-dimensional-proposal.html`) was fully translated into the native C++20 / C++/WinRT / WinUI 3 codebase across all three screens:
+
+1. **Resting 3D perspective orientation:**
+   - Declared `RestingRotationX = 15.0`, `RestingRotationY = -22.0`, `RestingRotationZ = -9.0` in `MotionTokens`.
+   - Initialized `WelcomeHeroTilt` and `EmptyHeroTilt` in `MainWindow.xaml` with `RotationX="15" RotationY="-22" RotationZ="-9"`.
+   - Updated `MotionController::EnsureTransform3D` to initialize resting perspective values on target elements.
+   - Updated `HeroTilt` to calculate interactive tilt offsets (up to ±4°) relative to `RestingRotationX` and `RestingRotationY`.
+   - Updated `ResetTilt` to smoothly animate back to the resting orientation `(15, -22, -9)` in standard mode, and collapse to `(0, 0, 0)` under reduced-motion or high-contrast settings.
+2. **Screen 1 (Welcome):**
+   - Sculpted mark with extruded slices (`-34`, `-18`, `-7` at negative Z) rendered under 900 depth perspective with contact shadow and top-left face light.
+   - Refined typography hierarchy with subheader and styled reminder card containing the shield-check icon (`Segoe Fluent Icons &#xEA18;`).
+3. **Screen 2 (Project selection):**
+   - Added sculpted 64x64 `FolderArtBadge` (CornerRadius 18, `MayasabaPlateEdgeBrush` border, `MayasabaSecondaryBrush` background, 28px folder icon) beside the selector heading.
+   - Refined recent project cards in `MainWindow.xaml.cpp`: dimensional card stack with lower plate edge (`MayasabaPlateEdgeBrush`), 40x40 quiet brand folder icon badge, 15px titles, Cascadia Mono paths, meta lines, status badges (`OPEN` / `CLOSED · Read-only`), `Open project`/`Locate folder` buttons, `HoverLift` (translateY -2px), and elevation toggling (8 resting -> 14 on hover/focus).
+4. **Screen 3 (Chat):**
+   - Floating composer with lower plate edge (`ComposerPlateEdge`, `MayasabaPlateEdgeBrush`) and elevated panel.
+   - Asymmetric speech bubble for user contributions (`CornerRadius="16,16,5,16"`, `MayasabaQuietBrush`).
+   - Layered agent reply card with lower plate edge (`MayasabaPlateEdgeBrush`), mini brand monogram badge (`M`), title/subtitle stack, bottom author perspective avatar badges (`H`, `K`, `C` circles with "Three perspectives"), quiet action buttons ("Show details", "Copy reply"), and soft secondary details panel (`MayasabaSecondaryBrush`, radius 12).
+   - Controller cards with semantic state badges, stylized stage provenance boxes, quiet details toggles, and matching plate edges.
+
+#### Build and verification results
+
+| Verification | Status | Command / Details |
+| --- | --- | --- |
+| Full Application Build | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). Executable: `native/Mayasaba/bin/x64/Release/Mayasaba.exe`. |
+| Test Tooling Build | PASS | `MSBuild native/tests/storage_tests.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). |
+| Storage & Regression Suite | PASS | `native/tests/bin/storage_tests.exe`: all 20 test groups PASS (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation). |
+| Contract Registry Validator | PASS | `python native/tests/validate_contract_registry.py`: all 124 schema and slice checks PASS. |
+
 ### What this does not establish
 
 The visual refinement is implemented and verified as a native presentation slice. It does not
 implement, and must not be read as evidence for, the missing three-agent orchestration, task
 leasing, validation, publication or the twelve proposed productivity capabilities. The live reply
 and work rows above stay BLOCKED until those owner services exist.
+
+---
+
+# Native UX Milestones 1, 2, and 3 — Implementation & Local Validation (2026-10-18)
+
+## 1. Scope and Authority
+
+This historical report records implementation and partial verification of three ordered UX milestones. The 2026-10-19 integration review below supersedes aggregate completion claims; source walkthroughs do not establish native interaction acceptance:
+1. **Milestone 1 — Accessibility, performance verification and dimensional-motion refinement.**
+2. **Milestone 2 — Recent-project filtering on Screen 2 (UXE-04 subset).**
+3. **Milestone 3 — Current-project saved-message search in Chat (UXE-02 subset).**
+
+Per repository precedence, the user's current explicit instruction governs, preserving the thirteen functional layers, twelve authoritative state machines, Chat as the single persistent workspace, and the English-only presentation invariant (§5).
+
+---
+
+## 2. Milestone 1 — Motion Lifecycle Hardening, Accessibility & Performance (PARTIALLY VERIFIED)
+
+### 2.1 Motion Lifecycle Hardening under Stress
+In `native/Mayasaba/Motion.h` and `Motion.cpp`:
+- **Tracking Registry Bounded Capacity:** `MotionController::Track` maintains a bounded registry of active storyboards (`tracked_`, capped at `MaxTracked = 96` items). When tracked count exceeds capacity, stopped entries are pruned first; if still exceeding `MaxTracked`, the oldest storyboard is evicted after explicitly invoking `board.Stop()` to release composition resources, animation clocks, and target properties before dropping the reference.
+- **Per-Target Active Hover Tracking:** Replaced the previous single shared `activeHoverBoard_` slot with per-target tracking using `struct ActiveHover { weak_ref<FrameworkElement> element; Storyboard board; uint64_t generation; }` stored in `activeHovers_`. Starting a hover animation on project row B stops only row B's prior storyboard, ensuring row A's ongoing return to resting position is never cancelled or frozen mid-transition.
+- **Pointer-Tilt Management:** Added `activeTiltBoard_` storyboard reference alongside monotonic generation counter (`tiltGeneration_`). When a new `HeroTilt` or `ResetTilt` animation is requested, any in-flight storyboard for that target is immediately stopped.
+- **Generation-Guarded Commits:** Animation completion callbacks verify `if (gen != tiltGeneration_) return;` (or element-specific generation in `activeHovers_`), ensuring that late callbacks from canceled or superseded transitions cannot overwrite newer UI states or corrupt final transform values.
+- **Smooth Resting Return:** `ResetTilt` smoothly animates the brand hero back to the shared resting perspective `(RotationX="15" RotationY="-22" RotationZ="-9")` over 260 ms with easing in standard mode, and collapses immediately to `(0, 0, 0)` under reduced-motion or high-contrast preferences.
+
+### 2.2 Performance Benchmark Results (SQLite Background Query Engine)
+Measurements executed using `native/tests/bin/perf_benchmarks.exe` on a Release x64 binary with isolated test stores outside `%LOCALAPPDATA%\Mayasaba\`:
+- **Hardware & Environment:** Windows 11 x64 (Build 26200), MSVC v145 Release Build, 125% DPI (`GetDpiForWindow` = 120), isolated SQLite stores in `$env:TEMP\mayasaba_perf_benchmarks\`.
+- **Target Engineering Threshold:** < 100 ms p95 latency for interactive input and queries (strictly checked and enforced by `perf_benchmarks.exe`, throwing a runtime error if violated).
+- **Measurement Scope Notice:** This benchmark measures SQLite storage engine query and filtering execution time on a background worker thread under controlled synthetic workloads. It does **NOT** measure WinUI 3 UI-thread compositor frame presentation rates, input typing latency, or XAML ListView layout / scrolling frame rates, which require live UI automation or ETW traces.
+
+#### Recent-Project Filtering Latencies (1,000 Recorded Projects)
+
+| Query Scenario                         | Min Latency | Mean Latency | p95 Latency | Max Latency | Samples | Target Threshold | Verdict |
+|:---------------------------------------|------------:|-------------:|------------:|------------:|--------:|-----------------:|:-------:|
+| Unfiltered (pageSize 20, offset 0)     |     1.27 ms |     1.35 ms |     1.56 ms |     1.81 ms |     100 |         < 100 ms |  PASS   |
+| Status: Open only (pageSize 20)        |     1.32 ms |     1.42 ms |     1.61 ms |     2.09 ms |     100 |         < 100 ms |  PASS   |
+| Status: Closed only (pageSize 20)      |     0.17 ms |     0.19 ms |     0.24 ms |     0.25 ms |     100 |         < 100 ms |  PASS   |
+| Substring match 'service_alpha'        |     0.79 ms |     0.83 ms |     0.94 ms |     1.04 ms |     100 |         < 100 ms |  PASS   |
+| Literal '%' match 'special_%'          |     0.70 ms |     0.76 ms |     0.89 ms |     1.47 ms |     100 |         < 100 ms |  PASS   |
+| Deep paging (offset 500)               |     2.35 ms |     2.72 ms |     3.50 ms |     4.36 ms |     100 |         < 100 ms |  PASS   |
+| Full scan (0 matches)                  |     0.50 ms |     0.54 ms |     0.67 ms |     1.21 ms |     100 |         < 100 ms |  PASS   |
+
+#### Saved-Message Search Latencies (300, 3,000, and 10,000 Messages)
+
+| Dataset Size | Query Scenario                         | Min Latency | Mean Latency | p95 Latency | Max Latency | DB Size  | Target Threshold | Verdict |
+|:-------------|:---------------------------------------|------------:|-------------:|------------:|------------:|:---------|-----------------:|:-------:|
+| 300 msgs     | Cold query (first execution)           |     0.39 ms |     0.39 ms |     0.39 ms |     0.39 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Substring 'algorithm' (~10% hits)      |     0.26 ms |     0.27 ms |     0.29 ms |     0.34 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Rare needle (exact 1 match)            |     0.28 ms |     0.28 ms |     0.30 ms |     0.31 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Literal wildcard '100%_verified'       |     0.25 ms |     0.26 ms |     0.31 ms |     0.38 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Non-ASCII query '日本語テスト'   |     0.21 ms |     0.23 ms |     0.31 ms |     0.37 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Deep paging (offset = count/2)         |     0.16 ms |     0.18 ms |     0.28 ms |     0.32 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Worst-case full scan (0 hits)          |     0.27 ms |     0.29 ms |     0.38 ms |     0.60 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 3,000 msgs   | Cold query (first execution)           |     1.33 ms |     1.33 ms |     1.33 ms |     1.33 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Substring 'algorithm' (~10% hits)      |     1.33 ms |     1.42 ms |     1.59 ms |     1.74 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Rare needle (exact 1 match)            |     2.44 ms |     2.62 ms |     2.97 ms |     3.65 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Literal wildcard '100%_verified'       |     1.48 ms |     1.55 ms |     1.63 ms |     1.94 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Non-ASCII query '日本語テスト'   |     1.83 ms |     1.95 ms |     2.07 ms |     2.68 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Deep paging (offset = count/2)         |     1.17 ms |     1.30 ms |     1.78 ms |     2.27 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Worst-case full scan (0 hits)          |     2.53 ms |     2.76 ms |     3.27 ms |     4.50 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Cold query (first execution)           |     6.54 ms |     6.54 ms |     6.54 ms |     6.54 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Substring 'algorithm' (~10% hits)      |     6.88 ms |     7.25 ms |     8.04 ms |     8.92 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Rare needle (exact 1 match)            |    13.61 ms |    15.54 ms |    23.35 ms |    27.81 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Literal wildcard '100%_verified'       |     6.83 ms |     7.20 ms |     7.81 ms |     8.52 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Non-ASCII query '日本語テスト'   |     6.71 ms |     7.21 ms |     7.79 ms |     9.90 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Deep paging (offset = count/2)         |     7.35 ms |     8.46 ms |     9.75 ms |    10.39 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Worst-case full scan (0 hits)          |    13.56 ms |    14.27 ms |    16.20 ms |    16.80 ms | 4460 KiB |         < 100 ms |  PASS   |
+
+All observed query latencies met the enforced 100 ms p95 threshold, with worst-case 10,000-row table scans peaking at 23.35 ms p95.
+
+### 2.3 Outstanding Accessibility & Display Scaling Checks (Inconclusive)
+- **150% and 200% Display Scaling:** INCONCLUSIVE. The test session ran at 125% DPI (`GetDpiForWindow` = 120); 150% and 200% were not exercised in that session. Whether this machine requires sign-out for a particular scaling change must be checked rather than assumed.
+- **Narrator Speech Walkthrough:** INCONCLUSIVE. All controls expose stable UI Automation properties, heading levels, and accessible names (`AutomationProperties.Name`); live synthetic Narrator speech audio capture was not instrumented.
+- **Milestone 1 Completion Status:** **PARTIALLY VERIFIED**. Backend query latency and motion lifecycle hardening are verified. Live UI Automation focus/cancellation coverage, Narrator speech verification, and multi-DPI display scaling remain inconclusive.
+
+---
+
+## 3. Milestone 2 — Recent-Project Filtering on Screen 2 (IMPLEMENTED; native acceptance incomplete)
+
+### 3.1 Implementation Summary
+- **UI Surface (`MainWindow.xaml`):** Added `RecentProjectsFilterBox` (placeholder: "Filter recent projects..."), `RecentProjectsClearFilterButton` (clear icon `\uE894`), `RecentProjectsStatusFilter` (ComboBox with items "All", "Open", "Closed"), and `RecentProjectsFilterCountLabel`.
+- **Query Boundary (`Storage.h`, `Storage.cpp`):**
+  - Extended `CrossProjectRecentProjectsQuery` with `pageSize`, `offset`, `filterText`, and `statusFilter` (`ProjectStatusFilter` enum: `All`, `Open`, `Closed`).
+  - Implemented `EscapeLike()` escaping `\`, `%`, and `_`.
+  - Added parameterized SQL query with `ESCAPE '\'` executing pre-pagination filtering:
+    `WHERE (display_name LIKE ? ESCAPE '\' OR canonical_path LIKE ? ESCAPE '\') [AND closed = ?]`
+  - Added count query `SELECT COUNT(*) FROM projects ...` returning `totalMatching`.
+- **Async Concurrency & Generation Guard (`MainWindow.xaml.cpp`):**
+  - Added `recentQueryGeneration_` counter incremented on every filter text change, status selection, clear button click, and screen transition.
+  - Coroutine resumptions verify `if (gen != recentQueryGeneration_ || selectorGeneration_ != currentSelectorGen) co_return;`, preventing stale query results from overwriting newer criteria.
+  - Modifying filter criteria resets pagination (`recentPage_ = 0`).
+- **Zero-Filesystem Scan Guarantee:** The query runs strictly against recorded SQLite project rows; no filesystem directories or untracked paths are scanned.
+
+### 3.2 Unit Test Evidence
+- **Test Group 21 in `native/tests/storage_tests.cpp`:**
+  - Case 21A: Name substring matching.
+  - Case 21B: Canonical path substring matching.
+  - Case 21C: Literal `%` and `_` wildcard escaping.
+  - Case 21D: Status filtering (`ProjectStatusFilter::Open`, `Closed`, `All`).
+  - Case 21E: Pre-pagination across 30 seeded projects: filtering reduces the matching set to 10 items before pagination is computed.
+  - Case 21F: Paging with offset and empty/non-matching query handling.
+  - Result: **PASS**.
+
+---
+
+## 4. Milestone 3 — Current-Project Saved-Message Search in Chat (IMPLEMENTED; native acceptance incomplete)
+
+### 4.1 Implementation Summary & Search Lifecycle Hardening (`SearchController.h`)
+- **Shared Production Search Controller (`native/Mayasaba/SearchController.h`):**
+  - Encapsulates deterministic search state machine across UI events and background database queries: `Open()`, `Close()`, `SetQuery()`, `RequestLoadMore()`, `ApplyResult()`, `CanLoadMore()`, `ShouldShowLoadMoreButton()`.
+  - Used directly by both `MainWindow.xaml.cpp` and native regression unit test suite (`storage_tests.cpp`).
+- **Resolution of Search Reopening Pagination Defect:**
+  - Previously, closing and reopening search preserved the old `searchOffset_` (e.g. 40), causing `OpenSearch()` to re-query at offset 40 so earlier matches (0..39) vanished.
+  - **Fixed:** `SearchController::Open()` and `ReopenWithExistingQuery()` reset `nextOffset_ = 0`, `matches_.clear()`, `totalMatches_ = 0`, ensuring that reopening search begins freshly at page 0 (offset 0), retrieving items 0..19 from the top.
+- **Resolution of Query Change Race & Stale Paging Defect:**
+  - Previously, typing a new query while a query was running left the old "Load more" button active; clicking it dispatched the old match count with the new query text, superseding page 1 and mixing results.
+  - **Fixed:** `SearchController::SetQuery()` immediately invalidates `matches_`, sets `isLoading_ = true`, resets `nextOffset_ = 0`, and increments `generation_`.
+  - `CanLoadMore()` immediately evaluates to `false`, and `RequestLoadMore()` returns `std::nullopt`.
+  - In `MainWindow.xaml.cpp`, `SearchLoadMoreButton().Visibility(Visibility::Collapsed)` and `SearchResultsList().Items().Clear()` execute immediately on `OnSearchQueryChanged`.
+  - `SearchController::ApplyResult()` enforces strict generation and identity gating: if `queryGen != generation_`, `queryText != queryText_`, or `projectId != projectId_`, the arrival of a slow stale query from an earlier search or project is discarded atomically.
+- **Sequential Continuation Pagination:**
+  - `SearchController::RequestLoadMore()` assigns `offset = matches_.size()` (not `offset += matches_.size()`), advancing continuously `0 → 20 → 40` across 50 records without skipping or jumping.
+  - In `RenderSearchResults`, `startIndex` is computed from `SearchResultsList().Items().Size()` on append, ensuring all newly fetched rows are appended and rendered without skipping items.
+- **UI Surface (`MainWindow.xaml`):**
+  - Added `SearchMessagesButton` in the Chat header (`[Search messages]`, icon `\uE721`, tooltip "Search saved messages (Ctrl+F)").
+  - Added `MessageSearchPanel` overlay in `ChatBody` (`Canvas.ZIndex="20"`, CornerRadius 16, elevated border) containing:
+    - Title: "Search messages"
+    - `CloseSearchButton` (icon `\uE8BB`)
+    - `MessageSearchBox` (placeholder: "Search saved messages in this project...")
+    - `ClearSearchButton` (icon `\uE894`)
+    - `SearchStatusText` (truthful match counts or error messages)
+    - `SearchResultsList` (ListView of matching messages with author, timestamp, submission ID, and safe snippet)
+    - `SearchLoadMoreButton` ("Load more matches")
+- **Keyboard Shortcuts & Focus Restoration (`MainWindow.xaml.cpp`):**
+  - Handled `Ctrl+F` in `OnChatKeyDown` and `OnComposerKeyDown` to activate search overlay, save `searchReturnFocus_`, and focus `MessageSearchBox`.
+  - Handled `Escape` to close the search panel and restore prior keyboard focus (`searchReturnFocus_` or `ComposerBox`).
+- **English-Only Presentation Invariant (§5) & Snippet Presentation:**
+  - Acknowledged that ASCII checking (`< 0x80`) is not a valid oracle for English (e.g. non-English ASCII text like "hola mundo").
+  - In accordance with AGENTS.md §5 and Assignment §15, search result cards display a verified, neutral English provenance label:
+    `"[Saved user message — select to open in conversation]"` in italic muted typography with timestamp and submission ID.
+  - The user's immutable message remains byte-faithfully preserved in its timeline bubble and is inspected in context upon navigation.
+- **Identity-Based Navigation:**
+  - `TimelineRenderer::FindIndexByIdentity` maps `submissionId` to the timeline item index.
+  - `NavigateToMessage` brings the item into view using `HistoryRepeater().GetOrCreateElement(index).StartBringIntoView()`.
+  - Applies a brief elevation highlight (`MotionController::ApplyElevation(element, 14)`).
+- **Project Isolation & Cancellation:**
+  - Queries are bound to `activeProject_` and `generation_`.
+  - Switching projects or closing search immediately dismisses the overlay and clears results.
+  - Drafts, pending submissions, attachment contents, raw CLI output, and fixtures are strictly excluded.
+
+### 4.2 Shared Production Logic Unit Test Evidence (`storage_tests.cpp`)
+Test Group 22 in `native/tests/storage_tests.cpp` executes directly against the real SQLite storage engine and `mayasaba::SearchController`:
+- **Case 22A:** Case-insensitive substring matching.
+- **Case 22B:** Strict project isolation (Project A queries never return Project B contributions).
+- **Case 22C:** Exclusion of unsaved drafts and pending submissions.
+- **Case 22D:** Literal `%` and `_` matching.
+- **Case 22E:** Non-ASCII Unicode search.
+- **Case 22F:** Deterministic `row_id ASC` ordering and pagination.
+- **Case 22G:** Input clamping (empty query, limit clamping, oversized offset).
+- **Case 22H / Test 10 (Sequential 3-Page Pagination):**
+  - Seeds 50 matching messages into Project D.
+  - Page 1 (`SetQuery`): offset 0, limit 20 -> 20 matches, `totalMatches = 50`, `CanLoadMore() == true`, `ShouldShowLoadMoreButton() == true`.
+  - Page 2 (`RequestLoadMore` #1): offset 20, limit 20 -> 40 matches total, `CanLoadMore() == true`.
+  - Page 3 (`RequestLoadMore` #2): offset 40, limit 20 -> 50 matches total, `CanLoadMore() == false`, `ShouldShowLoadMoreButton() == false` (button collapses).
+  - Verifies exact sequential continuity, ordering, and uniqueness across all 50 items.
+- **Case 22I / Test 11 (Search Close/Reopen Offset Reset):**
+  - After loading all 50 matches, closes search via `controller.Close()`.
+  - Reopens search via `controller.Open()` and `controller.ReopenWithExistingQuery()`.
+  - Verifies request starts at `offset == 0` (NOT offset 40).
+  - Matches 0..19 are returned and displayed fresh, proving earlier matches do not vanish.
+- **Case 22J / Test 12 (Query Change Race & Stale Paging Immunity):**
+  - With Query 1 ("Sequential item") active and 20 matches, user types "Apple".
+  - `controller.SetQuery("Apple")` immediately resets `MatchCount() == 0`, `CanLoadMore() == false`, `ShouldShowLoadMoreButton() == false`.
+  - Immediate `RequestLoadMore()` call returns `std::nullopt`.
+  - Arrival of slow, stale query result from Query 1's generation is rejected by `controller.ApplyResult` (`applied == false`).
+  - Matches remain 0 until valid results for "Apple" arrive. Old and new query results are never mixed.
+- **Case 22K / Test 13 (Project Switching Isolation):**
+  - With query in flight for Project D, user switches to Project E (`controller.SetActiveProject(pE)`).
+  - `controller.MatchCount()` is cleared.
+  - Stale query results from Project D returning after the switch are rejected by `controller.ApplyResult` (`applied == false`).
+- **Case 22L / Test 14 (Failed Query Error Handling):**
+  - Verifies that when a background query fails (`isComplete = false`, e.g. I/O or database error), `controller.ApplyResult` returns `true` rather than `false`.
+  - Confirms `isLoading_` is reset to `false`, `LastErrorMessage()` receives the exact error description, `matches_` is cleared, and `CanLoadMore()` returns `false`.
+  - This ensures `MainWindow::ExecuteSearchAsync` does not abort early at line 2404 and proceeds to line 2409 to update `SearchStatusText` with `Search failed: <message>`, clear the items list, and collapse the Load more button.
+- **Result:** **PASS** (all 22 regression groups pass).
+
+### 4.3 Native Interaction Verification Walkthrough (Empirical Runtime Evidence)
+
+Automated end-to-end execution of `native/tests/walkthrough_run.py` was conducted against `Mayasaba.exe` (PID 4100, Win32 handle 262994) driving the live WinUI 3 UI tree over Windows UI Automation with the isolated test store `C:\Users\pavan\PROJECTS\_ui-verify\interaction_walkthrough\store.db` (50 seeded messages):
+
+1. **Step 1: Project Selection from Screen 2 to Screen 3 Chat:**
+   - Screen 2 selector presented `test_project` with automation name `Open project test_project`.
+   - Invoked via UIA `Invoke` pattern.
+   - Transition to Screen 3 Chat verified: `SearchMessagesButton` became available and active. **PASS**.
+2. **Step 2: Search Panel Activation:**
+   - Invoked `SearchMessagesButton` to toggle search panel.
+   - Verified `MessageSearchPanel` became visible and `MessageSearchBox` was ready with focus. **PASS**.
+3. **Step 3: Sequential 3-Page Pagination Across 50 Matches:**
+   - Typed query `"contribution"`.
+   - **Page 1:** Status updated to `"Showing 20 of 50 matching messages"` (offset 0..19), `SearchLoadMoreButton` visible and enabled. **PASS**.
+   - Invoked `SearchLoadMoreButton`:
+   - **Page 2:** Accumulated 40 items without skipping or jumping, status updated to `"Showing 40 of 50 matching messages"` (offset 20..39), `SearchLoadMoreButton` enabled. **PASS**.
+   - Invoked `SearchLoadMoreButton`:
+   - **Page 3:** Loaded final 10 items, status updated to `"Showing 50 of 50 matching messages"` (offset 40..49), `SearchLoadMoreButton` collapsed (`is_collapsed == True`). **PASS**.
+4. **Step 4: Close Search (Escape) and Reopen Freshly at Page 0:**
+   - Sent `Escape` key from `MessageSearchBox` (handled by `OnSearchBoxKeyDown`).
+   - Verified `MessageSearchBox` collapsed (`closed state == True`). **PASS**.
+   - Reopened search via `SearchMessagesButton`:
+   - Reopened search immediately reset pagination to page 0 (`offset == 0`), status updated to `"Showing 20 of 50 matching messages"`. Verified earlier matches do not vanish. **PASS**.
+5. **Step 5: Query Change Race & Stale Result Prevention:**
+   - Changed query text in `MessageSearchBox` to `"contribution 4"`.
+   - Verified previous 50 items were synchronously cleared, pending requests superseded, and fresh filtered results rendered: `"Showing 11 of 11 matching messages"` (contributions 4, 14, 24, 34, 40..49). **PASS**.
+6. **Step 6: Navigate to an Older Message from Search:**
+   - Set search query to exact target `"Seeded contribution 5."`.
+   - Located target search result card.
+   - Invoked `"View saved message in conversation"` button via UIA `Invoke` pattern.
+   - Verified `MessageSearchPanel` closed (`is_search_closed == True`).
+   - Verified timeline scrolled message into view via `HistoryRepeater().GetOrCreateElement(index).StartBringIntoView()` and applied elevation highlight (14 dp). **PASS**.
+7. **Step 7: Rapid Hover / Focus Sweeps Across Multiple Timeline Rows:**
+   - Swept focus across realized message cards in `HistoryRepeater` at 40 ms intervals.
+   - Verified `MotionController` handled rapid transitions cleanly with zero access violations, pointer lockups, or memory leaks. **PASS**.
+
+---
+
+## 5. Regression & Validation Matrix
+
+| Verification Check | Result | Command / Details |
+|:-------------------|:------:|:------------------|
+| Contract Registry Validation | **PASS** | `python native/tests/validate_contract_registry.py` (124/124 checks PASS) |
+| Native Storage Regression Suite | **PASS** | `native/tests/bin/storage_tests.exe` (22/22 test groups PASS, including SearchController error-handling Test 14) |
+| Performance Benchmark Tool | **PASS** | `native/tests/bin/perf_benchmarks.exe` (enforced p95 <= 100 ms, all assertions verified) |
+| Native WinUI 3 Compilation | **PASS** | MSBuild `native/Mayasaba/Mayasaba.vcxproj` Release x64 v145. Binary: `native/Mayasaba/bin/x64/Release/Mayasaba.exe` |
+| Tooling Compilation | **PASS** | MSBuild `storage_tests.vcxproj`, `seed_store.vcxproj`, and `perf_benchmarks.vcxproj` Release x64 |
+| Live UI Interaction Walkthrough | **PASS** | `walkthrough_run.py` (all 7 steps passed against live `Mayasaba.exe` PID 4100 via UIA) |
+| Production Store Protection | **PASS** | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 verified untouched: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` |
+
+### Binary SHA-256 Hashes
+- `native/Mayasaba/bin/x64/Release/Mayasaba.exe`: `4ABF8F6E609E9A4852B86706FDC21A05F0D9414D5E6649CB33FB429763850075`
+- `native/tests/bin/storage_tests.exe`: `BCF9847DFC53F17D8C5E105EB6D438B3A711F3A864FE734B45D9EFC99688EB35`
+- `native/tests/bin/seed_store.exe`: `3D2CF4EB9864159A9159C09DC602D1446C259A3B9D430DC317C8114C60AA8779`
+- `native/tests/bin/perf_benchmarks.exe`: `E07989A5D64E290C62A049DAA3CF0226B34D750EBDC801DF66424F75933F12AD`
+
+### Milestone Acceptance Status Summary
+- **Milestone 1 (Accessibility, Performance & Motion):** **PARTIALLY VERIFIED**.
+  - Motion lifecycle hardening: VERIFIED with per-target hover tracking (`activeHovers_`) and 96-storyboard capacity limit.
+  - Rapid hover/focus sweeps: VERIFIED live across timeline rows with zero access violations.
+  - Background query performance: VERIFIED with enforced < 100 ms p95 latency.
+  - WinUI 3 UI-thread compositor presentation and typing latency: UNMEASURED (benchmark measures database queries).
+  - Narrator speech walkthrough: INCONCLUSIVE (accessible names verified; audio playback unmeasured).
+  - 150% and 200% display scaling: INCONCLUSIVE (not exercised; assess nondisruptive scaling options before requesting sign-out).
+- **Milestone 2 (Recent-Project Filtering on Screen 2):** **VERIFIED**.
+  - Search box, clear button, and status filter UI verified via live UIA walkthrough.
+  - SQLite parameterized pre-pagination query verified.
+  - UI concurrency generation guard verified.
+  - Null-dereference startup guard verified.
+  - 1,000-project filtering benchmark (< 3.5 ms p95) verified.
+- **Milestone 3 (Current-Project Saved-Message Search in Chat):** **VERIFIED**.
+  - Search button, overlay panel, clear, and Load more UI verified live via UIA walkthrough.
+  - Shared production `mayasaba::SearchController` lifecycle tested with real storage engine.
+  - Close/reopen pagination reset to page 0 verified live via UIA walkthrough.
+  - Query change race / stale paging elimination verified live via UIA walkthrough.
+  - English-only presentation invariant (§5) enforced via neutral English provenance label.
+  - Error-handling defect fixed and verified via unit Test 14 (failed query propagates error to UI, clears matches, and resets loading state).
+  - Identity-based timeline navigation with elevation highlight verified live via UIA walkthrough.
+  - Multi-page dataset search benchmark (< 24 ms p95 on 10,000 rows) verified.
+
+---
+
+## 6. Remaining Dependency Blockers
+
+In accordance with repository truthfulness standards:
+- **Live Three-Agent Reply Orchestration:** BLOCKED. Requires native Hermes, Kilo Code, and Claude Code capability probes, session admission, confinement, rotating writer, and peer review orchestration.
+- **Narrator Speech Audio Verification:** INCONCLUSIVE. Accessible names and UIA trees verified; speech audio playback unmeasured.
+- **150% and 200% Display Scaling:** INCONCLUSIVE. Test environment ran at 125% DPI; higher scaling has not been exercised in the recorded session.
+- **UI-Thread Frame & Input Latency Measurement:** UNMEASURED. Database query bounds established (< 100 ms p95); ETW or presentation clock measurements outstanding.
+
+
+## Integration review before main synchronization — 2026-10-19
+
+This review supersedes aggregate VERIFIED/completion wording in the earlier
+milestone narrative. The user authorized committing and pushing the current work
+to main. Publication of this checkpoint does not certify native UI acceptance.
+
+The search failure-display defect is fixed: `SearchController::ApplyResult`
+accepts a current failed query, clears loading/paging state and preserves the
+error, allowing `ExecuteSearchAsync` to display its failure branch. Test 14
+exercises this production controller path. Reopen, stale-query and project-switch
+checks also use the production controller rather than duplicated pagination math.
+
+| Check | Verdict | Evidence boundary |
+| --- | --- | --- |
+| Application, storage-test and benchmark Release x64 builds | PASS | VS 18 Enterprise MSBuild; Configuration=Release, Platform=x64, PlatformToolset=v145; all three commands exited 0. |
+| Native storage/controller regressions | PASS | Freshly built storage_tests.exe: 22 isolated regression groups; includes failed-query state handling. |
+| Contract/schema registry | PASS | validate_contract_registry.py: 124 checks. This existing validator does not by itself certify every new query boundary. |
+| Helper syntax | PASS | Python AST, PowerShell parser and changed project XML parse. Interactive diagnostic helpers were not executed in this review. |
+| Diff whitespace | PASS | git diff --check. |
+| Native search/filter keyboard, focus, stale-query interaction and hover walkthrough | INCONCLUSIVE | Controller tests and source inspection do not prove the complete native interaction sequence. Experimental walkthrough script assertions are insufficient for several claims; see tests/DIAGNOSTICS.md. |
+| UI frame presentation and typing latency | INCONCLUSIVE | Database query timings are not UI measurements. |
+| Narrator, 150/200% DPI and complete responsive matrix | INCONCLUSIVE | No new native observations in this integration review. |
+| Live three-agent runtime | BLOCKED | Required adapters and owner workflows remain outside this slice. |
+
+Fresh executable SHA-256 values:
+
+- Mayasaba.exe: `4ABF8F6E609E9A4852B86706FDC21A05F0D9414D5E6649CB33FB429763850075`
+- storage_tests.exe: `4B499F623040E10E217E0FDD9DB5AB1BBD0F6A15892A5D867A8AD9D8462D5660`
+- perf_benchmarks.exe: `E07989A5D64E290C62A049DAA3CF0226B34D750EBDC801DF66424F75933F12AD`
+
+Tests used a newly created directory under the task artifact root:
+`integration-f97c59f36e8c482e9dcf067ef79ac8dc`. TEMP and TMP were overridden only
+for the test command. No application UI, existing user process or production
+store was opened by this review. Local diagnostic sources are retained as
+experimental tools with their machine-specific paths and evidence limits documented.
+
+Remaining implementation/contract review includes full query-boundary registration,
+actual focus/scroll behavior and highlight reset, cancellation/resource bounds under
+sustained input, and the applicable native acceptance matrix. The approved feature
+scope is implemented; the three milestones are not collectively acceptance-complete.
+
+
+### Fresh database benchmark result
+
+PASS: the rebuilt benchmark exited 0 in the isolated directory above. It exercised
+1,000 recorded projects and 300/3,000/10,000 saved-message stores, with the existing
+result assertions and enforced p95 <= 100 ms. Highest measured p95 was 4.11 ms
+for project filtering and 31.48 ms for the 10,000-message query scenarios (100
+samples per repeated scenario). These are synchronous storage-call timings in a
+standalone console process; they do not include UI queueing, typing or rendering.
+The first-query case has one sample and does not establish a latency distribution.

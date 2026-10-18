@@ -76,10 +76,14 @@ namespace mayasaba
     enum class SaveDisposition { Saved, Duplicate, Conflict, RejectedClosed, Unknown };
     struct PendingSubmission { std::string id; std::string body; std::string attachmentManifest{}; };
 
+    enum class ProjectStatusFilter { All = 0, Open = 1, Closed = 2 };
+
     struct CrossProjectRecentProjectsQuery
     {
         size_t pageSize{20};
         size_t offset{0};
+        std::string filterText{};
+        ProjectStatusFilter statusFilter{ProjectStatusFilter::All};
     };
 
     struct CrossProjectRecentProjectsResult
@@ -88,6 +92,31 @@ namespace mayasaba
         bool isComplete{true};
         std::string errorMessage;
         bool hasMore{};
+        size_t totalMatching{0};
+    };
+
+    struct MessageSearchQuery
+    {
+        std::string projectId;
+        std::string queryText;
+        size_t limit{20};
+        size_t offset{0};
+    };
+
+    struct MessageMatch
+    {
+        std::string submissionId;
+        std::string body;
+        std::string createdAt;
+    };
+
+    struct MessageSearchResult
+    {
+        std::vector<MessageMatch> matches;
+        size_t totalMatches{0};
+        bool hasMore{false};
+        bool isComplete{true};
+        std::string errorMessage;
     };
 
     enum class DraftChoice { Automatic, KeepProject, UseSelector };
@@ -153,6 +182,7 @@ namespace mayasaba
         SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body);
         SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body, std::vector<AttachmentRecord> const& attachments);
         std::vector<Contribution> Contributions(std::string const& projectId);
+        MessageSearchResult SearchUserMessages(MessageSearchQuery const& query);
         std::optional<std::string> LastBoundProject();
         std::filesystem::path const& FilePath() const noexcept { return file_; }
 

@@ -551,9 +551,13 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::ShowFolder(SelectorContext context)
     {
+        CloseSearch();
+        searchController_.Close();
+        searchController_.SetActiveProject("");
         selectorContext_ = context;
         recentOffset_=0;
         ++selectorGeneration_;
+        recentQueryGeneration_++;
         motion_.CancelAll();
         SetVisible(WelcomeScreen(), false);
         SetVisible(FolderScreen(), true);
@@ -578,6 +582,9 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::ShowChat()
     {
+        CloseSearch();
+        searchController_.Close();
+        searchController_.SetActiveProject(activeProject_);
         if (!storage_ || activeProject_.empty()) { ShowFolder(SelectorContext::Startup); return; }
         LoadChatAsync(activeProject_, ++selectorGeneration_);
     }
@@ -1574,8 +1581,15 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::OnComposerKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& e)
     {
-        if (e.Key() == Windows::System::VirtualKey::Enter &&
-            GetKeyState(VK_SHIFT) >= 0 && GetKeyState(VK_CONTROL) >= 0)
+        bool const isCtrl = (GetKeyState(VK_CONTROL) < 0) || ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+        bool const isShift = (GetKeyState(VK_SHIFT) < 0) || ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
+        if (e.Key() == Windows::System::VirtualKey::F && isCtrl && !isShift)
+        {
+            e.Handled(true);
+            OpenSearch();
+            return;
+        }
+        if (e.Key() == Windows::System::VirtualKey::Enter && !isShift && !isCtrl)
         {
             e.Handled(true);
             SendCurrent();
@@ -1904,6 +1918,35 @@ namespace winrt::Mayasaba::implementation
     }
 
 
+    void MainWindow::OnRecentFilterTextChanged(IInspectable const&, Controls::TextChangedEventArgs const&)
+    {
+        if (!storage_) return;
+        recentFilterText_ = Utf8(RecentProjectsFilterBox().Text().c_str());
+        recentOffset_ = 0;
+        if (auto b = RecentProjectsClearFilterButton())
+            b.Visibility(recentFilterText_.empty() ? Visibility::Collapsed : Visibility::Visible);
+        recentQueryGeneration_++;
+        RefreshRecentProjectsAsync(selectorGeneration_);
+    }
+
+    void MainWindow::OnClearRecentFilter(IInspectable const&, RoutedEventArgs const&)
+    {
+        if (auto box = RecentProjectsFilterBox())
+            box.Text(L"");
+    }
+
+    void MainWindow::OnRecentStatusFilterChanged(IInspectable const&, Controls::SelectionChangedEventArgs const&)
+    {
+        if (!storage_ || !RecentProjectsStatusFilter()) return;
+        int index = RecentProjectsStatusFilter().SelectedIndex();
+        recentStatusFilter_ = (index == 1) ? mayasaba::ProjectStatusFilter::Open :
+                              (index == 2) ? mayasaba::ProjectStatusFilter::Closed :
+                                             mayasaba::ProjectStatusFilter::All;
+        recentOffset_ = 0;
+        recentQueryGeneration_++;
+        RefreshRecentProjectsAsync(selectorGeneration_);
+    }
+
     void MainWindow::RefreshRecentProjects()
     {
         RefreshRecentProjectsAsync(selectorGeneration_);
@@ -1911,65 +1954,241 @@ namespace winrt::Mayasaba::implementation
 
     winrt::fire_and_forget MainWindow::RefreshRecentProjectsAsync(uint64_t gen)
     {
-        auto alive=get_strong();auto ui=DispatcherQueue();auto offset=recentOffset_;
-        if(!storage_){NoRecentProjectsText().Text(L"Project store unavailable.");SetVisible(NoRecentProjectsText(),true);co_return;}
-        NoRecentProjectsText().Text(L"Loading recorded projects…");SetVisible(NoRecentProjectsText(),true);
-        mayasaba::CrossProjectRecentProjectsResult result;std::vector<mayasaba::DirectoryOperationRecord> recovery;std::string error;
-        try{co_await selectorQueue_.Background();result=mayasaba::ProjectService(*storage_).Recent({20,offset});
-            recovery=storage_->UnreconciledDirectoryOperations();}
-        catch(std::exception const& e){error=e.what();}
-        if(!co_await resume_foreground(ui))co_return;
-        if(windowClosed_ || selectorGeneration_!=gen)co_return;
-        if(!error.empty() || !result.isComplete){NoRecentProjectsText().Text(L"Recent list unavailable: "+Utf16(error+result.errorMessage));co_return;}
-        recentRecords_=result.items;RecentProjectsList().Items().Clear();RecoveryList().Children().Clear();
-        PreviousRecentButton().IsEnabled(offset>0);NextRecentButton().IsEnabled(result.hasMore);
-        NoRecentProjectsText().Text(L"No recorded projects on this page. Open an existing folder to begin.");SetVisible(NoRecentProjectsText(),result.items.empty());
+        auto alive = get_strong();
+        if (!storage_) co_return;
+        auto ui = DispatcherQueue();
+        auto offset = recentOffset_;
+        auto queryGen = recentQueryGeneration_;
+        auto filter = recentFilterText_;
+        auto statusFilter = recentStatusFilter_;
+        if (auto noProjects = NoRecentProjectsText())
+        {
+            noProjects.Text(L"Loading recorded projects…");
+            SetVisible(noProjects, true);
+        }
+        mayasaba::CrossProjectRecentProjectsResult result;
+        std::vector<mayasaba::DirectoryOperationRecord> recovery;
+        std::string error;
+        try
+        {
+            co_await selectorQueue_.Background();
+            mayasaba::CrossProjectRecentProjectsQuery q;
+            q.pageSize = 20;
+            q.offset = offset;
+            q.filterText = filter;
+            q.statusFilter = statusFilter;
+            result = mayasaba::ProjectService(*storage_).Recent(q);
+            recovery = storage_->UnreconciledDirectoryOperations();
+        }
+        catch (std::exception const& e) { error = e.what(); }
+        if (!co_await resume_foreground(ui)) co_return;
+        if (windowClosed_ || selectorGeneration_ != gen || recentQueryGeneration_ != queryGen) co_return;
+        if (!storage_) co_return;
+        if (!error.empty() || !result.isComplete)
+        {
+            if (auto noProjects = NoRecentProjectsText())
+            {
+                noProjects.Text(L"Recent list unavailable: " + Utf16(error + result.errorMessage));
+                SetVisible(noProjects, true);
+            }
+            co_return;
+        }
+        recentRecords_ = result.items;
+        recentTotalMatching_ = result.totalMatching;
+        if (auto list = RecentProjectsList()) list.Items().Clear();
+        if (auto rec = RecoveryList()) rec.Children().Clear();
+        if (auto prev = PreviousRecentButton()) prev.IsEnabled(offset > 0);
+        if (auto next = NextRecentButton()) next.IsEnabled(result.hasMore);
+
+        bool isDefault = filter.empty() && statusFilter == mayasaba::ProjectStatusFilter::All;
+        if (auto countLabel = RecentProjectsFilterCountLabel())
+        {
+            if (isDefault)
+            {
+                countLabel.Text(result.totalMatching == 1 ? L"1 project recorded" : (to_hstring(result.totalMatching) + L" projects recorded"));
+            }
+            else
+            {
+                countLabel.Text(result.totalMatching == 1 ? L"1 matching project" : (to_hstring(result.totalMatching) + L" matching projects"));
+            }
+        }
+
+        if (auto noProjects = NoRecentProjectsText())
+        {
+            if (result.items.empty())
+            {
+                if (isDefault)
+                {
+                    noProjects.Text(L"No recorded projects yet. Open an existing folder to begin.");
+                }
+                else
+                {
+                    noProjects.Text(L"No projects match your filter criteria.");
+                }
+                SetVisible(noProjects, true);
+            }
+            else
+            {
+                SetVisible(noProjects, false);
+            }
+        }
         for(auto const& p:result.items){
             // Recent row: a raised resting surface with a subtle hover lift. Rows
             // containing paths are never rotated or tilted.
+            Grid cardStack{};
+            cardStack.HorizontalAlignment(HorizontalAlignment::Stretch);
+            cardStack.Margin(Thickness{0, 2, 0, 8});
+
+            Border plateEdge{};
+            plateEdge.VerticalAlignment(VerticalAlignment::Bottom);
+            plateEdge.Height(18);
+            plateEdge.Margin(Thickness{4, 0, 4, 0});
+            plateEdge.CornerRadius(CornerRadius{14});
+            plateEdge.Background(Token(L"MayasabaPlateEdgeBrush"));
+            cardStack.Children().Append(plateEdge);
+
             Border card{};
             card.CornerRadius(CornerRadius{14});
-            card.Padding(Thickness{14, 12, 14, 12});
-            card.Background(Token(L"MayasabaSecondaryBrush"));
+            card.Padding(Thickness{16, 14, 16, 14});
+            card.Background(Token(L"MayasabaPanelBrush"));
             card.BorderBrush(Token(L"MayasabaBorderBrush"));
             card.BorderThickness(Thickness{1});
             card.HorizontalAlignment(HorizontalAlignment::Stretch);
-            motion_.ApplyElevation(card, 8);
 
-            StackPanel row;row.Spacing(6);row.HorizontalAlignment(HorizontalAlignment::Stretch);
-            auto text=[&](hstring const& value, bool technical){
-                TextBlock t;t.Text(value);t.TextWrapping(TextWrapping::Wrap);t.IsTextSelectionEnabled(true);
-                if(technical){t.FontFamily(FontFamily{L"Cascadia Mono"});t.FontSize(12);}
-                else{t.FontSize(14);}
-                t.Foreground(technical?Token(L"MayasabaMutedBrush"):Token(L"MayasabaInkBrush"));
-                row.Children().Append(t);};
-            text(Utf16(p.displayName)+(p.closed?L" · CLOSED · Read-only":L" · OPEN"),false);
-            text(Utf16(p.canonicalPath),true);
-            text(L"Last opened: "+Utf16(p.lastOpenedAt.empty()?"Unknown":LocalStamp(p.lastOpenedAt))+L" · Activity: unknown",false);
-            StackPanel actions;actions.Orientation(Orientation::Horizontal);actions.Spacing(8);auto weak=get_weak();auto id=p.id;
-            Button open;open.Content(box_value(p.closed?L"View history":L"Open project"));
-            open.CornerRadius(CornerRadius{11});open.Padding(Thickness{14,7,14,7});
+            Grid rowGrid{};
+            rowGrid.ColumnSpacing(14);
+            ColumnDefinition c0{}; c0.Width(GridLengthHelper::Auto());
+            ColumnDefinition c1{}; c1.Width(GridLengthHelper::FromValueAndType(1, GridUnitType::Star));
+            ColumnDefinition c2{}; c2.Width(GridLengthHelper::Auto());
+            rowGrid.ColumnDefinitions().Append(c0);
+            rowGrid.ColumnDefinitions().Append(c1);
+            rowGrid.ColumnDefinitions().Append(c2);
+
+            // Left icon badge: 40x40 rounded box with folder icon
+            Border iconBadge{};
+            iconBadge.Width(40); iconBadge.Height(40);
+            iconBadge.CornerRadius(CornerRadius{11});
+            iconBadge.Background(Token(L"MayasabaBrandQuietBrush"));
+            iconBadge.VerticalAlignment(VerticalAlignment::Center);
+            FontIcon folderIcon{};
+            folderIcon.Glyph(L"\xED25");
+            folderIcon.FontFamily(FontFamily{L"Segoe Fluent Icons"});
+            folderIcon.FontSize(18);
+            folderIcon.Foreground(Token(L"MayasabaBrandBrush"));
+            iconBadge.Child(folderIcon);
+            rowGrid.Children().Append(iconBadge);
+
+            // Middle: title, path, metadata
+            StackPanel copyStack{};
+            copyStack.Spacing(3);
+            copyStack.VerticalAlignment(VerticalAlignment::Center);
+            Grid::SetColumn(copyStack, 1);
+
+            TextBlock titleBlock{};
+            titleBlock.Text(Utf16(p.displayName));
+            titleBlock.FontSize(15);
+            titleBlock.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+            titleBlock.Foreground(Token(L"MayasabaInkBrush"));
+            copyStack.Children().Append(titleBlock);
+
+            TextBlock pathBlock{};
+            pathBlock.Text(Utf16(p.canonicalPath));
+            pathBlock.FontFamily(FontFamily{L"Cascadia Mono"});
+            pathBlock.FontSize(12);
+            pathBlock.TextWrapping(TextWrapping::Wrap);
+            pathBlock.IsTextSelectionEnabled(true);
+            pathBlock.Foreground(Token(L"MayasabaMutedBrush"));
+            copyStack.Children().Append(pathBlock);
+
+            TextBlock metaBlock{};
+            metaBlock.Text(L"Last opened: "+Utf16(p.lastOpenedAt.empty()?"Unknown":LocalStamp(p.lastOpenedAt))+L" · Activity: unknown");
+            metaBlock.FontSize(11.5);
+            metaBlock.Foreground(Token(L"MayasabaSoftBrush"));
+            copyStack.Children().Append(metaBlock);
+
+            rowGrid.Children().Append(copyStack);
+
+            // Right: status badge + actions
+            StackPanel rightStack{};
+            rightStack.Spacing(6);
+            rightStack.VerticalAlignment(VerticalAlignment::Center);
+            rightStack.HorizontalAlignment(HorizontalAlignment::Right);
+            Grid::SetColumn(rightStack, 2);
+
+            Border statusBadge{};
+            statusBadge.CornerRadius(CornerRadius{6});
+            statusBadge.Padding(Thickness{8, 3, 8, 3});
+            statusBadge.HorizontalAlignment(HorizontalAlignment::Right);
+            TextBlock statusText{};
+            statusText.FontSize(11);
+            statusText.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+            if (p.closed)
+            {
+                statusBadge.Background(Token(L"MayasabaSecondaryBrush"));
+                statusBadge.BorderBrush(Token(L"MayasabaBorderBrush"));
+                statusBadge.BorderThickness(Thickness{1});
+                statusText.Text(L"CLOSED · Read-only");
+                statusText.Foreground(Token(L"MayasabaAmberBrush"));
+            }
+            else
+            {
+                statusBadge.Background(Token(L"MayasabaBrandQuietBrush"));
+                statusText.Text(L"OPEN");
+                statusText.Foreground(Token(L"MayasabaBrandBrush"));
+            }
+            statusBadge.Child(statusText);
+            rightStack.Children().Append(statusBadge);
+
+            StackPanel actions{};
+            actions.Orientation(Orientation::Horizontal);
+            actions.Spacing(8);
+            auto weak=get_weak();
+            auto id=p.id;
+
+            Button open{};
+            open.Content(box_value(p.closed?L"View history":L"Open project"));
+            open.CornerRadius(CornerRadius{11});
+            open.Padding(Thickness{14,7,14,7});
             Automation::AutomationProperties::SetName(open,L"Open project "+Utf16(p.displayName));
-            open.Click([weak,id](auto const&,auto const&){if(auto self=weak.get())self->OpenProjectById(id);});actions.Children().Append(open);
-            Button locate;locate.Content(box_value(L"Locate folder"));Automation::AutomationProperties::SetName(locate,L"Locate folder for "+Utf16(p.displayName));
-            locate.CornerRadius(CornerRadius{11});locate.Padding(Thickness{14,7,14,7});
-            locate.Click([weak,id](auto const&,auto const&){if(auto self=weak.get())self->LocateProjectAsync(id);});actions.Children().Append(locate);
-            row.Children().Append(actions);
-            card.Child(row);
+            open.Click([weak,id](auto const&,auto const&){if(auto self=weak.get())self->OpenProjectById(id);});
+            actions.Children().Append(open);
+
+            Button locate{};
+            locate.Content(box_value(L"Locate folder"));
+            Automation::AutomationProperties::SetName(locate,L"Locate folder for "+Utf16(p.displayName));
+            locate.CornerRadius(CornerRadius{11});
+            locate.Padding(Thickness{14,7,14,7});
+            locate.Click([weak,id](auto const&,auto const&){if(auto self=weak.get())self->LocateProjectAsync(id);});
+            actions.Children().Append(locate);
+
+            rightStack.Children().Append(actions);
+            rowGrid.Children().Append(rightStack);
+
+            card.Child(rowGrid);
+            cardStack.Children().Append(card);
+            motion_.ApplyElevation(cardStack, 8);
 
             // Hover lift is a surface cue only; it never changes a record or a selection.
             auto* motion = &motion_;
-            auto weakCard = make_weak(card);
-            card.PointerEntered([motion, weakCard](auto const&, auto const&)
-            { if(auto c=weakCard.get()) motion->HoverLift(c, true); });
-            card.PointerExited([motion, weakCard](auto const&, auto const&)
-            { if(auto c=weakCard.get()) motion->HoverLift(c, false); });
-            card.GotFocus([motion, weakCard](auto const&, auto const&)
-            { if(auto c=weakCard.get()) motion->HoverLift(c, true); });
-            card.LostFocus([motion, weakCard](auto const&, auto const&)
-            { if(auto c=weakCard.get()) motion->HoverLift(c, false); });
+            auto weakStack = make_weak(cardStack);
+            cardStack.PointerEntered([motion, weakStack](auto const&, auto const&)
+            {
+                if(auto c=weakStack.get()) { motion->HoverLift(c, true); motion->ApplyElevation(c, 14); }
+            });
+            cardStack.PointerExited([motion, weakStack](auto const&, auto const&)
+            {
+                if(auto c=weakStack.get()) { motion->HoverLift(c, false); motion->ApplyElevation(c, 8); }
+            });
+            cardStack.GotFocus([motion, weakStack](auto const&, auto const&)
+            {
+                if(auto c=weakStack.get()) { motion->HoverLift(c, true); motion->ApplyElevation(c, 14); }
+            });
+            cardStack.LostFocus([motion, weakStack](auto const&, auto const&)
+            {
+                if(auto c=weakStack.get()) { motion->HoverLift(c, false); motion->ApplyElevation(c, 8); }
+            });
 
-            RecentProjectsList().Items().Append(card);
+            RecentProjectsList().Items().Append(cardStack);
         }
         for(auto const& op:recovery){
             StackPanel row;row.Spacing(5);TextBlock info;info.TextWrapping(TextWrapping::Wrap);
@@ -1997,7 +2216,16 @@ namespace winrt::Mayasaba::implementation
         auto id=activeProject_;auto draft=Utf8(ComposerBox().Text().c_str());
         bool saveProject=!id.empty() && !projectClosed_;auto wasReadOnly=ComposerBox().IsReadOnly();
         ComposerBox().IsReadOnly(true);draftTimer_.Stop();
-        returnFocus_=Input::FocusManager::GetFocusedElement(Content().as<FrameworkElement>().XamlRoot()).try_as<Control>();
+        returnFocus_ = nullptr;
+        try
+        {
+            auto root = Content() ? Content().try_as<FrameworkElement>() : nullptr;
+            if (root && root.XamlRoot())
+            {
+                returnFocus_ = Input::FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>();
+            }
+        }
+        catch (...) {}
         std::string error;
         try{co_await selectorQueue_.Background();
             if(saveProject && !storage_->Pending(id))storage_->SaveDraft(id,draft);}
@@ -2046,6 +2274,347 @@ namespace winrt::Mayasaba::implementation
         if(!error.empty()){ShowNotice(Utf16(error),true);co_return;}ShowChat();
     }
 
+    void MainWindow::OnChatKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& e)
+    {
+        bool const isCtrl = (GetKeyState(VK_CONTROL) < 0) || ((GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0);
+        bool const isShift = (GetKeyState(VK_SHIFT) < 0) || ((GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0);
+        if (e.Key() == Windows::System::VirtualKey::F && isCtrl && !isShift)
+        {
+            e.Handled(true);
+            OpenSearch();
+            return;
+        }
+        if (e.Key() == Windows::System::VirtualKey::Escape && searchController_.IsOpen())
+        {
+            e.Handled(true);
+            CloseSearch();
+            return;
+        }
+    }
 
+    void MainWindow::OnSearchBoxKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& e)
+    {
+        if (e.Key() == Windows::System::VirtualKey::Escape && searchController_.IsOpen())
+        {
+            e.Handled(true);
+            CloseSearch();
+            return;
+        }
+    }
+
+    void MainWindow::OnSearchMessagesClick(IInspectable const&, RoutedEventArgs const&)
+    {
+        if (searchController_.IsOpen()) CloseSearch();
+        else OpenSearch();
+    }
+
+    void MainWindow::OpenSearch()
+    {
+        if (searchController_.IsOpen()) return;
+        searchController_.Open(activeProject_);
+        searchReturnFocus_ = nullptr;
+        try
+        {
+            auto root = Content() ? Content().try_as<FrameworkElement>() : nullptr;
+            if (root && root.XamlRoot())
+            {
+                searchReturnFocus_ = Input::FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>();
+            }
+        }
+        catch (...) {}
+
+        SetVisible(MessageSearchPanel(), true);
+        motion_.DepthReveal(MessageSearchPanel());
+        MessageSearchBox().Focus(FocusState::Programmatic);
+
+        // When reopening search with an existing query, reset pagination to page 0
+        auto req = searchController_.ReopenWithExistingQuery();
+        if (req.has_value())
+        {
+            ClearSearchButton().Visibility(Visibility::Visible);
+            SearchLoadMoreButton().Visibility(Visibility::Collapsed);
+            SearchResultsList().Items().Clear();
+            SearchStatusText().Text(L"Searching saved user messages…");
+            ExecuteSearchAsync(*req);
+        }
+        else
+        {
+            ClearSearchButton().Visibility(Visibility::Collapsed);
+            SearchStatusText().Text(L"Type a query to search confirmed saved user messages.");
+            SearchResultsList().Items().Clear();
+            SearchLoadMoreButton().Visibility(Visibility::Collapsed);
+        }
+    }
+
+    void MainWindow::CloseSearch()
+    {
+        if (!searchController_.IsOpen()) return;
+        searchController_.Close();
+        SetVisible(MessageSearchPanel(), false);
+        if (searchReturnFocus_)
+        {
+            try { searchReturnFocus_.Focus(FocusState::Programmatic); } catch (...) {}
+            searchReturnFocus_ = nullptr;
+        }
+        else
+        {
+            ComposerBox().Focus(FocusState::Programmatic);
+        }
+    }
+
+    void MainWindow::OnSearchQueryChanged(IInspectable const&, Controls::TextChangedEventArgs const&)
+    {
+        std::string const text = Utf8(MessageSearchBox().Text().c_str());
+        ClearSearchButton().Visibility(text.empty() ? Visibility::Collapsed : Visibility::Visible);
+
+        // Changing query immediately disables stale paging and clears prior results
+        SearchLoadMoreButton().Visibility(Visibility::Collapsed);
+        SearchResultsList().Items().Clear();
+
+        auto req = searchController_.SetQuery(text);
+        if (req.has_value())
+        {
+            SearchStatusText().Text(L"Searching saved user messages…");
+            ExecuteSearchAsync(*req);
+        }
+        else
+        {
+            SearchStatusText().Text(L"Type a query to search confirmed saved user messages.");
+        }
+    }
+
+    void MainWindow::OnClearSearchQuery(IInspectable const&, RoutedEventArgs const&)
+    {
+        MessageSearchBox().Text(L"");
+    }
+
+    void MainWindow::OnCloseSearch(IInspectable const&, RoutedEventArgs const&)
+    {
+        CloseSearch();
+    }
+
+    void MainWindow::OnSearchLoadMore(IInspectable const&, RoutedEventArgs const&)
+    {
+        auto req = searchController_.RequestLoadMore();
+        if (req.has_value())
+        {
+            SearchLoadMoreButton().IsEnabled(false);
+            SearchStatusText().Text(L"Loading more matching messages…");
+            ExecuteSearchAsync(*req);
+        }
+    }
+
+    winrt::fire_and_forget MainWindow::ExecuteSearchAsync(mayasaba::SearchPageRequest req)
+    {
+        auto alive = get_strong();
+        auto ui = DispatcherQueue();
+
+        if (!storage_ || req.projectId.empty())
+        {
+            SearchStatusText().Text(L"Search unavailable: no project bound.");
+            SearchResultsList().Items().Clear();
+            SearchLoadMoreButton().Visibility(Visibility::Collapsed);
+            co_return;
+        }
+
+        mayasaba::MessageSearchResult result;
+        try
+        {
+            co_await selectorQueue_.Background();
+            mayasaba::MessageSearchQuery q;
+            q.projectId = req.projectId;
+            q.queryText = req.queryText;
+            q.limit = req.limit;
+            q.offset = req.offset;
+            result = storage_->SearchUserMessages(q);
+        }
+        catch (std::exception const& e)
+        {
+            result.isComplete = false;
+            result.errorMessage = e.what();
+        }
+
+        if (!co_await resume_foreground(ui)) co_return;
+        if (windowClosed_) co_return;
+
+        // ApplyResult atomically verifies generation, query text, project, and open state.
+        // If query was changed, project switched, or search closed in the meantime, it returns false.
+        bool const applied = searchController_.ApplyResult(
+            req.generation, req.queryText, req.projectId, req.isAppend, result);
+
+        if (!applied)
+        {
+            co_return;
+        }
+
+        if (!result.isComplete)
+        {
+            SearchStatusText().Text(L"Search failed: " + Utf16(result.errorMessage));
+            SearchResultsList().Items().Clear();
+            SearchLoadMoreButton().Visibility(Visibility::Collapsed);
+            co_return;
+        }
+
+        RenderSearchResults(req.isAppend);
+    }
+
+    void MainWindow::RenderSearchResults(bool append)
+    {
+        auto const& matches = searchController_.Matches();
+        size_t const totalMatches = searchController_.TotalMatches();
+
+        if (matches.empty())
+        {
+            SearchStatusText().Text(L"No saved user messages match your query.");
+            SearchLoadMoreButton().Visibility(Visibility::Collapsed);
+            return;
+        }
+
+        SearchStatusText().Text(L"Showing " + to_hstring(matches.size()) + L" of " + to_hstring(totalMatches) + L" matching messages");
+        SearchLoadMoreButton().Visibility(searchController_.ShouldShowLoadMoreButton() ? Visibility::Visible : Visibility::Collapsed);
+        SearchLoadMoreButton().IsEnabled(searchController_.CanLoadMore());
+
+        size_t startIndex = 0;
+        if (!append)
+        {
+            SearchResultsList().Items().Clear();
+            startIndex = 0;
+        }
+        else
+        {
+            startIndex = SearchResultsList().Items().Size();
+        }
+
+        for (size_t i = startIndex; i < matches.size(); ++i)
+        {
+            auto const& match = matches[i];
+
+            // In accordance with AGENTS.md §5 and Assignment §15 (English-only presentation invariant):
+            // user messages may contain arbitrary non-English text which cannot be certified as English
+            // without a verified language classifier (and ASCII characters do not prove English).
+            // Therefore, search result cards display an English provenance label, timestamp, and identity,
+            // while the message content itself remains protected and is viewed in context by opening the
+            // original user message bubble in the conversation timeline.
+            std::wstring const snippetText = L"[Saved user message — select to open in conversation]";
+
+            Border itemBorder{};
+            itemBorder.CornerRadius(CornerRadius{10});
+            itemBorder.Padding(Thickness{12, 10, 12, 10});
+            itemBorder.Margin(Thickness{0, 2, 0, 4});
+            itemBorder.Background(Token(L"MayasabaPanelBrush"));
+            itemBorder.BorderBrush(Token(L"MayasabaBorderBrush"));
+            itemBorder.BorderThickness(Thickness{1});
+            itemBorder.Tag(box_value(Utf16(match.submissionId)));
+
+            Grid itemGrid{};
+            ColumnDefinition c0{}; c0.Width(GridLengthHelper::FromValueAndType(1, GridUnitType::Star));
+            ColumnDefinition c1{}; c1.Width(GridLengthHelper::Auto());
+            itemGrid.ColumnDefinitions().Append(c0);
+            itemGrid.ColumnDefinitions().Append(c1);
+
+            StackPanel textStack{};
+            textStack.Spacing(3);
+
+            StackPanel headerStack{};
+            headerStack.Orientation(Orientation::Horizontal);
+            headerStack.Spacing(8);
+
+            TextBlock labelBlock{};
+            labelBlock.Text(L"Saved message");
+            labelBlock.FontSize(12);
+            labelBlock.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+            labelBlock.Foreground(Token(L"MayasabaBrandBrush"));
+            headerStack.Children().Append(labelBlock);
+
+            TextBlock timeBlock{};
+            timeBlock.Text(Utf16(match.createdAt.empty() ? "" : LocalStamp(match.createdAt)));
+            timeBlock.FontSize(11);
+            timeBlock.FontFamily(FontFamily{L"Cascadia Mono"});
+            timeBlock.Foreground(Token(L"MayasabaSoftBrush"));
+            headerStack.Children().Append(timeBlock);
+
+            textStack.Children().Append(headerStack);
+
+            TextBlock snippetBlock{};
+            snippetBlock.Text(snippetText);
+            snippetBlock.FontSize(12.5);
+            snippetBlock.TextWrapping(TextWrapping::Wrap);
+            snippetBlock.Foreground(Token(L"MayasabaMutedBrush"));
+            snippetBlock.FontStyle(Windows::UI::Text::FontStyle::Italic);
+            textStack.Children().Append(snippetBlock);
+
+            TextBlock idBlock{};
+            idBlock.Text(L"ID: " + Utf16(match.submissionId));
+            idBlock.FontSize(10.5);
+            idBlock.FontFamily(FontFamily{L"Cascadia Mono"});
+            idBlock.Foreground(Token(L"MayasabaMutedBrush"));
+            textStack.Children().Append(idBlock);
+
+            itemGrid.Children().Append(textStack);
+
+            Button openBtn{};
+            openBtn.Content(box_value(L"View →"));
+            openBtn.CornerRadius(CornerRadius{8});
+            openBtn.Padding(Thickness{10, 5, 10, 5});
+            openBtn.VerticalAlignment(VerticalAlignment::Center);
+            Grid::SetColumn(openBtn, 1);
+            auto weak = get_weak();
+            auto subId = match.submissionId;
+            openBtn.Click([weak, subId](auto const&, auto const&)
+            {
+                if (auto self = weak.get()) self->NavigateToMessage(subId);
+            });
+            Automation::AutomationProperties::SetName(openBtn, L"View saved message in conversation");
+            itemGrid.Children().Append(openBtn);
+
+            itemBorder.Child(itemGrid);
+            SearchResultsList().Items().Append(itemBorder);
+        }
+    }
+
+    void MainWindow::NavigateToMessage(std::string const& submissionId)
+    {
+        CloseSearch();
+
+        if (!timeline_) return;
+        auto indexOpt = timeline_->FindIndexByIdentity(submissionId);
+        if (!indexOpt)
+        {
+            ShowNotice(L"Saved message is not present in the current timeline view.", false);
+            return;
+        }
+
+        int32_t index = static_cast<int32_t>(*indexOpt);
+        try
+        {
+            auto element = HistoryRepeater().GetOrCreateElement(index);
+            HistoryRepeater().UpdateLayout();
+            if (element)
+            {
+                element.StartBringIntoView();
+                if (auto fe = element.try_as<FrameworkElement>())
+                {
+                    motion_.ApplyElevation(fe, 14);
+                }
+            }
+        }
+        catch (std::exception const& e)
+        {
+            ShowNotice(L"Navigation failed: " + Utf16(e.what()), true);
+        }
+    }
+
+    void MainWindow::OnSearchResultItemClick(IInspectable const&, Controls::ItemClickEventArgs const& e)
+    {
+        auto fe = e.ClickedItem().try_as<FrameworkElement>();
+        if (!fe) return;
+        auto tag = fe.Tag();
+        if (!tag) return;
+        auto subId = Utf8(unbox_value<hstring>(tag).c_str());
+        if (!subId.empty())
+        {
+            NavigateToMessage(subId);
+        }
+    }
 
 }

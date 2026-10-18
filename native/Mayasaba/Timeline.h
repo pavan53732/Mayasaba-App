@@ -116,6 +116,7 @@ namespace mayasaba::ui
         {
             return index < entries_.size() ? &entries_[index] : nullptr;
         }
+        std::optional<std::size_t> FindIndexByIdentity(std::string const& identity) const;
         bool Empty() const noexcept { return entries_.empty(); }
 
         void SetCopyHandler(std::function<void(winrt::hstring const&)> handler) { copy_ = std::move(handler); }

@@ -63,17 +63,21 @@ The native Windows application menu is outside all three screen content areas. O
 
 `Next`, `Skip`, and Escape advance to screen 2. Skip dismisses the explanation only; it cannot skip folder binding. Each CLI entry shows its own observed `CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, or `PROBE_FAILED` status with name, text, dot, and accessible name. The illustrated `CHECKING` values are examples.
 
-The action footer stays reachable outside the scrollable explanation. The native hero can use DepthReveal, optional bounded HeroTilt and slow idle Levitate/Glow/Orbit; loops stop when hidden or disallowed by preferences. Text and actions do not depend on motion.
+The action footer stays reachable outside the scrollable explanation. The native hero uses a resting 3D perspective orientation (`RotationX="15" RotationY="-22" RotationZ="-9"`) with DepthReveal, optional bounded pointer-responsive HeroTilt (±4° around resting angle) and slow idle Levitate/Glow/Orbit; loops stop when hidden or disallowed by preferences. The explanation includes a styled reminder card with shield-check icon. Text and actions do not depend on motion.
 
 ## Screen 2 — Project selection
 
 ```text
+SCREEN 2 — PROJECT SELECTION
 +--------------------------------------------------------------------+
 | Mayasaba                 Open a project                             |
 | Hermes Agent CLI: [status]   Kilo Code CLI: [status]                  |
 | Claude Code CLI: [status]  (each status is an observed projection)   |
 |                                                                    |
 | [Open existing folder]       [Create new project folder]             |
+|                                                                    |
+| [Filter recent projects...        ] [Clear] [Status: All ▼]         |
+| Showing 2 of 2 recorded projects                                   |
 |                                                                    |
 | Recent projects (illustrative values, not live activity)             |
 | Northstar   C:\Projects\Northstar   Last opened: 15 Oct 2026          |
@@ -87,11 +91,11 @@ The action footer stays reachable outside the scrollable explanation. The native
 +--------------------------------------------------------------------+
 ```
 
-Recent rows query recorded projects, sorted by last successful open; they do not scan the PC. Selection revalidates the root and opens Chat only after safe binding. Closed history stays read-only. Missing or mismatched paths cannot inherit another identity. Creation explicitly creates only the requested empty folder; no Git, scans, installations or agent work follow. Preserve drafts on failure and cancellation. See [the complete selector contract](PROJECT-SELECTION.md) for recovery and authority rules.
+Recent rows query recorded projects, sorted by last successful open; they do not scan the PC. Selection revalidates the root and opens Chat only after safe binding. Closed history stays read-only. Missing or mismatched paths cannot inherit another identity. Creation explicitly creates only the requested empty folder; no Git, scans, installations or agent work follow. Preserve drafts on failure and cancellation. Filtering provides case-insensitive substring search over recorded names and canonical paths across the full SQLite registry pre-pagination, with literal `%` and `_` escaping, status filtering (All / Open / Closed), out-of-order query protection (`recentQueryGeneration_`), and paging resets. See [the complete selector contract](PROJECT-SELECTION.md) for recovery and authority rules.
 
 ### Native picker and rejected folder
 
-Selection uses smaller decoration than Welcome. Rows lift subtly on hover with equivalent visible keyboard focus; full paths remain inspectable and never tilt. Folder actions stack at narrow widths, and create/recovery details preserve focus and the scroll anchor. No transition shows success before the service confirms binding.
+Selection features the 64x64 sculpted `FolderArtBadge` beside its heading. Project rows render as raised dimensional card stacks with lower plate edges (`MayasabaPlateEdgeBrush`), 40x40 quiet folder badges, and `HoverLift` (translateY -2px, elevation 8 resting -> 14 hover/focus) with equivalent visible keyboard focus; full paths remain inspectable in Cascadia Mono and never tilt. Folder actions stack at narrow widths, and create/recovery details preserve focus and the scroll anchor. No transition shows success before the service confirms binding.
 
 ```text
 SCREEN 2 REMAINS VISIBLE             NATIVE WINDOWS DIRECTORY PICKER
@@ -213,7 +217,7 @@ CLI readiness and problem cards do not move the composer. A restored project wit
 +--------------------------------------------------------------------------+
 | Mayasaba · Project name + inspectable path                               |
 | Phase + condition                Hermes Agent CLI  ● READY               |
-| [Start] [Pause] [Stop] [•••] [Exit]  Kilo Code CLI ● READY               |
+| [Start] [Pause] [Stop] [Search messages] [•••] [Exit]  Kilo Code CLI ● READY|
 |                                 Claude Code CLI   ● READY                |
 +--------------------------------------------------------------------------+
 | You · 10:42 · Saved                                                      |
@@ -232,7 +236,35 @@ CLI readiness and problem cards do not move the composer. A restored project wit
 +--------------------------------------------------------------------------+
 ```
 
-Messages and cards are chronological. Every submitted contribution separates **saved** status from interpretation, authorization, execution, and completion. A successfully finalized conversational turn has one primary reply, with all three responses, the selected writer, both peer reviews, and material disagreement available through `Show details`. A missing response or review shows waiting or a bounded blocker; it never produces a one- or two-agent final reply. A greeting grants no file scan or write permission. Long history preserves the reader's position and offers `Jump to latest`.
+Messages and cards are chronological. User messages appear as asymmetric speech bubbles (`CornerRadius="16,16,5,16"`, `MayasabaQuietBrush`). Every submitted contribution separates **saved** status from interpretation, authorization, execution, and completion. A successfully finalized conversational turn has one primary reply with layered dimensional presentation (lower plate edge, mini brand monogram badge `M`, title/subtitle stack, bottom author perspective avatar badges `H`, `K`, `C` with "Three perspectives", and soft secondary details panel), with all three responses, the selected writer, both peer reviews, and material disagreement available through `Show details`. Controller cards display semantic state badges, stylized stage provenance boxes, and matching plate edges. A missing response or review shows waiting or a bounded blocker; it never produces a one- or two-agent final reply. A greeting grants no file scan or write permission. Long history preserves the reader's position and offers `Jump to latest`.
+
+## Chat state — Saved-message search in Chat (Ctrl+F)
+
+```text
++--------------------------------------------------------------------------+
+| Mayasaba · Project name + inspectable path                               |
+| Phase + condition                Hermes Agent CLI  ● READY               |
+| [Start] [Pause] [Stop] [Search messages] [•••] [Exit]  Kilo Code CLI ● READY|
++--------------------------------------------------------------------------+
+| ┌ Search messages ──────────────────────────────────────────────── [x] ┐ |
+| │ [ Search saved messages in this project...            ] [Clear]     │ |
+| │ Found 3 matches in current project                                  │ |
+| │ ┌─────────────────────────────────────────────────────────────────┐ │ |
+| │ │ You · 10:42 (sub-7f1a)                                          │ │ |
+| │ │ ...needs next for the database optimization algorithm...        │ │ |
+| │ ├─────────────────────────────────────────────────────────────────┤ │ |
+| │ │ You · 10:45 (sub-8a2b)                                          │ │ |
+| │ │ [Protected user message — open in conversation to view]         │ │ |
+| │ └─────────────────────────────────────────────────────────────────┘ │ |
+| │ [Load more matches]                                                 │ |
+| └─────────────────────────────────────────────────────────────────────┘ |
+|                                                                          |
+| [ Message Mayasaba...                                      ] [Send]      |
+| [Attach files] · selected attachment chips                               |
++--------------------------------------------------------------------------+
+```
+
+Pressing `Ctrl+F` or selecting `[Search messages]` opens the temporary overlay surface (`MessageSearchPanel`). Queries execute against confirmed saved user messages for the current project via parameterized SQL pre-pagination (`Storage::SearchUserMessages`). Results show stable submission IDs, timestamps, and the neutral label `[Saved user message — select to open in conversation]`. No user-message snippet is extracted; original text remains available in the permitted conversation/history view. Selecting a match or pressing Enter closes the panel, navigates via `StartBringIntoView()` to the original message in the timeline by identity, and applies a brief elevation highlight. Pressing Escape or the close button dismisses the overlay and restores prior focus and reading position without moving or altering composer drafts. Project switching or leaving immediately cancels in-flight searches and dismisses the panel.
 
 ## Chat state — a CLI needs attention
 

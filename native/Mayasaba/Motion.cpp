@@ -74,6 +74,19 @@ namespace mayasaba::ui
 
     void MotionController::CancelAll() noexcept
     {
+        if (activeTiltBoard_)
+        {
+            try { activeTiltBoard_.Stop(); } catch (...) {}
+            activeTiltBoard_ = nullptr;
+        }
+        for (auto const& h : activeHovers_)
+        {
+            if (h.board)
+            {
+                try { h.board.Stop(); } catch (...) {}
+            }
+        }
+        activeHovers_.clear();
         for (auto const& board : tracked_)
         {
             try
@@ -108,10 +121,14 @@ namespace mayasaba::ui
     void MotionController::Track(Storyboard const& board, std::function<void()> commit)
     {
         Prune();
-        if (tracked_.size() >= MaxTracked)
+        while (tracked_.size() >= MaxTracked)
         {
-            // Bound the registry: the oldest entry is released rather than allowing
-            // an unbounded retention of target elements.
+            // Bounded registry: stopped before being evicted so the storyboard does not run unowned.
+            try
+            {
+                if (tracked_.front()) tracked_.front().Stop();
+            }
+            catch (...) {}
             tracked_.erase(tracked_.begin());
         }
         tracked_.push_back(board);
@@ -184,6 +201,9 @@ namespace mayasaba::ui
             if (!transform)
             {
                 transform = CompositeTransform3D{};
+                transform.RotationX(MotionTokens::RestingRotationX);
+                transform.RotationY(MotionTokens::RestingRotationY);
+                transform.RotationZ(MotionTokens::RestingRotationZ);
                 element.Transform3D(transform);
             }
             // Rotation must be about the element centre; a default centre of zero
@@ -364,16 +384,75 @@ namespace mayasaba::ui
     {
         if (!element) return;
         auto const transform = EnsureTransform(element);
-        double const target = lifted ? -3.0 : 0.0;
+        double const target = lifted ? -2.0 : 0.0;
         if (transform.TranslateY() == target) return;
         if (!Allowed())
         {
             transform.TranslateY(target);
             return;
         }
+
+        // Clean up expired or completed hover records
+        std::erase_if(activeHovers_, [](ActiveHover const& h) {
+            return !h.element.get() || !h.board;
+        });
+
+        // Locate existing active hover tracking for THIS specific element.
+        // Distinguishing targets guarantees that row A's ongoing return to resting position
+        // is never cancelled or frozen when row B starts an animation.
+        auto it = std::find_if(activeHovers_.begin(), activeHovers_.end(),
+            [&](ActiveHover const& h) {
+                auto const existing = h.element.get();
+                return existing && existing == element;
+            });
+
+        uint64_t gen = 1;
+        if (it != activeHovers_.end())
+        {
+            if (it->board)
+            {
+                try { it->board.Stop(); } catch (...) {}
+                it->board = nullptr;
+            }
+            gen = ++it->generation;
+        }
+        else
+        {
+            ActiveHover entry;
+            entry.element = make_weak(element);
+            entry.generation = 1;
+            activeHovers_.push_back(std::move(entry));
+            it = activeHovers_.end() - 1;
+            gen = 1;
+        }
+
         double const current = transform.TranslateY();
         auto const board = BuildDouble(transform, L"TranslateY", current, target, MotionTokens::HoverMs);
-        Track(board, [transform, target] { transform.TranslateY(target); });
+        it->board = board;
+
+        auto weakEl = make_weak(element);
+        Track(board, [this, weakEl, transform, target, gen]
+        {
+            auto const el = weakEl.get();
+            if (!el) return;
+            for (auto iter = activeHovers_.begin(); iter != activeHovers_.end(); ++iter)
+            {
+                if (iter->element.get() == el)
+                {
+                    if (iter->generation == gen)
+                    {
+                        transform.TranslateY(target);
+                        if (iter->board)
+                        {
+                            try { iter->board.Stop(); } catch (...) {}
+                            iter->board = nullptr;
+                        }
+                        activeHovers_.erase(iter);
+                    }
+                    break;
+                }
+            }
+        });
         board.Begin();
     }
 
@@ -382,8 +461,15 @@ namespace mayasaba::ui
     {
         if (!element || !Allowed()) return false;
         auto const transform = EnsureTransform3D(element);
-        double const rotationY = Clamp(normalizedX, -1.0, 1.0) * MotionTokens::MaxTiltDegrees;
-        double const rotationX = -Clamp(normalizedY, -1.0, 1.0) * MotionTokens::MaxTiltDegrees;
+        double const rotationY = MotionTokens::RestingRotationY + Clamp(normalizedX, -1.0, 1.0) * MotionTokens::MaxTiltDegrees;
+        double const rotationX = MotionTokens::RestingRotationX - Clamp(normalizedY, -1.0, 1.0) * MotionTokens::MaxTiltDegrees;
+
+        if (activeTiltBoard_)
+        {
+            try { activeTiltBoard_.Stop(); } catch (...) {}
+            activeTiltBoard_ = nullptr;
+        }
+        uint64_t const gen = ++tiltGeneration_;
 
         Storyboard board{};
         auto y = Bezier(transform.RotationY(), rotationY, MotionTokens::BaseMs);
@@ -396,10 +482,13 @@ namespace mayasaba::ui
         Storyboard::SetTargetProperty(x, L"RotationX");
         board.Children().Append(x);
 
-        Track(board, [transform, rotationX, rotationY]
+        activeTiltBoard_ = board;
+        Track(board, [this, transform, rotationX, rotationY, gen]
         {
+            if (gen != tiltGeneration_) return;
             transform.RotationX(rotationX);
             transform.RotationY(rotationY);
+            activeTiltBoard_ = nullptr;
         });
         board.Begin();
         return true;
@@ -410,28 +499,43 @@ namespace mayasaba::ui
         if (!element) return;
         if (auto const transform = element.Transform3D().try_as<CompositeTransform3D>())
         {
-            if (transform.RotationX() == 0 && transform.RotationY() == 0) return;
             if (!Allowed())
             {
                 transform.RotationX(0);
                 transform.RotationY(0);
+                transform.RotationZ(0);
                 return;
             }
+            if (transform.RotationX() == MotionTokens::RestingRotationX &&
+                transform.RotationY() == MotionTokens::RestingRotationY &&
+                transform.RotationZ() == MotionTokens::RestingRotationZ) return;
+
+            if (activeTiltBoard_)
+            {
+                try { activeTiltBoard_.Stop(); } catch (...) {}
+                activeTiltBoard_ = nullptr;
+            }
+            uint64_t const gen = ++tiltGeneration_;
+
             Storyboard board{};
-            auto y = Bezier(transform.RotationY(), 0, MotionTokens::BaseMs);
+            auto y = Bezier(transform.RotationY(), MotionTokens::RestingRotationY, MotionTokens::BaseMs);
             Storyboard::SetTarget(y, transform);
             Storyboard::SetTargetProperty(y, L"RotationY");
             board.Children().Append(y);
 
-            auto x = Bezier(transform.RotationX(), 0, MotionTokens::BaseMs);
+            auto x = Bezier(transform.RotationX(), MotionTokens::RestingRotationX, MotionTokens::BaseMs);
             Storyboard::SetTarget(x, transform);
             Storyboard::SetTargetProperty(x, L"RotationX");
             board.Children().Append(x);
 
-            Track(board, [transform]
+            activeTiltBoard_ = board;
+            Track(board, [this, transform, gen]
             {
-                transform.RotationX(0);
-                transform.RotationY(0);
+                if (gen != tiltGeneration_) return;
+                transform.RotationX(MotionTokens::RestingRotationX);
+                transform.RotationY(MotionTokens::RestingRotationY);
+                transform.RotationZ(MotionTokens::RestingRotationZ);
+                activeTiltBoard_ = nullptr;
             });
             board.Begin();
         }

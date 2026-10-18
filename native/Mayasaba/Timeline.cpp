@@ -110,7 +110,7 @@ namespace mayasaba::ui
         // Wires a Show/Hide details toggle. `open` is the persisted initial state so a
         // card rebuilt to stay last in the timeline keeps the reader's expansion, and
         // every toggle is reported back so the caller can persist it.
-        void WireDetails(Button const& toggle, StackPanel const& host, bool open,
+        void WireDetails(Button const& toggle, FrameworkElement const& host, bool open,
                          hstring const& showName, hstring const& hideName,
                          mayasaba::ui::MotionController* motion,
                          std::function<void(std::string const&, bool)> const& report,
@@ -253,6 +253,16 @@ namespace mayasaba::ui
         {
             items_.RemoveAt(items_.Size() - 1);
         }
+    }
+
+    std::optional<std::size_t> TimelineRenderer::FindIndexByIdentity(std::string const& identity) const
+    {
+        if (identity.empty()) return std::nullopt;
+        for (std::size_t i = 0; i < entries_.size(); ++i)
+        {
+            if (entries_[i].identity == identity) return i;
+        }
+        return std::nullopt;
     }
 
     UIElement TimelineRenderer::GetElement(ElementFactoryGetArgs const& args)
@@ -403,8 +413,8 @@ namespace mayasaba::ui
             bubble.Background(Token(L"MayasabaBrandQuietBrush"));
             bubble.BorderBrush(Token(L"MayasabaBorderBrush"));
             bubble.BorderThickness(Thickness{1});
-            bubble.CornerRadius(CornerRadius{14});
-            bubble.Padding(Thickness{16, 12, 16, 12});
+            bubble.CornerRadius(CornerRadius{16, 16, 5, 16});
+            bubble.Padding(Thickness{16, 14, 16, 14});
             bubble.MaxWidth(measure_ * 0.9);
             bubble.HorizontalAlignment(HorizontalAlignment::Right);
             bubble.Child(content);
@@ -422,14 +432,41 @@ namespace mayasaba::ui
 
             StackPanel header{};
             header.Orientation(Orientation::Horizontal);
-            header.Spacing(9);
-            header.Children().Append(Dot(edge, 9));
-            TextBlock title = Label(to_hstring(entry.title.empty() ? std::string{"Mayasaba · one reviewed reply"} : entry.title), 14, ink);
+            header.Spacing(10);
+            header.VerticalAlignment(VerticalAlignment::Center);
+
+            // Dimensional mini brand monogram for Mayasaba reply
+            Border miniMark{};
+            miniMark.Width(30); miniMark.Height(30);
+            miniMark.CornerRadius(CornerRadius{9});
+            miniMark.Background(Token(L"MayasabaBrandGradientBrush"));
+            miniMark.VerticalAlignment(VerticalAlignment::Center);
+            TextBlock miniText{};
+            miniText.Text(L"M");
+            miniText.FontSize(13.5);
+            miniText.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
+            miniText.Foreground(Token(L"MayasabaOnActionBrush"));
+            miniText.HorizontalAlignment(HorizontalAlignment::Center);
+            miniText.VerticalAlignment(VerticalAlignment::Center);
+            miniMark.Child(miniText);
+            header.Children().Append(miniMark);
+
+            StackPanel titleStack{};
+            titleStack.Spacing(1);
+            titleStack.VerticalAlignment(VerticalAlignment::Center);
+            TextBlock title = Label(to_hstring(entry.title.empty() ? std::string{"Mayasaba"} : entry.title), 13.5, ink);
             title.FontWeight(SemiBold());
-            header.Children().Append(title);
+            titleStack.Children().Append(title);
+            TextBlock subTitle = Label(L"Consolidated reply · Reviewed", 11, muted);
+            titleStack.Children().Append(subTitle);
+            header.Children().Append(titleStack);
+
             if (!entry.timestamp.empty())
             {
-                header.Children().Append(Label(to_hstring(entry.timestamp), 12, soft));
+                TextBlock timeLabel = Label(to_hstring(entry.timestamp), 11.5, soft);
+                timeLabel.VerticalAlignment(VerticalAlignment::Center);
+                timeLabel.Margin(Thickness{8, 0, 0, 0});
+                header.Children().Append(timeLabel);
             }
             content.Children().Append(header);
 
@@ -448,23 +485,59 @@ namespace mayasaba::ui
             if (entry.detailsAvailable && !entry.details.empty())
             {
                 auto const actions = ActionRow();
-                auto const toggle = QuietButton(L"Show details", L"Show reply details");
+                actions.HorizontalAlignment(HorizontalAlignment::Stretch);
 
-                StackPanel detailsHost{};
-                detailsHost.Spacing(10);
-                detailsHost.Visibility(Visibility::Collapsed);
-                detailsHost.Margin(Thickness{0, 4, 0, 0});
+                Grid actionGrid{};
+                actionGrid.HorizontalAlignment(HorizontalAlignment::Stretch);
+                ColumnDefinition cAuthors{}; cAuthors.Width(GridLengthHelper::Auto());
+                ColumnDefinition cSpacer{}; cSpacer.Width(GridLengthHelper::FromValueAndType(1, GridUnitType::Star));
+                ColumnDefinition cButtons{}; cButtons.Width(GridLengthHelper::Auto());
+                actionGrid.ColumnDefinitions().Append(cAuthors);
+                actionGrid.ColumnDefinitions().Append(cSpacer);
+                actionGrid.ColumnDefinitions().Append(cButtons);
+
+                // Three perspectives monogram badges: Hermes (H), Kilo (K), Claude (C)
+                StackPanel authorPanel{};
+                authorPanel.Orientation(Orientation::Horizontal);
+                authorPanel.VerticalAlignment(VerticalAlignment::Center);
+
+                auto makeBadge = [](wchar_t letter, wchar_t const* bgBrush, wchar_t const* fgBrush, double leftMargin)
                 {
-                    Microsoft::UI::Xaml::Shapes::Rectangle divider{};
-                    divider.Height(1);
-                    divider.Fill(Token(L"MayasabaLineBrush"));
-                    detailsHost.Children().Append(divider);
-                    detailsHost.Children().Append(RenderRichText(entry.details, options));
-                }
+                    Border badge{};
+                    badge.Width(22); badge.Height(22);
+                    badge.CornerRadius(CornerRadius{11});
+                    badge.Background(Token(bgBrush));
+                    badge.BorderBrush(Token(L"MayasabaPanelBrush"));
+                    badge.BorderThickness(Thickness{2});
+                    badge.Margin(Thickness{leftMargin, 0, 0, 0});
+                    TextBlock t{};
+                    t.Text(winrt::hstring{letter});
+                    t.FontSize(10);
+                    t.FontWeight(winrt::Windows::UI::Text::FontWeights::Bold());
+                    t.Foreground(Token(fgBrush));
+                    t.HorizontalAlignment(HorizontalAlignment::Center);
+                    t.VerticalAlignment(VerticalAlignment::Center);
+                    badge.Child(t);
+                    return badge;
+                };
 
-                WireDetails(toggle, detailsHost, entry.detailsOpen,
-                                L"Show reply details", L"Hide reply details", &motion_, detailsToggle_, entry.identity);
-                actions.Children().Append(toggle);
+                authorPanel.Children().Append(makeBadge(L'H', L"MayasabaHermesMonogramBrush", L"MayasabaHermesInkBrush", 0));
+                authorPanel.Children().Append(makeBadge(L'K', L"MayasabaKiloMonogramBrush", L"MayasabaKiloInkBrush", -5));
+                authorPanel.Children().Append(makeBadge(L'C', L"MayasabaClaudeMonogramBrush", L"MayasabaClaudeInkBrush", -5));
+
+                TextBlock persLabel = Label(L"Three perspectives", 11.5, muted);
+                persLabel.Margin(Thickness{8, 0, 0, 0});
+                persLabel.VerticalAlignment(VerticalAlignment::Center);
+                authorPanel.Children().Append(persLabel);
+                actionGrid.Children().Append(authorPanel);
+
+                StackPanel btnPanel{};
+                btnPanel.Orientation(Orientation::Horizontal);
+                btnPanel.Spacing(8);
+                Grid::SetColumn(btnPanel, 2);
+
+                auto const toggle = QuietButton(L"Show details", L"Show reply details");
+                btnPanel.Children().Append(toggle);
 
                 if (copy_)
                 {
@@ -480,19 +553,50 @@ namespace mayasaba::ui
                             button.Content(box_value(hstring{L"Copied"}));
                         }
                     });
-                    actions.Children().Append(copyReply);
+                    btnPanel.Children().Append(copyReply);
                 }
+                actionGrid.Children().Append(btnPanel);
+                actions.Children().Append(actionGrid);
+
+                Border detailsBorder{};
+                detailsBorder.CornerRadius(CornerRadius{12});
+                detailsBorder.Background(Token(L"MayasabaSecondaryBrush"));
+                detailsBorder.BorderBrush(Token(L"MayasabaBorderBrush"));
+                detailsBorder.BorderThickness(Thickness{1});
+                detailsBorder.Padding(Thickness{16, 14, 16, 14});
+                detailsBorder.Visibility(Visibility::Collapsed);
+                detailsBorder.Margin(Thickness{0, 6, 0, 0});
+
+                StackPanel detailsHost{};
+                detailsHost.Spacing(10);
+                detailsHost.Children().Append(RenderRichText(entry.details, options));
+                detailsBorder.Child(detailsHost);
+
+                WireDetails(toggle, detailsBorder, entry.detailsOpen,
+                            L"Show reply details", L"Hide reply details", &motion_, detailsToggle_, entry.identity);
                 content.Children().Append(actions);
-                content.Children().Append(detailsHost);
+                content.Children().Append(detailsBorder);
             }
 
+            Grid replyStack{};
+            replyStack.MaxWidth(measure_ + 40);
+            replyStack.HorizontalAlignment(HorizontalAlignment::Left);
+
+            Border plateEdge{};
+            plateEdge.VerticalAlignment(VerticalAlignment::Bottom);
+            plateEdge.Height(20);
+            plateEdge.Margin(Thickness{4, 0, 4, 0});
+            plateEdge.CornerRadius(CornerRadius{18});
+            plateEdge.Background(Token(L"MayasabaPlateEdgeBrush"));
+            replyStack.Children().Append(plateEdge);
+
             auto card = CardWithSpine(content, edge, 18, 16);
-            card.MaxWidth(measure_ + 40);
-            card.HorizontalAlignment(HorizontalAlignment::Left);
-            Automation::AutomationProperties::SetName(card,
+            replyStack.Children().Append(card);
+
+            Automation::AutomationProperties::SetName(replyStack,
                 L"Agent reply. " + StateLabel(entry.state) + L". Written by the recorded rotating writer and reviewed by both peers.");
-            motion_.ApplyElevation(card, 8);
-            return card;
+            motion_.ApplyElevation(replyStack, 8);
+            return replyStack;
         }
 
         // ---- Controller-owned card ------------------------------------------
@@ -502,14 +606,30 @@ namespace mayasaba::ui
         StackPanel header{};
         header.Orientation(Orientation::Horizontal);
         header.Spacing(9);
+        header.VerticalAlignment(VerticalAlignment::Center);
+
         header.Children().Append(Dot(edge, 9));
         TextBlock title = Label(to_hstring(entry.title.empty() ? std::string{"Mayasaba"} : entry.title), 14, ink);
         title.FontWeight(SemiBold());
         header.Children().Append(title);
-        header.Children().Append(Label(StateLabel(entry.state), 12, muted));
+
+        Border stateBadge{};
+        stateBadge.CornerRadius(CornerRadius{6});
+        stateBadge.Padding(Thickness{8, 2, 8, 2});
+        stateBadge.Margin(Thickness{6, 0, 0, 0});
+        stateBadge.Background(Token(L"MayasabaSecondaryBrush"));
+        stateBadge.BorderBrush(Token(L"MayasabaBorderBrush"));
+        stateBadge.BorderThickness(Thickness{1});
+        TextBlock stateText = Label(StateLabel(entry.state), 11, edge);
+        stateText.FontWeight(SemiBold());
+        stateBadge.Child(stateText);
+        header.Children().Append(stateBadge);
+
         if (!entry.timestamp.empty())
         {
-            header.Children().Append(Label(to_hstring(entry.timestamp), 12, soft));
+            TextBlock timeBlock = Label(to_hstring(entry.timestamp), 11.5, soft);
+            timeBlock.Margin(Thickness{8, 0, 0, 0});
+            header.Children().Append(timeBlock);
         }
         card.Children().Append(header);
 
@@ -524,48 +644,80 @@ namespace mayasaba::ui
             card.Children().Append(Label(to_hstring(entry.body), 13, muted));
         }
 
-        StackPanel provenance{};
-        provenance.Spacing(2);
-        if (!entry.operation.empty())
+        if (!entry.operation.empty() || !entry.nextAction.empty())
         {
-            TextBlock operation = Label(to_hstring(entry.operation), 11.5, soft);
-            operation.FontFamily(MonoFont());
-            operation.IsTextSelectionEnabled(true);
-            provenance.Children().Append(operation);
+            Border stageBox{};
+            stageBox.CornerRadius(CornerRadius{8});
+            stageBox.Background(Token(L"MayasabaSecondaryBrush"));
+            stageBox.BorderBrush(Token(L"MayasabaBorderBrush"));
+            stageBox.BorderThickness(Thickness{1});
+            stageBox.Padding(Thickness{12, 8, 12, 8});
+            stageBox.Margin(Thickness{0, 4, 0, 4});
+
+            StackPanel stageContent{};
+            stageContent.Spacing(3);
+
+            if (!entry.operation.empty())
+            {
+                TextBlock stageTitle = Label(to_hstring(entry.operation), 12, ink);
+                stageTitle.FontFamily(MonoFont());
+                stageTitle.FontWeight(SemiBold());
+                stageTitle.IsTextSelectionEnabled(true);
+                stageContent.Children().Append(stageTitle);
+            }
+            if (!entry.nextAction.empty())
+            {
+                TextBlock nextLabel = Label(to_hstring(entry.nextAction), 11.5, muted);
+                stageContent.Children().Append(nextLabel);
+            }
+            stageBox.Child(stageContent);
+            card.Children().Append(stageBox);
         }
-        if (!entry.nextAction.empty())
-        {
-            provenance.Children().Append(Label(to_hstring(entry.nextAction), 12, muted));
-        }
-        if (provenance.Children().Size() > 0) card.Children().Append(provenance);
 
         if (entry.detailsAvailable && !entry.details.empty())
         {
             auto const actions = ActionRow();
             auto const toggle = QuietButton(L"Show details", L"Show card details");
+
+            Border detailsBorder{};
+            detailsBorder.CornerRadius(CornerRadius{12});
+            detailsBorder.Background(Token(L"MayasabaSecondaryBrush"));
+            detailsBorder.BorderBrush(Token(L"MayasabaBorderBrush"));
+            detailsBorder.BorderThickness(Thickness{1});
+            detailsBorder.Padding(Thickness{14, 12, 14, 12});
+            detailsBorder.Visibility(Visibility::Collapsed);
+            detailsBorder.Margin(Thickness{0, 6, 0, 0});
+
             StackPanel detailsHost{};
-            detailsHost.Spacing(10);
-            detailsHost.Visibility(Visibility::Collapsed);
-            {
-                Microsoft::UI::Xaml::Shapes::Rectangle divider{};
-                divider.Height(1);
-                divider.Fill(Token(L"MayasabaLineBrush"));
-                detailsHost.Children().Append(divider);
-                detailsHost.Children().Append(RenderRichText(entry.details, options));
-            }
-            WireDetails(toggle, detailsHost, entry.detailsOpen,
+            detailsHost.Spacing(8);
+            detailsHost.Children().Append(RenderRichText(entry.details, options));
+            detailsBorder.Child(detailsHost);
+
+            WireDetails(toggle, detailsBorder, entry.detailsOpen,
                         L"Show card details", L"Hide card details", &motion_, detailsToggle_, entry.identity);
             actions.Children().Append(toggle);
             card.Children().Append(actions);
-            card.Children().Append(detailsHost);
+            card.Children().Append(detailsBorder);
         }
 
+        Grid opStack{};
+        opStack.MaxWidth(measure_ + 40);
+        opStack.HorizontalAlignment(HorizontalAlignment::Left);
+
+        Border plateEdge{};
+        plateEdge.VerticalAlignment(VerticalAlignment::Bottom);
+        plateEdge.Height(18);
+        plateEdge.Margin(Thickness{4, 0, 4, 0});
+        plateEdge.CornerRadius(CornerRadius{18});
+        plateEdge.Background(Token(L"MayasabaPlateEdgeBrush"));
+        opStack.Children().Append(plateEdge);
+
         auto surface = CardWithSpine(card, edge, 18, 16);
-        surface.MaxWidth(measure_ + 40);
-        surface.HorizontalAlignment(HorizontalAlignment::Left);
-        Automation::AutomationProperties::SetName(surface,
+        opStack.Children().Append(surface);
+
+        Automation::AutomationProperties::SetName(opStack,
             L"Controller card. " + to_hstring(entry.title) + L". " + StateLabel(entry.state));
-        motion_.ApplyElevation(surface, 8);
-        return surface;
+        motion_.ApplyElevation(opStack, 8);
+        return opStack;
     }
 }

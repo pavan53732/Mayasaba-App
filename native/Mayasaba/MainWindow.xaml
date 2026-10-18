@@ -128,7 +128,7 @@
                                 <Grid x:Name="WelcomeHeroMark" Width="138" Height="138"
                                       HorizontalAlignment="Center" VerticalAlignment="Center">
                                     <Grid.Transform3D>
-                                        <CompositeTransform3D x:Name="WelcomeHeroTilt"/>
+                                        <CompositeTransform3D x:Name="WelcomeHeroTilt" RotationX="15" RotationY="-22" RotationZ="-9"/>
                                     </Grid.Transform3D>
                                     <!-- Real extruded slices: every edge sits at a negative Z behind the
                                          face under the stage perspective, so the mark is genuinely
@@ -183,9 +183,15 @@
                                 <TextBlock FontSize="18" Foreground="{ThemeResource MayasabaMutedBrush}"
                                            TextWrapping="Wrap" MaxWidth="700"
                                            Text="A calm Windows control room for Hermes Agent CLI, Kilo Code CLI and Claude Code CLI. Inspect their work, preserve evidence and stay in control of every material action."/>
-                                <TextBlock FontSize="15" Foreground="{ThemeResource MayasabaMutedBrush}"
-                                           TextWrapping="Wrap" MaxWidth="700"
-                                           Text="You install, authenticate, configure and update the three CLIs yourself. Mayasaba never installs a model, changes your provider or starts a CLI merely because you opened a folder. A missing CLI never blocks opening a folder."/>
+                                <Border Style="{StaticResource MayasabaSecondarySurface}" CornerRadius="12" Padding="14,10" MaxWidth="640">
+                                    <StackPanel Orientation="Horizontal" Spacing="10">
+                                        <FontIcon Glyph="&#xEA18;" FontFamily="Segoe Fluent Icons" FontSize="18"
+                                                  Foreground="{ThemeResource MayasabaBrandBrush}" VerticalAlignment="Center"/>
+                                        <TextBlock Text="You install and sign in to the three CLIs yourself. Mayasaba never installs a model, changes your provider or starts a CLI merely because you opened a folder. A missing CLI never blocks opening a folder."
+                                                   FontSize="13" Foreground="{ThemeResource MayasabaMutedBrush}"
+                                                   TextWrapping="Wrap" VerticalAlignment="Center" MaxWidth="580"/>
+                                    </StackPanel>
+                                </Border>
                             </StackPanel>
 
                             <!-- Stable per-CLI monogram identity: name plus colour, never colour alone. -->
@@ -332,14 +338,28 @@
                         <StackPanel x:Name="FolderStack" HorizontalAlignment="Center"
                                     MaxWidth="780" Spacing="18">
 
-                            <StackPanel Spacing="6">
-                                <TextBlock x:Name="FolderHeading" Text="Open a project"
-                                           Style="{StaticResource MayasabaScreenTitleText}"
-                                           AutomationProperties.HeadingLevel="Level1"/>
-                                <TextBlock Text="Select a recent project, open an existing folder, or create a new project folder. Opening a folder only creates or restores project identity: it launches no CLI session, scans nothing, initializes no Git repository and installs nothing."
-                                           Style="{StaticResource MayasabaBodyText}"
-                                           Foreground="{ThemeResource MayasabaMutedBrush}" MaxWidth="700"/>
-                            </StackPanel>
+                            <Grid ColumnSpacing="16" Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="6" VerticalAlignment="Center">
+                                    <TextBlock x:Name="FolderHeading" Text="Pick up where you left off"
+                                               Style="{StaticResource MayasabaScreenTitleText}"
+                                               AutomationProperties.HeadingLevel="Level1"/>
+                                    <TextBlock Text="Select a recent project, open an existing folder, or create a new project folder. Opening a folder only creates or restores project identity: it launches no CLI session, scans nothing, initializes no Git repository and installs nothing."
+                                               Style="{StaticResource MayasabaBodyText}"
+                                               Foreground="{ThemeResource MayasabaMutedBrush}" MaxWidth="620"/>
+                                </StackPanel>
+                                <Border Grid.Column="1" Width="64" Height="64" CornerRadius="18"
+                                        Background="{ThemeResource MayasabaSecondaryBrush}"
+                                        BorderBrush="{ThemeResource MayasabaPlateEdgeBrush}" BorderThickness="1"
+                                        VerticalAlignment="Center" HorizontalAlignment="Right">
+                                    <FontIcon Glyph="&#xED25;" FontFamily="Segoe Fluent Icons" FontSize="28"
+                                              Foreground="{ThemeResource MayasabaBrandBrush}"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                            </Grid>
 
                             <!-- Primary folder actions. These stack vertically so neither can be
                                  pushed off a narrow window. -->
@@ -461,8 +481,45 @@
                             <!-- Recent projects: the primary content of this screen. -->
                             <Border Style="{StaticResource MayasabaCardSurface}" Padding="18">
                                 <StackPanel Spacing="12">
-                                    <TextBlock Text="Recent projects" Style="{StaticResource MayasabaSectionText}"
-                                               AutomationProperties.HeadingLevel="Level2"/>
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="Recent projects" Style="{StaticResource MayasabaSectionText}"
+                                                   VerticalAlignment="Center"
+                                                   AutomationProperties.HeadingLevel="Level2"/>
+                                        <TextBlock x:Name="RecentProjectsFilterCountLabel" Grid.Column="1"
+                                                   Style="{StaticResource MayasabaMicroText}"
+                                                   Foreground="{ThemeResource MayasabaMutedBrush}"
+                                                   VerticalAlignment="Center"/>
+                                    </Grid>
+
+                                    <!-- Filter recent projects by name, path, or status -->
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox x:Name="RecentProjectsFilterBox"
+                                                 PlaceholderText="Filter recent projects by name or path..."
+                                                 TextChanged="OnRecentFilterTextChanged"
+                                                 AutomationProperties.Name="Filter recent projects"/>
+                                        <Button x:Name="RecentProjectsClearFilterButton" Grid.Column="1"
+                                                Click="OnClearRecentFilter" Content="Clear" Visibility="Collapsed"
+                                                Padding="12,6" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                                AutomationProperties.Name="Clear project filter"/>
+                                        <ComboBox x:Name="RecentProjectsStatusFilter" Grid.Column="2"
+                                                  SelectedIndex="0" SelectionChanged="OnRecentStatusFilterChanged"
+                                                  CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                                  AutomationProperties.Name="Filter by project status">
+                                            <ComboBoxItem Content="All projects"/>
+                                            <ComboBoxItem Content="Open projects only"/>
+                                            <ComboBoxItem Content="Closed projects only"/>
+                                        </ComboBox>
+                                    </Grid>
+
                                     <TextBlock x:Name="NoRecentProjectsText" Text="No recent projects yet."
                                                Style="{StaticResource MayasabaMetaText}"
                                                Visibility="Collapsed"/>
@@ -495,7 +552,7 @@
                  SCREEN 3 — CHAT
                  The only persistent work surface. All other information is a Chat card.
                  ========================================================================== -->
-            <Grid x:Name="ChatScreen" Visibility="Collapsed">
+            <Grid x:Name="ChatScreen" Visibility="Collapsed" KeyDown="OnChatKeyDown">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
@@ -549,6 +606,15 @@
                              owns row 1 at full width so it keeps every full CLI name visible. -->
                         <StackPanel Grid.Row="0" Grid.Column="1" HorizontalAlignment="Right">
                             <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                                <Button x:Name="SearchMessagesButton" Click="OnSearchMessagesClick"
+                                        Padding="13,7" CornerRadius="11"
+                                        AutomationProperties.Name="Search saved user messages"
+                                        AutomationProperties.AcceleratorKey="Control F">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <FontIcon Glyph="&#xE721;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
+                                        <TextBlock Text="Search"/>
+                                    </StackPanel>
+                                </Button>
                                 <Button x:Name="StartButton" Content="Start" Click="OnStart" Padding="15,7"
                                         CornerRadius="11"
                                         AutomationProperties.HelpText="Starts all three project-scoped CLI sessions. Currently blocked because no native adapter exists."/>
@@ -594,6 +660,73 @@
                         <RowDefinition x:Name="ChatComposerRow" Height="Auto"/>
                         <RowDefinition x:Name="ChatBottomSpacer" Height="*"/>
                     </Grid.RowDefinitions>
+
+                    <!-- Temporary Search Messages Panel (animated reveal) -->
+                    <Border x:Name="MessageSearchPanel" Grid.Row="0" Grid.RowSpan="4"
+                            VerticalAlignment="Top" HorizontalAlignment="Center"
+                            MaxWidth="760" Margin="18,10,18,0"
+                            Visibility="Collapsed" Canvas.ZIndex="20"
+                            Style="{StaticResource MayasabaCardSurface}"
+                            Padding="16"
+                            BorderBrush="{ThemeResource MayasabaBrandBrush}" BorderThickness="1.5">
+                        <StackPanel Spacing="10">
+                            <!-- Search header row -->
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <FontIcon Glyph="&#xE721;" FontFamily="Segoe Fluent Icons" FontSize="15"
+                                              Foreground="{ThemeResource MayasabaBrandBrush}"/>
+                                    <TextBlock Text="Search saved user messages" Style="{StaticResource MayasabaSectionText}"
+                                               AutomationProperties.HeadingLevel="Level2"/>
+                                </StackPanel>
+                                <Button x:Name="CloseSearchButton" Grid.Column="1" Click="OnCloseSearch"
+                                        Padding="10,6" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                        AutomationProperties.Name="Close search (Escape)">
+                                    <FontIcon Glyph="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
+                                </Button>
+                            </Grid>
+
+                            <!-- Query input row -->
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="MessageSearchBox"
+                                         PlaceholderText="Search saved user messages in this project..."
+                                         TextChanged="OnSearchQueryChanged"
+                                         KeyDown="OnSearchBoxKeyDown"
+                                         AutomationProperties.Name="Search query input"/>
+                                <Button x:Name="ClearSearchButton" Grid.Column="1" Click="OnClearSearchQuery"
+                                        Content="Clear" Visibility="Collapsed" Padding="12,6"
+                                        CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                        AutomationProperties.Name="Clear search query"/>
+                            </Grid>
+
+                            <!-- Search status label -->
+                            <TextBlock x:Name="SearchStatusText" Text="Type a query to search confirmed saved user messages."
+                                       Style="{StaticResource MayasabaMicroText}"
+                                       Foreground="{ThemeResource MayasabaMutedBrush}"
+                                       AutomationProperties.LiveSetting="Polite"/>
+
+                            <!-- Search results list -->
+                            <ListView x:Name="SearchResultsList" MaxHeight="280"
+                                      SelectionMode="None" IsItemClickEnabled="True"
+                                      ItemClick="OnSearchResultItemClick"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                      HorizontalContentAlignment="Stretch"
+                                      AutomationProperties.Name="Search results"/>
+
+                            <!-- Load more button -->
+                            <Button x:Name="SearchLoadMoreButton" Click="OnSearchLoadMore"
+                                    Content="Load more results" Visibility="Collapsed"
+                                    HorizontalAlignment="Center" Padding="14,6"
+                                    CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                        </StackPanel>
+                    </Border>
 
                     <ScrollViewer x:Name="HistoryScroller" Grid.Row="0" Visibility="Collapsed"
                                   HorizontalScrollBarVisibility="Disabled"
@@ -641,7 +774,7 @@
                                     <CompositeTransform x:Name="EmptyHeroLevitate"/>
                                 </Grid.RenderTransform>
                                 <Grid.Transform3D>
-                                    <CompositeTransform3D x:Name="EmptyHeroTilt"/>
+                                    <CompositeTransform3D x:Name="EmptyHeroTilt" RotationX="15" RotationY="-22" RotationZ="-9"/>
                                 </Grid.Transform3D>
                                 <Border x:Name="EmptyHeroLayer1" Width="76" Height="76" CornerRadius="24"
                                         Translation="8,9,-26"

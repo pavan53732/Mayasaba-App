@@ -525,22 +525,61 @@ namespace mayasaba
         }
         return result;
     }
+    namespace
+    {
+        std::string EscapeLike(std::string const& s)
+        {
+            std::string escaped;
+            escaped.reserve(s.size() * 2);
+            for (char c : s)
+            {
+                if (c == '\\' || c == '%' || c == '_')
+                {
+                    escaped.push_back('\\');
+                }
+                escaped.push_back(c);
+            }
+            return escaped;
+        }
+    }
+
     CrossProjectRecentProjectsResult Storage::QueryRecentProjects(CrossProjectRecentProjectsQuery const& query)
     {
         std::lock_guard lock(mutex_);
         CrossProjectRecentProjectsResult result;
         try
         {
-            if (query.pageSize < 1 || query.pageSize > 100 || query.offset > 1000000)
+            if (query.pageSize < 1 || query.pageSize > 100 || query.offset > 1000000 || query.filterText.size() > 500)
                 throw std::runtime_error("Recent-project query exceeds its bounds");
+
+            std::string const pattern = "%" + EscapeLike(query.filterText) + "%";
+            int const status = static_cast<int>(query.statusFilter);
+
+            // 1. Total matching count across all pages
+            Statement cnt(db_, "SELECT count(*) FROM projects "
+                               "WHERE (?1 = '' OR (display_name LIKE ?2 ESCAPE '\\' OR canonical_path LIKE ?2 ESCAPE '\\')) "
+                               "  AND (?3 = 0 OR (?3 = 1 AND closed = 0) OR (?3 = 2 AND closed != 0));");
+            Bind(cnt.value, 1, query.filterText);
+            Bind(cnt.value, 2, pattern);
+            sqlite3_bind_int(cnt.value, 3, status);
+            int rc = sqlite3_step(cnt.value);
+            Check(rc, db_);
+            result.totalMatching = static_cast<size_t>(sqlite3_column_int64(cnt.value, 0));
+
+            // 2. Data query with deterministic ordering and bounded pagination
             Statement q(db_, "SELECT id, display_name, canonical_path, draft, closed, version, "
                              "coalesce(last_opened_at, ''), coalesce(filesystem_identity, ''), domain_id "
                              "FROM projects "
+                             "WHERE (?1 = '' OR (display_name LIKE ?2 ESCAPE '\\' OR canonical_path LIKE ?2 ESCAPE '\\')) "
+                             "  AND (?3 = 0 OR (?3 = 1 AND closed = 0) OR (?3 = 2 AND closed != 0)) "
                              "ORDER BY (CASE WHEN last_opened_at IS NOT NULL AND last_opened_at != '' THEN 0 ELSE 1 END), "
-                             "last_opened_at DESC, id ASC LIMIT ?1 OFFSET ?2;");
-            sqlite3_bind_int(q.value, 1, static_cast<int>(query.pageSize + 1));
-            sqlite3_bind_int(q.value, 2, static_cast<int>(query.offset));
-            int rc{};
+                             "last_opened_at DESC, id ASC LIMIT ?4 OFFSET ?5;");
+            Bind(q.value, 1, query.filterText);
+            Bind(q.value, 2, pattern);
+            sqlite3_bind_int(q.value, 3, status);
+            sqlite3_bind_int(q.value, 4, static_cast<int>(query.pageSize + 1));
+            sqlite3_bind_int(q.value, 5, static_cast<int>(query.offset));
+
             while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
             {
                 result.items.push_back({
@@ -1395,6 +1434,81 @@ namespace mayasaba
             result.push_back(std::move(c));
         }
         Check(rc,db_);
+        return result;
+    }
+
+    MessageSearchResult Storage::SearchUserMessages(MessageSearchQuery const& query)
+    {
+        MessageSearchResult result;
+        if (query.projectId.empty())
+        {
+            return result;
+        }
+
+        std::string queryText = query.queryText;
+        if (queryText.size() > 1000)
+        {
+            queryText = queryText.substr(0, 1000);
+        }
+
+        if (queryText.empty())
+        {
+            result.isComplete = true;
+            result.totalMatches = 0;
+            result.hasMore = false;
+            return result;
+        }
+
+        size_t limit = query.limit;
+        if (limit == 0) limit = 20;
+        if (limit > 100) limit = 100;
+        size_t offset = (query.offset > 1000000) ? 1000000 : query.offset;
+
+        std::lock_guard lock(mutex_);
+        try
+        {
+            std::string pattern = "%" + EscapeLike(queryText) + "%";
+
+            // Count total matches
+            {
+                Statement countStmt(db_, "SELECT count(*) FROM contributions WHERE project_id = ?1 AND body LIKE ?2 ESCAPE '\\';");
+                Bind(countStmt.value, 1, query.projectId);
+                Bind(countStmt.value, 2, pattern);
+                int rc = sqlite3_step(countStmt.value);
+                if (rc == SQLITE_ROW)
+                {
+                    result.totalMatches = static_cast<size_t>(sqlite3_column_int64(countStmt.value, 0));
+                }
+            }
+
+            // Fetch matching page
+            {
+                Statement dataStmt(db_, "SELECT submission_id, body, created_at FROM contributions WHERE project_id = ?1 AND body LIKE ?2 ESCAPE '\\' ORDER BY row_id ASC LIMIT ?3 OFFSET ?4;");
+                Bind(dataStmt.value, 1, query.projectId);
+                Bind(dataStmt.value, 2, pattern);
+                sqlite3_bind_int64(dataStmt.value, 3, static_cast<sqlite3_int64>(limit));
+                sqlite3_bind_int64(dataStmt.value, 4, static_cast<sqlite3_int64>(offset));
+
+                int rc = SQLITE_OK;
+                while ((rc = sqlite3_step(dataStmt.value)) == SQLITE_ROW)
+                {
+                    result.matches.push_back(MessageMatch{
+                        Text(dataStmt.value, 0),
+                        Text(dataStmt.value, 1),
+                        Text(dataStmt.value, 2)
+                    });
+                }
+                Check(rc, db_);
+            }
+
+            result.hasMore = (offset + result.matches.size() < result.totalMatches);
+            result.isComplete = true;
+        }
+        catch (std::exception const& e)
+        {
+            result.isComplete = false;
+            result.errorMessage = e.what();
+        }
         return result;
     }
 
