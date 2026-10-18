@@ -443,51 +443,54 @@ def main():
             log("FAIL: No realized message cards found in HistoryScroller")
             return 1
 
-        # Check for card that has "highlighted_14dp" item_status or keyboard focus
-        highlighted_card = None
+        # Specifically locate the card containing the intended target message "Seeded contribution 5."
+        target_card = None
         for c in realized_groups:
-            status = get_item_status(c)
-            if status == "highlighted_14dp":
-                highlighted_card = c
+            card_texts = [d.window_text() for d in c.descendants() if d.window_text()]
+            if any("Seeded contribution 5." in t for t in card_texts):
+                target_card = c
                 break
 
-        if not highlighted_card:
-            # Fallback: check if any card has keyboard focus
-            for c in realized_groups:
-                if c.has_keyboard_focus():
-                    highlighted_card = c
-                    break
-
-        if not highlighted_card:
-            log("FAIL: Navigated card was not highlighted or focused")
+        if not target_card:
+            log("FAIL: Intended message card 'Seeded contribution 5.' not found among realized groups")
             return 1
 
-        card_rect = highlighted_card.rectangle()
-        initial_status = get_item_status(highlighted_card)
-        log(f"Navigated card status immediately after navigation: '{initial_status}'")
-        log(f"Navigated card bounds: L{card_rect.left}, T{card_rect.top}, R{card_rect.right}, B{card_rect.bottom}")
-        log(f"Scroller bounds:       L{scroller_rect.left}, T{scroller_rect.top}, R{scroller_rect.right}, B{scroller_rect.bottom}")
+        log("PASS: Intended message card 'Seeded contribution 5.' confirmed in realized timeline.")
 
-        # Check visibility and viewport position
-        if not highlighted_card.is_visible():
-            log("FAIL: Navigated card is not marked visible")
+        # Assert keyboard focus independently on the intended target card
+        has_focus = target_card.has_keyboard_focus() or any(d.has_keyboard_focus() for d in target_card.descendants())
+        log(f"Target message card has keyboard focus: {has_focus}")
+        if not has_focus:
+            log("FAIL: Target message card did not receive keyboard focus")
             return 1
-        if card_rect.top < scroller_rect.top - 20 or card_rect.bottom > scroller_rect.bottom + 60:
-            log("FAIL: Navigated card was not scrolled within the visible viewport bounds")
-            return 1
-        log("PASS: Target message card successfully brought into view within the active viewport.")
+        log("PASS: Target message card explicitly verified with keyboard focus.")
 
-        # Check initial highlight status
+        # Assert item_status highlight independently
+        initial_status = get_item_status(target_card)
+        log(f"Target card status immediately after navigation: '{initial_status}'")
         if initial_status != "highlighted_14dp":
             log(f"FAIL: Expected initial item_status 'highlighted_14dp', got '{initial_status}'")
             return 1
         log("PASS: Target card verified with item_status='highlighted_14dp' (14.0 dp elevation).")
 
+        card_rect = target_card.rectangle()
+        log(f"Target card bounds: L{card_rect.left}, T{card_rect.top}, R{card_rect.right}, B{card_rect.bottom}")
+        log(f"Scroller bounds:    L{scroller_rect.left}, T{scroller_rect.top}, R{scroller_rect.right}, B{scroller_rect.bottom}")
+
+        # Check visibility and viewport position
+        if not target_card.is_visible():
+            log("FAIL: Target message card is not marked visible")
+            return 1
+        if card_rect.top < scroller_rect.top - 20 or card_rect.bottom > scroller_rect.bottom + 60:
+            log("FAIL: Target message card was not scrolled within the visible viewport bounds")
+            return 1
+        log("PASS: Target message card successfully brought into view within the active viewport.")
+
         log("Waiting 2.0s for highlight reset timer (1.5s interval) to execute...")
         time.sleep(2.0)
 
-        status_after = get_item_status(highlighted_card)
-        log(f"Navigated card status after reset timer: '{status_after}'")
+        status_after = get_item_status(target_card)
+        log(f"Target card status after reset timer: '{status_after}'")
         if status_after != "resting_8dp":
             log(f"FAIL: Expected item_status to reset to 'resting_8dp', got '{status_after}'")
             return 1
@@ -675,9 +678,9 @@ def main():
         log("PASS: Rapid hover/focus sweeps verified across realized cards with zero pointer lockup or crash.")
 
         # =========================================================================
-        # PHASE 6: MULTI-DPI DISPLAY SCALING SIMULATION (150% & 200%)
+        # PHASE 6: WM_DPICHANGED MESSAGE HANDLING (150% & 200% SIMULATION)
         # =========================================================================
-        log("\n--- PHASE 6: Multi-DPI Display Scaling Simulation (150% and 200%) ---")
+        log("\n--- PHASE 6: WM_DPICHANGED Message Handling Simulation (150% and 200%) ---")
         curr_rect = win.rectangle()
 
         # 150% DPI (144 DPI)
@@ -689,11 +692,11 @@ def main():
         user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi150 << 16) | dpi150, ctypes.byref(sug_rect_150))
         time.sleep(1.0)
         r150 = win.rectangle()
-        log(f"Window bounds at 150% DPI: L{r150.left}, T{r150.top}, R{r150.right}, B{r150.bottom}")
-        if r150.width() <= 0 or r150.height() <= 0:
-            log("FAIL: Window collapsed after 150% DPI change")
+        log(f"Window bounds at 150% DPI: L{r150.left}, T{r150.top}, R{r150.right}, B{r150.bottom} (W={r150.width()}, H={r150.height()})")
+        if r150.width() <= curr_rect.width() or r150.height() <= 0:
+            log("FAIL: Window failed to expand under 150% DPI suggested rect")
             return 1
-        log("PASS: 150% DPI transition handled cleanly.")
+        log("PASS: 150% DPI WM_DPICHANGED handled cleanly with window expansion.")
 
         # 200% DPI (192 DPI)
         dpi200 = 192
@@ -704,11 +707,11 @@ def main():
         user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi200 << 16) | dpi200, ctypes.byref(sug_rect_200))
         time.sleep(1.0)
         r200 = win.rectangle()
-        log(f"Window bounds at 200% DPI: L{r200.left}, T{r200.top}, R{r200.right}, B{r200.bottom}")
-        if r200.width() <= 0 or r200.height() <= 0:
-            log("FAIL: Window collapsed after 200% DPI change")
+        log(f"Window bounds at 200% DPI: L{r200.left}, T{r200.top}, R{r200.right}, B{r200.bottom} (W={r200.width()}, H={r200.height()})")
+        if r200.width() <= r150.width() or r200.height() <= 0:
+            log("FAIL: Window failed to expand under 200% DPI suggested rect")
             return 1
-        log("PASS: 200% DPI transition handled cleanly.")
+        log("PASS: 200% DPI WM_DPICHANGED handled cleanly with window expansion.")
 
         # Restore baseline 120 DPI (125%)
         dpi120 = 120
@@ -716,6 +719,7 @@ def main():
         user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi120 << 16) | dpi120, ctypes.byref(sug_rect_120))
         time.sleep(1.0)
         log("PASS: Display DPI restored to baseline.")
+        log("NOTE: Real OS-level display-scale validation (150%/200%) requires system display settings change / sign-out and remains INCONCLUSIVE.")
 
         # =========================================================================
         # PHASE 7: ACTUAL UI PERFORMANCE PROFILING (UNCAPPED STALL RETENTION)
@@ -759,20 +763,20 @@ def main():
             perf_data = json.load(f)
 
         log("Empirical UI Performance Measurements recorded from WinUI 3 CompositionTarget (NO stalls discarded):")
-        log(f"  Total frames rendered:         {perf_data.get('total_frames')}")
-        log(f"  Average frame time:            {perf_data.get('avg_frame_ms'):.2f} ms ({perf_data.get('avg_fps'):.1f} FPS)")
-        log(f"  Max frame time:                {perf_data.get('max_frame_ms'):.2f} ms")
-        log(f"  Dropped frames (>33.3ms):      {perf_data.get('dropped_frames_gt_33ms')}")
-        log(f"  Stall frames (>100.0ms):       {perf_data.get('stall_frames_gt_100ms')}")
-        log(f"  Typing samples:                {perf_data.get('typing_sample_count')}")
-        log(f"  Typing p50 latency:            {perf_data.get('typing_p50_latency_ms'):.2f} ms")
-        log(f"  Typing p95 latency:            {perf_data.get('typing_p95_latency_ms'):.2f} ms")
-        log(f"  Typing max latency:            {perf_data.get('typing_max_latency_ms'):.2f} ms")
-        log(f"  Scroll samples:                {perf_data.get('scroll_sample_count')}")
-        log(f"  Scroll p50 frame time:         {perf_data.get('scroll_p50_frame_ms'):.2f} ms")
-        log(f"  Scroll p95 frame time:         {perf_data.get('scroll_p95_frame_ms'):.2f} ms")
-        log(f"  Scroll max frame time:         {perf_data.get('scroll_max_frame_ms'):.2f} ms")
-        log(f"  Dropped scroll frames (>33ms): {perf_data.get('dropped_scroll_frames_gt_33ms')}")
+        log(f"  Total UI render callbacks:        {perf_data.get('total_frames')}")
+        log(f"  Average render callback interval: {perf_data.get('avg_frame_ms'):.2f} ms")
+        log(f"  Max render callback interval:     {perf_data.get('max_frame_ms'):.2f} ms")
+        log(f"  Callbacks exceeding 33.3ms:       {perf_data.get('dropped_frames_gt_33ms')}")
+        log(f"  Stall callbacks exceeding 100ms:  {perf_data.get('stall_frames_gt_100ms')}")
+        log(f"  Typing latency samples:           {perf_data.get('typing_sample_count')}")
+        log(f"  Typing p50 latency:               {perf_data.get('typing_p50_latency_ms'):.2f} ms")
+        log(f"  Typing p95 latency:               {perf_data.get('typing_p95_latency_ms'):.2f} ms")
+        log(f"  Typing max latency:               {perf_data.get('typing_max_latency_ms'):.2f} ms")
+        log(f"  Scroll ViewChanged samples:       {perf_data.get('scroll_sample_count')}")
+        log(f"  Scroll ViewChanged p50 interval:  {perf_data.get('scroll_p50_frame_ms'):.2f} ms")
+        log(f"  Scroll ViewChanged p95 interval:  {perf_data.get('scroll_p95_frame_ms'):.2f} ms")
+        log(f"  Scroll ViewChanged max interval:  {perf_data.get('scroll_max_frame_ms'):.2f} ms")
+        log(f"  Scroll intervals exceeding 33ms:  {perf_data.get('dropped_scroll_frames_gt_33ms')}")
 
         if perf_data.get("total_frames", 0) < 50:
             log("FAIL: Insufficient frames rendered during test session")

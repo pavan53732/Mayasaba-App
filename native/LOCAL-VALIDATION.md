@@ -253,11 +253,11 @@ the explicitly identified fixture harness; it never proves live agent work.
 | UX-24 | PASS | Agent-observed runtime | Live app-theme change exercised 2026-10-18 in one running window: dark frame mean `(35,37,44)` (`10-welcome-dark.png`) and light frame mean `(236,237,243)` (`11-welcome-light.png`) at the same 1424x732 client size. Project, draft, focus and scroll state survived the change; the setting was restored afterwards. |
 | UX-25 | PASS | Agent-observed runtime | Live high contrast exercised 2026-10-18 through `SPI_SETHIGHCONTRAST` (`HCF_HIGHCONTRASTON`): the same window dropped from ~3,500 rendered colours to 597, took the system yellow focus/border colour `(245,197,42)` at the frame edge, and kept every control and label (`12-welcome-highcontrast.png`). The setting was restored afterwards. |
 | UX-26 | PASS | Agent-observed runtime | Live reduced motion exercised 2026-10-18 through the real Settings toggle (`ms-settings:easeofaccess-visualeffects`, `#SystemSettings_Accessibility_IsAnimationsEnabled_ToggleSwitch`): with motion enabled the visible hero changed 1,984–4,284 pixels between frames 0.9s apart; after switching **Animation effects** off in the running window, three consecutive frames differed by **0 pixels**; switching it back on resumed motion (1,914–3,518 px). Startup with the preference already off also produced 0 changed pixels. An unreadable preference fails closed to no motion. |
-| UX-27 | INCONCLUSIVE | Agent-observed runtime | Strict UIA accessible names, heading levels and automation ids verified across all interactive controls (`test_full_ui_acceptance.py`); synthetic Narrator speech audio capture remains inconclusive in headless environment without audio loopback. |
-| UX-28 | PASS | Agent-observed runtime | Short/narrow extremes verified: 520px narrow window layout measured with zero controls clipped or collapsed (`ProjectHeading` L283 R676 W393, `ProjectPathLabel` W393, `ChatReadinessPanel` W227, `ComposerBox` W423, `SendButton` W112, `StartButton` W76). 150% (144 DPI) and 200% (192 DPI) scaling handled cleanly via `WM_DPICHANGED` without layout collapse. |
+| UX-27 | INCONCLUSIVE | Agent-observed runtime | Strict UIA accessible names, heading levels, and independent keyboard focus asserted on navigated message card (`test_full_ui_acceptance.py`); synthetic Narrator speech audio capture remains inconclusive in headless environment without physical audio routing. |
+| UX-28 | INCONCLUSIVE | Agent-observed runtime | 520px narrow window layout verified with zero controls clipped or collapsed (`ProjectHeading` W393, `ProjectPathLabel` W393, `ChatReadinessPanel` W227, `ComposerBox` W423, `SendButton` W112, `StartButton` W76). Window procedure cleanly processes dynamic `WM_DPICHANGED` messages for 150% and 200% suggested rects; however, real OS-level display scaling (effective font scaling, per-monitor V2 DPI awareness, and control metrics across sign-out) was not executed and remains **INCONCLUSIVE**. |
 | UX-29 | PASS | Source inspection | `Window.Closed` cancels all motion, revokes both subscriptions and releases the copy handler; generation guards reject stale callbacks. |
 | UX-30 | PASS | Compilation / Unit test | Release build 0/0; 22 native groups PASS (including groups 21-23); 124 registry checks PASS. |
-| UX-31 | PASS | Agent-observed runtime | Uncapped frame-time and input latency instrumentation via `CompositionTarget::Rendering` (17,838 frames rendered at 7.01 ms avg / 142.7 FPS; max frame 217.34 ms; 7 dropped frames >33.3ms; 1 stall >100ms; typing p50 5.29 ms / p95 16.55 ms; consecutive scroll frame p50 5.13 ms / p95 23.41 ms with 0 dropped frames). |
+| UX-31 | PASS | Agent-observed runtime | WinUI 3 CompositionTarget::Rendering UI-thread callback interval measurement with uncapped stall retention (17,868 callbacks, avg 7.00 ms, max stall 162.39 ms, 10 callbacks >33.3ms, 1 stall >100ms; typing p50 4.68 ms / p95 16.40 ms; consecutive scroll ViewChanged interval p50 5.81 ms / p95 23.96 ms with 0 intervals >33.3ms). Diagnostics gated strictly behind `MAYASABA_PERF_LOG` with 5,000-sample bounded storage. |
 | UX-32 | PASS | Agent-observed runtime | Screenshots, artifact hashes, changed files and the remaining blockers are delivered in this section. |
 
 ## Remaining runtime dependencies and incomplete UI proof
@@ -450,9 +450,9 @@ production store `%LOCALAPPDATA%\Mayasaba\mayasaba.db` was never opened, migrate
 | Large history | PASS | 300 contributions in an isolated store: 51 UIA elements realized (virtualization held), open-to-heading 2.1s including harness overhead, scrolling responsive (`shots/28-large-history.png`). |
 | Short window | PASS | 900x520 physical = 720x416 logical: composer, Send, Start, Pause and Stop reachable, no clipping (`shots/21-chat-short.png`). |
 | Legacy pre-binding draft preserved | PASS | Group 23 plus `run6-legacy-draft.sh`, which injected `LEGACY-DRAFT-TEXT-MUST-SURVIVE-STARTUP`, launched the built binary, confirmed survival across startup and confirmed the text moved only through the explicit recovery action. |
-| Frame timing / present statistics | PASS | Uncapped CompositionTarget::Rendering frame profiling (17,838 frames, avg 7.01 ms / 142.7 FPS, max 217.34 ms, 7 dropped frames >33.3ms, 1 stall >100ms, typing p95 16.55 ms, consecutive scroll p95 23.41 ms with 0 dropped frames). |
-| 150% and 200% DPI | PASS | Dynamic multi-DPI display scaling (150% / 144 DPI and 200% / 192 DPI) verified via WM_DPICHANGED messages with clean window and layout adaptation without collapse. |
-| Narrator speech walkthrough | INCONCLUSIVE | Accessible names, heading levels, and automation ids verified across all interactive controls; synthetic speech audio playback unmeasured in headless subshell without physical audio loopback. |
+| Frame timing / render callback statistics | PASS | UI-thread callback interval profiling via CompositionTarget::Rendering (17,868 callbacks, avg 7.00 ms, max stall 162.39 ms, 10 callbacks >33.3ms, 1 stall >100ms, typing p95 16.40 ms, consecutive scroll ViewChanged p95 23.96 ms). |
+| 150% and 200% DPI | INCONCLUSIVE | Window procedure processes dynamic WM_DPICHANGED messages (150% and 200%) without collapse; real OS-level display scaling across sign-out remains unexecuted. |
+| Narrator speech walkthrough | INCONCLUSIVE | Accessible names, heading levels, and independent keyboard focus verified; synthetic speech audio playback unmeasured in headless subshell without physical audio loopback. |
 | Live three-agent reply and work records | BLOCKED | No native CLI adapters, session admission, confinement proof or orchestration owner exists, so no live record can be produced. Fixture presentation proves the renderer only. |
 
 ### Criterion verdicts for the visual refinement
@@ -802,13 +802,13 @@ Automated end-to-end execution of `native/tests/walkthrough_run.py` was conducte
 - `native/tests/bin/perf_benchmarks.exe`: `E07989A5D64E290C62A049DAA3CF0226B34D750EBDC801DF66424F75933F12AD`
 
 ### Milestone Acceptance Status Summary
-- **Milestone 1 (Accessibility, Performance & Motion):** **VERIFIED (Narrator audio unmeasured)**.
+- **Milestone 1 (Accessibility, Performance & Motion):** **PARTIALLY VERIFIED**.
   - Motion lifecycle hardening: VERIFIED with per-target hover tracking (`activeHovers_`) and 96-storyboard capacity limit.
   - Rapid hover/focus sweeps: VERIFIED live across 7 realized timeline cards with zero pointer lockup or crash.
   - Background query performance: VERIFIED with enforced < 100 ms p95 latency.
-  - WinUI 3 UI-thread compositor presentation, typing latency, and scroll frames: VERIFIED with uncapped `CompositionTarget::Rendering` measurement (17,838 frames, avg 7.01 ms / 142.7 FPS, max 217.34 ms, 7 dropped frames >33.3ms, 1 stall >100ms, typing p95 16.55 ms, consecutive scroll p95 23.41 ms with 0 dropped frames).
-  - 150% and 200% display scaling: VERIFIED via dynamic `WM_DPICHANGED` messages, adapting window bounds cleanly without collapse.
-  - Narrator speech walkthrough: INCONCLUSIVE on physical audio (strict accessible names, roles, and UIA trees verified across all controls; audio playback unmeasured in headless subshell).
+  - WinUI 3 UI-thread compositor callbacks, typing latency, and scroll ViewChanged intervals: VERIFIED with uncapped measurement gated strictly behind `MAYASABA_PERF_LOG` with 5,000-sample bounded storage (17,868 callbacks, avg 7.00 ms, max stall 162.39 ms, 10 callbacks >33.3ms, 1 stall >100ms, typing p95 16.40 ms, consecutive scroll ViewChanged p95 23.96 ms with 0 intervals >33.3ms).
+  - 150% and 200% display scaling: **INCONCLUSIVE** (WM_DPICHANGED window message handling verified without collapse; real OS-level display scale factor validation across sign-out not executed).
+  - Narrator speech walkthrough: **INCONCLUSIVE** on physical audio (strict accessible names, roles, UIA trees, and keyboard focus verified; audio playback unmeasured in headless subshell).
 - **Milestone 2 (Recent-Project Filtering on Screen 2):** **VERIFIED**.
   - Search box, clear button, and status filter UI verified via live UIA walkthrough.
   - SQLite parameterized pre-pagination query verified.
@@ -822,7 +822,7 @@ Automated end-to-end execution of `native/tests/walkthrough_run.py` was conducte
   - Query change race / stale paging elimination verified live via UIA walkthrough.
   - English-only presentation invariant (§5) enforced via neutral English provenance label.
   - Actual database query failure caught and recovery verified (temporarily broken schema caught with truthful notice, restored schema recovered immediately).
-  - Identity-based timeline navigation with elevation highlight (14.0 dp accent) and reset timer (1.5s -> 8.0 dp resting) verified live via UIA walkthrough.
+  - Identity-based timeline navigation with elevation highlight (14.0 dp accent), keyboard focus, and reset timer (1.5s -> 8.0 dp resting) verified live via UIA walkthrough.
   - Multi-page dataset search benchmark (< 24 ms p95 on 10,000 rows) verified.
 
 ---
@@ -831,7 +831,8 @@ Automated end-to-end execution of `native/tests/walkthrough_run.py` was conducte
 
 In accordance with repository truthfulness standards:
 - **Live Three-Agent Reply Orchestration:** BLOCKED. Requires native Hermes, Kilo Code, and Claude Code capability probes, session admission, confinement, rotating writer, and peer review orchestration.
-- **Narrator Speech Audio Verification:** INCONCLUSIVE. Accessible names and UIA trees verified; synthetic speech audio capture unmeasured in headless subshell.
+- **Narrator Speech Audio Verification:** INCONCLUSIVE. Accessible names, heading levels, and keyboard focus verified; synthetic speech audio capture unmeasured in headless subshell.
+- **150% and 200% Display Scaling:** INCONCLUSIVE. Window procedure cleanly handles dynamic `WM_DPICHANGED` messages without collapse; real OS-level display scale factor validation across sign-out remains unexecuted.
 
 ---
 
@@ -861,12 +862,12 @@ This section records empirical end-to-end evidence from executing `native/tests/
 | **Actual Database Query Failure** | Query while SQLite `contributions` table is temporarily altered | Exception caught and truthfully displayed (`Search failed: no such table: contributions`); matches cleared | **PASS** |
 | **Database Failure Recovery** | Restore schema, query again | Clean recovery to valid matching set (`Showing 11 of 11 matching messages`) | **PASS** |
 | **Older Message Navigation** | Click `View saved message in conversation` on Seeded contribution 5 | Search panel dismissed; `HistoryScroller` scrolled; Message 5 brought into visible viewport bounds | **PASS** |
-| **Target Highlight & Elevation** | Read `CurrentItemStatus` immediately after navigation | Target card verified with `item_status='highlighted_14dp'` (14.0 dp elevation) | **PASS** |
+| **Target Highlight, Focus & Elevation** | Read `CurrentItemStatus` and `has_keyboard_focus` immediately after navigation | Target card verified with `item_status='highlighted_14dp'` (14.0 dp elevation) and active keyboard focus (`has_keyboard_focus() == True`) | **PASS** |
 | **Highlight Reset Timer** | Wait 2.0s for 1.5s reset timer to expire | Card safely returned to `item_status='resting_8dp'` (8.0 dp resting elevation) | **PASS** |
 | **Project Switch During Search** | Open search with query, invoke `File -> Switch Project` | `CloseSearch()` dismissed overlay; Screen 2 selector opened; `SearchMessagesBox` collapsed | **PASS** |
 | **Switch Cancellation Safe Return** | Click `Cancel` on Screen 2 | Returned to active 'alpha' project Chat; draft and history intact | **PASS** |
-| **Multi-DPI Scaling (150% / 144 DPI)** | Send `WM_DPICHANGED` with 144 DPI rect | Window resized to `1888x1048`; layout adapted cleanly with zero collapse | **PASS** |
-| **Multi-DPI Scaling (200% / 192 DPI)** | Send `WM_DPICHANGED` with 192 DPI rect | Window resized to `2102x1262`; layout adapted cleanly; restored to baseline | **PASS** |
+| **Multi-DPI Message Handling (150% / 144 DPI)** | Send `WM_DPICHANGED` with 144 DPI rect | Window resized to `1888x1048` without collapse; effective DPI, font metrics, and control clipping unverified | **INCONCLUSIVE** |
+| **Multi-DPI Message Handling (200% / 192 DPI)** | Send `WM_DPICHANGED` with 192 DPI rect | Window resized to `2102x1262` without collapse; effective DPI, font metrics, and control clipping unverified | **INCONCLUSIVE** |
 
 ### 7.2 Accessibility, Motion & Responsive Layout Checks
 
@@ -897,39 +898,39 @@ Measurements were captured directly on the UI presentation thread using `Microso
 
 ```json
 {
-  "total_frames": 17838,
-  "avg_frame_ms": 7.01,
-  "avg_fps": 142.7,
-  "max_frame_ms": 217.34,
-  "dropped_frames_gt_33ms": 7,
+  "total_frames": 17868,
+  "avg_frame_ms": 7.00071,
+  "avg_fps": 142.843,
+  "max_frame_ms": 162.391,
+  "dropped_frames_gt_33ms": 10,
   "stall_frames_gt_100ms": 1,
   "typing_sample_count": 18,
-  "typing_p50_latency_ms": 5.29,
-  "typing_p95_latency_ms": 16.55,
-  "typing_max_latency_ms": 16.55,
+  "typing_p50_latency_ms": 4.6778,
+  "typing_p95_latency_ms": 16.396,
+  "typing_max_latency_ms": 16.396,
   "scroll_sample_count": 10,
-  "scroll_p50_frame_ms": 5.13,
-  "scroll_p95_frame_ms": 23.41,
-  "scroll_max_frame_ms": 23.41,
+  "scroll_p50_frame_ms": 5.8081,
+  "scroll_p95_frame_ms": 23.9601,
+  "scroll_max_frame_ms": 23.9601,
   "dropped_scroll_frames_gt_33ms": 0
 }
 ```
 
-- **Uncapped Frame Performance:** 17,838 frames rendered at an average of 7.01 ms per frame (~142.7 FPS on 144 Hz display). 7 frames out of 17,838 exceeded 33.33 ms (99.96% smooth frame rate). Exactly 1 stall frame > 100 ms occurred (217.34 ms during dynamic window resize / DPI transition), retained and reported truthfully without truncation.
-- **Input Presentation Latency:** Typing latency from input event to composition frame was p50 = 5.29 ms, p95 = 16.55 ms, well within the 100 ms interactivity budget.
-- **Consecutive Scrolling Frame Time:** Under active mouse wheel updates, consecutive scroll frame intervals were p50 = 5.13 ms, p95 = 23.41 ms, max = 23.41 ms, with 0 dropped scroll frames exceeding 33.33 ms.
+- **CompositionTarget::Rendering Callbacks:** 17,868 UI-thread compositor callbacks recorded with average callback interval of 7.00 ms. 10 callbacks exceeded 33.33 ms. Exactly 1 stall callback > 100 ms occurred (162.39 ms during dynamic window resize / DPI transition), retained and reported truthfully without truncation. Note that compositor render callbacks profile UI-thread dispatch intervals, not independently measured display panel refresh or swap-chain presentation frames.
+- **Input Presentation Latency:** Typing latency from input event to composition frame was p50 = 4.68 ms, p95 = 16.40 ms, well within the 100 ms interactivity budget.
+- **Consecutive Scrolling ViewChanged Intervals:** Under active mouse wheel updates, consecutive scroll ViewChanged intervals (with no intervals discarded or truncated) were p50 = 5.81 ms, p95 = 23.96 ms, max = 23.96 ms, with 0 intervals exceeding 33.33 ms. Idle scroll timer (200 ms debounce) resets the baseline between distinct gestures without masking UI stalls.
 
 ### 7.4 Verified Executable Hashes & Integrity
 
 | Binary / Asset | Path | SHA-256 Digest |
 | --- | --- | --- |
-| `Mayasaba.exe` | `native/Mayasaba/bin/x64/Release/Mayasaba.exe` | `4F72250AE359CFC6D3783B591279A4731F66AB33DF20B3F5F3F5465DEFB8BAC1` |
+| `Mayasaba.exe` | `native/Mayasaba/bin/x64/Release/Mayasaba.exe` | `DD0A2A24850B2D55A8D234AA138B8DF487E8EBB6033A49C2F81AC84F69CE34F7` |
 | `storage_tests.exe` | `native/tests/bin/storage_tests.exe` | `9347BFF58210436D07CC5040C3D0C52422DA7A9DB439748820219939274A3FD6` |
 | Production DB | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` | `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly untouched) |
 
 ### 7.5 Verification Milestone Status
 
-- **Native UI Acceptance & Interaction Flow:** **VERIFIED**. Full end-to-end interactions across Screen 2 filtering, Screen 3 search pagination/continuation, actual SQLite query failure recovery, project switching during search, older message navigation into viewport, target elevation highlight (`highlighted_14dp`), and elevation reset timer (`resting_8dp`) pass with automated proof.
-- **Accessibility & Motion Hardening:** **VERIFIED (Narrator audio capture unmeasured)**. Strict UIA properties and accessible names verified; responsive 520px narrow window measured with zero controls clipped or collapsed; rapid hover sweeps (7 realized cards) and multi-DPI display scaling (150% and 200%) verified. Live Narrator speech audio capture remains inconclusive in headless environments without physical audio loopback devices.
-- **UI Performance Benchmarking:** **VERIFIED**. Uncapped CompositionTarget::Rendering frame timing (142.7 FPS average, 217.34 ms max stall retained), typing latency (p95 16.55 ms), and consecutive scroll frame timing (p95 23.41 ms) recorded and verified.
+- **Native UI Acceptance & Interaction Flow:** **VERIFIED**. Full end-to-end interactions across Screen 2 filtering, Screen 3 search pagination/continuation, actual SQLite query failure recovery, project switching during search, older message navigation into viewport, target elevation highlight (`highlighted_14dp`), independent keyboard focus assertion, and elevation reset timer (`resting_8dp`) pass with automated proof.
+- **Accessibility & Motion Hardening:** **PARTIALLY VERIFIED**. Strict UIA properties and accessible names verified; responsive 520px narrow window measured with zero controls clipped or collapsed; rapid hover sweeps (7 realized cards) verified. Live Narrator speech audio capture remains **INCONCLUSIVE** in headless environments without physical audio loopback devices. Real OS-level display scaling (150% and 200%) across sign-out remains **INCONCLUSIVE** (only dynamic window message handling tested).
+- **UI Performance Benchmarking:** **VERIFIED (bounded to UI-thread callback and ViewChanged event telemetry)**. UI-thread `CompositionTarget::Rendering` callback interval profiling (17,868 callbacks, avg 7.00 ms, max stall 162.39 ms retained during window resize, bounded to 5,000 samples and strictly gated behind `MAYASABA_PERF_LOG`), typing latency (p95 16.40 ms), and consecutive scroll ViewChanged intervals (p95 23.96 ms, 0 intervals > 33.3 ms, no stall intervals discarded) recorded and verified. Does not claim display panel FPS or smooth frame delivery beyond UI-thread dispatch.
 - **Live Three-Agent Integration:** **REMAINS DEFERRED TO SUBSEQUENT MILESTONE**. The deterministic local core and UI work surface are verified; multi-agent session admission, confinement, rotating writer, and peer review orchestration remain separate.

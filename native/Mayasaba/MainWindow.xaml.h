@@ -124,11 +124,14 @@ namespace winrt::Mayasaba::implementation
 
         // UI-thread frame presentation and typing latency measurement
         winrt::event_token renderingToken_{};
+        bool perfEnabled_{false};
+        static constexpr size_t kMaxPerfSamples = 5000;
         std::string perfLogPath_;
         LARGE_INTEGER perfFreq_{};
         LARGE_INTEGER lastRenderQpc_{};
         LARGE_INTEGER lastInputQpc_{};
         LARGE_INTEGER lastScrollQpc_{};
+        Microsoft::UI::Xaml::DispatcherTimer scrollIdleTimer_{nullptr};
         uint64_t totalFramesRendered_{0};
         uint64_t droppedFrames_{0};
         uint64_t stallFrames_{0};

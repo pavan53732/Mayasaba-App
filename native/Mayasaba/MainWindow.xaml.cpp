@@ -1056,23 +1056,45 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnHistoryViewChanged(IInspectable const&,
         Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const& e)
     {
-        if (perfFreq_.QuadPart > 0)
+        if (perfEnabled_ && perfFreq_.QuadPart > 0)
         {
             LARGE_INTEGER now;
             QueryPerformanceCounter(&now);
             if (lastScrollQpc_.QuadPart > 0)
             {
                 double dt = static_cast<double>(now.QuadPart - lastScrollQpc_.QuadPart) * 1000.0 / static_cast<double>(perfFreq_.QuadPart);
-                // Retain consecutive scroll update intervals during active scrolling (< 250ms).
-                // Intervals >= 250ms represent idle gaps between distinct scrolling gestures.
-                if (dt > 0.5 && dt < 250.0)
+                // Retain all consecutive scroll intervals without an upper cap;
+                // do not discard stalls >= 250ms.
+                if (dt > 0.5)
                 {
-                    scrollFrameTimes_.push_back(dt);
+                    if (scrollFrameTimes_.size() < kMaxPerfSamples)
+                    {
+                        scrollFrameTimes_.push_back(dt);
+                    }
                     if (dt > maxScrollFrameMs_) maxScrollFrameMs_ = dt;
                     if (dt > 33.33) ++droppedScrollFrames_;
                 }
             }
             lastScrollQpc_ = now;
+
+            // Debounce idle reset: when scrolling stops for > 200ms on the idle UI thread,
+            // reset lastScrollQpc_ so the idle gap before the next user gesture is not counted as a scroll stall.
+            if (!scrollIdleTimer_)
+            {
+                scrollIdleTimer_ = DispatcherTimer();
+                scrollIdleTimer_.Interval(std::chrono::milliseconds(200));
+                auto weak = get_weak();
+                scrollIdleTimer_.Tick([weak](auto const&, auto const&)
+                {
+                    if (auto self = weak.get())
+                    {
+                        self->scrollIdleTimer_.Stop();
+                        self->lastScrollQpc_.QuadPart = 0;
+                    }
+                });
+            }
+            scrollIdleTimer_.Stop();
+            scrollIdleTimer_.Start();
         }
         auto const scroller = HistoryScroller();
         double const extent = scroller.ScrollableHeight();
@@ -2794,12 +2816,13 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::InitPerfMeasurement()
     {
-        QueryPerformanceFrequency(&perfFreq_);
         wchar_t buf[MAX_PATH] = {0};
         DWORD len = GetEnvironmentVariableW(L"MAYASABA_PERF_LOG", buf, MAX_PATH);
         if (len > 0)
         {
+            perfEnabled_ = true;
             perfLogPath_ = Utf8(buf);
+            QueryPerformanceFrequency(&perfFreq_);
             QueryPerformanceCounter(&lastRenderQpc_);
             auto weak = get_weak();
             renderingToken_ = Microsoft::UI::Xaml::Media::CompositionTarget::Rendering(
@@ -2815,7 +2838,7 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::RecordInputEvent()
     {
-        if (perfFreq_.QuadPart > 0)
+        if (perfEnabled_ && perfFreq_.QuadPart > 0)
         {
             QueryPerformanceCounter(&lastInputQpc_);
         }
@@ -2823,6 +2846,7 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::OnRendering(IInspectable const&, IInspectable const&)
     {
+        if (!perfEnabled_) return;
         LARGE_INTEGER now;
         QueryPerformanceCounter(&now);
         if (lastRenderQpc_.QuadPart > 0 && perfFreq_.QuadPart > 0)
@@ -2841,7 +2865,7 @@ namespace winrt::Mayasaba::implementation
         {
             double latencyMs = static_cast<double>(now.QuadPart - lastInputQpc_.QuadPart) * 1000.0 / static_cast<double>(perfFreq_.QuadPart);
             lastInputQpc_.QuadPart = 0;
-            if (latencyMs > 0.0) // Retain all typing latencies without upper cap
+            if (latencyMs > 0.0 && typingLatencies_.size() < kMaxPerfSamples) // Bound sample storage
             {
                 typingLatencies_.push_back(latencyMs);
             }
@@ -2851,7 +2875,12 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::FlushPerfLog()
     {
-        if (perfLogPath_.empty()) return;
+        if (scrollIdleTimer_)
+        {
+            scrollIdleTimer_.Stop();
+            scrollIdleTimer_ = nullptr;
+        }
+        if (!perfEnabled_ || perfLogPath_.empty()) return;
         try
         {
             std::ofstream out(perfLogPath_);
