@@ -62,7 +62,9 @@ namespace winrt::Mayasaba::implementation
         void OnCloseSearch(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnCloseActionCenter(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnShowActionCenterDetails(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnMoreActionCenterItems(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnActionCenterItemClick(IInspectable const&, Microsoft::UI::Xaml::Controls::ItemClickEventArgs const&);
+        void OnCloseAttachmentPreview(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         winrt::fire_and_forget RefreshActionCenterAsync(uint64_t gen);
         void OnSearchBoxKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnSearchResultItemClick(IInspectable const&, Microsoft::UI::Xaml::Controls::ItemClickEventArgs const&);
@@ -206,7 +208,16 @@ namespace winrt::Mayasaba::implementation
         uint64_t actionCenterRequestSeq_{0};
         bool actionCenterRefreshing_{false};
         bool actionCenterPendingRerun_{false};
+        bool actionCenterPaging_{false};
+        std::string actionCenterContinuationToken_;
         std::vector<mayasaba::ActionCenterItem> actionCenterItems_;
+
+        // Drop handling guard
+        bool dropProcessing_{false};
+
+        // Attachment inspection & preview state
+        std::atomic<uint64_t> inspectionRequestSeq_{0};
+        Microsoft::UI::Xaml::FrameworkElement activeInspectionOrigin_{nullptr};
 
         // Incremental timeline rendering. Only entries appended after the first
         // render animate, so restored history never replays an insertion transition.
@@ -275,6 +286,9 @@ namespace winrt::Mayasaba::implementation
         winrt::fire_and_forget PickFolderAsync();
         winrt::fire_and_forget OnCreateAndOpenFolderAsync();
         void InspectAttachment(std::string const& attachmentId);
+        winrt::fire_and_forget InspectAttachmentAsync(std::string attachmentId, Microsoft::UI::Xaml::FrameworkElement originControl = nullptr);
+        void CloseAttachmentPreview();
+        winrt::fire_and_forget LoadMoreActionCenterItemsAsync(uint64_t gen);
         winrt::fire_and_forget ProcessCandidatePathsAsync(std::vector<std::wstring> candidatePaths);
     };
 }

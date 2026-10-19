@@ -162,6 +162,7 @@ namespace mayasaba
         std::vector<ActionCenterItem> items;
         bool isComplete{true};
         std::string continuationToken;
+        std::vector<std::string> ownerRecordVersions;
         std::string errorMessage;
         bool ownerUnavailable{false};
     };
@@ -187,6 +188,7 @@ namespace mayasaba
         std::string explanationEn;
         bool previewEligible{false};
         std::string previewUnavailableReasonEn;
+        std::string previewContent; // loaded text content when previewEligible is true
     };
 
     struct AttachmentInspectionQuery
@@ -269,6 +271,7 @@ namespace mayasaba
         MessageSearchResult SearchUserMessages(MessageSearchQuery const& query);
         std::optional<std::string> LastBoundProject();
         std::filesystem::path const& FilePath() const noexcept { return file_; }
+        std::filesystem::path ManagedAttachmentRoot() const { return file_.parent_path() / "attachments"; }
 
         // Attachment draft and committed persistence
         void SaveDraftAttachment(std::string const& projectId, AttachmentRecord const& att);

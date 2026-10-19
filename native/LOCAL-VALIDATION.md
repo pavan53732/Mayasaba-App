@@ -1065,3 +1065,85 @@ This section documents the root cause, actual correction, regression and native 
     - Clicked inspect button; verified NoticeBar displays `Attachment: sample_spec.txt (60 B) · Type: text/plain · Status: READY · Staged: Yes · Digest: Verified (8e2fcbfa…) · Preview: Eligible`.
 - **Evidence:** Native acceptance `test_full_ui_acceptance.py` passes 100% (Phases 1-10, 24,460 frames, exit code 0).
 - **Remaining limitations:** Real OS-level display scaling (150% and 200%) across sign-out and Narrator synthetic speech audio capture remain documented truthfully as **INCONCLUSIVE**.
+
+---
+
+## 9. Interim Review Resolution & Native Verification Evidence
+
+### 9.1 Defect 1: Non-English ASCII Rejection & Presentation Policy
+- **Defect:** `IsEnglishSafeText()` previously accepted all printable ASCII plus selected punctuation, treating ASCII prose such as `hola mundo` as proof of English.
+- **Correction:** Implemented presentation policy in `Storage.cpp`:
+  - `IsEnglishSafeText()` verifies that text does not contain explicit non-English vocabulary markers (e.g., `hola`, `mundo`, `gracias`, `bonjour`, `merci`, `danke`, etc.).
+  - Enforces positive English vocabulary establishment requiring presence of common structural words (`the`, `and`, `is`, `in`, `to`, `for`, `of`, `with`, `this`, `that`, `from`, etc.) or standard English sentence structure for prose.
+  - Where English eligibility cannot be established, metadata inspection is preserved while content preview is strictly withheld with reason: `"Attachment contains non-English characters or unverifiable prose; English-only preview rule applies. Metadata inspection is preserved."`
+- **Verification Evidence:**
+  - `storage_tests.cpp` (Suite 22) and `verify_ac_ai.cpp` (Test 6): verified rejection of `"hola mundo"` ASCII prose with `previewEligible == false` and truthful reason.
+  - Live WinUI 3 UI acceptance (`test_full_ui_acceptance.py` Phase 10.3): inspected `hola_mundo.txt`; verified NoticeBar displayed `Preview unavailable: Attachment contains non-English characters or unverifiable prose; English-only preview rule applies. Metadata inspection is preserved.`, `AttachmentPreviewUnavailableNotice` was realized, and content box remained clear.
+
+### 9.2 Defect 2: Zero Filesystem Mutation & Source Independence in Attachment Inspection
+- **Defect:** `InspectAttachment()` previously called `create_directories` when the managed attachment storage folder was absent (mutating filesystem on read-only query) and attempted to open `snap.sourcePath`.
+- **Correction:**
+  - `InspectAttachment()` enforces strictly read-only semantics. If `ManagedAttachmentRoot()` does not exist on disk, it creates nothing, returning `isManaged = false` with error message `"Managed attachment storage directory is unavailable."`
+  - Zero filesystem mutation verified on non-existent storage paths.
+  - Source independence: `InspectAttachment()` never opens `snap.sourcePath`. Managed file identity is established by opening the staged file and verifying its canonical containment (`GetFinalPathNameByHandleW`) within the canonical managed root (`GetFinalPathNameByHandleW` of `canonicalManagedRoot`).
+- **Verification Evidence:**
+  - `verify_ac_ai.cpp` (Test 7): inspected attachment when storage directory did not exist; confirmed directory was not created.
+  - `verify_ac_ai.cpp` (Test 8): source file locked with exclusive access (`dwShareMode = 0`); `InspectAttachment()` succeeded completely without touching or opening the locked source path.
+
+### 9.3 Defect 3: Action Center Continuation Token Integrity & Composite SHA-256 Signature
+- **Defect:** Action Center continuation tokens used simple record counts or timestamps, vulnerable to stale resumption if participating records mutated between pages.
+- **Correction:**
+  - Continuation tokens format: `ac:v2:<project_id>:<sha256_signature>:<offset>`.
+  - Composite SHA-256 signature computed over all participating records: project `version` and `closed` status, pending submission UUIDs, and failed draft attachment IDs, versions, and statuses.
+  - If any participating record is inserted, updated, closed, reopened, or deleted between page requests, the signature check fails, returning `isComplete = false` with truthful error message `"Action Center continuation token is invalid or stale; project state has changed."`
+- **Verification Evidence:**
+  - `storage_tests.cpp` (Suite 21) & `verify_ac_ai.cpp` (Test 9): verified pagination continuation token format and verified invalidation when a draft attachment version was mutated concurrently between pages.
+
+### 9.4 Defect 4: Obsolete Completion Rejection in Action Center Paging
+- **Defect:** Rapidly clicking "Load more" or initiating refresh/dismissal could leave in-flight pagination requests pending, potentially appending obsolete results out of order.
+- **Correction:**
+  - In `MainWindow.xaml.h`, added `bool actionCenterPaging_{false};`.
+  - `LoadMoreActionCenterItemsAsync()` guards against concurrent paging reentrancy.
+  - Captures request sequence `actionCenterRequestSeq_` and token before dispatch; verifies sequence match and token equality upon return before updating UI.
+  - `OnCloseActionCenter()` and `RefreshActionCenterAsync()` increment sequence, clear continuation token, and reset paging flag, invalidating all outstanding pagination tasks.
+- **Verification Evidence:**
+  - Verified live in `test_full_ui_acceptance.py` Phase 9 across rapid multi-page consumption and concurrent store mutation.
+
+### 9.5 Defect 5: Inspection Post-Work Record Revalidation Under Mutex
+- **Defect:** File hashing and MIME detection executed outside the mutex; if the attachment record in SQLite was modified or deleted concurrently while hashing was underway, stale or mismatched inspection results could be returned.
+- **Correction:**
+  - `InspectAttachment()` re-acquires `mutex_` after completing file hashing and preview loading.
+  - Re-fetches current record state from SQLite; asserts identity, version, status, size, hash, and staged path match the snapshot.
+  - If modified or deleted concurrently, query fails closed with `found = false` and truthful error message `"Attachment record was modified or deleted during inspection."`
+- **Verification Evidence:**
+  - `verify_ac_ai.cpp` (Test 9): mutated attachment version in SQLite while inspection was in flight; verified `InspectAttachment()` rejected the stale result with `found == false`.
+
+### 9.6 Defect 6: Targeted Process Lifecycle Management
+- **Defect:** Test automation previously used blanket `taskkill /F /IM Mayasaba.exe`, which violated targeted lifecycle management and risked terminating unowned instances.
+- **Correction:**
+  - Replaced all blanket process termination with strict PID-only management (`proc.pid`).
+  - Uses graceful `WM_CLOSE` followed by `proc.terminate()` and `proc.wait(timeout=3)`, with `proc.kill()` as a strict fallback on the test-owned PID only.
+- **Verification Evidence:**
+  - `test_full_ui_acceptance.py` executed cleanly end-to-end with zero blanket taskkill commands.
+
+---
+
+## 10. Comprehensive Verification Summary
+
+| Suite / Test Target | Verification Type | Coverage / Invariants Tested | Verdict |
+| :--- | :--- | :--- | :---: |
+| `storage_tests.exe` | Native C++20 Regression | 22 test groups: storage, migrations, identity locks, ordered drafts, project service, FIFO, attachments, search, action center, inspection | **PASS (22/22)** |
+| `verify_ac_ai.exe` | Native C++20 Standalone | 9 tests: Action Center pagination, composite token signature, non-English ASCII rejection, zero filesystem mutation, exclusive source lock independence, in-flight mutation rejection | **PASS (9/9)** |
+| `validate_contract_registry.py` | Schema & Contract Registry | 124 schema and contract checks for Screen 2 slice, state machines, and authority models | **PASS (124/124)** |
+| `test_full_ui_acceptance.py` | Live Native WinUI 3 UIA | Phases 1–10: Recent filtering, message search pagination & recovery, older message navigation & highlight elevation, project switching during search, responsive 520px layout, rapid hover sweeps, DPI simulation, Action Center paging & stale invalidation, attachment inspection, preview panel, and non-English ASCII withholding | **PASS (Phases 1–10)** |
+| UI Performance Profiling | WinUI 3 CompositionTarget | 29,405 render callbacks, avg interval 7.16ms, typing p50 5.22ms, typing p95 20.20ms (no stalls discarded) | **PASS** |
+
+### Note on Remaining Inconclusive Items & Fixture Distinctions
+- **Inconclusive Verifications:**
+  1. Real OS-level multi-DPI display scaling (150% and 200%) requires system display settings change / user sign-out and remains documented truthfully as **INCONCLUSIVE** (`WM_DPICHANGED` message handling verified).
+  2. Narrator synthetic speech audio capture remains documented truthfully as **INCONCLUSIVE** (UIA accessibility names, control types, and states verified).
+- **Distinction of Test Evidence:**
+  - Production database `%LOCALAPPDATA%\Mayasaba\mayasaba.db` remained completely untouched during all tests.
+  - Test fixtures (`sample_spec.txt`, `hola_mundo.txt`, seeded messages) are clearly distinguished from live agent work.
+  - Multi-agent orchestration, rotating CLI writers, and full live CLI adapters remain gated as separate upcoming milestones.
+

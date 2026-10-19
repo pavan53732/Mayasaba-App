@@ -11,10 +11,13 @@
 #include <filesystem>
 #include <iostream>
 #include <set>
+#include <sstream>
+#include <iomanip>
 #include <stdexcept>
 #include <string>
 
 #include <windows.h>
+#include <bcrypt.h>
 
 #define EXPECT(cond) \
     do { \
@@ -22,6 +25,31 @@
             throw std::runtime_error(std::string("Assertion failed: ") + #cond + " at " + __FILE__ + ":" + std::to_string(__LINE__)); \
         } \
     } while (0)
+
+inline std::string ComputeSha256ForTestFile(std::string const& path)
+{
+    std::ifstream is(path, std::ios::binary);
+    if (!is.is_open()) return {};
+    std::string bytes((std::istreambuf_iterator<char>(is)), std::istreambuf_iterator<char>());
+
+    BCRYPT_ALG_HANDLE hAlg = nullptr;
+    if (BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) != 0) return {};
+    BCRYPT_HASH_HANDLE hHash = nullptr;
+    if (BCryptCreateHash(hAlg, &hHash, nullptr, 0, nullptr, 0, 0) != 0) {
+        BCryptCloseAlgorithmProvider(hAlg, 0);
+        return {};
+    }
+    BCryptHashData(hHash, reinterpret_cast<PUCHAR>(const_cast<char*>(bytes.data())), static_cast<ULONG>(bytes.size()), 0);
+    uint8_t hashBuf[32];
+    BCryptFinishHash(hHash, hashBuf, sizeof(hashBuf), 0);
+    BCryptDestroyHash(hHash);
+    BCryptCloseAlgorithmProvider(hAlg, 0);
+
+    std::ostringstream ss;
+    ss << std::hex << std::setfill('0');
+    for (int i = 0; i < 32; ++i) ss << std::setw(2) << static_cast<int>(hashBuf[i]);
+    return ss.str();
+}
 
 inline std::string WideToUtf8(std::wstring const& w)
 {
@@ -1974,6 +2002,28 @@ int main()
             EXPECT(resPage1.items.size() == 2);
             EXPECT(!resPage1.isComplete);
             EXPECT(!resPage1.continuationToken.empty());
+            EXPECT(resPage1.continuationToken.rfind("ac:v2:proj-ac:", 0) == 0);
+
+            // Test project mutation invalidates continuation token
+            ac.SetClosure("proj-ac", 2, false);
+            mayasaba::ActionCenterQuery qMutated{ "proj-ac", 2, resPage1.continuationToken };
+            auto resMutated = ac.QueryActionCenter(qMutated);
+            EXPECT(!resMutated.isComplete);
+            EXPECT(resMutated.errorMessage.find("mutated") != std::string::npos);
+
+            // Test project mismatch in continuation token is rejected
+            ac.BindProject("proj-other", "Other", "C:/Other");
+            mayasaba::ActionCenterQuery qMismatch{ "proj-other", 2, resPage1.continuationToken };
+            auto resMismatch = ac.QueryActionCenter(qMismatch);
+            EXPECT(!resMismatch.isComplete);
+            EXPECT(resMismatch.errorMessage.find("mismatch") != std::string::npos);
+
+            // Re-close project (version becomes 4), re-fetch page 1, then fetch page 2
+            ac.SetClosure("proj-ac", 3, true);
+            resPage1 = ac.QueryActionCenter(qPage1);
+            EXPECT(resPage1.items.size() == 2);
+            EXPECT(!resPage1.continuationToken.empty());
+            EXPECT(resPage1.continuationToken.rfind("ac:v2:proj-ac:", 0) == 0);
 
             // Query second page using continuation token.
             mayasaba::ActionCenterQuery qPage2{ "proj-ac", 2, resPage1.continuationToken };
@@ -1994,7 +2044,7 @@ int main()
 
             // 6. Stale item handling / underlying record updates:
             // Reopen project: closure obligation disappears.
-            ac.SetClosure("proj-ac", 2, false);
+            ac.SetClosure("proj-ac", 4, false);
             auto resAfterReopen = ac.QueryActionCenter(q);
             bool closedStillThere = false;
             for (auto const& item : resAfterReopen.items)
@@ -2021,17 +2071,20 @@ int main()
         {
             mayasaba::Storage ai(folder / "attachment_inspect.db");
             ai.BindProject("proj-ai", "AI Project", "C:/AI");
+            fs::create_directories(ai.ManagedAttachmentRoot());
 
-            // Happy-path draft attachment (markdown, valid hash, distinct staged path)
-            std::string validDraftFile = (folder / "valid_draft.md").string();
+            // Happy-path draft attachment (markdown, valid hash, in approved managed storage)
+            std::string validDraftText = "This is a valid English markdown draft document for testing.";
+            std::string validDraftFile = (ai.ManagedAttachmentRoot() / "valid_draft.md").string();
             {
                 std::ofstream of(validDraftFile, std::ios::binary);
-                of.write("abcd", 4);
+                of.write(validDraftText.data(), validDraftText.size());
             }
+            std::string validDraftHash = ComputeSha256ForTestFile(validDraftFile);
 
             mayasaba::AttachmentRecord draft1{};
             draft1.id = "att-draft-1"; draft1.projectId = "proj-ai"; draft1.fileName = "valid_draft.md";
-            draft1.fileSize = 4; draft1.sha256 = "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589";
+            draft1.fileSize = validDraftText.size(); draft1.sha256 = validDraftHash;
             draft1.detectedType = "text/markdown"; draft1.storagePath = validDraftFile;
             draft1.sourcePath = "C:/source/valid_draft.md"; draft1.status = "READY"; draft1.errorMessage = "";
             ai.SaveDraftAttachment("proj-ai", draft1);
@@ -2042,23 +2095,43 @@ int main()
             EXPECT(ri1.inspection.attachmentId == "att-draft-1");
             EXPECT(ri1.inspection.projectId == "proj-ai");
             EXPECT(ri1.inspection.fileName == "valid_draft.md");
-            EXPECT(ri1.inspection.fileSize == 4);
+            EXPECT(ri1.inspection.fileSize == validDraftText.size());
             EXPECT(ri1.inspection.detectedType == "text/markdown");
             EXPECT(ri1.inspection.storagePath == validDraftFile);
             EXPECT(ri1.inspection.sourceRecordVersion == "1");
             EXPECT(ri1.inspection.isManaged);
             EXPECT(ri1.inspection.integrityVerified);
             EXPECT(ri1.inspection.previewEligible);
+            EXPECT(ri1.inspection.previewContent == validDraftText);
             EXPECT(ri1.inspection.previewUnavailableReasonEn.empty());
 
             // Updating the draft attachment increments sourceRecordVersion
-            draft1.fileSize = 4;
+            draft1.fileSize = validDraftText.size();
             ai.SaveDraftAttachment("proj-ai", draft1);
             auto ri1_v2 = ai.InspectAttachment(qi1);
             EXPECT(ri1_v2.inspection.sourceRecordVersion == "2");
 
+            // External path outside ManagedAttachmentRoot fails isManaged check
+            std::string externalFile = (folder / "outside.txt").string();
+            {
+                std::ofstream of(externalFile, std::ios::binary);
+                of.write("abcd", 4);
+            }
+            mayasaba::AttachmentRecord draftExternal{};
+            draftExternal.id = "att-external"; draftExternal.projectId = "proj-ai"; draftExternal.fileName = "outside.txt";
+            draftExternal.fileSize = 4; draftExternal.sha256 = "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589";
+            draftExternal.detectedType = "text/plain"; draftExternal.storagePath = externalFile;
+            draftExternal.sourcePath = "C:/source/outside.txt"; draftExternal.status = "READY";
+            ai.SaveDraftAttachment("proj-ai", draftExternal);
+
+            auto riExternal = ai.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "proj-ai", "att-external" });
+            EXPECT(riExternal.found);
+            EXPECT(!riExternal.inspection.isManaged);
+            EXPECT(!riExternal.inspection.previewEligible);
+            EXPECT(riExternal.inspection.previewUnavailableReasonEn.find("approved managed storage") != std::string::npos);
+
             // Tampered file (disk contents altered: hash/size mismatch)
-            std::string tamperedFile = (folder / "tampered.txt").string();
+            std::string tamperedFile = (ai.ManagedAttachmentRoot() / "tampered.txt").string();
             {
                 std::ofstream of(tamperedFile, std::ios::binary);
                 of.write("hello world modified", 20);
@@ -2081,7 +2154,7 @@ int main()
             mayasaba::AttachmentRecord draftMissing{};
             draftMissing.id = "att-missing"; draftMissing.projectId = "proj-ai"; draftMissing.fileName = "missing.txt";
             draftMissing.fileSize = 10; draftMissing.sha256 = "abc";
-            draftMissing.detectedType = "text/plain"; draftMissing.storagePath = (folder / "nonexistent.txt").string();
+            draftMissing.detectedType = "text/plain"; draftMissing.storagePath = (ai.ManagedAttachmentRoot() / "nonexistent.txt").string();
             draftMissing.sourcePath = "C:/source/missing.txt"; draftMissing.status = "READY";
             ai.SaveDraftAttachment("proj-ai", draftMissing);
 
@@ -2095,7 +2168,7 @@ int main()
             mayasaba::AttachmentRecord draftTraversal{};
             draftTraversal.id = "att-traversal"; draftTraversal.projectId = "proj-ai"; draftTraversal.fileName = "escaped.txt";
             draftTraversal.fileSize = 10; draftTraversal.sha256 = "abc";
-            draftTraversal.detectedType = "text/plain"; draftTraversal.storagePath = (folder / "../escaped.txt").string();
+            draftTraversal.detectedType = "text/plain"; draftTraversal.storagePath = (ai.ManagedAttachmentRoot() / "../escaped.txt").string();
             draftTraversal.sourcePath = "C:/source/escaped.txt"; draftTraversal.status = "READY";
             ai.SaveDraftAttachment("proj-ai", draftTraversal);
 
@@ -2107,7 +2180,7 @@ int main()
             // Invalid managed path: storage path identical to source path (unisolated)
             mayasaba::AttachmentRecord draftUnisolated{};
             draftUnisolated.id = "att-unisolated"; draftUnisolated.projectId = "proj-ai"; draftUnisolated.fileName = "unisolated.txt";
-            draftUnisolated.fileSize = 4; draftUnisolated.sha256 = "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589";
+            draftUnisolated.fileSize = validDraftText.size(); draftUnisolated.sha256 = validDraftHash;
             draftUnisolated.detectedType = "text/plain"; draftUnisolated.storagePath = validDraftFile;
             draftUnisolated.sourcePath = validDraftFile; // identical!
             draftUnisolated.status = "READY";
@@ -2118,10 +2191,50 @@ int main()
             EXPECT(!riUnisolated.inspection.isManaged);
             EXPECT(!riUnisolated.inspection.previewEligible);
 
+            // Non-English / binary file content test
+            std::string nonEnglishFile = (ai.ManagedAttachmentRoot() / "non_english.txt").string();
+            {
+                std::ofstream of(nonEnglishFile, std::ios::binary);
+                uint8_t rawBytes[4] = { 0xFF, 0xFE, 0x00, 0x01 };
+                of.write(reinterpret_cast<char const*>(rawBytes), 4);
+            }
+            mayasaba::AttachmentRecord draftNonEnglish{};
+            draftNonEnglish.id = "att-non-eng"; draftNonEnglish.projectId = "proj-ai"; draftNonEnglish.fileName = "non_english.txt";
+            draftNonEnglish.fileSize = 4; draftNonEnglish.sha256 = "d2ad9277baaee14856d20ec2b21f87a0cb8a7f86c6ef090fd5a082b1e85135ac";
+            draftNonEnglish.detectedType = "text/plain"; draftNonEnglish.storagePath = nonEnglishFile;
+            draftNonEnglish.sourcePath = "C:/source/non_english.txt"; draftNonEnglish.status = "READY";
+            ai.SaveDraftAttachment("proj-ai", draftNonEnglish);
+
+            auto riNonEng = ai.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "proj-ai", "att-non-eng" });
+            EXPECT(riNonEng.found);
+            EXPECT(riNonEng.inspection.isManaged);
+            EXPECT(!riNonEng.inspection.previewEligible);
+            EXPECT(riNonEng.inspection.previewUnavailableReasonEn.find("non-English") != std::string::npos);
+
+            // File exceeding 10 MiB preview ceiling
+            std::string largeFile = (ai.ManagedAttachmentRoot() / "large.txt").string();
+            {
+                std::ofstream of(largeFile, std::ios::binary);
+                std::string chunk(1024 * 1024, 'a');
+                for (int i = 0; i < 11; ++i) of.write(chunk.data(), chunk.size());
+            }
+            mayasaba::AttachmentRecord draftLarge{};
+            draftLarge.id = "att-large"; draftLarge.projectId = "proj-ai"; draftLarge.fileName = "large.txt";
+            draftLarge.fileSize = 11 * 1024 * 1024; draftLarge.sha256 = "dummy";
+            draftLarge.detectedType = "text/plain"; draftLarge.storagePath = largeFile;
+            draftLarge.sourcePath = "C:/source/large.txt"; draftLarge.status = "READY";
+            ai.SaveDraftAttachment("proj-ai", draftLarge);
+
+            auto riLarge = ai.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "proj-ai", "att-large" });
+            EXPECT(riLarge.found);
+            EXPECT(riLarge.inspection.isManaged);
+            EXPECT(!riLarge.inspection.previewEligible);
+            EXPECT(riLarge.inspection.previewUnavailableReasonEn.find("10 MiB") != std::string::npos);
+
             // Non-previewable MIME type (e.g. application/pdf)
             mayasaba::AttachmentRecord draftPdf{};
             draftPdf.id = "att-pdf"; draftPdf.projectId = "proj-ai"; draftPdf.fileName = "doc.pdf";
-            draftPdf.fileSize = 4; draftPdf.sha256 = "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589";
+            draftPdf.fileSize = validDraftText.size(); draftPdf.sha256 = validDraftHash;
             draftPdf.detectedType = "application/pdf"; draftPdf.storagePath = validDraftFile;
             draftPdf.sourcePath = "C:/source/doc.pdf"; draftPdf.status = "READY";
             ai.SaveDraftAttachment("proj-ai", draftPdf);
@@ -2135,18 +2248,20 @@ int main()
 
             // Committed attachment: bound and saved via SaveContribution in an isolated project
             ai.BindProject("proj-comm", "Comm Project", "C:/Comm");
-            std::string committedFile = (folder / "committed.txt").string();
+            std::string commText = "This is an authorized English committed specification document.";
+            std::string committedFile = (ai.ManagedAttachmentRoot() / "committed.txt").string();
             {
                 std::ofstream of(committedFile, std::ios::binary);
-                of.write("abcd", 4);
+                of.write(commText.data(), commText.size());
             }
+            std::string commHash = ComputeSha256ForTestFile(committedFile);
             // Sealed as read-only per committed attachment contract
             std::wstring wCommitted = std::filesystem::path(committedFile).wstring();
             SetFileAttributesW(wCommitted.c_str(), FILE_ATTRIBUTE_READONLY);
 
             mayasaba::AttachmentRecord draftComm{};
             draftComm.id = "att-committed-1"; draftComm.projectId = "proj-comm"; draftComm.fileName = "committed.txt";
-            draftComm.fileSize = 4; draftComm.sha256 = "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589";
+            draftComm.fileSize = commText.size(); draftComm.sha256 = commHash;
             draftComm.detectedType = "text/plain"; draftComm.storagePath = committedFile;
             draftComm.sourcePath = "C:/source/committed.txt"; draftComm.status = "READY"; draftComm.errorMessage = "";
             ai.SaveDraftAttachment("proj-comm", draftComm);
@@ -2163,6 +2278,7 @@ int main()
             EXPECT(riComm.inspection.isManaged);
             EXPECT(riComm.inspection.integrityVerified);
             EXPECT(riComm.inspection.previewEligible);
+            EXPECT(riComm.inspection.previewContent == commText);
             EXPECT(riComm.inspection.status == "COMMITTED");
 
             // Committed attachment without read-only attribute fails isManaged check

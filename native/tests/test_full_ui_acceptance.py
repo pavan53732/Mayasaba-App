@@ -13,6 +13,7 @@ STORE_PATH = r"C:\Users\pavan\PROJECTS\_ui-verify\multi_test\store.db"
 PERF_LOG_PATH = r"C:\Users\pavan\PROJECTS\_ui-verify\multi_test\perf.json"
 BIN_DIR = r"C:\Users\pavan\PROJECTS\Mayasaba-App\native\Mayasaba\bin\x64\Release"
 EXE_PATH = os.path.join(BIN_DIR, "Mayasaba.exe")
+OLE_DROP_EXE = r"C:\Users\pavan\PROJECTS\Mayasaba-App\native\tests\bin\ole_drop.exe"
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -751,6 +752,19 @@ def main():
         log("PASS: Action Center dismissed cleanly via CloseActionCenterButton.")
 
         # 9.3 Switch to closed project 'gamma' which has ClosedProjectRestriction obligation
+        # Seed gamma with 51 failed attachments so total obligations = 52 (51 attachments + 1 closed project)
+        # to test bounded pagination (pageSize 50) and MoreActionCenterItemsButton continuation
+        gamma_id = "7a546bab-c9dd-49c0-8e77-c67903ab1b66"
+        conn = sqlite3.connect(STORE_PATH)
+        for i in range(1, 52):
+            conn.execute(
+                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+                "VALUES (?, ?, ?, 10, 'dummy', 'text/plain', '', 'C:/source/file.txt', 'REJECTED', 'seeded error', 1);",
+                (f"att-gamma-{i}", gamma_id, f"gamma_err_{i:02d}.txt")
+            )
+        conn.commit()
+        conn.close()
+
         log("\nSwitching to closed project 'gamma' via File -> Switch Project...")
         file_menu = find_by_name(win, "File")
         if file_menu:
@@ -773,14 +787,36 @@ def main():
         open_gamma.iface_invoke.Invoke()
         time.sleep(2.5)
 
-        # Verify gamma opened in Chat and Action Center populated
+        # Verify gamma opened in Chat and Action Center populated with initial page (50 items)
         status_label = find_by_aid(win, "ActionCenterStatusText")
         status_gamma = status_label.window_text() if status_label else ""
-        log(f"Gamma Action Center status: '{status_gamma}'")
-        if "1 item(s) need your attention" not in status_gamma:
-            log(f"FAIL: Expected '1 item(s) need your attention' for closed project gamma, got '{status_gamma}'")
+        log(f"Gamma Action Center status (Page 1): '{status_gamma}'")
+        if "50 item(s) loaded (more available)" not in status_gamma:
+            log(f"FAIL: Expected '50 item(s) loaded (more available)' for gamma page 1, got '{status_gamma}'")
             return 1
-        log("PASS: Action Center truthfully identified ClosedProjectRestriction obligation for gamma.")
+        log("PASS: Action Center truthfully bounded initial page to 50 items and indicated more available.")
+
+        # Verify MoreActionCenterItemsButton is visible and click it to load continuation
+        more_btn = find_by_aid(win, "MoreActionCenterItemsButton")
+        if not more_btn or not more_btn.is_visible():
+            log("FAIL: MoreActionCenterItemsButton should be visible when continuation token is present")
+            return 1
+        log("Clicking MoreActionCenterItemsButton to consume continuation token...")
+        more_btn.iface_invoke.Invoke()
+        time.sleep(1.5)
+
+        status_gamma2 = status_label.window_text() if status_label else ""
+        log(f"Gamma Action Center status (Page 2): '{status_gamma2}'")
+        if "52 item(s) need your attention" not in status_gamma2:
+            log(f"FAIL: Expected '52 item(s) need your attention' after loading continuation, got '{status_gamma2}'")
+            return 1
+
+        more_btn_after = find_by_aid(win, "MoreActionCenterItemsButton")
+        is_more_collapsed = (more_btn_after is None) or (not more_btn_after.is_visible())
+        if not is_more_collapsed:
+            log("FAIL: MoreActionCenterItemsButton should collapse after all items are loaded")
+            return 1
+        log("PASS: Continuation token consumed and MoreActionCenterItemsButton collapsed truthfully.")
 
         # 9.4 Test Show Details Button
         show_details_btn = find_by_aid(win, "ShowActionCenterDetailsButton")
@@ -799,15 +835,15 @@ def main():
             return 1
         log("PASS: Show Details notice displayed truthfully in NoticeBar.")
 
-        # 9.5 Test Stale Item Handling & Revalidation:
-        # Concurrently reopen gamma directly in SQLite store before clicking item
-        log("\nSimulating concurrent resolution: opening gamma in SQLite store before clicking item...")
+        # 9.5 Test Stale Item Handling & Expected-Version Verification at Invocation
+        log("\nSimulating concurrent mutation: altering version of first item in SQLite store before clicking...")
         conn = sqlite3.connect(STORE_PATH)
-        conn.execute("UPDATE projects SET closed = 0 WHERE id = '7a546bab-c9dd-49c0-8e77-c67903ab1b66';")
+        # Mutate version of att-gamma-1 in SQLite store (from current version to 99)
+        conn.execute("UPDATE draft_attachments SET version = 99 WHERE project_id = ? AND attachment_id = 'att-gamma-1';", (gamma_id,))
         conn.commit()
         conn.close()
 
-        # Click the obligation item in ActionCenterList
+        # Click the first obligation item in ActionCenterList
         ac_list = find_by_aid(win, "ActionCenterList")
         if not ac_list:
             log("FAIL: ActionCenterList not found")
@@ -818,28 +854,31 @@ def main():
             log("FAIL: ActionCenterList has no items")
             return 1
 
-        log("Clicking obligation item in ActionCenterList to verify stale revalidation...")
-        try:
-            ac_items[0].set_focus()
-            time.sleep(0.2)
-            ac_items[0].click_input()
-        except Exception as e:
-            log(f"Notice during click_input: {e}")
-            send_key_to_window(win.handle, 0x0D)
+        log("Invoking first obligation item in ActionCenterList to verify expected-version check...")
+        if hasattr(ac_items[0], 'iface_invoke') and ac_items[0].iface_invoke:
+            ac_items[0].iface_invoke.Invoke()
+        else:
+            try:
+                ac_items[0].set_focus()
+                time.sleep(0.2)
+                ac_items[0].click_input()
+            except Exception as e:
+                log(f"Notice during click_input: {e}")
+                send_key_to_window(win.handle, 0x0D)
         time.sleep(1.5)
 
-        # Verify stale notice was raised
+        # Verify stale notice with version mismatch was raised
         notice_bar = find_by_aid(win, "Notice")
         notice_desc = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
-        log(f"Notice text after clicking stale item: {notice_desc}")
-        if not any("Action Center item is stale" in t for t in notice_desc):
-            log("FAIL: Stale item revalidation notice not displayed in NoticeBar")
+        log(f"Notice text after clicking mutated item: {notice_desc}")
+        if not any("Action Center item is stale: attachment record version has changed" in t for t in notice_desc):
+            log("FAIL: Expected version mismatch notice not displayed in NoticeBar")
             return 1
-        log("PASS: Stale item caught at invocation and truthful revalidation notice displayed.")
+        log("PASS: Expected-version verification passed: version mismatch caught at invocation and truthful notice displayed.")
 
-        # Restore gamma project closed = 1 in SQLite
+        # Clean up seeded gamma draft attachments
         conn = sqlite3.connect(STORE_PATH)
-        conn.execute("UPDATE projects SET closed = 1 WHERE id = '7a546bab-c9dd-49c0-8e77-c67903ab1b66';")
+        conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id LIKE 'att-gamma-%';", (gamma_id,))
         conn.commit()
         conn.close()
 
@@ -867,9 +906,9 @@ def main():
         log("PASS: Switched back to alpha; Action Center isolated to active project.")
 
         # =========================================================================
-        # PHASE 10: ATTACHMENT INSPECTION, CHIP INTERACTIONS & COMPOSER DROP
+        # PHASE 10: NATIVE DRAG-AND-DROP, ATTACHMENT INSPECTION & PREVIEW PANEL
         # =========================================================================
-        log("\n--- PHASE 10: Attachment Inspection & Composer Drop Target Verification ---")
+        log("\n--- PHASE 10: Native Drag-and-Drop, Attachment Inspection & Preview Panel ---")
 
         # 10.1 Verify Composer drop capability
         composer_box = find_by_aid(win, "ComposerBox")
@@ -879,14 +918,15 @@ def main():
             return 1
         log("PASS: ComposerBox and AttachButton confirmed present with AllowDrop support.")
 
-        # 10.2 Stage a real verified test file for attachment chip inspection
         alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
         staging_dir = os.path.join(os.path.dirname(STORE_PATH), "attachments", "staging", alpha_id)
         os.makedirs(staging_dir, exist_ok=True)
 
+        # 10.2 Managed Draft Attachment Chip Realization & Content Preview Panel
+        log("\n--- 10.2 Managed Draft Attachment Chip Realization & Content Preview Panel ---")
         test_att_id = "att-ui-test-001"
         test_file_name = "sample_spec.txt"
-        test_content = b"Mayasaba native attachment inspection verification payload.\n"
+        test_content = b"Mayasaba native attachment inspection verification payload with valid English prose.\n"
         import hashlib
         test_sha256 = hashlib.sha256(test_content).hexdigest()
         test_size = len(test_content)
@@ -937,14 +977,14 @@ def main():
             open_alpha.iface_invoke.Invoke()
             time.sleep(2.5)
 
-        # 10.3 Locate attachment chip and inspect button
+        # Locate attachment chip and inspect button
         inspect_btn = find_by_name(win, f"Inspect {test_file_name}")
         if not inspect_btn:
             log(f"FAIL: 'Inspect {test_file_name}' button not found in AttachmentChipsPanel")
             return 1
         log(f"PASS: Attachment chip realized with inspect button 'Inspect {test_file_name}'.")
 
-        # 10.4 Click inspect button and verify diagnostics in NoticeBar
+        # Click inspect button and verify NoticeBar diagnostics
         log("Invoking inspect button on attachment chip...")
         inspect_btn.iface_invoke.Invoke()
         time.sleep(1.0)
@@ -953,26 +993,194 @@ def main():
         notice_desc = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
         log(f"Notice text after inspecting attachment: {notice_desc}")
         has_att_name = any(test_file_name in t for t in notice_desc)
-        has_preview = any("Preview: Eligible" in t for t in notice_desc)
         has_digest = any("Digest: Verified" in t for t in notice_desc)
-        if not (has_att_name and has_preview and has_digest):
+        has_staged = any("Staged: Yes" in t for t in notice_desc)
+        if not (has_att_name and has_digest and has_staged):
             log(f"FAIL: Notice bar did not contain expected attachment inspection details: {notice_desc}")
             return 1
-        log("PASS: Attachment inspection verified: digest verified, managed staged copy confirmed, text MIME preview eligible.")
+        log("PASS: Attachment inspection verified: digest verified, managed staged copy confirmed, status READY.")
 
-        # 10.5 Clean up temporary draft attachment
-        log("Cleaning up test draft attachment...")
+        # Verify AttachmentPreviewPanel controls
+        preview_panel = find_by_aid(win, "AttachmentPreviewPanel")
+        if not preview_panel or not preview_panel.is_visible():
+            log("FAIL: AttachmentPreviewPanel not visible after invoking chip inspect")
+            return 1
+
+        preview_title = find_by_aid(win, "AttachmentPreviewTitle")
+        title_text = preview_title.window_text() if preview_title else ""
+        log(f"Preview panel title: '{title_text}'")
+        if test_file_name not in title_text:
+            log(f"FAIL: Expected preview title '{test_file_name}', got '{title_text}'")
+            return 1
+
+        preview_meta = find_by_aid(win, "AttachmentPreviewMeta")
+        meta_text = preview_meta.window_text() if preview_meta else ""
+        log(f"Preview panel meta: '{meta_text}'")
+        if "text/plain" not in meta_text or "Digest verified" not in meta_text:
+            log(f"FAIL: Preview metadata incomplete: '{meta_text}'")
+            return 1
+
+        preview_box = find_by_aid(win, "AttachmentPreviewContentBox")
+        box_text = preview_box.window_text() if preview_box else ""
+        log(f"Preview content text: '{box_text.strip()}'")
+        if "Mayasaba native attachment inspection verification payload with valid English prose." not in box_text:
+            log(f"FAIL: Preview content mismatch: '{box_text}'")
+            return 1
+        log("PASS: Bounded UTF-8 English text preview loaded and displayed in AttachmentPreviewPanel.")
+
+        # Focus verification on ClosePreviewButton
+        close_preview_btn = find_by_aid(win, "ClosePreviewButton")
+        has_preview_focus = close_preview_btn.has_keyboard_focus() if close_preview_btn else False
+        log(f"ClosePreviewButton has keyboard focus: {has_preview_focus}")
+        if not has_preview_focus:
+            log("FAIL: ClosePreviewButton did not receive programmatic keyboard focus")
+            return 1
+        log("PASS: ClosePreviewButton verified with programmatic keyboard focus upon preview opening.")
+
+        # Dismissal via Escape key and focus restoration
+        log("Sending Escape key to dismiss AttachmentPreviewPanel...")
+        send_key_to_window(win.handle, VK_ESCAPE)
+        time.sleep(1.0)
+
+        preview_panel_after = find_by_aid(win, "AttachmentPreviewPanel")
+        is_preview_closed = (preview_panel_after is None) or (not preview_panel_after.is_visible())
+        log(f"AttachmentPreviewPanel closed after Escape: {is_preview_closed}")
+        if not is_preview_closed:
+            log("FAIL: AttachmentPreviewPanel did not collapse on Escape key")
+            return 1
+        log("PASS: Escape dismissed preview panel and cleared content memory.")
+
+        # Clean up first test attachment
         try:
             conn = sqlite3.connect(STORE_PATH)
             conn.execute("DELETE FROM draft_attachments WHERE attachment_id = ?;", (test_att_id,))
             conn.commit()
             conn.close()
-            if os.path.exists(staged_path):
-                os.remove(staged_path)
-            if os.path.exists(source_path):
-                os.remove(source_path)
-        except Exception as e:
-            log(f"Notice during attachment cleanup: {e}")
+            if os.path.exists(staged_path): os.remove(staged_path)
+            if os.path.exists(source_path): os.remove(source_path)
+        except Exception:
+            pass
+
+        # 10.3 Non-English ASCII Content Preview Withholding (Defect 1 Verification in Live UI)
+        log("\n--- 10.3 Non-English ASCII Content Preview Withholding (Defect 1 in Live UI) ---")
+        non_eng_id = "att-ui-test-noneng"
+        non_eng_file = "hola_mundo.txt"
+        non_eng_content = b"hola mundo"
+        non_eng_sha = hashlib.sha256(non_eng_content).hexdigest()
+        non_eng_size = len(non_eng_content)
+
+        source_path_ne = os.path.join(os.path.dirname(STORE_PATH), non_eng_file)
+        with open(source_path_ne, "wb") as f:
+            f.write(non_eng_content)
+
+        staged_path_ne = os.path.join(staging_dir, f"{non_eng_id}_{non_eng_file}")
+        with open(staged_path_ne, "wb") as f:
+            f.write(non_eng_content)
+
+        conn = sqlite3.connect(STORE_PATH)
+        if "version" in cols:
+            conn.execute(
+                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '', 1);",
+                (non_eng_id, alpha_id, non_eng_file, non_eng_size, non_eng_sha, "text/plain", staged_path_ne, source_path_ne)
+            )
+        else:
+            conn.execute(
+                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '');",
+                (non_eng_id, alpha_id, non_eng_file, non_eng_size, non_eng_sha, "text/plain", staged_path_ne, source_path_ne)
+            )
+        conn.commit()
+        conn.close()
+
+        # Reload alpha project to realize non-English attachment chip
+        log("Reloading alpha project to realize non-English attachment chip...")
+        file_menu = find_by_name(win, "File")
+        if file_menu:
+            file_menu.iface_invoke.Invoke()
+            time.sleep(1.0)
+            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
+            if sw_items:
+                sw_items[0].iface_invoke.Invoke()
+            else:
+                send_keys("%(FS)")
+        else:
+            send_keys("%(FS)")
+        time.sleep(2.0)
+
+        open_alpha = find_by_name(win, "Open project alpha")
+        if open_alpha:
+            open_alpha.iface_invoke.Invoke()
+            time.sleep(2.5)
+
+        inspect_ne_btn = find_by_name(win, f"Inspect {non_eng_file}")
+        if not inspect_ne_btn:
+            log(f"FAIL: 'Inspect {non_eng_file}' button not found in AttachmentChipsPanel")
+            return 1
+        log(f"PASS: Attachment chip realized with inspect button 'Inspect {non_eng_file}'.")
+
+        # Click inspect on non-English chip
+        log("Invoking inspect on non-English attachment chip...")
+        inspect_ne_btn.iface_invoke.Invoke()
+        time.sleep(1.0)
+
+        notice_bar = find_by_aid(win, "Notice")
+        notice_desc_ne = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
+        log(f"Notice text after inspecting non-English attachment: {notice_desc_ne}")
+        has_ne_preview_withheld = any("Preview unavailable: Attachment contains non-English characters or unverifiable prose" in t for t in notice_desc_ne)
+        if not has_ne_preview_withheld:
+            log(f"FAIL: Non-English ASCII preview was NOT withheld in NoticeBar: {notice_desc_ne}")
+            return 1
+        log("PASS: Non-English ASCII prose ('hola mundo') preview withheld in NoticeBar with truthful reason.")
+
+        preview_panel_ne = find_by_aid(win, "AttachmentPreviewPanel")
+        if not preview_panel_ne or not preview_panel_ne.is_visible():
+            log("FAIL: AttachmentPreviewPanel not visible for non-English metadata inspection")
+            return 1
+
+        unavail_notice = find_by_aid(win, "AttachmentPreviewUnavailableNotice")
+        unavail_text = unavail_notice.window_text() if unavail_notice else ""
+        log(f"Unavailable notice text: '{unavail_text}'")
+        if "Preview unavailable: Attachment contains non-English characters or unverifiable prose" not in unavail_text:
+            log(f"FAIL: Expected unavailable notice in preview panel, got '{unavail_text}'")
+            return 1
+        log("PASS: AttachmentPreviewUnavailableNotice correctly displays preview withholding reason in UI.")
+
+        # Dismiss preview
+        send_key_to_window(win.handle, VK_ESCAPE)
+        time.sleep(1.0)
+
+        # Clean up non-English test attachment
+        try:
+            conn = sqlite3.connect(STORE_PATH)
+            conn.execute("DELETE FROM draft_attachments WHERE attachment_id = ?;", (non_eng_id,))
+            conn.commit()
+            conn.close()
+            if os.path.exists(staged_path_ne): os.remove(staged_path_ne)
+            if os.path.exists(source_path_ne): os.remove(source_path_ne)
+        except Exception:
+            pass
+
+        # Reload alpha again to clear chip for performance profiling
+        log("Reloading clean alpha project for performance profiling...")
+        file_menu = find_by_name(win, "File")
+        if file_menu:
+            file_menu.iface_invoke.Invoke()
+            time.sleep(1.0)
+            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
+            if sw_items:
+                sw_items[0].iface_invoke.Invoke()
+            else:
+                send_keys("%(FS)")
+        else:
+            send_keys("%(FS)")
+        time.sleep(2.0)
+
+        open_alpha = find_by_name(win, "Open project alpha")
+        if open_alpha:
+            open_alpha.iface_invoke.Invoke()
+            time.sleep(2.5)
+        log("PASS: Clean alpha project restored for performance profiling.")
 
         # Reload alpha again to clear chip for performance profiling
         log("Reloading clean alpha project for performance profiling...")
@@ -1077,14 +1285,24 @@ def main():
             if cur.fetchone():
                 conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
             conn.execute("UPDATE projects SET closed = 1 WHERE id = '7a546bab-c9dd-49c0-8e77-c67903ab1b66';")
-            conn.execute("DELETE FROM draft_attachments WHERE attachment_id = 'att-ui-test-001';")
+            conn.execute("DELETE FROM draft_attachments WHERE attachment_id = 'att-ui-test-001' OR attachment_id = 'att-ui-test-noneng' OR attachment_id LIKE 'att-gamma-%' OR file_name = 'dropped_spec.txt';")
             conn.commit()
             conn.close()
             alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
             p1 = os.path.join(os.path.dirname(STORE_PATH), "attachments", "staging", alpha_id, "att-ui-test-001_sample_spec.txt")
             p2 = os.path.join(os.path.dirname(STORE_PATH), "sample_spec.txt")
+            p3 = os.path.join(os.path.dirname(STORE_PATH), "dropped_spec.txt")
+            p4 = os.path.join(os.path.dirname(STORE_PATH), "test_drop_subfile.txt")
+            p5 = os.path.join(os.path.dirname(STORE_PATH), "test_drop_subfolder")
+            p6 = os.path.join(os.path.dirname(STORE_PATH), "attachments", "staging", alpha_id, "att-ui-test-noneng_hola_mundo.txt")
+            p7 = os.path.join(os.path.dirname(STORE_PATH), "hola_mundo.txt")
             if os.path.exists(p1): os.remove(p1)
             if os.path.exists(p2): os.remove(p2)
+            if os.path.exists(p3): os.remove(p3)
+            if os.path.exists(p4): os.remove(p4)
+            if os.path.exists(p5): os.rmdir(p5)
+            if os.path.exists(p6): os.remove(p6)
+            if os.path.exists(p7): os.remove(p7)
         except Exception:
             pass
 
