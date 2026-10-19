@@ -1682,17 +1682,24 @@ namespace winrt::Mayasaba::implementation
 
         auto alive = get_strong();
         auto ui = DispatcherQueue();
-        auto const dropCtx = mayasaba::AttachmentIngestionCoordinator::CreateContext(activeProject_, selectorGeneration_.load());
+        auto const dropCtx = ingestionCoordinator_.CreateContext(
+            activeProject_,
+            selectorGeneration_.load(),
+            &windowClosed_,
+            &selectorGeneration_);
+
+        // Strictly thread-safe atomic cancellation predicate for worker:
+        auto isWorkerCancelled = ingestionCoordinator_.CreateWorkerCancellationPredicate(dropCtx);
 
         std::vector<mayasaba::AttachmentCandidate> prepared;
         std::string prepError;
         try
         {
             co_await selectorQueue_.Background();
-            prepared = attachmentService_->PrepareBatch(dropCtx.boundProjectId, candidatePaths,
-                [this, dropCtx] {
-                    return windowClosed_ || !mayasaba::AttachmentIngestionCoordinator::ValidateBoundary(dropCtx, activeProject_, selectorGeneration_.load());
-                },
+            prepared = attachmentService_->PrepareBatch(
+                dropCtx.boundProjectId,
+                candidatePaths,
+                isWorkerCancelled,
                 mayasaba::PREPARATION_TIMEOUT_SECONDS);
         }
         catch (std::exception const& e)
@@ -1701,24 +1708,28 @@ namespace winrt::Mayasaba::implementation
         }
 
         if (!co_await resume_foreground(ui)) co_return;
-        if (windowClosed_ || !mayasaba::AttachmentIngestionCoordinator::ValidateBoundary(dropCtx, activeProject_, selectorGeneration_.load()))
+
+        // Post-preparation boundary check on UI thread before any draft mutation
+        if (!ingestionCoordinator_.ValidatePostPreparationBoundary(
+                dropCtx,
+                activeProject_,
+                selectorGeneration_.load(),
+                windowClosed_.load()))
         {
+            attachmentsPreparing_ = false;
             co_return;
         }
 
         attachmentsPreparing_ = false;
 
-        size_t prepIdx = 0;
-        for (auto& d : draftAttachments_)
-        {
-            if (prepIdx < prepared.size() && d.id == preparingIds[prepIdx])
-            {
-                d = std::move(prepared[prepIdx]);
-                prepIdx++;
-            }
-        }
-
-        attachmentService_->SaveDraftAttachments(activeProject_, draftAttachments_);
+        ingestionCoordinator_.CommitDraftBatch(
+            activeProject_,
+            draftAttachments_,
+            prepared,
+            preparingIds,
+            [this](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
+                attachmentService_->SaveDraftAttachments(proj, drafts);
+            });
 
         RenderAttachmentChips();
         UpdateComposerState();
@@ -1805,12 +1816,17 @@ namespace winrt::Mayasaba::implementation
             ~DropGuard() { if (self) self->dropProcessing_ = false; }
         } dropGuard{this};
 
-        auto const dropCtx = mayasaba::AttachmentIngestionCoordinator::CreateContext(activeProject_, selectorGeneration_.load());
+        auto const dropCtx = ingestionCoordinator_.CreateContext(
+            activeProject_,
+            selectorGeneration_.load(),
+            &windowClosed_,
+            &selectorGeneration_);
 
         auto def = e.GetDeferral();
         Windows::Foundation::Collections::IVectorView<Windows::Storage::IStorageItem> items{nullptr};
         try
         {
+            ingestionCoordinator_.OnRetrievalPending();
             items = co_await e.DataView().GetStorageItemsAsync();
         }
         catch (std::exception const& ex)
@@ -1827,8 +1843,13 @@ namespace winrt::Mayasaba::implementation
         }
         def.Complete();
 
-        // Project boundary check immediately after async retrieval
-        if (windowClosed_ || projectClosed_ || !mayasaba::AttachmentIngestionCoordinator::ValidateBoundary(dropCtx, activeProject_, selectorGeneration_.load()))
+        // Project boundary check immediately after async retrieval (UI thread)
+        if (!ingestionCoordinator_.ValidateRetrievalBoundary(
+                dropCtx,
+                activeProject_,
+                selectorGeneration_.load(),
+                windowClosed_.load(),
+                projectClosed_))
         {
             ShowNotice(L"Attachment drop cancelled: project selection changed.", false);
             co_return;

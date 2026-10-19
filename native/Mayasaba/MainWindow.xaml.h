@@ -181,7 +181,7 @@ namespace winrt::Mayasaba::implementation
         winrt::event_token highContrastChangedToken_{};
         bool motionSubscriptionActive_{false};
         bool highContrastSubscriptionActive_{false};
-        bool windowClosed_{false};
+        std::atomic<bool> windowClosed_{false};
         bool animationsEnabled_{true};
         bool highContrast_{false};
         // Adaptive layout state, so a size change does not rebuild the screen.
@@ -221,8 +221,9 @@ namespace winrt::Mayasaba::implementation
         std::string actionCenterContinuationToken_;
         std::vector<mayasaba::ActionCenterItem> actionCenterItems_;
 
-        // Drop handling guard
+        // Drop handling guard and production ingestion coordinator
         bool dropProcessing_{false};
+        mayasaba::AttachmentIngestionCoordinator ingestionCoordinator_;
 
         // Attachment inspection & preview state
         std::atomic<uint64_t> inspectionRequestSeq_{0};

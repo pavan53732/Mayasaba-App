@@ -1346,6 +1346,77 @@ This section documents the specific corrections and empirical evidence resolving
 | Production Database Checksum | UNTOUCHED | SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
 | Real Multi-DPI & Narrator Speech | INCOMPLETE | Retained as separately incomplete per project acceptance rules. |
 
+---
 
+## 14. Resolution of Review Findings: Thread-Safe Worker Cancellation and Production Ingestion Coordination Verification
 
+### 14.1 Item 1: Elimination of Unsynchronized Background Reads (Data Race Fix)
 
+- **Review finding:** In `native/Mayasaba/MainWindow.xaml.cpp:1692–1696`, the cancellation callback running during background preparation read `activeProject_` and `windowClosed_`. `activeProject_` was an ordinary `std::string` assigned on the UI thread at line 666, and `windowClosed_` was an ordinary `bool`. Concurrent background reading and UI thread mutation constituted a C++ data race.
+- **Actual correction:**
+  - In `MainWindow.xaml.h`, converted `windowClosed_` to `std::atomic<bool> windowClosed_{false};` and ensured `selectorGeneration_` is an `std::atomic_uint64_t selectorGeneration_{1};`.
+  - In `AttachmentIngestionCoordinator.h`, updated `DropContext` to hold atomic pointers (`std::atomic<bool> const* windowClosed` and `std::atomic_uint64_t const* selectorGeneration`).
+  - Implemented `CreateWorkerCancellationPredicate(DropContext const& ctx)`:
+    - Strictly reads ONLY atomic variables: `winClosed->load(std::memory_order_relaxed)` and `selGen->load(std::memory_order_relaxed) != boundGen`.
+    - ZERO reads of `activeProject_` or any non-atomic UI state on the background worker thread.
+  - Project string validation is strictly retained on the UI thread:
+    - Pre-dispatch boundary validation on UI thread: `ValidateBoundary` / `ValidateRetrievalBoundary`.
+    - Post-preparation boundary validation on UI thread after `resume_foreground`: `ValidatePostPreparationBoundary(dropCtx, activeProject_, selectorGeneration_.load(), windowClosed_.load())`.
+  - Audited window-close cancellation in the exact same path: closing the window sets atomic `windowClosed_ = true`, which immediately signals the worker cancellation predicate.
+
+### 14.2 Item 2: Production Sequence Coordination & Active Preparation Hook Verification
+
+- **Review finding:** `AttachmentIngestionCoordinator::CoordinateDrop()` was previously called only by `verify_ac_ai.cpp`, while `MainWindow` used its own separate sequence. Furthermore, Test 5 case 4b paused before calling `PrepareBatch()`, starting already canceled rather than during active preparation.
+- **Actual correction:**
+  - **Shared Production Coordination Integration:**
+    - `MainWindow` was refactored to execute shared coordination methods across the full ingestion lifecycle:
+      1. `ingestionCoordinator_.CreateContext(...)`
+      2. `ingestionCoordinator_.OnRetrievalPending()`
+      3. `ingestionCoordinator_.ValidateRetrievalBoundary(...)`
+      4. `ingestionCoordinator_.CreateWorkerCancellationPredicate(...)`
+      5. `ingestionCoordinator_.ValidatePostPreparationBoundary(...)`
+      6. `ingestionCoordinator_.CommitDraftBatch(...)`
+  - **Controlled Native Production Hooks:**
+    - Added `AttachmentService::SetPreparationChunkHookForTesting(std::function<void()> hook)`:
+      - Invoked directly inside `PrepareAttachment`'s chunk copy loop after the source file handle is opened, the staging copy file is created, and the durable SQLite intent record (`status = PREPARING`) is persisted via `storage_.SaveDraftAttachment`, but before copying completes.
+    - Added `AttachmentIngestionCoordinator::SetRetrievalPendingHookForTesting(std::function<void()> hook)`:
+      - Invoked during `OnRetrievalPending()` at the asynchronous retrieval boundary.
+  - **Comprehensive Test Suite in `verify_ac_ai.cpp` Test 5:**
+    - **Case 4b: Controlled project switch during ACTIVE preparation:**
+      - Seeded existing drafts: `draft-a-existing` in `proj-A` and `draft-b-existing` in `proj-B`.
+      - Set `SetPreparationChunkHookForTesting` to signal `prepActive` and wait with a bounded 3-second timeout.
+      - Dispatched background worker to execute `PrepareBatch("proj-A", ...)` with the atomic worker cancellation predicate.
+      - Main thread waited boundedly for `prepActive == true`. Verified that while in flight, the durable intent record with status `PREPARING` was present in SQLite.
+      - Main thread executed a project switch to `proj-B` (`activeProject = "proj-B"`, `++selectorGeneration`), then released the hook.
+      - Joined worker thread; verified candidate status became `Rejected` (`"Preparation cancelled"`).
+      - Verified `ValidatePostPreparationBoundary` returned `false` on the main thread, aborting draft commit.
+      - Verified **no stale attachment admission** to either project (`postDraftsA` and `postDraftsB` contain 0 stale items).
+      - Verified **existing drafts remain intact** (`existing_a.txt` in A, `existing_b.txt` in B).
+      - Verified **no automatic submission** (`store.Contributions` empty, `!store.Pending.has_value()`).
+      - Verified **cancellation and preparation state recover correctly**: intermediate `PREPARING` record removed on cancellation rollback, and a subsequent retry succeeds cleanly, committing the candidate with status `Ready`.
+      - **Demonstrated guard failure if removed**: explicitly showed that bypassing `ValidatePostPreparationBoundary` contaminates the target project with an unexpected draft, proving the production boundary guard is strictly necessary and effective.
+    - **Case 4c: Controlled project switch during PENDING retrieval:**
+      - Held operation at retrieval pending via `SetRetrievalPendingHookForTesting`.
+      - Switched project to `proj-B` while retrieval was in flight.
+      - Verified `ValidateRetrievalBoundary` rejected the operation before preparation began, keeping both projects' drafts untouched with no submissions.
+      - Demonstrated that removing `ValidateRetrievalBoundary` fails project/generation/window-closed validation.
+    - **Case 4d: Shared `CoordinateDrop` method verification:**
+      - Exercised the unified `CoordinateDrop` pipeline with the active preparation chunk hook, verifying that the coordinator wrapper enforces the exact same boundary invariants and returns `false` on switch.
+    - **Bounded Waits:**
+      - All test wait loops are bounded to 3000ms using `waitBounded`, guaranteeing that regressions fail immediately instead of hanging.
+
+### 14.3 Accepted Verdicts & Retained Inconclusive Matrix
+
+- Preserved the accepted independent drop violation classification and corrected `Notice` automation ID lookup.
+- Synthetic desktop OLE drag-drop execution, real OS display scaling (150%/200%), and Narrator speech acceptance remain explicitly marked `INCONCLUSIVE`/`INCOMPLETE` per contract rules.
+
+| Verification Suite | Result | Details |
+| --- | --- | --- |
+| Drop Verdict Classification Unit Tests | PASS (6/6) | All 6 violation classification test cases pass. |
+| Standalone AC + AI Suites (`verify_ac_ai.exe`) | PASS (10/10) | Tests 1–10 pass, including active preparation hook (4b), retrieval hook (4c), retry recovery, guard failure demonstrations, and shared `CoordinateDrop` (4d). |
+| Core Native Regressions (`storage_tests.exe`) | PASS (22/22) | 22 isolated native regression groups pass cleanly. |
+| Contract Registry (`validate_contract_registry.py`) | PASS (124/124) | 124 schema and slice contract checks pass. |
+| Live UI Acceptance (`test_full_ui_acceptance.py`) | 13 PASS, 2 INCONCLUSIVE, 0 FAIL | Inconclusive synthetic desktop OLE drag-drop execution retained truthfully. All other 13 criteria PASS. |
+| Native WinUI 3 App Compilation (`Mayasaba.exe`) | PASS | MSBuild Release x64 v145 built clean with 0 warnings, 0 errors. |
+| Production Database Checksum | UNTOUCHED | SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
+| Real Multi-DPI & Narrator Speech | INCOMPLETE | Retained as separately incomplete per project acceptance rules. |

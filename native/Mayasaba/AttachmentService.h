@@ -132,9 +132,16 @@ namespace mayasaba
 
         std::filesystem::path const& StagingRoot() const noexcept { return stagingRoot_; }
 
+        // Testing hook for in-flight active chunk preparation verification
+        void SetPreparationChunkHookForTesting(std::function<void()> hook)
+        {
+            preparationChunkHook_ = std::move(hook);
+        }
+
     private:
         Storage& storage_;
         std::filesystem::path stagingRoot_;
+        std::function<void()> preparationChunkHook_;
 
         static std::string Utf16ToUtf8(std::wstring const& w);
         static std::wstring Utf8ToUtf16(std::string const& u);

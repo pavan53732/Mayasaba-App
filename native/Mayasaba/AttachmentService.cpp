@@ -473,6 +473,11 @@ namespace mayasaba
 
         while (totalBytesRead < static_cast<uint64_t>(initialSize.QuadPart))
         {
+            if (preparationChunkHook_)
+            {
+                preparationChunkHook_();
+            }
+
             if (isCancelled())
             {
                 cancelled = true;
