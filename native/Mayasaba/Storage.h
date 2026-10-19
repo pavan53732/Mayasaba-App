@@ -1,6 +1,7 @@
 #pragma once
 #include <filesystem>
 #include <atomic>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -288,12 +289,18 @@ namespace mayasaba
         // Attachment inspection: read-only detail projection.
         AttachmentInspectionResult InspectAttachment(AttachmentInspectionQuery const& query);
 
+        // Testing hooks for race and concurrency verification
+        void SetInspectionFileHashedHookForTesting(std::function<void()> hook) { inspectionFileHashedHook_ = std::move(hook); }
+        void SetQueryActionCenterSnapshotHookForTesting(std::function<void()> hook) { queryActionCenterSnapshotHook_ = std::move(hook); }
+
     private:
         sqlite3* db_{nullptr};
         std::filesystem::path file_;
         std::mutex mutex_;
         std::atomic_uint64_t requestedDraftRevision_{0};
         uint64_t savedDraftRevision_{0};
+        std::function<void()> inspectionFileHashedHook_;
+        std::function<void()> queryActionCenterSnapshotHook_;
 #ifdef _WIN32
         HANDLE instanceMutex_{nullptr};
         HANDLE identityHandle_{INVALID_HANDLE_VALUE};

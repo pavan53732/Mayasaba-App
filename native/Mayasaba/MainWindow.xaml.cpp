@@ -665,6 +665,7 @@ namespace winrt::Mayasaba::implementation
         if (!error.empty() || !project) { ShowNotice(L"Chat restoration blocked: " + Utf16(error), true); co_return; }
         activeProject_=id;
         projectClosed_=project->closed;
+        actionCenterPresenter_.BindProject(id, selectorGeneration_.load());
         actionCenterItems_.clear();
         ActionCenterList().Items().Clear();
         ActionCenterPanel().Visibility(Visibility::Collapsed);
@@ -3235,8 +3236,11 @@ namespace winrt::Mayasaba::implementation
     // ------------------------------------------------------------------
     void MainWindow::OnCloseActionCenter(IInspectable const&, RoutedEventArgs const&)
     {
-        ++actionCenterRequestSeq_;
+        actionCenterPresenter_.Dismiss();
+        actionCenterDismissed_ = true;
+        ++actionCenterRefreshSeq_;
         actionCenterPendingRerun_ = false;
+        actionCenterActivePagingId_ = 0;
         actionCenterPaging_ = false;
         actionCenterContinuationToken_.clear();
         actionCenterItems_.clear();
@@ -3259,32 +3263,64 @@ namespace winrt::Mayasaba::implementation
 
     winrt::fire_and_forget MainWindow::LoadMoreActionCenterItemsAsync(uint64_t gen)
     {
-        if (!storage_ || activeProject_.empty() || actionCenterContinuationToken_.empty() || actionCenterPaging_) co_return;
+        if (!storage_ || activeProject_.empty() || actionCenterContinuationToken_.empty() || actionCenterPaging_ || actionCenterDismissed_) co_return;
 
+        std::string token;
+        uint64_t const pagingId = actionCenterPresenter_.BeginPaging(gen, token);
+        if (pagingId == 0) co_return;
+        actionCenterPagingSeq_ = pagingId;
+        actionCenterActivePagingId_ = pagingId;
         actionCenterPaging_ = true;
+
         auto alive = get_strong();
         auto ui = DispatcherQueue();
         auto projectId = activeProject_;
-        uint64_t const reqSeq = actionCenterRequestSeq_;
-        std::string const token = actionCenterContinuationToken_;
+        uint64_t const refreshSeq = actionCenterRefreshSeq_;
 
         struct PagingCleanup
         {
             MainWindow* self;
+            uint64_t id;
+            winrt::Microsoft::UI::Dispatching::DispatcherQueue uiQueue{nullptr};
             ~PagingCleanup()
             {
                 if (self)
                 {
-                    self->actionCenterPaging_ = false;
-                    try {
-                        if (self->MoreActionCenterItemsButton())
+                    self->actionCenterPresenter_.CleanupPaging(id);
+                    if (self->actionCenterActivePagingId_ == id)
+                    {
+                        self->actionCenterActivePagingId_ = 0;
+                        self->actionCenterPaging_ = false;
+                        if (uiQueue)
                         {
-                            self->MoreActionCenterItemsButton().IsEnabled(true);
+                        if (uiQueue.HasThreadAccess())
+                        {
+                            try {
+                                if (self->MoreActionCenterItemsButton())
+                                {
+                                    self->MoreActionCenterItemsButton().IsEnabled(true);
+                                }
+                            } catch (...) {}
                         }
-                    } catch (...) {}
+                        else
+                        {
+                            auto target = self;
+                            auto aliveRef = self->get_strong();
+                            auto targetId = id;
+                            uiQueue.TryEnqueue([target, aliveRef, targetId]() {
+                                try {
+                                    if (target->actionCenterActivePagingId_ == 0 && target->MoreActionCenterItemsButton())
+                                    {
+                                        target->MoreActionCenterItemsButton().IsEnabled(true);
+                                    }
+                                } catch (...) {}
+                            });
+                        }
+                    }
                 }
             }
-        } pagingCleanup{this};
+        }
+        } pagingCleanup{this, pagingId, ui};
 
         MoreActionCenterItemsButton().IsEnabled(false);
 
@@ -3297,9 +3333,14 @@ namespace winrt::Mayasaba::implementation
 
         if (!co_await resume_foreground(ui)) co_return;
 
-        // Check guards: windowClosed, project switch, generation change, or obsolete request sequence / token mismatch
-        if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != gen ||
-            reqSeq != actionCenterRequestSeq_ || token != actionCenterContinuationToken_)
+        if (!actionCenterPresenter_.ApplyPagingResult(pagingId, projectId, gen, refreshSeq, token, result))
+        {
+            co_return;
+        }
+
+        // Check guards: windowClosed, dismissal, project switch, generation change, or obsolete request sequence / token mismatch / paging ownership loss
+        if (windowClosed_ || actionCenterDismissed_ || activeProject_ != projectId || selectorGeneration_.load() != gen ||
+            refreshSeq != actionCenterRefreshSeq_ || token != actionCenterContinuationToken_ || actionCenterActivePagingId_ != pagingId)
         {
             co_return;
         }
@@ -3435,8 +3476,11 @@ namespace winrt::Mayasaba::implementation
     {
         if (!storage_ || activeProject_.empty()) co_return;
 
-        ++actionCenterRequestSeq_;
+        // An explicit refresh request makes the panel active again
+        actionCenterDismissed_ = false;
+        ++actionCenterRefreshSeq_;
         actionCenterContinuationToken_.clear();
+        actionCenterActivePagingId_ = 0;
         actionCenterPaging_ = false;
         if (actionCenterRefreshing_)
         {
@@ -3460,9 +3504,13 @@ namespace winrt::Mayasaba::implementation
         while (true)
         {
             actionCenterPendingRerun_ = false;
-            uint64_t const servicedSeq = actionCenterRequestSeq_;
+            uint64_t const servicedSeq = actionCenterPresenter_.BeginRefresh(selectorGeneration_.load());
+            actionCenterDismissed_ = false;
+            actionCenterRefreshSeq_ = servicedSeq;
             auto projectId = activeProject_;
             auto currentGen = selectorGeneration_.load();
+
+            if (actionCenterDismissed_ || actionCenterPresenter_.IsDismissed()) break;
 
             co_await selectorQueue_.Background();
             mayasaba::ActionCenterQuery query;
@@ -3472,7 +3520,14 @@ namespace winrt::Mayasaba::implementation
 
             if (!co_await resume_foreground(ui)) co_return;
 
-            // Reject obsolete completions: project changed, generation changed, or window closed
+            bool rerunNeeded = false;
+            bool accepted = actionCenterPresenter_.ApplyRefreshResult(servicedSeq, projectId, currentGen, result, rerunNeeded);
+
+            // Reject obsolete completions: dismissal occurred, project changed, generation changed, or window closed
+            if (actionCenterDismissed_ || actionCenterPresenter_.IsDismissed())
+            {
+                break;
+            }
             if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != currentGen)
             {
                 if (activeProject_ != projectId)
@@ -3487,51 +3542,51 @@ namespace winrt::Mayasaba::implementation
                 break;
             }
 
-            // If a newer refresh request arrived while in background, rerun loop
-            // servicedSeq will update to the newest actionCenterRequestSeq_ on next pass!
-            if (actionCenterPendingRerun_ || servicedSeq != actionCenterRequestSeq_)
+            // If a newer refresh request arrived while in background, rerun loop only if not dismissed
+            if (rerunNeeded || actionCenterPendingRerun_ || servicedSeq != actionCenterRefreshSeq_)
             {
+                if (actionCenterDismissed_ || actionCenterPresenter_.IsDismissed()) break;
                 continue;
             }
 
+            if (!accepted) break;
+
             // Atomically replace backing and visible collections together
-            actionCenterItems_.clear();
+            actionCenterItems_ = actionCenterPresenter_.Items();
             ActionCenterList().Items().Clear();
-            actionCenterContinuationToken_ = result.continuationToken;
+            actionCenterContinuationToken_ = actionCenterPresenter_.ContinuationToken();
 
-            if (!result.errorMessage.empty())
+            auto const& vs = actionCenterPresenter_.ViewState();
+            ActionCenterStatusText().Text(vs.statusText);
+
+            if (!vs.errorMessage.empty())
             {
-                ActionCenterStatusText().Text(L"Storage unavailable: " + Utf16(result.errorMessage));
                 ActionCenterPanel().Visibility(Visibility::Visible);
                 ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
                 MoreActionCenterItemsButton().Visibility(Visibility::Collapsed);
                 break;
             }
 
-            if (result.items.empty())
+            if (vs.items.empty())
             {
-                ActionCenterStatusText().Text(L"No unresolved owner obligations need your attention.");
                 ActionCenterPanel().Visibility(Visibility::Visible);
                 ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
                 MoreActionCenterItemsButton().Visibility(Visibility::Collapsed);
                 break;
             }
 
-            for (auto const& item : result.items)
+            for (auto const& item : vs.items)
             {
                 auto entry = winrt::to_hstring(item.titleEn) + L" — " + winrt::to_hstring(item.explanationEn);
                 ActionCenterList().Items().Append(winrt::box_value(entry));
-                actionCenterItems_.push_back(item);
             }
 
-            if (!result.continuationToken.empty())
+            if (!vs.continuationToken.empty())
             {
-                ActionCenterStatusText().Text(std::to_wstring(result.items.size()) + L" item(s) loaded (more available).");
                 MoreActionCenterItemsButton().Visibility(Visibility::Visible);
             }
             else
             {
-                ActionCenterStatusText().Text(std::to_wstring(result.items.size()) + L" item(s) need your attention.");
                 MoreActionCenterItemsButton().Visibility(Visibility::Collapsed);
             }
             ActionCenterPanel().Visibility(Visibility::Visible);
@@ -3539,7 +3594,7 @@ namespace winrt::Mayasaba::implementation
             break;
         }
 
-        if (actionCenterPendingRerun_ && !windowClosed_ && !activeProject_.empty())
+        if (actionCenterPendingRerun_ && !actionCenterDismissed_ && !windowClosed_ && !activeProject_.empty())
         {
             RefreshActionCenterAsync(selectorGeneration_.load());
         }

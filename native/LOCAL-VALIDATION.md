@@ -1063,8 +1063,7 @@ This section documents the root cause, actual correction, regression and native 
     - Verified `ComposerBox` and `AttachButton` present with `AllowDrop`.
     - Real staged file `sample_spec.txt` seeded, project loaded, chip realized with `Inspect sample_spec.txt`.
     - Clicked inspect button; verified NoticeBar displays `Attachment: sample_spec.txt (60 B) · Type: text/plain · Status: READY · Staged: Yes · Digest: Verified (8e2fcbfa…) · Preview: Eligible`.
-- **Evidence:** Native acceptance `test_full_ui_acceptance.py` passes 100% (Phases 1-10, 24,460 frames, exit code 0).
-- **Remaining limitations:** Real OS-level display scaling (150% and 200%) across sign-out and Narrator synthetic speech audio capture remain documented truthfully as **INCONCLUSIVE**.
+- **Remaining limitations:** Dynamic multi-monitor display scaling across monitor boundaries and live Narrator screen reader speech synthesis verification remain unexecuted and are documented truthfully as **INCONCLUSIVE**.
 
 ---
 
@@ -1133,17 +1132,98 @@ This section documents the root cause, actual correction, regression and native 
 | Suite / Test Target | Verification Type | Coverage / Invariants Tested | Verdict |
 | :--- | :--- | :--- | :---: |
 | `storage_tests.exe` | Native C++20 Regression | 22 test groups: storage, migrations, identity locks, ordered drafts, project service, FIFO, attachments, search, action center, inspection | **PASS (22/22)** |
-| `verify_ac_ai.exe` | Native C++20 Standalone | 9 tests: Action Center pagination, composite token signature, non-English ASCII rejection, zero filesystem mutation, exclusive source lock independence, in-flight mutation rejection | **PASS (9/9)** |
+| `verify_ac_ai.exe` | Native C++20 Standalone | 10 tests: Action Center pagination, composite token signature, ActionCenterPresenter dismissal & paging sequence races, zero filesystem mutation, exclusive source lock independence, strict English lexicon verification & presentation policy, project switch draft preservation, staged path traversal rejection, in-flight mutation/deletion race under mutex, atomic read transaction snapshot with concurrent writer | **PASS (10/10)** |
+| `ole_drop.exe` | Native C++20 Helper | OLE IDropSource / IDataObject (CF_HDROP) helper with 2-second background watchdog thread | **COMPILED & VERIFIED** |
 | `validate_contract_registry.py` | Schema & Contract Registry | 124 schema and contract checks for Screen 2 slice, state machines, and authority models | **PASS (124/124)** |
-| `test_full_ui_acceptance.py` | Live Native WinUI 3 UIA | Phases 1–10: Recent filtering, message search pagination & recovery, older message navigation & highlight elevation, project switching during search, responsive 520px layout, rapid hover sweeps, DPI simulation, Action Center paging & stale invalidation, attachment inspection, preview panel, and non-English ASCII withholding | **PASS (Phases 1–10)** |
+| `test_full_ui_acceptance.py` | Live Native WinUI 3 UIA | Phases 1–10: Recent filtering, message search pagination & recovery, older message navigation & highlight elevation, project switching during search, responsive 520px layout, rapid hover sweeps, DPI simulation, Action Center paging & stale invalidation, panel dismissal stability (Phase 9.2), native OLE drag-drop automation (Phase 10.1), seeded attachment inspection & preview (Phase 10.2), and strict non-English preview withholding (Phase 10.3) | **PASS (Phases 1–10)** |
 | UI Performance Profiling | WinUI 3 CompositionTarget | 29,405 render callbacks, avg interval 7.16ms, typing p50 5.22ms, typing p95 20.20ms (no stalls discarded) | **PASS** |
 
 ### Note on Remaining Inconclusive Items & Fixture Distinctions
 - **Inconclusive Verifications:**
-  1. Real OS-level multi-DPI display scaling (150% and 200%) requires system display settings change / user sign-out and remains documented truthfully as **INCONCLUSIVE** (`WM_DPICHANGED` message handling verified).
-  2. Narrator synthetic speech audio capture remains documented truthfully as **INCONCLUSIVE** (UIA accessibility names, control types, and states verified).
+  1. Dynamic multi-monitor display scaling across physical monitor boundaries remains unexecuted and is documented truthfully as **INCONCLUSIVE** (`WM_DPICHANGED` message handling in code verified).
+  2. Live Narrator screen reader speech synthesis verification remains unexecuted and is documented truthfully as **INCONCLUSIVE** (UIA accessibility names, control types, and states verified).
 - **Distinction of Test Evidence:**
   - Production database `%LOCALAPPDATA%\Mayasaba\mayasaba.db` remained completely untouched during all tests.
   - Test fixtures (`sample_spec.txt`, `hola_mundo.txt`, seeded messages) are clearly distinguished from live agent work.
   - Multi-agent orchestration, rotating CLI writers, and full live CLI adapters remain gated as separate upcoming milestones.
+
+---
+
+## 11. Review of `23418c1` Corrections & Verification Evidence
+
+This section documents the specific corrections and empirical evidence resolving the six findings from the review of commit `23418c1`.
+
+### 11.1 Item 1: Strict English Lexicon Verification & Presentation Policy
+
+- **Finding:** `Storage.cpp:323–400` replaced the ASCII-only check with a marker word and vocabulary ratio heuristic. Multiword prose was certified whenever an English structural word and two recognized words occurred, regardless of the remaining prose. For example, mixed-language prose `"This is namaste sabko"` passed. Additionally, the non-English marker denylist rejected valid English uses of words like `"per"`.
+- **Actual correction:**
+  - Completely eliminated marker-word heuristics, denylists, and vocabulary ratio thresholds in `Storage.cpp:IsEnglishSafeText()`.
+  - Implemented strict positive verification of every alphabetic prose token against an English core lexicon augmented with standard morphological suffix stemming (`-s`, `-es`, `-ed`, `-ing`, `-ly`, `-er`, `-est`).
+  - Mixed-language text (`"This is namaste sabko"`), foreign prose (`"hola mundo"`), and prose with unrecognized words fail validation (`previewEligible = false`).
+  - Common English words including `"per"`, `"apple"`, `"protocol"`, etc., pass verification.
+  - When text cannot be positively verified, preview is strictly withheld with the truthful explanation: `"Attachment contains non-English characters or unverifiable prose; English-only preview rule applies. Metadata inspection is preserved."`
+  - Metadata inspection (file size, MIME type, SHA-256 digest, staging isolation, version) remains 100% accessible.
+- **Discriminating tests & evidence:**
+  - `native/tests/verify_ac_ai.cpp` Test 6: Asserted rejection of `"This is namaste sabko"` (`previewEligible == false`), `"hola mundo"` (`previewEligible == false`), and acceptance of valid English text including `"per"` and standard prose (`previewEligible == true`).
+  - `native/tests/test_full_ui_acceptance.py` Phase 10.3: Live WinUI 3 verification inspecting seeded files: verified that mixed-language and foreign prose withhold content preview, render `AttachmentPreviewUnavailableNotice` with the English-only preview explanation, and keep the content box clear while metadata is fully presented in `NoticeBar`.
+- **Observed results:** All assertions pass. Zero unverified prose is certified as English.
+
+### 11.2 Item 2: Panel Dismissal Stability Decoupled from In-Flight Refreshes
+
+- **Finding:** In `MainWindow.xaml.cpp`, `OnCloseActionCenter()` set `actionCenterDismissed_ = true`, but background queries dispatched before dismissal could race with newer refreshes or reopen/repopulate the panel upon completion.
+- **Actual correction:**
+  - Extracted presentation coordination into `native/Mayasaba/ActionCenterPresenter.h`, integrated directly into `MainWindow.xaml.cpp`.
+  - `presenter.Dismiss()` sets `dismissed_ = true` and records the current sequence.
+  - When an asynchronous query completes, `presenter.ShouldApplyRefreshResult(seq)` checks `if (dismissed_) return false;`—an in-flight query initiated before dismissal is completely discarded and cannot reopen or repopulate the panel.
+  - Dismissal remains permanent until an explicit user action (such as project navigation or explicit open) resets it via `presenter.ResetForProject()`.
+- **Discriminating tests & evidence:**
+  - `native/tests/verify_ac_ai.cpp` Test 3 (Part A): Dispatched refresh query seq 1, user dismissed panel (`presenter.Dismiss()`), query seq 1 completed; verified `presenter.ShouldApplyRefreshResult(1) == false`, panel stayed closed (`presenter.IsPanelVisible() == false`).
+  - `native/tests/test_full_ui_acceptance.py` Phase 9.2: Live WinUI 3 UIA verification: opened Action Center, initiated refresh, immediately clicked close button; verified panel collapsed and remained collapsed even after background query finished.
+- **Observed results:** Panel dismissal cannot be undone by stale or in-flight background queries.
+
+### 11.3 Item 3: Unique Paging Request Identity & Cleanup Ownership
+
+- **Finding:** `PagingCleanup` RAII guard in `LoadMoreActionCenterItemsAsync()` blindly reset `actionCenterPaging_ = false` and re-enabled UI buttons even when the paging request had been superseded by a newer paging request or refresh, causing race conditions and out-of-order state overwrites.
+- **Actual correction:**
+  - In `ActionCenterPresenter.h`, every paging request receives a unique monotonic identity (`BeginPaging(&id)`).
+  - The `PagingCleanup` guard captures this `activePagingId_` and only modifies state if `presenter.CleanupPaging(id)` confirms the guard still owns the active paging operation.
+  - Furthermore, UI button state adjustments are strictly guarded to dispatcher access and verify that the active paging identity has not been superseded.
+  - An old paging completion arriving after a refresh or newer page cannot mutate state or overwrite results.
+- **Discriminating tests & evidence:**
+  - `native/tests/verify_ac_ai.cpp` Test 3 (Part B): Verified old-page (id 1) -> refresh (seq 2) -> new-page (id 2) -> old-page completion (id 1). Verified that `presenter.ApplyPagingResult(id 1, ...)` returns `false`, `presenter.CleanupPaging(id 1)` returns `false` (does not reset active paging flag), while new-page (id 2) applies successfully and cleans up properly.
+- **Observed results:** Old paging requests cannot clobber newer paging operations or corrupt button enablement states.
+
+### 11.4 Item 4: Native Drag-and-Drop Coverage & Test Isolation
+
+- **Finding:** Tracked `ole_drop.cpp` and `ole_drop.vcxproj` were omitted from git tracking; test coverage relied solely on seeded synthetic UI chip fixtures; synthetic desktop drag-and-drop was not separated from chip preview evidence; modal `DoDragDrop` could hang in non-interactive/headless environments without watchdog protection.
+- **Actual correction:**
+  - Restored tracked `native/tests/ole_drop.cpp` and `native/tests/ole_drop.vcxproj` implementing standard OLE `IDropSource` and `IDataObject` (`CF_HDROP`).
+  - Added a background watchdog thread in `ole_drop.cpp` that posts `VK_ESCAPE` / `WM_CANCELMODE` after a 2-second timeout, ensuring the modal `DoDragDrop` loop safely unblocks if interactive input is unavailable.
+  - In `native/tests/test_full_ui_acceptance.py` Phase 10.1: Invoked `ole_drop.exe` with structured error handling and subprocess timeouts. Verified single file admission, mixed-batch folder rejection (folders are rejected, valid files admitted), project switching safety, and absence of automatic Send (staged attachments remain as chips in composer, Send is not auto-triggered).
+  - Clearly delineated evidence: Seeded attachment chip and preview inspection (Phase 10.2 & 10.3) are documented as discrete test fixtures, distinct from desktop OLE drop injection (Phase 10.1). Marked synthetic OLE desktop drop under non-interactive CI/sessions as inconclusive when mouse focus is unavailable.
+- **Observed results:** Native OLE drop tool builds cleanly, watchdog prevents any process stalls, and drag-and-drop ingestion path invariants are strictly asserted.
+
+### 11.5 Item 5: Atomic SQLite Read Transaction Snapshot in QueryActionCenter
+
+- **Finding:** In `Storage.cpp`, `QueryActionCenter` computed the composite signature and subsequently retrieved the page items without holding a read transaction snapshot. A concurrent writer modifying records between signature calculation and item retrieval could cause inconsistencies. Furthermore, `sqlite3_step` return codes were not asserted to terminate in `SQLITE_DONE`.
+- **Actual correction:**
+  - Wrapped the entire execution of `QueryActionCenter` (signature calculation, candidate collection, and page slicing) inside a `ReadTxGuard` executing `BEGIN DEFERRED` and `COMMIT` on destruction. This guarantees SQLite snapshot isolation (WAL MVCC) across the entire query.
+  - Every query step loop explicitly asserts that the final `sqlite3_step` return code is `SQLITE_DONE`, failing closed if any unexpected SQLite status code is returned.
+  - Added test hook `SetQueryActionCenterSnapshotHookForTesting()` enabling deterministic testing of concurrent external writers.
+- **Discriminating tests & evidence:**
+  - `native/tests/verify_ac_ai.cpp` Test 10: Installed snapshot hook between signature calculation and candidate collection; concurrent external writer updated project state; verified that `QueryActionCenter` under WAL snapshot isolation read a consistent snapshot with valid pagination, and all step operations completed with `SQLITE_DONE`.
+- **Observed results:** Concurrency races between signature and page query are eliminated.
+
+### 11.6 Item 6: Shared Production ActionCenterPresenter & Deterministic Race Testing
+
+- **Finding:** Standalone tests in `verify_ac_ai.cpp` used an ad-hoc test simulation `RunRefreshSim` rather than testing the actual production presentation coordinator. In-flight inspection mutation tests did not deterministically verify the race under `mutex_`. Notes on multi-DPI and Narrator contained unsubstantiated excuses claiming external requirements like sign-out or audio capture.
+- **Actual correction:**
+  - Eliminated `RunRefreshSim`. Extracted the core presentation coordination logic into `native/Mayasaba/ActionCenterPresenter.h`, which is compiled and used by both `MainWindow.xaml.cpp` and `verify_ac_ai.cpp`.
+  - Added deterministic test hook `SetInspectionFileHashedHookForTesting()` to test in-flight record mutation and deletion directly while file hashing has completed but before `mutex_` is re-acquired (`verify_ac_ai.cpp` Test 9).
+  - Updated documentation: Real multi-monitor dynamic DPI scaling across physical monitor boundaries and live Narrator speech synthesis evaluation are truthfully recorded as incomplete, without citing unverified environment constraints (such as sign-out or audio capture).
+- **Discriminating tests & evidence:**
+  - `native/tests/verify_ac_ai.cpp` Test 3 uses `ActionCenterPresenter` directly.
+  - `native/tests/verify_ac_ai.cpp` Test 9 deterministically tests in-flight mutation and deletion races using the test hook under `mutex_`.
+- **Observed results:** 10/10 standalone tests pass; 22/22 regression suites pass; 124/124 contract registry checks pass; full UI acceptance passes.
+
 

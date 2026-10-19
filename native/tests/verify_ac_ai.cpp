@@ -1,4 +1,5 @@
 #include "../Mayasaba/Storage.h"
+#include "../Mayasaba/ActionCenterPresenter.h"
 #include <chrono>
 #include <fstream>
 #include <iostream>
@@ -425,94 +426,170 @@ int main()
     }
 
     // -------------------------------------------------------------------------
-    // Test 3: Action Center refresh loop: sequence capture per iteration,
-    // holding first query, supersession by newer refresh, eventual publication of
-    // newest result, query activity stoppage, and cleanup on dismissal.
+    // Test 3: Production Action Center Presenter & Presentation Invariants
+    // - Held query dismissed while pending: completion does not reopen panel (Finding 2)
+    // - Paging cleanup & identity race: old-page -> refresh -> new-page -> old-completion (Finding 3)
+    // - Refresh sequence capture, supersession by newer refresh, and coalesced publication
     // -------------------------------------------------------------------------
     {
         mayasaba::Storage store(folder / "refresh_loop.db");
         store.BindProject("proj-rl", "Refresh Loop Proj", "C:/RL");
 
-        std::atomic<uint64_t> requestSeq{0};
-        std::atomic<bool> isRefreshing{false};
-        std::atomic<bool> pendingRerun{false};
-        std::atomic<int> queryCount{0};
-        std::atomic<uint64_t> lastPublishedSeq{0};
-        std::atomic<bool> holdFirstQuery{true};
+        mayasaba::ActionCenterPresenter presenter;
+        presenter.BindProject("proj-rl", 1);
+        EXPECT(presenter.IsDismissed() == true);
+        EXPECT(presenter.ViewState().isVisible == false);
 
-        auto RunRefreshSim = [&](std::string const& projId)
-        {
-            ++requestSeq;
-            if (isRefreshing.exchange(true))
-            {
-                pendingRerun = true;
-                return;
-            }
+        // --- Part A: Held query dismissed while pending (Finding 2) ---
+        // 1. User/system triggers refresh
+        uint64_t const reqSeq1 = presenter.BeginRefresh(1);
+        EXPECT(reqSeq1 > 0);
+        EXPECT(presenter.IsDismissed() == false);
+        EXPECT(presenter.IsRefreshing() == true);
 
-            // Loop implementation with iteration-scoped sequence capture
-            while (true)
-            {
-                pendingRerun = false;
-                uint64_t const servicedSeq = requestSeq.load();
-                ++queryCount;
+        // 2. Query is executing on background (simulated with held query)
+        // While query is pending, user dismisses panel via OnCloseActionCenter / presenter.Dismiss()
+        presenter.Dismiss();
+        EXPECT(presenter.IsDismissed() == true);
+        EXPECT(presenter.ViewState().isVisible == false);
 
-                // If first query and hold is requested, wait until released
-                if (queryCount == 1 && holdFirstQuery.load())
-                {
-                    while (holdFirstQuery.load())
-                    {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                    }
-                }
+        // 3. Held background query completes and returns its result
+        mayasaba::ActionCenterResult heldResult;
+        heldResult.continuationToken = "tok-held";
+        mayasaba::ActionCenterItem heldItem;
+        heldItem.titleEn = "Held Item";
+        heldItem.explanationEn = "Held Explanation";
+        heldResult.items.push_back(heldItem);
 
-                mayasaba::ActionCenterQuery query{ projId, 50 };
-                auto res = store.QueryActionCenter(query);
+        bool rerunNeeded = false;
+        bool accepted = presenter.ApplyRefreshResult(reqSeq1, "proj-rl", 1, heldResult, rerunNeeded);
+        // Completion from before dismissal must NOT reopen the panel!
+        EXPECT(accepted == false);
+        EXPECT(rerunNeeded == false);
+        EXPECT(presenter.ViewState().isVisible == false); // Panel remains CLOSED!
+        EXPECT(presenter.IsRefreshing() == false);        // Querying settled!
+        EXPECT(presenter.Items().empty());                // Obsolete items discarded!
 
-                // If a newer request arrived during background execution, continue!
-                if (pendingRerun.load() || servicedSeq != requestSeq.load())
-                {
-                    continue; // On next iteration, servicedSeq updates to requestSeq!
-                }
+        // 4. Verify panel reopens only when a subsequent explicit event requests it
+        uint64_t const reqSeq2 = presenter.BeginRefresh(1);
+        EXPECT(reqSeq2 > reqSeq1); // Explicit refresh gets newer sequence
+        EXPECT(presenter.IsDismissed() == false);
+        EXPECT(presenter.IsRefreshing() == true);
 
-                // Publish newest result
-                lastPublishedSeq = servicedSeq;
-                break;
-            }
+        mayasaba::ActionCenterResult freshResult;
+        freshResult.continuationToken = "tok-page-1";
+        mayasaba::ActionCenterItem freshItem;
+        freshItem.titleEn = "Fresh Item";
+        freshItem.explanationEn = "Fresh Explanation";
+        freshResult.items.push_back(freshItem);
 
-            isRefreshing = false;
-        };
+        accepted = presenter.ApplyRefreshResult(reqSeq2, "proj-rl", 1, freshResult, rerunNeeded);
+        EXPECT(accepted == true);
+        EXPECT(rerunNeeded == false);
+        EXPECT(presenter.ViewState().isVisible == true); // Explicit refresh legitimately opened panel
+        EXPECT(presenter.ViewState().moreItemsVisible == true);
+        EXPECT(presenter.Items().size() == 1);
+        EXPECT(presenter.ContinuationToken() == "tok-page-1");
 
-        // Launch refresh #1 in background thread with hold active
-        std::thread t1([&] { RunRefreshSim("proj-rl"); });
+        // --- Part B: Controlled old-page -> refresh -> new-page -> old-completion race (Finding 3) ---
+        // 1. Start old paging operation (id 1)
+        std::string tokenForPaging1;
+        uint64_t const oldPagingId = presenter.BeginPaging(1, tokenForPaging1);
+        EXPECT(oldPagingId == 1);
+        EXPECT(tokenForPaging1 == "tok-page-1");
+        EXPECT(presenter.IsPaging() == true);
+        EXPECT(presenter.ActivePagingId() == oldPagingId);
+        EXPECT(presenter.ViewState().moreItemsEnabled == false); // Button disabled during paging
 
-        // Wait until query #1 starts and enters hold
-        while (queryCount == 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        // 2. An explicit refresh arrives before old paging completes
+        uint64_t const refreshSeq3 = presenter.BeginRefresh(1);
+        EXPECT(presenter.ActivePagingId() == 0); // Paging identity invalidated by refresh!
+        EXPECT(presenter.IsPaging() == false);
 
-        // Request refresh #2 while query #1 is being held
-        RunRefreshSim("proj-rl");
-        EXPECT(pendingRerun.load() == true);
-        EXPECT(requestSeq.load() == 2);
+        mayasaba::ActionCenterResult refreshResult3;
+        refreshResult3.continuationToken = "tok-page-2";
+        mayasaba::ActionCenterItem refreshItem3;
+        refreshItem3.titleEn = "Refreshed Item";
+        refreshItem3.explanationEn = "Refreshed Explanation";
+        refreshResult3.items.push_back(refreshItem3);
 
-        // Request refresh #3 while query #1 is still held
-        RunRefreshSim("proj-rl");
-        EXPECT(requestSeq.load() == 3);
+        accepted = presenter.ApplyRefreshResult(refreshSeq3, "proj-rl", 1, refreshResult3, rerunNeeded);
+        EXPECT(accepted == true);
+        EXPECT(presenter.ContinuationToken() == "tok-page-2");
+        EXPECT(presenter.Items().size() == 1);
 
-        // Now release hold on query #1
-        holdFirstQuery = false;
-        t1.join();
+        // 3. A new paging operation starts under the fresh state
+        std::string tokenForPaging2;
+        uint64_t const newPagingId = presenter.BeginPaging(1, tokenForPaging2);
+        EXPECT(newPagingId == 2);
+        EXPECT(tokenForPaging2 == "tok-page-2");
+        EXPECT(presenter.IsPaging() == true);
+        EXPECT(presenter.ActivePagingId() == newPagingId);
+        EXPECT(presenter.ViewState().moreItemsEnabled == false);
 
-        // Verify:
-        // 1. Newest result was published (sequence 3)
-        EXPECT(lastPublishedSeq.load() == 3);
-        // 2. Query activity stopped (queryCount is exactly 2: superseded query #1 and newest query #2)
-        EXPECT(queryCount.load() == 2);
-        EXPECT(isRefreshing.load() == false);
-        EXPECT(pendingRerun.load() == false);
+        // 4. Now old paging operation #1 finishes late: cleanup runs first, then apply result
+        bool const oldCleanupClaimed = presenter.CleanupPaging(oldPagingId);
+        EXPECT(oldCleanupClaimed == false); // Old cleanup does NOT own active paging!
+        EXPECT(presenter.IsPaging() == true); // Newer paging guard was NOT cleared!
+        EXPECT(presenter.ActivePagingId() == newPagingId);
+        EXPECT(presenter.ViewState().moreItemsEnabled == false); // Button NOT prematurely re-enabled!
 
-        // Verification of deterministic cleanup on dismissal:
-        ++requestSeq;
-        pendingRerun = false;
-        EXPECT(requestSeq.load() == 4);
+        mayasaba::ActionCenterResult oldPageResult;
+        mayasaba::ActionCenterItem obsoleteItem;
+        obsoleteItem.titleEn = "Obsolete Page Item";
+        obsoleteItem.explanationEn = "Obsolete Page Explanation";
+        oldPageResult.items.push_back(obsoleteItem);
+        oldPageResult.continuationToken = "tok-old-page";
+
+        bool const oldPageAccepted = presenter.ApplyPagingResult(
+            oldPagingId, "proj-rl", 1, refreshSeq3, tokenForPaging1, oldPageResult);
+        EXPECT(oldPageAccepted == false); // Obsolete page rejected by token and paging identity mismatch!
+        EXPECT(presenter.Items().size() == 1); // No obsolete items appended!
+
+        // 5. Now new paging operation #2 completes legitimately
+        mayasaba::ActionCenterResult newPageResult;
+        mayasaba::ActionCenterItem validNewItem;
+        validNewItem.titleEn = "Valid New Page Item";
+        validNewItem.explanationEn = "Valid New Page Explanation";
+        newPageResult.items.push_back(validNewItem);
+        newPageResult.continuationToken = ""; // End of pages
+
+        bool const newPageAccepted = presenter.ApplyPagingResult(
+            newPagingId, "proj-rl", 1, refreshSeq3, tokenForPaging2, newPageResult);
+        EXPECT(newPageAccepted == true);
+        EXPECT(presenter.Items().size() == 2);
+
+        bool const newCleanupClaimed = presenter.CleanupPaging(newPagingId);
+        EXPECT(newCleanupClaimed == true); // New cleanup successfully released active paging
+        EXPECT(presenter.IsPaging() == false);
+        EXPECT(presenter.ActivePagingId() == 0);
+        EXPECT(presenter.ViewState().moreItemsEnabled == true); // Re-enabled truthfully
+        EXPECT(presenter.ViewState().moreItemsVisible == false); // End of pages
+
+        // --- Part C: Concurrent refresh requests coalescing to newest ---
+        uint64_t const cSeq1 = presenter.BeginRefresh(1);
+        uint64_t const cSeq2 = presenter.BeginRefresh(1);
+        uint64_t const cSeq3 = presenter.BeginRefresh(1);
+        EXPECT(cSeq2 > cSeq1);
+        EXPECT(cSeq3 > cSeq2);
+
+        mayasaba::ActionCenterResult cRes1;
+        cRes1.continuationToken = "";
+        bool rerunC1 = false;
+        bool accC1 = presenter.ApplyRefreshResult(cSeq1, "proj-rl", 1, cRes1, rerunC1);
+        EXPECT(accC1 == false); // Older refresh #1 superseded
+        EXPECT(rerunC1 == true); // Loop continues to newest sequence
+
+        mayasaba::ActionCenterResult cRes3;
+        mayasaba::ActionCenterItem cItem3;
+        cItem3.titleEn = "Coalesced Final Item";
+        cRes3.items.push_back(cItem3);
+        bool rerunC3 = false;
+        bool accC3 = presenter.ApplyRefreshResult(cSeq3, "proj-rl", 1, cRes3, rerunC3);
+        EXPECT(accC3 == true); // Newest refresh #3 accepted
+        EXPECT(rerunC3 == false);
+        EXPECT(presenter.Items().size() == 1);
+        EXPECT(presenter.Items()[0].titleEn == "Coalesced Final Item");
     }
 
     // -------------------------------------------------------------------------
@@ -655,6 +732,9 @@ int main()
             { "att-ascii-fr1", "bonjour le monde merci beaucoup", false },
             { "att-ascii-de1", "hallo guten tag danke", false },
             { "att-ascii-it1", "ciao mondo grazie arrivederci", false },
+            { "att-ascii-mixed", "This is namaste sabko", false },
+            { "att-ascii-long-foreign", "This is a test of long unrecognized prose luego los usuarios no pudieron continuar con el proceso de autorizacion del sistema", false },
+            { "att-ascii-valid-per", "Requests per second were within limits as per the specification.", true },
             { "att-ascii-eng", "This is an authorized English specification file for project inspection.", true }
         };
 
@@ -923,7 +1003,127 @@ int main()
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Test 9: Deterministic in-flight inspection-mutation race handling under mutex
+    // -------------------------------------------------------------------------
+    {
+        mayasaba::Storage store(folder / "race_inspect.db");
+        store.BindProject("proj-race", "Race Proj", "C:/Race");
+        auto attDir = store.ManagedAttachmentRoot();
+        fs::create_directories(attDir);
+
+        std::string filePath = (attDir / "att-race-1.txt").string();
+        std::string testContent = "Valid English payload for race verification.";
+        {
+            std::ofstream of(filePath, std::ios::binary);
+            of.write(testContent.data(), testContent.size());
+        }
+        std::string hash = ComputeSha256ForTestFile(filePath);
+
+        mayasaba::AttachmentRecord rec{};
+        rec.id = "att-race-1";
+        rec.projectId = "proj-race";
+        rec.fileName = "att-race-1.txt";
+        rec.fileSize = testContent.size();
+        rec.sha256 = hash;
+        rec.detectedType = "text/plain";
+        rec.storagePath = filePath;
+        rec.sourcePath = "C:/source/att-race-1.txt";
+        rec.status = "READY";
+        store.SaveDraftAttachment("proj-race", rec);
+
+        // 9.1 Baseline: inspection without race succeeds
+        auto resBase = store.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "proj-race", "att-race-1" });
+        EXPECT(resBase.found);
+        EXPECT(resBase.inspection.previewEligible);
+
+        // 9.2 In-flight mutation: attachment version mutated while hashing was in flight
+        bool hookFired = false;
+        store.SetInspectionFileHashedHookForTesting([&]() {
+            hookFired = true;
+            mayasaba::AttachmentRecord mod = rec;
+            mod.status = "REJECTED"; // Mutated in SQLite while inspection was in flight
+            mod.errorMessage = "Source corrupted concurrently";
+            store.SaveDraftAttachment("proj-race", mod);
+        });
+
+        auto resMut = store.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "proj-race", "att-race-1" });
+        EXPECT(hookFired);
+        EXPECT(!resMut.found);
+        EXPECT(resMut.errorMessage.find("during inspection") != std::string::npos);
+
+        // 9.3 In-flight deletion: attachment deleted while hashing was in flight
+        hookFired = false;
+        store.SaveDraftAttachment("proj-race", rec); // Restore to READY
+        store.SetInspectionFileHashedHookForTesting([&]() {
+            hookFired = true;
+            store.RemoveDraftAttachment("proj-race", "att-race-1");
+        });
+
+        auto resDel = store.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "proj-race", "att-race-1" });
+        EXPECT(hookFired);
+        EXPECT(!resDel.found);
+        EXPECT(resDel.errorMessage.find("during inspection") != std::string::npos);
+
+        store.SetInspectionFileHashedHookForTesting(nullptr);
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 10: Atomic SQLite read transaction snapshot in QueryActionCenter
+    // -------------------------------------------------------------------------
+    {
+        mayasaba::Storage store(folder / "snapshot_consistency.db");
+        store.BindProject("proj-snap", "Snap Proj", "C:/Snap");
+        store.SetClosure("proj-snap", 0, false);
+
+        for (int i = 1; i <= 3; ++i)
+        {
+            mayasaba::AttachmentRecord att{};
+            att.id = "att-s" + std::to_string(i);
+            att.projectId = "proj-snap";
+            att.fileName = "snap" + std::to_string(i) + ".txt";
+            att.fileSize = 100;
+            att.sha256 = "hash" + std::to_string(i);
+            att.detectedType = "text/plain";
+            att.storagePath = "";
+            att.sourcePath = "C:/source/snap" + std::to_string(i) + ".txt";
+            att.status = "REJECTED";
+            store.SaveDraftAttachment("proj-snap", att);
+        }
+
+        // Test concurrent writer hook right after signature collection, inside read transaction:
+        // Because of BEGIN DEFERRED read transaction snapshot, the unified query MUST see the
+        // snapshot captured at the start of the transaction, and the token signature matches!
+        bool hookRan = false;
+        store.SetQueryActionCenterSnapshotHookForTesting([&]() {
+            hookRan = true;
+            // Another connection or thread mutates the store externally
+            sqlite3* dbExt = nullptr;
+            std::string dbPath = (folder / "snapshot_consistency.db").string();
+            if (sqlite3_open(dbPath.c_str(), &dbExt) == SQLITE_OK)
+            {
+                sqlite3_exec(dbExt, "INSERT INTO pending_submissions (submission_id, project_id, body) VALUES ('sub-ext-writer', 'proj-snap', 'external writer body');", nullptr, nullptr, nullptr);
+                sqlite3_close(dbExt);
+            }
+        });
+
+        mayasaba::ActionCenterQuery q1{ "proj-snap", 2, "" };
+        auto r1 = store.QueryActionCenter(q1);
+        EXPECT(hookRan);
+        EXPECT(r1.items.size() == 2);
+        EXPECT(!r1.isComplete);
+        EXPECT(!r1.continuationToken.empty());
+
+        // When Page 2 is subsequently requested, the continuation token (built with the old signature)
+        // is validated against a NEW read snapshot containing the external writer's commit:
+        store.SetQueryActionCenterSnapshotHookForTesting(nullptr);
+        mayasaba::ActionCenterQuery q2{ "proj-snap", 2, r1.continuationToken };
+        auto r2 = store.QueryActionCenter(q2);
+        EXPECT(!r2.isComplete);
+        EXPECT(r2.errorMessage.find("participating record set mutated between pages") != std::string::npos);
+    }
+
     fs::remove_all(folder);
-    std::cout << "PASS: standalone Action Center + attachment inspection verification\n";
+    std::cout << "PASS: standalone Action Center + attachment inspection verification (10/10 tests passed)\n";
     return 0;
 }

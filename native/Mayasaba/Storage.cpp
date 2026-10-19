@@ -295,115 +295,230 @@ namespace mayasaba
                 return false;
             }
 
-            // 2. Tokenize into lowercase alphabetic words
-            std::vector<std::string> words;
-            std::string current;
+            // 2. Tokenize text into whitespace-delimited tokens
+            std::vector<std::string> tokens;
+            std::string curTok;
             for (char ch : text)
             {
-                if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z'))
+                if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n')
                 {
-                    current.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+                    if (!curTok.empty())
+                    {
+                        tokens.push_back(std::move(curTok));
+                        curTok.clear();
+                    }
                 }
                 else
                 {
-                    if (!current.empty())
-                    {
-                        words.push_back(std::move(current));
-                        current.clear();
-                    }
+                    curTok.push_back(ch);
                 }
             }
-            if (!current.empty())
+            if (!curTok.empty())
             {
-                words.push_back(std::move(current));
+                tokens.push_back(std::move(curTok));
             }
 
-            if (words.empty()) return false;
+            if (tokens.empty()) return false;
 
-            // 3. Reject non-English marker words (e.g. Spanish, French, German, Italian, Portuguese)
-            static const std::unordered_set<std::string_view> nonEnglishMarkers = {
-                "hola", "mundo", "gracias", "por", "favor", "buenos", "dias", "amigo", "este", "todo", "bien", "como", "pero", "para", "los", "las", "una", "unos", "unas", "del",
-                "bonjour", "monde", "merci", "avec", "pour", "dans", "sur", "cette", "tout",
-                "hallo", "welt", "danke", "bitte", "und", "oder", "nicht", "ein", "eine", "fuer",
-                "ciao", "mondo", "grazie", "per", "favore", "molto", "questo",
-                "ola", "obrigado", "voce"
+            // 3. Positive English lexicon for verifiable source prose
+            // Contains common English vocabulary, technical identifiers, and Mayasaba domain terms.
+            // In accordance with presentation policy: EVERY alphabetic word token must be verifiable as English.
+            // If any word in source prose cannot be established as English, fail closed (withhold content preview).
+            static const std::unordered_set<std::string_view> englishLexicon = {
+                // Articles, pronouns, prepositions, conjunctions
+                "a", "an", "the", "this", "that", "these", "those", "i", "you", "he", "she", "it", "we", "they",
+                "me", "him", "her", "us", "them", "my", "your", "his", "her", "its", "our", "their", "mine", "yours",
+                "in", "on", "at", "to", "for", "with", "from", "by", "about", "into", "through", "during", "before",
+                "after", "above", "below", "between", "under", "behind", "per", "via", "across", "against", "along",
+                "among", "off", "over", "up", "down", "out", "and", "or", "but", "so", "yet", "nor", "if", "because",
+                "although", "though", "while", "unless", "since", "until", "where", "when", "whenever", "wherever",
+                "whether", "as", "than", "then", "now", "here", "there", "why", "how", "what", "which", "who", "whom", "whose",
+
+                // Auxiliary, modal, and common verbs
+                "be", "is", "am", "are", "was", "were", "been", "being", "have", "has", "had", "having",
+                "do", "does", "did", "done", "doing", "will", "would", "shall", "should", "can", "could", "may",
+                "might", "must", "make", "made", "see", "saw", "seen", "know", "knew", "known", "take", "took",
+                "taken", "get", "got", "gotten", "go", "went", "gone", "come", "came", "think", "thought",
+                "look", "looked", "want", "wanted", "give", "gave", "given", "use", "used", "find", "found",
+                "tell", "told", "ask", "asked", "work", "worked", "seem", "seemed", "feel", "felt", "try", "tried",
+                "leave", "left", "call", "called", "keep", "kept", "let", "begin", "began", "begun", "show",
+                "showed", "shown", "hear", "heard", "play", "played", "run", "ran", "move", "moved", "live", "lived",
+                "believe", "believed", "bring", "brought", "happen", "happened", "write", "wrote", "written",
+                "read", "provide", "provided", "sit", "sat", "stand", "stood", "lose", "lost", "pay", "paid",
+                "meet", "met", "include", "included", "continue", "continued", "set", "learn", "learned",
+                "change", "changed", "lead", "led", "understand", "understood", "watch", "watched", "follow",
+                "followed", "stop", "stopped", "create", "created", "speak", "spoke", "spoken", "allow", "allowed",
+                "add", "added", "spend", "spent", "grow", "grew", "grown", "open", "opened", "walk", "walked",
+                "win", "won", "offer", "offered", "remember", "remembered", "consider", "considered", "appear",
+                "appeared", "buy", "bought", "wait", "waited", "serve", "served", "die", "died", "send", "sent",
+                "expect", "expected", "build", "built", "stay", "stayed", "fall", "fell", "fallen", "cut",
+                "reach", "reached", "remain", "remained", "suggest", "suggested", "raise", "raised", "pass",
+                "passed", "require", "required", "report", "reported", "decide", "decided", "pull", "pulled",
+                "return", "returned", "explain", "explained", "hope", "hoped", "develop", "developed", "carry",
+                "carried", "break", "broke", "broken", "receive", "received", "agree", "agreed", "support",
+                "supported", "hit", "produce", "produced", "cover", "covered", "catch", "caught", "draw", "drew",
+                "drawn", "choose", "chose", "chosen", "cause", "caused", "point", "pointed", "listen", "listened",
+
+                // Common nouns, adjectives, adverbs
+                "time", "year", "people", "way", "day", "world", "state", "group", "problem", "part", "place",
+                "case", "week", "company", "system", "program", "question", "work", "number", "night", "point",
+                "home", "water", "room", "area", "money", "story", "fact", "month", "lot", "right", "study",
+                "book", "eye", "job", "word", "business", "issue", "side", "kind", "head", "house", "service",
+                "friend", "power", "hour", "game", "line", "end", "member", "law", "car", "city", "community",
+                "name", "team", "minute", "idea", "body", "information", "back", "face", "others", "level",
+                "office", "door", "health", "person", "art", "war", "history", "party", "result", "change",
+                "morning", "reason", "research", "moment", "air", "force", "education", "foot", "age", "policy",
+                "process", "market", "sense", "nation", "plan", "interest", "experience", "effect", "use",
+                "class", "control", "care", "field", "development", "role", "effort", "rate", "heart", "show",
+                "leader", "light", "voice", "mind", "price", "view", "report", "decision", "town", "road",
+                "difference", "value", "building", "action", "model", "position", "record", "data", "paper",
+                "space", "ground", "form", "event", "matter", "center", "site", "project", "activity", "table",
+                "need", "situation", "cost", "industry", "figure", "street", "image", "title", "note", "summary",
+                "good", "new", "first", "last", "long", "great", "little", "own", "other", "old", "right",
+                "big", "high", "different", "small", "large", "next", "early", "young", "important", "few",
+                "public", "bad", "same", "able", "full", "simple", "general", "local", "hard", "sure", "free",
+                "low", "true", "false", "real", "clear", "easy", "strong", "safe", "complete", "valid", "ready",
+                "single", "multiple", "active", "closed", "pending", "draft", "staging", "committed", "only",
+                "just", "also", "well", "even", "any", "all", "some", "most", "more", "less", "much", "very",
+
+                // Domain, software, engineering, and testing terms
+                "mayasaba", "verification", "inspection", "attachment", "payload", "acceptance", "native", "file",
+                "spec", "specification", "code", "system", "test", "testing", "error", "data", "staged",
+                "source", "markdown", "text", "version", "valid", "content", "sample", "authorized", "document",
+                "english", "prose", "drag", "drop", "hello", "user", "start", "stop", "pause", "read", "write",
+                "root", "entry", "output", "input", "line", "item", "list", "check", "pass", "fail", "info",
+                "status", "hash", "digest", "size", "byte", "bytes", "format", "string", "type", "rule", "rules",
+                "task", "tasks", "action", "detail", "details", "directory", "results", "found", "unresolved",
+                "restriction", "recheck", "remove", "reopen", "policy", "preview", "eligible", "reason", "sha",
+                "state", "epoch", "requirement", "decision", "council", "review", "peer", "response", "reply",
+                "drafts", "files", "guid", "uuid", "sqlite", "query", "token", "offset", "signature", "composite",
+                "session", "process", "thread", "mutex", "lock", "guard", "boundary", "storage", "database",
+                "attribute", "handle", "containment", "canonical", "path", "filename", "managed", "manage", "management",
+                "isolate", "isolated", "isolation", "verify", "verified", "verification",
+                "modify", "modified", "modification", "limits", "limit",
+                "request", "requests", "authorize", "authorized", "authorization",
+                "within", "second", "seconds", "race", "races", "criteria", "matrix", "invariant", "invariants"
             };
 
-            for (auto const& w : words)
+            auto isRecognizedEnglishWord = [&](std::string_view w) -> bool {
+                if (englishLexicon.find(w) != englishLexicon.end()) return true;
+
+                // Standard morphological stems:
+                // -s (plural / 3rd person)
+                if (w.size() > 3 && w.ends_with("s"))
+                {
+                    if (englishLexicon.find(w.substr(0, w.size() - 1)) != englishLexicon.end()) return true;
+                }
+                // -es
+                if (w.size() > 4 && w.ends_with("es"))
+                {
+                    if (englishLexicon.find(w.substr(0, w.size() - 2)) != englishLexicon.end()) return true;
+                }
+                // -ied -> -y (e.g. verified -> verify, modified -> modify)
+                if (w.size() > 4 && w.ends_with("ied"))
+                {
+                    std::string withY = std::string(w.substr(0, w.size() - 3)) + "y";
+                    if (englishLexicon.find(withY) != englishLexicon.end()) return true;
+                }
+                // -ed
+                if (w.size() > 4 && w.ends_with("ed"))
+                {
+                    if (englishLexicon.find(w.substr(0, w.size() - 2)) != englishLexicon.end()) return true;
+                    if (englishLexicon.find(w.substr(0, w.size() - 1)) != englishLexicon.end()) return true;
+                }
+                // -ing
+                if (w.size() > 5 && w.ends_with("ing"))
+                {
+                    if (englishLexicon.find(w.substr(0, w.size() - 3)) != englishLexicon.end()) return true;
+                    std::string withE = std::string(w.substr(0, w.size() - 3)) + "e";
+                    if (englishLexicon.find(withE) != englishLexicon.end()) return true;
+                }
+                // -ly
+                if (w.size() > 4 && w.ends_with("ly"))
+                {
+                    if (englishLexicon.find(w.substr(0, w.size() - 2)) != englishLexicon.end()) return true;
+                }
+                return false;
+            };
+
+            size_t verifiedEnglishCount = 0;
+
+            for (auto const& token : tokens)
             {
-                if (nonEnglishMarkers.find(w) != nonEnglishMarkers.end())
+                // Strip surrounding punctuation (e.g. quotes, brackets, semicolons, commas, periods)
+                size_t start = 0;
+                while (start < token.size() && (ispunct(static_cast<unsigned char>(token[start])) || isspace(static_cast<unsigned char>(token[start]))))
+                {
+                    start++;
+                }
+                size_t end = token.size();
+                while (end > start && (ispunct(static_cast<unsigned char>(token[end - 1])) || isspace(static_cast<unsigned char>(token[end - 1]))))
+                {
+                    end--;
+                }
+                if (start >= end)
+                {
+                    // Pure punctuation token (e.g. "---", "###", "::"), permitted syntax
+                    continue;
+                }
+
+                std::string core = token.substr(start, end - start);
+
+                // Check if technical identity: contains digits, underscores, hex prefixes, path separators, or UUID dashes
+                bool isTechnical = false;
+                for (char ch : core)
+                {
+                    if (isdigit(static_cast<unsigned char>(ch)) || ch == '_' || ch == '/' || ch == '\\' || ch == '.' || ch == ':')
+                    {
+                        isTechnical = true;
+                        break;
+                    }
+                }
+                if (isTechnical)
+                {
+                    // Permitted technical identity / code identifier / URL / path / hash
+                    continue;
+                }
+
+                // Alphabetic prose word: convert to lowercase
+                std::string word;
+                word.reserve(core.size());
+                for (char ch : core)
+                {
+                    word.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
+                }
+
+                // Strip common English apostrophe suffixes (e.g. "user's", "it's", "don't")
+                if (word.size() > 2 && word.ends_with("'s")) word.resize(word.size() - 2);
+                else if (word.size() > 2 && word.ends_with("n't")) word.resize(word.size() - 3);
+                else if (word.size() > 3 && word.ends_with("'ve")) word.resize(word.size() - 3);
+                else if (word.size() > 3 && word.ends_with("'ll")) word.resize(word.size() - 3);
+                else if (word.size() > 3 && word.ends_with("'re")) word.resize(word.size() - 3);
+
+                // If word contains internal non-letters (and wasn't technical), it is invalid
+                bool allLetters = true;
+                for (char ch : word)
+                {
+                    if (ch < 'a' || ch > 'z')
+                    {
+                        allLetters = false;
+                        break;
+                    }
+                }
+                if (!allLetters) return false;
+
+                // EVERY prose word must be a verified English word.
+                // If any prose word cannot be verified, English eligibility fails.
+                if (!isRecognizedEnglishWord(word))
                 {
                     return false;
                 }
+
+                verifiedEnglishCount++;
             }
 
-            // 4. Require positive English vocabulary establishment
-            static const std::unordered_set<std::string_view> englishCore = {
-                "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not", "on", "with",
-                "he", "as", "you", "do", "at", "this", "but", "his", "by", "from", "they", "we", "say", "her",
-                "she", "or", "an", "will", "my", "one", "all", "would", "there", "their", "what", "so", "up",
-                "out", "if", "about", "who", "get", "which", "go", "me", "when", "make", "can", "like", "time",
-                "no", "just", "him", "know", "take", "people", "into", "year", "your", "good", "some", "could",
-                "them", "see", "other", "than", "then", "now", "look", "only", "come", "its", "over", "think",
-                "also", "back", "after", "use", "two", "how", "our", "work", "first", "well", "way", "even",
-                "new", "want", "because", "any", "these", "give", "day", "most", "us", "is", "are", "was",
-                "were", "been", "has", "had", "mayasaba", "verification", "inspection", "attachment", "payload",
-                "acceptance", "native", "file", "spec", "project", "code", "system", "test", "error", "data",
-                "staged", "source", "markdown", "text", "version", "valid", "testing", "content", "sample",
-                "authorized", "committed", "draft", "document", "specification", "english", "real", "drag", "drop",
-                "hello", "world", "ready", "user", "run", "start", "stop", "pause", "read", "write", "open", "close",
-                "name", "path", "root", "entry", "output", "input", "line", "item", "list", "check", "pass", "fail",
-                "note", "title", "info", "true", "false", "status", "hash", "digest", "size", "byte", "bytes", "format",
-                "string", "type", "rule", "rules", "task", "tasks", "action", "detail", "details", "directory", "summary",
-                "result", "results", "found", "unresolved", "closed", "restriction", "recheck", "remove", "reopen",
-                "policy", "preview", "eligible", "reason", "sha", "state", "epoch", "requirement", "decision", "council",
-                "review", "peer", "response", "reply", "drafts", "files", "here", "where", "more"
-            };
-
-            static const std::unordered_set<std::string_view> englishStructural = {
-                "the", "and", "to", "of", "a", "in", "is", "it", "for", "on", "are", "with", "be", "this",
-                "have", "from", "or", "not", "we", "can", "if", "will", "its", "all", "an", "as", "by", "that"
-            };
-
-            size_t englishWordCount = 0;
-            bool hasStructural = false;
-            for (auto const& w : words)
-            {
-                if (englishCore.find(w) != englishCore.end())
-                {
-                    englishWordCount++;
-                }
-                if (englishStructural.find(w) != englishStructural.end())
-                {
-                    hasStructural = true;
-                }
-            }
-
-            if (words.size() == 1)
-            {
-                return englishCore.find(words[0]) != englishCore.end();
-            }
-
-            // For multi-word text: must establish English eligibility through English words
-            // If it has non-English markers, it was already rejected above.
-            // Positive establishment: requires either an English structural word and at least 2 English words,
-            // or at least 40% of words recognized in englishCore.
-            if (hasStructural)
-            {
-                if (englishWordCount >= 2 || (englishWordCount * 3 >= words.size()))
-                {
-                    return true;
-                }
-            }
-            else
-            {
-                if (englishWordCount >= 2 && (englishWordCount * 2 >= words.size()))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            // Must contain at least one recognized English word
+            return verifiedEnglishCount > 0;
         }
 #endif
     }
@@ -1989,6 +2104,46 @@ namespace mayasaba
             if (query.projectId.empty())
                 throw std::runtime_error("Project ID cannot be empty");
 
+            // Execute all queries within a single consistent SQLite read transaction/snapshot
+            struct ReadTxGuard
+            {
+                sqlite3* db;
+                bool active{true};
+                ReadTxGuard(sqlite3* d) : db(d)
+                {
+                    char* err = nullptr;
+                    int rc = sqlite3_exec(db, "BEGIN DEFERRED;", nullptr, nullptr, &err);
+                    if (rc != SQLITE_OK)
+                    {
+                        std::string msg = err ? err : "Failed to begin read transaction";
+                        sqlite3_free(err);
+                        throw std::runtime_error(msg);
+                    }
+                }
+                ~ReadTxGuard()
+                {
+                    if (active && db)
+                    {
+                        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                    }
+                }
+                void Commit()
+                {
+                    if (active && db)
+                    {
+                        char* err = nullptr;
+                        int rc = sqlite3_exec(db, "COMMIT;", nullptr, nullptr, &err);
+                        active = false;
+                        if (rc != SQLITE_OK)
+                        {
+                            std::string msg = err ? err : "Failed to commit read transaction";
+                            sqlite3_free(err);
+                            throw std::runtime_error(msg);
+                        }
+                    }
+                }
+            } tx(db_);
+
             std::string consistencyDigestInput;
             consistencyDigestInput.reserve(512);
 
@@ -2000,7 +2155,9 @@ namespace mayasaba
                 int rcVer = sqlite3_step(qVer.value);
                 if (rcVer != SQLITE_ROW)
                 {
-                    throw std::runtime_error("Project not found");
+                    if (rcVer == SQLITE_DONE)
+                        throw std::runtime_error("Project not found");
+                    Check(rcVer, db_);
                 }
                 currentProjectVersion = sqlite3_column_int(qVer.value, 0);
                 currentProjectClosed = sqlite3_column_int(qVer.value, 1);
@@ -2010,18 +2167,28 @@ namespace mayasaba
             {
                 Statement qSubs(db_, "SELECT submission_id FROM pending_submissions WHERE project_id=?1 ORDER BY submission_id;");
                 Bind(qSubs.value, 1, query.projectId);
-                while (sqlite3_step(qSubs.value) == SQLITE_ROW)
+                int rcSubs = SQLITE_OK;
+                while ((rcSubs = sqlite3_step(qSubs.value)) == SQLITE_ROW)
                 {
                     consistencyDigestInput += "sub:" + Text(qSubs.value, 0) + ";";
+                }
+                if (rcSubs != SQLITE_DONE)
+                {
+                    Check(rcSubs, db_);
                 }
             }
 
             {
                 Statement qAtts(db_, "SELECT attachment_id, version, status FROM draft_attachments WHERE project_id=?1 AND (status='REJECTED' OR status='SOURCE_CHANGED' OR status='TIMED_OUT') ORDER BY rowid;");
                 Bind(qAtts.value, 1, query.projectId);
-                while (sqlite3_step(qAtts.value) == SQLITE_ROW)
+                int rcAtts = SQLITE_OK;
+                while ((rcAtts = sqlite3_step(qAtts.value)) == SQLITE_ROW)
                 {
                     consistencyDigestInput += "att:" + Text(qAtts.value, 0) + ":" + std::to_string(sqlite3_column_int64(qAtts.value, 1)) + ":" + Text(qAtts.value, 2) + ";";
+                }
+                if (rcAtts != SQLITE_DONE)
+                {
+                    Check(rcAtts, db_);
                 }
             }
 
@@ -2067,6 +2234,12 @@ namespace mayasaba
                 } catch (...) {
                     throw std::runtime_error("Invalid continuation token: offset malformed");
                 }
+            }
+
+            // Testing hook for external writer concurrency testing if registered
+            if (queryActionCenterSnapshotHook_)
+            {
+                queryActionCenterSnapshotHook_();
             }
 
             char const* unifiedSql =
@@ -2129,7 +2302,12 @@ namespace mayasaba
                 }
                 result.items.push_back(std::move(item));
             }
-            Check(rc, db_);
+            if (rc != SQLITE_DONE)
+            {
+                Check(rc, db_);
+            }
+
+            tx.Commit();
 
             if (result.items.size() > query.pageSize)
             {
@@ -2421,6 +2599,11 @@ namespace mayasaba
         // Step 5: Revalidate record under storage mutex lock after file work completes
         // Ensures that if the attachment was removed, replaced, or changed while inspection was in flight,
         // stale content is withheld.
+        if (inspectionFileHashedHook_)
+        {
+            inspectionFileHashedHook_();
+        }
+
         {
             std::lock_guard lock(mutex_);
             try

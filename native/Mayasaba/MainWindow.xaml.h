@@ -8,6 +8,7 @@
 #include "Motion.h"
 #include "Timeline.h"
 #include "SearchController.h"
+#include "ActionCenterPresenter.h"
 #include <memory>
 #include <string>
 #include <winrt/Windows.Foundation.h>
@@ -204,11 +205,18 @@ namespace winrt::Mayasaba::implementation
         bool showChatDockTransition_{false};
         std::string fixtureMode_;
 
-        // Action Center read-only projection state.
-        uint64_t actionCenterRequestSeq_{0};
+        // Action Center read-only projection state and presenter.
+        mayasaba::ActionCenterPresenter actionCenterPresenter_;
+        bool actionCenterDismissed_{true};
+        uint64_t actionCenterRefreshSeq_{0};
         bool actionCenterRefreshing_{false};
         bool actionCenterPendingRerun_{false};
+
+        // Paging identity and guards
         bool actionCenterPaging_{false};
+        uint64_t actionCenterPagingSeq_{0};
+        uint64_t actionCenterActivePagingId_{0};
+
         std::string actionCenterContinuationToken_;
         std::vector<mayasaba::ActionCenterItem> actionCenterItems_;
 
