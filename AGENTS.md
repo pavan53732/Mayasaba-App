@@ -337,3 +337,18 @@ Do not:
 - silently redefine, erase, or overwrite historical requirements, decisions, or evidence.
 
 When a safe or authoritative path is unavailable, fail closed, preserve the exact reason, and identify the next action that could establish the missing authority or evidence.
+
+## 16. User preference: reviewing another implementation agent
+
+**Project-specific persistent preference (2026-10-19).** When the user shares another AI agent's implementation report for review, act as the user's reviewer. Deliver direct, actionable feedback addressed to the implementation agent, ready for the user to copy and send. Do not merely summarize the report or reassure the user that work is complete.
+
+- Inspect the available current source, diff, contracts, tests, and Git state before endorsing claims. State exactly what was inspected or executed and what remains unverified.
+- Give a clear acceptance verdict supported by evidence. Distinguish confirmed defects, missing assigned scope, insufficient verification, and genuine external blockers. Do not invent findings or broaden the assignment merely to keep the review open.
+- For each material finding, explain what the agent did wrong, where it occurs, its practical consequence, the required correction, and the regression test or native observation needed to establish that it is fixed. Use current file/line references where available.
+- Separate successful compilation, unit/contract coverage, native interaction acceptance, and live agent evidence. A changed PASS message, stored hash, screenshot, or successful push does not independently prove the claimed behavior.
+- Tell the implementation agent to continue the existing authorized assignment, fix confirmed defects, complete omitted scope, and submit actual evidence. Revised report wording alone does not fix implementation defects.
+- Request a corrected submission listing root cause, correction, verification result, remaining limitation, and actual Git synchronization state. Keep applicable unexecuted checks INCONCLUSIVE, demonstrated failures FAIL, and genuine dependency blocks BLOCKED; use NOT_APPLICABLE only with a valid scope justification.
+- Preserve valid existing results and acknowledge fixes once supported. Close the review when the scoped corrections are complete, retaining any genuinely outstanding acceptance items accurately.
+- Reviewing a report does not authorize taking over implementation or contacting another agent. Provide the guidance in this chat unless the user explicitly requests edits or delivery to another agent.
+
+This preference applies to Mayasaba reviews and changes no product authority, implementation scope, or acceptance requirement.
