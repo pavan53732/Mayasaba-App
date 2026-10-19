@@ -107,6 +107,30 @@ namespace mayasaba
             return true;
         }
 
+        // Production operation: atomically validates post-preparation boundary on UI thread
+        // and conditionally commits prepared candidates into the project drafts.
+        // Returns true if valid and committed; returns false if boundary check failed (stale/cancelled),
+        // guaranteeing that saveDrafts is NEVER invoked and drafts are NOT mutated on stale completion.
+        template <typename SaveFn>
+        static bool ValidateAndCommitPreparedBatch(
+            DropContext const& ctx,
+            std::string const& currentProjectId,
+            uint64_t currentGeneration,
+            bool windowClosed,
+            std::vector<AttachmentCandidate>& draftAttachments,
+            std::vector<AttachmentCandidate> const& prepared,
+            std::vector<std::string> const& preparingIds,
+            SaveFn&& saveDrafts)
+        {
+            if (!ValidatePostPreparationBoundary(ctx, currentProjectId, currentGeneration, windowClosed))
+            {
+                return false;
+            }
+
+            CommitDraftBatch(currentProjectId, draftAttachments, prepared, preparingIds, std::forward<SaveFn>(saveDrafts));
+            return true;
+        }
+
         // Test hooks for boundary inspection
         void SetRetrievalPendingHookForTesting(std::function<void()> hook)
         {
@@ -156,15 +180,20 @@ namespace mayasaba
             auto isWorkerCancelled = CreateWorkerCancellationPredicate(ctx);
             auto prepared = prepareBatchOnWorker(candidatePaths, isWorkerCancelled);
 
-            // 5. Post-preparation boundary check on UI thread before any draft mutation
-            if (!ValidatePostPreparationBoundary(ctx, getCurrentProjectOnUI(), getCurrentGenerationOnUI(), isWindowClosedOnUI()))
-            {
-                return false;
-            }
-
-            // 6. Commit drafts to store (UI thread)
-            commitDraftsOnUI(prepared);
-            return true;
+            // 5 & 6. Post-preparation boundary validation and conditional commit
+            std::vector<AttachmentCandidate> intermediateDrafts;
+            std::vector<std::string> intermediateIds;
+            return ValidateAndCommitPreparedBatch(
+                ctx,
+                getCurrentProjectOnUI(),
+                getCurrentGenerationOnUI(),
+                isWindowClosedOnUI(),
+                intermediateDrafts,
+                prepared,
+                intermediateIds,
+                [&](std::string const&, std::vector<AttachmentCandidate> const&) {
+                    commitDraftsOnUI(prepared);
+                });
         }
 
     private:

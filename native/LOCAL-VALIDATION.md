@@ -1364,42 +1364,49 @@ This section documents the specific corrections and empirical evidence resolving
     - Post-preparation boundary validation on UI thread after `resume_foreground`: `ValidatePostPreparationBoundary(dropCtx, activeProject_, selectorGeneration_.load(), windowClosed_.load())`.
   - Audited window-close cancellation in the exact same path: closing the window sets atomic `windowClosed_ = true`, which immediately signals the worker cancellation predicate.
 
-### 14.2 Item 2: Production Sequence Coordination & Active Preparation Hook Verification
+### 14.2 Item 2: Unified Production Validation & Commit Operation with Guard Removal Demonstration
 
-- **Review finding:** `AttachmentIngestionCoordinator::CoordinateDrop()` was previously called only by `verify_ac_ai.cpp`, while `MainWindow` used its own separate sequence. Furthermore, Test 5 case 4b paused before calling `PrepareBatch()`, starting already canceled rather than during active preparation.
+- **Review finding:** In `MainWindow.xaml.cpp`, `ValidatePostPreparationBoundary()` and `CommitDraftBatch()` were called separately, while tests called those helpers independently and `CoordinateDrop()` remained test-only. Removing MainWindow's boundary guard would therefore leave tests passing. Furthermore, the previous test asserted that deliberate contamination occurs when committing manually, rather than demonstrating that the regression test detects removal of the production guard.
 - **Actual correction:**
-  - **Shared Production Coordination Integration:**
-    - `MainWindow` was refactored to execute shared coordination methods across the full ingestion lifecycle:
-      1. `ingestionCoordinator_.CreateContext(...)`
-      2. `ingestionCoordinator_.OnRetrievalPending()`
-      3. `ingestionCoordinator_.ValidateRetrievalBoundary(...)`
-      4. `ingestionCoordinator_.CreateWorkerCancellationPredicate(...)`
-      5. `ingestionCoordinator_.ValidatePostPreparationBoundary(...)`
-      6. `ingestionCoordinator_.CommitDraftBatch(...)`
+  - **Single Shared Production Operation:**
+    - Defined `AttachmentIngestionCoordinator::ValidateAndCommitPreparedBatch(ctx, currentProjectId, currentGeneration, windowClosed, draftAttachments, prepared, preparingIds, saveDrafts)`.
+    - Atomically performs the UI-thread post-preparation boundary check before any mutation.
+    - If validation fails (stale project, generation mismatch, or window closed), it returns `false` immediately without invoking `saveDrafts` and without mutating the draft vector.
+    - Only if validation succeeds does it apply prepared candidates to the draft vector and invoke `saveDrafts`.
+    - Refactored `MainWindow.xaml.cpp` to call `ValidateAndCommitPreparedBatch` directly; if it returns `false`, `MainWindow` aborts draft ingestion and resets `attachmentsPreparing_ = false`.
+    - Refactored `CoordinateDrop` to execute `ValidateAndCommitPreparedBatch` internally.
   - **Controlled Native Production Hooks:**
-    - Added `AttachmentService::SetPreparationChunkHookForTesting(std::function<void()> hook)`:
-      - Invoked directly inside `PrepareAttachment`'s chunk copy loop after the source file handle is opened, the staging copy file is created, and the durable SQLite intent record (`status = PREPARING`) is persisted via `storage_.SaveDraftAttachment`, but before copying completes.
-    - Added `AttachmentIngestionCoordinator::SetRetrievalPendingHookForTesting(std::function<void()> hook)`:
-      - Invoked during `OnRetrievalPending()` at the asynchronous retrieval boundary.
+    - `AttachmentService::SetPreparationChunkHookForTesting`: invoked inside `PrepareAttachment`'s chunk copy loop after file handle creation, staging file creation, and durable SQLite intent record persistence (`status = PREPARING`).
+    - `AttachmentIngestionCoordinator::SetRetrievalPendingHookForTesting`: invoked at `OnRetrievalPending()` during asynchronous retrieval.
   - **Comprehensive Test Suite in `verify_ac_ai.cpp` Test 5:**
-    - **Case 4b: Controlled project switch during ACTIVE preparation:**
+    - **Case 4b: Stale completion rejection via `ValidateAndCommitPreparedBatch`:**
       - Seeded existing drafts: `draft-a-existing` in `proj-A` and `draft-b-existing` in `proj-B`.
-      - Set `SetPreparationChunkHookForTesting` to signal `prepActive` and wait with a bounded 3-second timeout.
-      - Dispatched background worker to execute `PrepareBatch("proj-A", ...)` with the atomic worker cancellation predicate.
-      - Main thread waited boundedly for `prepActive == true`. Verified that while in flight, the durable intent record with status `PREPARING` was present in SQLite.
-      - Main thread executed a project switch to `proj-B` (`activeProject = "proj-B"`, `++selectorGeneration`), then released the hook.
-      - Joined worker thread; verified candidate status became `Rejected` (`"Preparation cancelled"`).
-      - Verified `ValidatePostPreparationBoundary` returned `false` on the main thread, aborting draft commit.
+      - Hooked preparation chunk loop; verified intermediate `PREPARING` record was present in SQLite while in flight.
+      - Switched project to `proj-B` on the UI thread (`activeProject = "proj-B"`, `++selectorGeneration`), released hook, and joined worker.
+      - Executed `coordinator.ValidateAndCommitPreparedBatch` against target project B's drafts in memory.
+      - Verified `committed == false`.
+      - Verified `persistenceInvoked == false`: persistence was **never** invoked.
+      - Verified draft in memory was **not** mutated (`uiDraftsB.size() == 1`, `draft-b-existing`).
       - Verified **no stale attachment admission** to either project (`postDraftsA` and `postDraftsB` contain 0 stale items).
-      - Verified **existing drafts remain intact** (`existing_a.txt` in A, `existing_b.txt` in B).
+      - Verified **existing drafts remain intact** in SQLite (`existing_a.txt` in A, `existing_b.txt` in B).
       - Verified **no automatic submission** (`store.Contributions` empty, `!store.Pending.has_value()`).
-      - Verified **cancellation and preparation state recover correctly**: intermediate `PREPARING` record removed on cancellation rollback, and a subsequent retry succeeds cleanly, committing the candidate with status `Ready`.
-      - **Demonstrated guard failure if removed**: explicitly showed that bypassing `ValidatePostPreparationBoundary` contaminates the target project with an unexpected draft, proving the production boundary guard is strictly necessary and effective.
+    - **Valid completion on retry via `ValidateAndCommitPreparedBatch`:**
+      - Switched back to `proj-A` (`activeProject = "proj-A"`, `++selectorGeneration`).
+      - Prepared valid candidate; called `ValidateAndCommitPreparedBatch`.
+      - Verified `retryCommitted == true` and `persistenceInvoked == true`.
+      - Verified drafts in memory and in SQLite updated cleanly to `Ready` (2 items total).
+      - Cleaned up retry draft, restoring baseline.
+    - **Deliberate Guard Removal Demonstration:**
+      - Temporarily commented out the boundary guard inside `ValidateAndCommitPreparedBatch`:
+        `// if (!ValidatePostPreparationBoundary(...)) return false;`
+      - Recompiled `verify_ac_ai.vcxproj` with the disabled guard and ran `verify_ac_ai.exe`.
+      - Observed immediate test failure: `Assertion failed: committed == false at verify_ac_ai.cpp:842` (process exit code 1).
+      - This proved that the regression test directly executes the production operation and actively fails if the application's boundary guard is removed.
+      - Restored the guard in `ValidateAndCommitPreparedBatch`, recompiled, and verified that all 10/10 tests passed cleanly.
     - **Case 4c: Controlled project switch during PENDING retrieval:**
       - Held operation at retrieval pending via `SetRetrievalPendingHookForTesting`.
       - Switched project to `proj-B` while retrieval was in flight.
       - Verified `ValidateRetrievalBoundary` rejected the operation before preparation began, keeping both projects' drafts untouched with no submissions.
-      - Demonstrated that removing `ValidateRetrievalBoundary` fails project/generation/window-closed validation.
     - **Case 4d: Shared `CoordinateDrop` method verification:**
       - Exercised the unified `CoordinateDrop` pipeline with the active preparation chunk hook, verifying that the coordinator wrapper enforces the exact same boundary invariants and returns `false` on switch.
     - **Bounded Waits:**
@@ -1413,7 +1420,7 @@ This section documents the specific corrections and empirical evidence resolving
 | Verification Suite | Result | Details |
 | --- | --- | --- |
 | Drop Verdict Classification Unit Tests | PASS (6/6) | All 6 violation classification test cases pass. |
-| Standalone AC + AI Suites (`verify_ac_ai.exe`) | PASS (10/10) | Tests 1–10 pass, including active preparation hook (4b), retrieval hook (4c), retry recovery, guard failure demonstrations, and shared `CoordinateDrop` (4d). |
+| Standalone AC + AI Suites (`verify_ac_ai.exe`) | PASS (10/10) | Tests 1–10 pass, including active preparation hook (4b), retrieval hook (4c), retry recovery, guard removal failure demonstration, and shared `CoordinateDrop` (4d). |
 | Core Native Regressions (`storage_tests.exe`) | PASS (22/22) | 22 isolated native regression groups pass cleanly. |
 | Contract Registry (`validate_contract_registry.py`) | PASS (124/124) | 124 schema and slice contract checks pass. |
 | Live UI Acceptance (`test_full_ui_acceptance.py`) | 13 PASS, 2 INCONCLUSIVE, 0 FAIL | Inconclusive synthetic desktop OLE drag-drop execution retained truthfully. All other 13 criteria PASS. |

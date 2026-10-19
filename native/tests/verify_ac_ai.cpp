@@ -821,24 +821,44 @@ int main()
         EXPECT(prepared[0].status == mayasaba::AttachmentStatus::Rejected);
         EXPECT(prepared[0].errorMessage == "Preparation cancelled");
 
-        // UI thread checks post-preparation boundary
-        bool const postBoundaryPassed = coordinator.ValidatePostPreparationBoundary(
+        // Execute the shared production operation (ValidateAndCommitPreparedBatch) for the stale completion:
+        // Project switch to proj-B occurred while preparation was in flight for proj-A.
+        std::vector<mayasaba::AttachmentCandidate> uiDraftsB = attService.LoadDraftAttachments("proj-B");
+        bool persistenceInvoked = false;
+        bool const committed = coordinator.ValidateAndCommitPreparedBatch(
             dropCtx,
-            activeProject,
-            selectorGeneration.load(),
-            windowClosed.load());
-        EXPECT(postBoundaryPassed == false);
+            activeProject, // "proj-B"
+            selectorGeneration.load(), // 11
+            windowClosed.load(), // false
+            uiDraftsB,
+            prepared,
+            { "stale-preparing-id" },
+            [&](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
+                persistenceInvoked = true;
+                attService.SaveDraftAttachments(proj, drafts);
+            });
 
-        // In production MainWindow, because postBoundaryPassed == false, CommitDraftBatch is never called.
+        // The shared production operation MUST reject the stale completion:
+        EXPECT(committed == false);
+        // Persistence is NEVER invoked on stale completion:
+        EXPECT(persistenceInvoked == false);
+        // Current draft list in memory is NOT mutated:
+        EXPECT(uiDraftsB.size() == 1);
+        EXPECT(uiDraftsB[0].id == "draft-b-existing");
+
+        // In production MainWindow, because ValidateAndCommitPreparedBatch returns false,
+        // no drafts are mutated and saveDrafts is never invoked.
         // Assert:
         // 1. No stale attachment admission to either project
         auto postDraftsA = attService.LoadDraftAttachments("proj-A");
         EXPECT(postDraftsA.size() == 1);
         EXPECT(postDraftsA[0].id == "draft-a-existing");
+        EXPECT(postDraftsA[0].fileName == "existing_a.txt");
 
         auto postDraftsB = attService.LoadDraftAttachments("proj-B");
         EXPECT(postDraftsB.size() == 1);
         EXPECT(postDraftsB[0].id == "draft-b-existing");
+        EXPECT(postDraftsB[0].fileName == "existing_b.txt");
 
         // 2. Existing drafts remain intact
         EXPECT(postDraftsA[0].fileName == "existing_a.txt");
@@ -851,7 +871,7 @@ int main()
         EXPECT(!store.Pending("proj-B").has_value());
 
         // 4. Cancellation and preparation state recover correctly:
-        // Clean up hook and perform retry
+        // Clean up hook and perform retry with valid completion
         attService.SetPreparationChunkHookForTesting(nullptr);
 
         activeProject = "proj-A";
@@ -871,12 +891,32 @@ int main()
         auto retryPrepared = attService.PrepareBatch("proj-A", { activeDropFile.wstring() }, retryCancelled, 120);
         EXPECT(!retryPrepared.empty());
         EXPECT(retryPrepared[0].status == mayasaba::AttachmentStatus::Ready);
-        EXPECT(coordinator.ValidatePostPreparationBoundary(retryCtx, activeProject, selectorGeneration.load(), windowClosed.load()) == true);
 
-        // Commit retry batch replaces the preparing slot with the finalized candidate
-        coordinator.CommitDraftBatch("proj-A", uiDraftsA, retryPrepared, { slotId },
-            [&](std::string const& p, auto const& d) { attService.SaveDraftAttachments(p, d); });
+        // Execute the shared production operation for the valid completion:
+        persistenceInvoked = false;
+        bool const retryCommitted = coordinator.ValidateAndCommitPreparedBatch(
+            retryCtx,
+            activeProject, // "proj-A"
+            selectorGeneration.load(), // 12
+            windowClosed.load(), // false
+            uiDraftsA,
+            retryPrepared,
+            { slotId },
+            [&](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
+                persistenceInvoked = true;
+                attService.SaveDraftAttachments(proj, drafts);
+            });
 
+        // Valid completion is accepted and committed:
+        EXPECT(retryCommitted == true);
+        EXPECT(persistenceInvoked == true);
+
+        // Draft in memory is updated to Ready:
+        EXPECT(uiDraftsA.size() == 2);
+        EXPECT(uiDraftsA[1].id == retryPrepared[0].id);
+        EXPECT(uiDraftsA[1].status == mayasaba::AttachmentStatus::Ready);
+
+        // Draft in SQLite storage is updated:
         auto finalDraftsA = attService.LoadDraftAttachments("proj-A");
         EXPECT(finalDraftsA.size() == 2);
         EXPECT(finalDraftsA[1].id == retryPrepared[0].id);
@@ -885,23 +925,6 @@ int main()
         // Clean up retry draft to keep proj-A baseline
         attService.RemoveDraftAttachment("proj-A", retryPrepared[0].id);
         EXPECT(attService.LoadDraftAttachments("proj-A").size() == 1);
-
-        // 5. Demonstrate that removing a production boundary guard makes the relevant test fail:
-        EXPECT(coordinator.ValidatePostPreparationBoundary(dropCtx, "proj-B", 11, false) == false);
-        EXPECT(coordinator.ValidatePostPreparationBoundary(dropCtx, "proj-A", 11, false) == false);
-        EXPECT(coordinator.ValidatePostPreparationBoundary(dropCtx, "proj-A", 10, true) == false);
-        {
-            // If the post-preparation boundary guard is bypassed, stale item is incorrectly committed to target project:
-            std::vector<mayasaba::AttachmentCandidate> corruptedDraftsB = attService.LoadDraftAttachments("proj-B");
-            corruptedDraftsB.push_back(slot);
-            coordinator.CommitDraftBatch("proj-B", corruptedDraftsB, prepared, { slotId },
-                [&](std::string const& p, auto const& d) { attService.SaveDraftAttachments(p, d); });
-            auto checkB = attService.LoadDraftAttachments("proj-B");
-            EXPECT(checkB.size() == 2); // Contaminated! Demonstrates guard necessity.
-            // Restore Project B:
-            attService.RemoveDraftAttachment("proj-B", prepared[0].id);
-            EXPECT(attService.LoadDraftAttachments("proj-B").size() == 1);
-        }
 
         // 4c. Controlled in-flight asynchronous project switch during retrieval boundary
         std::atomic<bool> heldAtRetrievalBoundary{false};

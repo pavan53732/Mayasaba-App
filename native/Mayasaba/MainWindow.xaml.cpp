@@ -1709,27 +1709,25 @@ namespace winrt::Mayasaba::implementation
 
         if (!co_await resume_foreground(ui)) co_return;
 
-        // Post-preparation boundary check on UI thread before any draft mutation
-        if (!ingestionCoordinator_.ValidatePostPreparationBoundary(
-                dropCtx,
-                activeProject_,
-                selectorGeneration_.load(),
-                windowClosed_.load()))
-        {
-            attachmentsPreparing_ = false;
-            co_return;
-        }
-
-        attachmentsPreparing_ = false;
-
-        ingestionCoordinator_.CommitDraftBatch(
+        // Atomically validate post-preparation boundary on UI thread and conditionally commit
+        bool const committed = ingestionCoordinator_.ValidateAndCommitPreparedBatch(
+            dropCtx,
             activeProject_,
+            selectorGeneration_.load(),
+            windowClosed_.load(),
             draftAttachments_,
             prepared,
             preparingIds,
             [this](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
                 attachmentService_->SaveDraftAttachments(proj, drafts);
             });
+
+        attachmentsPreparing_ = false;
+
+        if (!committed)
+        {
+            co_return;
+        }
 
         RenderAttachmentChips();
         UpdateComposerState();
