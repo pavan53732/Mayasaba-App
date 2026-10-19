@@ -1884,7 +1884,7 @@ int main()
         }
 
         fs::remove_all(folder);
-        std::cout << "PASS: 22 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search)\n";
+        std::cout << "PASS: 22 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search, action center, attachment inspection)\n";
         return 0;
     }
     catch (std::exception const& e)

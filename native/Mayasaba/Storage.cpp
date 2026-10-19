@@ -1646,5 +1646,221 @@ namespace mayasaba
             ss << att.id << ":" << att.fileSize << ":" << att.sha256 << ";";
         }
         return ss.str();
-    }
+        }
+
+        ActionCenterResult Storage::QueryActionCenter(ActionCenterQuery const& query)
+        {
+            std::lock_guard lock(mutex_);
+            ActionCenterResult result;
+            try
+            {
+                if (query.pageSize < 1 || query.pageSize > 200)
+                    throw std::runtime_error("Action Center query exceeds page bounds");
+
+                // 1. Unresolved submissions whose physical outcome is unknown.
+                {
+                    Statement q(db_, "SELECT id, submission_id, body, created_at FROM pending_submissions "
+                                     "WHERE project_id=?1 ORDER BY rowid LIMIT ?2;");
+                    Bind(q.value, 1, query.projectId);
+                    sqlite3_bind_int(q.value, 2, static_cast<int>(query.pageSize));
+                    int rc = SQLITE_OK;
+                    while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+                    {
+                        ActionCenterItem item;
+                        item.itemId = Text(q.value, 0);
+                        item.projectId = query.projectId;
+                        item.sourceOwner = "MESSAGE_CONTRIBUTION_SERVICE";
+                        item.sourceRecordId = Text(q.value, 1);
+                        item.kind = ActionCenterKind::UnresolvedSubmission;
+                        item.state = "UNKNOWN_EFFECT";
+                        item.titleEn = "Unresolved submission awaiting reconciliation";
+                        item.explanationEn =
+                            "A Send outcome could not be confirmed. The draft and submission identity are "
+                            "retained; use the existing reconciliation path before resending. No duplicate "
+                            "contribution will be created.";
+                        item.sourceReference = "pending_submissions." + Text(q.value, 1);
+                        item.availableAction = "Recheck outcome";
+                        result.items.push_back(std::move(item));
+                    }
+                    Check(rc, db_);
+                }
+
+                // 2. Failed draft attachments: preparation failed, timed out, or source changed.
+                {
+                    Statement q(db_, "SELECT attachment_id, file_name, status, error_message FROM draft_attachments "
+                                     "WHERE project_id=?1 AND (status='REJECTED' OR status='SourceChangedDuringPreparation' "
+                                     "OR status='TimedOut') ORDER BY rowid LIMIT ?2;");
+                    Bind(q.value, 1, query.projectId);
+                    sqlite3_bind_int(q.value, 2, static_cast<int>(query.pageSize));
+                    int rc = SQLITE_OK;
+                    while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+                    {
+                        ActionCenterItem item;
+                        item.itemId = Text(q.value, 0);
+                        item.projectId = query.projectId;
+                        item.sourceOwner = "SQLITE_STORAGE";
+                        item.sourceRecordId = Text(q.value, 0);
+                        item.kind = ActionCenterKind::FailedAttachment;
+                        item.state = "COMPLETE";
+                        item.titleEn = "Attachment requires attention: " + Text(q.value, 1);
+                        item.explanationEn =
+                            "Attachment preparation failed or the source file changed. Remove or re-attach "
+                            "it before sending; nothing is sent automatically.";
+                        item.sourceReference = "draft_attachments." + Text(q.value, 0);
+                        item.availableAction = "Remove or re-attach";
+                        if (!Text(q.value, 3).empty())
+                            item.explanationEn += " Detail: " + Text(q.value, 3);
+                        result.items.push_back(std::move(item));
+                    }
+                    Check(rc, db_);
+                }
+
+                // 3. Closed-project restriction.
+                {
+                    Statement q(db_, "SELECT id, closed FROM projects WHERE id=?1;");
+                    Bind(q.value, 1, query.projectId);
+                    int rc = sqlite3_step(q.value);
+                    if (rc == SQLITE_ROW && sqlite3_column_int(q.value, 1) != 0)
+                    {
+                        ActionCenterItem item;
+                        item.itemId = "closed-project-" + query.projectId;
+                        item.projectId = query.projectId;
+                        item.sourceOwner = "PROJECT_SERVICE";
+                        item.sourceRecordId = query.projectId;
+                        item.kind = ActionCenterKind::ClosedProjectRestriction;
+                        item.state = "COMPLETE";
+                        item.titleEn = "Project is closed";
+                        item.explanationEn =
+                            "Work is blocked until an explicit, authorized Reopen Project action is taken. "
+                            "History remains readable; Send and Start remain gated.";
+                        item.sourceReference = "projects." + query.projectId;
+                        item.availableAction = "Reopen Project";
+                        result.items.push_back(std::move(item));
+                    }
+                    Check(rc, db_);
+                }
+
+                // 4. Storage failures recorded in directory operations.
+                {
+                    Statement q4(db_, "SELECT operation_id, error_message, updated_at FROM directory_operations "
+                                         "WHERE state='FAILED' OR state='INTENDED' ORDER BY rowid LIMIT ?2;");
+                    sqlite3_bind_int(q4.value, 2, static_cast<int>(query.pageSize));
+                    int rc4 = SQLITE_OK;
+                    while ((rc4 = sqlite3_step(q4.value)) == SQLITE_ROW)
+                    {
+                        ActionCenterItem item;
+                        item.itemId = Text(q4.value, 0);
+                        item.sourceOwner = "SQLITE_STORAGE";
+                        item.sourceRecordId = Text(q4.value, 0);
+                        item.kind = ActionCenterKind::StorageFailure;
+                        item.state = "UNKNOWN_EFFECT";
+                        item.titleEn = "Directory operation requires reconciliation: " + Text(q4.value, 0);
+                        item.explanationEn =
+                            "A directory creation outcome could not be confirmed. Review the affected files "
+                            "and choose a safe recovery action before proceeding.";
+                        item.sourceReference = "directory_operations." + Text(q4.value, 0);
+                        item.availableAction = "Inspect affected files";
+                        result.items.push_back(std::move(item));
+                    }
+                    Check(rc4, db_);
+                }
+
+                result.isComplete = true;
+            }
+            catch (std::exception const& e)
+            {
+                result.isComplete = false;
+                result.errorMessage = e.what();
+                result.ownerUnavailable = false;
+            }
+            return result;
+        }
+
+        AttachmentInspectionResult Storage::InspectAttachment(AttachmentInspectionQuery const& query)
+        {
+            AttachmentInspectionResult result;
+            std::lock_guard lock(mutex_);
+            try
+            {
+                // Look in draft attachments first, then committed attachments.
+                Statement q(db_, "SELECT attachment_id,project_id,'',file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,created_at "
+                                 "FROM draft_attachments WHERE attachment_id=?1 AND project_id=?2;");
+                Bind(q.value, 1, query.attachmentId);
+                Bind(q.value, 2, query.projectId);
+                int rc = sqlite3_step(q.value);
+                if (rc == SQLITE_ROW)
+                {
+                    result.found = true;
+                    result.inspection.attachmentId = Text(q.value, 0);
+                    result.inspection.projectId = Text(q.value, 1);
+                    result.inspection.sourceRecordId = query.attachmentId;
+                    result.inspection.sourceRecordVersion = "1";
+                    result.inspection.fileName = Text(q.value, 3);
+                    result.inspection.fileSize = static_cast<uint64_t>(sqlite3_column_int64(q.value, 4));
+                    result.inspection.sha256 = Text(q.value, 5);
+                    result.inspection.detectedType = Text(q.value, 6);
+                    result.inspection.storagePath = Text(q.value, 7);
+                    result.inspection.status = Text(q.value, 8);
+                    result.inspection.isManaged = !Text(q.value, 7).empty();
+                    result.inspection.integrityVerified = !Text(q.value, 5).empty();
+                    result.inspection.titleEn = "Attachment: " + Text(q.value, 3);
+                    result.inspection.explanationEn =
+                        "Read-only inspection of staged draft attachment bytes. Original source path is not "
+                        "reopened for reading; only the verified managed copy is exposed.";
+                    result.inspection.previewEligible =
+                        result.inspection.detectedType == "text/plain" ||
+                        result.inspection.detectedType == "text/markdown";
+                    if (!result.inspection.previewEligible)
+                    {
+                        result.inspection.previewUnavailableReasonEn =
+                            "No approved preview renderer for content type " +
+                            (result.inspection.detectedType.empty() ? "(unspecified)" : result.inspection.detectedType);
+                    }
+                    Check(rc, db_);
+                    return result;
+                }
+                Statement q2(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,created_at "
+                                       "FROM attachments WHERE attachment_id=?1 AND project_id=?2;");
+                    Bind(q2.value, 1, query.attachmentId);
+                    Bind(q2.value, 2, query.projectId);
+                    rc = sqlite3_step(q2.value);
+                    if (rc == SQLITE_ROW)
+                    {
+                        result.found = true;
+                        result.inspection.attachmentId = Text(q2.value, 0);
+                        result.inspection.projectId = Text(q2.value, 1);
+                        result.inspection.sourceRecordId = query.attachmentId;
+                        result.inspection.sourceRecordVersion = "1";
+                        result.inspection.fileName = Text(q2.value, 3);
+                        result.inspection.fileSize = static_cast<uint64_t>(sqlite3_column_int64(q2.value, 4));
+                        result.inspection.sha256 = Text(q2.value, 5);
+                        result.inspection.detectedType = Text(q2.value, 6);
+                        result.inspection.storagePath = Text(q2.value, 7);
+                        result.inspection.status = Text(q2.value, 9);
+                        result.inspection.isManaged = !Text(q2.value, 7).empty();
+                        result.inspection.integrityVerified = !Text(q2.value, 5).empty();
+                        result.inspection.titleEn = "Attachment: " + Text(q2.value, 3);
+                        result.inspection.explanationEn =
+                            "Read-only inspection of managed attachment bytes. Original source path is not "
+                            "reopened for reading; only the verified managed copy is exposed.";
+                        result.inspection.previewEligible =
+                            result.inspection.detectedType == "text/plain" ||
+                            result.inspection.detectedType == "text/markdown";
+                        if (!result.inspection.previewEligible)
+                        {
+                            result.inspection.previewUnavailableReasonEn =
+                                "No approved preview renderer for content type " +
+                                (result.inspection.detectedType.empty() ? "(unspecified)" : result.inspection.detectedType);
+                        }
+                    }
+                    Check(rc, db_);
+                    return result;
+            }
+            catch (std::exception const& e)
+            {
+                result.found = false;
+                result.errorMessage = e.what();
+            }
+            return result;
+        }
 }

@@ -58,6 +58,10 @@ namespace winrt::Mayasaba::implementation
         void OnSearchQueryChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::TextChangedEventArgs const&);
         void OnClearSearchQuery(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnCloseSearch(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnCloseActionCenter(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnShowActionCenterDetails(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnActionCenterItemClick(IInspectable const&, Microsoft::UI::Xaml::Controls::ItemClickEventArgs const&);
+        winrt::fire_and_forget RefreshActionCenterAsync(uint64_t gen);
         void OnSearchBoxKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnSearchResultItemClick(IInspectable const&, Microsoft::UI::Xaml::Controls::ItemClickEventArgs const&);
         void OnSearchLoadMore(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
@@ -195,6 +199,10 @@ namespace winrt::Mayasaba::implementation
         // Set for exactly one refresh when a confirmed first save moves the composer.
         bool showChatDockTransition_{false};
         std::string fixtureMode_;
+
+        // Action Center read-only projection state.
+        bool actionCenterRefreshing_{false};
+        std::vector<mayasaba::ActionCenterItem> actionCenterItems_;
 
         // Incremental timeline rendering. Only entries appended after the first
         // render animate, so restored history never replays an insertion transition.

@@ -638,6 +638,7 @@ namespace winrt::Mayasaba::implementation
         searchController_.SetActiveProject(activeProject_);
         if (!storage_ || activeProject_.empty()) { ShowFolder(SelectorContext::Startup); return; }
         LoadChatAsync(activeProject_, ++selectorGeneration_);
+        RefreshActionCenterAsync(selectorGeneration_.load());
     }
 
     winrt::fire_and_forget MainWindow::LoadChatAsync(std::string id, uint64_t gen)
@@ -2928,4 +2929,80 @@ namespace winrt::Mayasaba::implementation
         catch (...) {}
     }
 
+    // ------------------------------------------------------------------
+    // Action Center handlers.
+    // ------------------------------------------------------------------
+    void MainWindow::OnCloseActionCenter(IInspectable const&, RoutedEventArgs const&)
+    {
+        ActionCenterPanel().Visibility(Visibility::Collapsed);
+        ActionCenterStatusText().Text(L"");
+        ActionCenterList().Items().Clear();
+        ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+    }
+
+    void MainWindow::OnShowActionCenterDetails(IInspectable const&, RoutedEventArgs const&)
+    {
+        ShowNotice(L"Action Center items are read-only projections of owner records. Select an item for its available action.", false);
+    }
+
+    void MainWindow::OnActionCenterItemClick(IInspectable const&, Controls::ItemClickEventArgs const& e)
+    {
+        auto const index = ActionCenterList().SelectedIndex();
+        if (index < 0 || index >= static_cast<int32_t>(actionCenterItems_.size())) return;
+        auto const& item = actionCenterItems_[static_cast<size_t>(index)];
+        ShowNotice(winrt::to_hstring(item.titleEn) + L" — " + winrt::to_hstring(item.explanationEn), false);
+    }
+
+    winrt::fire_and_forget MainWindow::RefreshActionCenterAsync(uint64_t gen)
+    {
+        if (actionCenterRefreshing_) co_return;
+        if (!storage_ || activeProject_.empty()) co_return;
+        actionCenterRefreshing_ = true;
+
+        auto alive = get_strong();
+        auto ui = DispatcherQueue();
+        auto projectId = activeProject_;
+
+        co_await selectorQueue_.Background();
+        mayasaba::ActionCenterQuery query;
+        query.projectId = projectId;
+        query.pageSize = 50;
+        auto result = storage_->QueryActionCenter(query);
+
+        if (!co_await resume_foreground(ui)) co_return;
+        if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != gen)
+        {
+            actionCenterRefreshing_ = false;
+            co_return;
+        }
+
+        actionCenterRefreshing_ = false;
+        ActionCenterList().Items().Clear();
+
+        if (!result.errorMessage.empty())
+        {
+            ActionCenterStatusText().Text(L"Storage unavailable: " + Utf16(result.errorMessage));
+            ActionCenterPanel().Visibility(Visibility::Visible);
+            co_return;
+        }
+
+        if (result.items.empty())
+        {
+            ActionCenterStatusText().Text(L"No unresolved owner obligations need your attention.");
+            ActionCenterPanel().Visibility(Visibility::Visible);
+            ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+            co_return;
+        }
+
+        for (auto const& item : result.items)
+        {
+            auto entry = winrt::to_hstring(item.titleEn) + L" — " + winrt::to_hstring(item.explanationEn);
+            ActionCenterList().Items().Append(winrt::box_value(entry));
+            actionCenterItems_.push_back(item);
+        }
+
+        ActionCenterStatusText().Text(std::to_wstring(result.items.size()) + L" item(s) need your attention.");
+        ActionCenterPanel().Visibility(Visibility::Visible);
+        ShowActionCenterDetailsButton().Visibility(Visibility::Visible);
+    }
 }

@@ -39,7 +39,7 @@ Runtime acceptance uses only `PASS`, `FAIL`, `INCONCLUSIVE`, `BLOCKED`, `NOT_APP
 
 | ID | Capability | Priority | Status | Primary dependency |
 |---|---|---|---|---|
-| UXE-01 | Action Center in Chat | P0 | PROPOSED | Available owner records |
+| UXE-01 | Action Center in Chat | P0 | IMPLEMENTED (read-only projection over owner records; handler wiring complete; native acceptance pending) | Available owner records |
 | UXE-02 | Universal Search | P0 | IMPLEMENTED (saved user messages subset; native acceptance incomplete) | Current project contributions; remaining scope PROPOSED |
 | UXE-03 | Native Diff Inspector | P0 | PROPOSED | Staged-change records (Workspace Manager) |
 | UXE-04 | Smart Project Explorer | P1 | IMPLEMENTED (Screen 2 filtering subset; native acceptance incomplete) | Local project registry; remaining scope PROPOSED |

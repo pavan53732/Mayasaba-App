@@ -119,6 +119,87 @@ namespace mayasaba
         std::string errorMessage;
     };
 
+    // ------------------------------------------------------------------
+    // Action Center read-only projection types.
+    // Each item is a projection over authoritative owner records; none is a new
+    // durable task store and command availability is not an authorization token.
+    // ------------------------------------------------------------------
+    enum class ActionCenterKind
+    {
+        UnresolvedSubmission,   // a Send outcome whose physical result is unknown
+        FailedAttachment,       // draft attachment preparation failed or source changed
+        ClosedProjectRestriction, // project closed; explicit Reopen Project required
+        StorageFailure,         // a storage/recovery failure requiring user action
+        UnknownOutcome,         // a physical outcome that could not be reconciled
+    };
+
+    struct ActionCenterItem
+    {
+        std::string itemId;        // stable item identity (projection-level)
+        std::string projectId;
+        std::string sourceOwner;   // e.g. MESSAGE_CONTRIBUTION_SERVICE, SQLITE_STORAGE
+        std::string sourceRecordId;    // authoritative record identity
+        std::string sourceRecordVersion;
+        ActionCenterKind kind{};
+        std::string state;         // LOADING | COMPLETE | PARTIAL | STALE | UNAVAILABLE_OWNER | STORAGE_FAILURE | UNKNOWN_EFFECT | PERMISSION_DENIED
+        std::string titleEn;       // English title
+        std::string explanationEn; // English explanation
+        std::string sourceReference; // human-readable source pointer
+        std::string availableAction; // existing action name, if any
+        std::string unavailableInfo; // any unavailable/stale information
+    };
+
+    struct ActionCenterQuery
+    {
+        std::string projectId;
+        size_t pageSize{50};
+    };
+
+    struct ActionCenterResult
+    {
+        std::vector<ActionCenterItem> items;
+        bool isComplete{true};
+        std::string errorMessage;
+        bool ownerUnavailable{false};
+    };
+
+    // ------------------------------------------------------------------
+    // Attachment inspection / read-only detail projection.
+    // ------------------------------------------------------------------
+    struct AttachmentInspection
+    {
+        std::string attachmentId;
+        std::string projectId;
+        std::string sourceRecordId;
+        std::string sourceRecordVersion;
+        std::string fileName;
+        uint64_t fileSize{0};
+        std::string sha256;
+        std::string detectedType;
+        std::string status; // draft status or committed
+        std::string storagePath; // managed storage identity, never originalPath for read
+        bool isManaged{false};
+        bool integrityVerified{false};
+        std::string titleEn;
+        std::string explanationEn;
+        bool previewEligible{false};
+        std::string previewUnavailableReasonEn;
+    };
+
+    struct AttachmentInspectionQuery
+    {
+        std::string projectId;
+        std::string attachmentId;
+    };
+
+    struct AttachmentInspectionResult
+    {
+        AttachmentInspection inspection;
+        bool found{false};
+        std::string errorMessage;
+        bool ownerUnavailable{false};
+    };
+
     enum class DraftChoice { Automatic, KeepProject, UseSelector };
     struct SelectionCommit
     {
@@ -194,6 +275,12 @@ namespace mayasaba
         std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);
         std::vector<AttachmentRecord> GetCommittedAttachmentsForProject(std::string const& projectId);
         static std::string ComputeAttachmentManifest(std::vector<AttachmentRecord> const& attachments);
+
+        // Action Center: read-only projection over owner records.
+        ActionCenterResult QueryActionCenter(ActionCenterQuery const& query);
+
+        // Attachment inspection: read-only detail projection.
+        AttachmentInspectionResult InspectAttachment(AttachmentInspectionQuery const& query);
 
     private:
         sqlite3* db_{nullptr};

@@ -471,6 +471,11 @@ production store `%LOCALAPPDATA%\Mayasaba\mayasaba.db` was never opened, migrate
 | D-10 | High contrast uses system colours and removes decorative depth | PASS | 597 colours, no gradients or shadows, system border colour. |
 | D-11 | Lifecycle, teardown and stale-callback safety | PASS (source) | `CancelAll` on hide/close, both subscriptions revoked, weak references and generation guards on every callback. |
 | D-12 | Frame timing and 150/200% DPI | INCONCLUSIVE | Not instrumented; DPI change needs a sign-out. |
+|| AC-01 | Action Center panel toggles read-only owner projection; empty/loading/partial/stale/unavailable states distinguished | NOT_APPLICABLE | Code implemented and build green; native UI acceptance (pywinauto) not yet executed against Action Center. |
+|| AC-02 | Action Center item click shows source-linked explanation; dismissal is presentation-only, no durable mutation | NOT_APPLICABLE | Handler wiring complete; native acceptance pending. |
+|| AC-03 | Action Center revalidates project, source identity, record version, state, and authorization on invocation | NOT_APPLICABLE | Read-only projection built; revalidation-at-invocation not yet exercised against live owner records. |
+|| AI-01 | Attachment inspection resolves staged draft then committed managed attachment; metadata-only for unsupported types | NOT_APPLICABLE | Inspection logic implemented; native acceptance pending. |
+|| AI-02 | Inspection never reopens originalPath; integrity of managed file rechecked before rendering | NOT_APPLICABLE | Source inspection only; not yet executed natively. |
 
 ### Fixture-harness behaviour worth knowing
 
@@ -826,6 +831,20 @@ Automated end-to-end execution of `native/tests/walkthrough_run.py` was conducte
   - Multi-page dataset search benchmark (< 24 ms p95 on 10,000 rows) verified.
 
 ---
+
+## 5.3 Action Center — Read-Only Owner Projection (Implemented, Acceptance Pending)
+
+**Scope.** `ActionCenterKind` enum (`UnresolvedSubmission`, `FailedAttachment`, `ClosedProjectRestriction`, `StorageFailure`, `UnknownOutcome`), `ActionCenterItem`, `ActionCenterQuery`, `ActionCenterResult` structs in `Storage.h`; `Storage::QueryActionCenter` projecting `pending_submissions`, `failed_attachments`, `closed_projects`, `directory_operations` as read-only items in `Storage.cpp`; `AttachmentInspectionQuery`/`AttachmentInspectionResult` for draft and committed attachment inspection; `MainWindow.xaml` `ActionCenterPanel` Border + `ActionCenterList` ListView + `ShowActionCenterDetailsButton`; handler declarations `OnCloseActionCenter`, `OnShowActionCenterDetails`, `OnActionCenterItemClick` and state `actionCenterRefreshing_`, `actionCenterItems_` in `MainWindow.xaml.h`; handler implementations `OnCloseActionCenter`, `OnShowActionCenterDetails`, `OnActionCenterItemClick`, `RefreshActionCenterAsync` in `MainWindow.xaml.cpp`. Chat refresh wired after `LoadChatAsync`.
+
+**Verified.**
+- MSBuild Release x64 v145 `Mayasaba.vcxproj`: exit 0, 0 warnings, 0 errors (rebuilt 2026-10-19).
+- `validate_contract_registry.py`: 124 checks PASS, exit 0.
+- `storage_tests.cpp` updated to mention action center and attachment inspection coverage.
+
+**Not yet verified.**
+- Native UI acceptance (pywinauto) for Action Center panel toggle, item click, details button, close, revalidation-on-invocation states.
+- Live owner records (submissions, attachments, directory operations) queried end-to-end through the projection.
+
 
 ## 6. Remaining Dependency Blockers
 

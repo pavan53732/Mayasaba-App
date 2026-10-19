@@ -636,18 +636,49 @@
                             </Button>
                             <Button x:Name="ExitButton" Content="Exit" Click="OnExit" Padding="15,7"
                                     CornerRadius="11" AutomationProperties.Name="Exit Mayasaba"/>
-                        </StackPanel>
-                        <StackPanel x:Name="ChatReadinessPanel" Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="15"
-                                    HorizontalAlignment="Right" AutomationProperties.Name="CLI readiness">
-                            <TextBlock x:Name="HermesStatus" FontSize="11.5"
-                                       Text="Hermes Agent CLI · UNSUPPORTED"/>
-                            <TextBlock x:Name="KiloStatus" FontSize="11.5"
-                                       Text="Kilo Code CLI · UNSUPPORTED"/>
-                            <TextBlock x:Name="ClaudeStatus" FontSize="11.5"
-                                       Text="Claude Code CLI · UNSUPPORTED"/>
-                        </StackPanel>
-                    </Grid>
-                </Border>
+                                                            </StackPanel>
+                                                            <!-- Compact Action Center: read-only projection of unresolved owner obligations. -->
+                                                            <Border x:Name="ActionCenterPanel" Grid.Row="2" Grid.ColumnSpan="2" Visibility="Collapsed"
+                                                                    Style="{StaticResource MayasabaCardSurface}" Padding="12"
+                                                                    BorderBrush="{ThemeResource MayasabaAmberBrush}" BorderThickness="1"
+                                                                    AutomationProperties.Name="Action Center" AutomationProperties.LiveSetting="Polite" Margin="0,10,0,0">
+                                                                <StackPanel Spacing="8">
+                                                                    <Grid ColumnSpacing="12">
+                                                                        <Grid.ColumnDefinitions>
+                                                                            <ColumnDefinition Width="*"/>
+                                                                            <ColumnDefinition Width="Auto"/>
+                                                                        </Grid.ColumnDefinitions>
+                                                                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                                                            <FontIcon Glyph="&#xE9CE;" FontFamily="Segoe Fluent Icons" FontSize="14"
+                                                                                      Foreground="{ThemeResource MayasabaBrandBrush}" VerticalAlignment="Center"/>
+                                                                            <TextBlock Text="Needs your attention" Style="{StaticResource MayasabaSectionText}"
+                                                                                       AutomationProperties.HeadingLevel="Level3"/>
+                                                                        </StackPanel>
+                                                                        <Button x:Name="CloseActionCenterButton" Grid.Column="1" Click="OnCloseActionCenter"
+                                                                                Padding="8,6" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                                                                AutomationProperties.Name="Close Action Center">
+                                                                            <FontIcon Glyph="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
+                                                                        </Button>
+                                                                    </Grid>
+                                                                    <TextBlock x:Name="ActionCenterStatusText" Text="Checking owner records..."
+                                                                               Style="{StaticResource MayasabaMicroText}"
+                                                                               Foreground="{ThemeResource MayasabaMutedBrush}"
+                                                                               AutomationProperties.LiveSetting="Polite"/>
+                                                                    <ListView x:Name="ActionCenterList" SelectionMode="None" IsItemClickEnabled="True" ItemClick="OnActionCenterItemClick" MaxHeight="220"
+                                                                                ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                                                HorizontalContentAlignment="Stretch"
+                                                                                AutomationProperties.Name="Action Center items"/>
+                                                                    <Button x:Name="ShowActionCenterDetailsButton" Content="Show details" Visibility="Collapsed"
+                                                                            Click="OnShowActionCenterDetails" Padding="14,7"
+                                                                            HorizontalAlignment="Left" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                                                            AutomationProperties.Name="Show Action Center details"/>
+                                                                </StackPanel>
+                                                            </Border>
+                                                            <StackPanel x:Name="ChatReadinessPanel" Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="15"
+                                                                        HorizontalAlignment="Right" AutomationProperties.Name="CLI readiness">
+                                                            </StackPanel>
+                                                        </Grid>
+                        </Border>
 
                 <!-- The conversation area and the ONE composer.
                      Four auto/star rows replace the previous independent 190/135 fixed offsets:
