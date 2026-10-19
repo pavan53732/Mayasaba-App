@@ -46,35 +46,57 @@ namespace mayasaba
             return w;
         }
 
-        inline std::string ComputeFileSha256(std::wstring const& path, uint64_t* outSize = nullptr)
+        struct FileHashResult
         {
-            HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+            bool success{false};
+            uint64_t size{0};
+            std::string sha256;
+            std::string error;
+        };
+
+        inline FileHashResult ComputeFileSha256Safe(std::wstring const& path)
+        {
+            FileHashResult res;
+            if (path.empty())
+            {
+                res.error = "Path is empty";
+                return res;
+            }
+
+            HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ,
                 nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (hFile == INVALID_HANDLE_VALUE) return {};
+            if (hFile == INVALID_HANDLE_VALUE)
+            {
+                res.error = "Cannot open file";
+                return res;
+            }
 
             LARGE_INTEGER size{};
             if (!GetFileSizeEx(hFile, &size))
             {
                 CloseHandle(hFile);
-                return {};
+                res.error = "Cannot query file size";
+                return res;
             }
-            if (outSize) *outSize = static_cast<uint64_t>(size.QuadPart);
+            res.size = static_cast<uint64_t>(size.QuadPart);
 
             BCRYPT_ALG_HANDLE hAlg = nullptr;
             NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
             if (!BCRYPT_SUCCESS(status))
             {
                 CloseHandle(hFile);
-                return {};
+                res.error = "BCryptOpenAlgorithmProvider failed";
+                return res;
             }
 
             DWORD hashObjSize = 0, dataLen = 0;
             status = BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, (PBYTE)&hashObjSize, sizeof(DWORD), &dataLen, 0);
-            if (!BCRYPT_SUCCESS(status))
+            if (!BCRYPT_SUCCESS(status) || hashObjSize == 0)
             {
                 BCryptCloseAlgorithmProvider(hAlg, 0);
                 CloseHandle(hFile);
-                return {};
+                res.error = "BCryptGetProperty failed";
+                return res;
             }
 
             std::vector<BYTE> hashObj(hashObjSize);
@@ -84,40 +106,93 @@ namespace mayasaba
             {
                 BCryptCloseAlgorithmProvider(hAlg, 0);
                 CloseHandle(hFile);
-                return {};
+                res.error = "BCryptCreateHash failed";
+                return res;
             }
 
             constexpr DWORD BUFFER_SIZE = 64 * 1024;
             std::vector<BYTE> buffer(BUFFER_SIZE);
             DWORD bytesRead = 0;
-            while (ReadFile(hFile, buffer.data(), BUFFER_SIZE, &bytesRead, nullptr) && bytesRead > 0)
+            uint64_t totalRead = 0;
+            bool readError = false;
+
+            while (true)
             {
-                BCryptHashData(hHash, buffer.data(), bytesRead, 0);
+                BOOL ok = ReadFile(hFile, buffer.data(), BUFFER_SIZE, &bytesRead, nullptr);
+                if (!ok)
+                {
+                    readError = true;
+                    res.error = "ReadFile returned error " + std::to_string(GetLastError());
+                    break;
+                }
+                if (bytesRead == 0)
+                {
+                    // Clean EOF reached
+                    break;
+                }
+                totalRead += bytesRead;
+                status = BCryptHashData(hHash, buffer.data(), bytesRead, 0);
+                if (!BCRYPT_SUCCESS(status))
+                {
+                    readError = true;
+                    res.error = "BCryptHashData failed";
+                    break;
+                }
+            }
+
+            if (readError || totalRead != res.size)
+            {
+                if (!readError) res.error = "File size mismatch during read";
+                BCryptDestroyHash(hHash);
+                BCryptCloseAlgorithmProvider(hAlg, 0);
+                CloseHandle(hFile);
+                return res;
             }
 
             BYTE hash[32];
-            BCryptFinishHash(hHash, hash, 32, 0);
+            status = BCryptFinishHash(hHash, hash, 32, 0);
             BCryptDestroyHash(hHash);
             BCryptCloseAlgorithmProvider(hAlg, 0);
             CloseHandle(hFile);
+
+            if (!BCRYPT_SUCCESS(status))
+            {
+                res.error = "BCryptFinishHash failed";
+                return res;
+            }
 
             std::ostringstream ss;
             for (int i = 0; i < 32; ++i)
             {
                 ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hash[i]);
             }
-            return ss.str();
+            res.sha256 = ss.str();
+            res.success = true;
+            return res;
         }
 
-        inline bool VerifyManagedAttachment(std::string const& storagePathUtf8,
-                                            std::string const& expectedSha256,
-                                            uint64_t expectedSize)
+        inline std::string ComputeFileSha256(std::wstring const& path, uint64_t* outSize = nullptr)
         {
-            if (storagePathUtf8.empty() || expectedSha256.empty()) return false;
-            std::wstring const storagePath = Utf8ToWide(storagePathUtf8);
-            uint64_t actualSize = 0;
-            std::string const actualSha = ComputeFileSha256(storagePath, &actualSize);
-            return actualSha == expectedSha256 && actualSize == expectedSize;
+            auto res = ComputeFileSha256Safe(path);
+            if (!res.success) return {};
+            if (outSize) *outSize = res.size;
+            return res.sha256;
+        }
+
+        inline bool IsManagedStoragePath(std::string const& storagePath, std::string const& sourcePath, bool isCommitted)
+        {
+            if (storagePath.empty() || storagePath == sourcePath) return false;
+            // Prevent directory traversal or relative escapes
+            if (storagePath.find("..") != std::string::npos) return false;
+            std::wstring wpath = Utf8ToWide(storagePath);
+            DWORD attrs = GetFileAttributesW(wpath.c_str());
+            if (attrs == INVALID_FILE_ATTRIBUTES || (attrs & FILE_ATTRIBUTE_DIRECTORY)) return false;
+            if (isCommitted)
+            {
+                // Committed files must be sealed as read-only
+                if (!(attrs & FILE_ATTRIBUTE_READONLY)) return false;
+            }
+            return true;
         }
 #endif
     }
@@ -384,6 +459,7 @@ namespace mayasaba
                  "file_name TEXT NOT NULL, file_size INTEGER NOT NULL, sha256 TEXT NOT NULL,"
                  "detected_type TEXT NOT NULL, staged_path TEXT NOT NULL, source_path TEXT NOT NULL,"
                  "status TEXT NOT NULL, error_message TEXT NOT NULL DEFAULT '',"
+                 "version INTEGER NOT NULL DEFAULT 1,"
                  "created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));");
             Exec("CREATE INDEX IF NOT EXISTS draft_attachment_project ON draft_attachments(project_id);");
 
@@ -393,9 +469,35 @@ namespace mayasaba
                  "file_name TEXT NOT NULL, file_size INTEGER NOT NULL, sha256 TEXT NOT NULL,"
                  "detected_type TEXT NOT NULL, storage_path TEXT NOT NULL, source_path TEXT NOT NULL,"
                  "status TEXT NOT NULL, error_message TEXT NOT NULL DEFAULT '',"
+                 "version INTEGER NOT NULL DEFAULT 1,"
                  "created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));");
             Exec("CREATE INDEX IF NOT EXISTS attachment_submission ON attachments(submission_id);");
             Exec("CREATE INDEX IF NOT EXISTS attachment_project ON attachments(project_id);");
+
+            {
+                bool hasDraftVersion = false;
+                Statement info(db_, "PRAGMA table_info(draft_attachments);");
+                while (sqlite3_step(info.value) == SQLITE_ROW)
+                {
+                    if (Text(info.value, 1) == "version") { hasDraftVersion = true; break; }
+                }
+                if (!hasDraftVersion)
+                {
+                    Exec("ALTER TABLE draft_attachments ADD COLUMN version INTEGER NOT NULL DEFAULT 1;");
+                }
+            }
+            {
+                bool hasAttVersion = false;
+                Statement info(db_, "PRAGMA table_info(attachments);");
+                while (sqlite3_step(info.value) == SQLITE_ROW)
+                {
+                    if (Text(info.value, 1) == "version") { hasAttVersion = true; break; }
+                }
+                if (!hasAttVersion)
+                {
+                    Exec("ALTER TABLE attachments ADD COLUMN version INTEGER NOT NULL DEFAULT 1;");
+                }
+            }
             if(schemaVersion<3)
             {
                 auto protectColumn=[&](char const* select,char const* update)
@@ -1344,7 +1446,7 @@ namespace mayasaba
                 // Atomically link verified attachments to this submission
                 for (auto const& att : attachments)
                 {
-                    Statement ins(db_, "INSERT INTO attachments(attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11);");
+                    Statement ins(db_, "INSERT INTO attachments(attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,version) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12);");
                     Bind(ins.value,1,att.id);
                     Bind(ins.value,2,id);
                     Bind(ins.value,3,submission);
@@ -1356,6 +1458,7 @@ namespace mayasaba
                     Bind(ins.value,9,att.sourcePath);
                     Bind(ins.value,10,"COMMITTED");
                     Bind(ins.value,11,att.errorMessage);
+                    sqlite3_bind_int64(ins.value,12,static_cast<sqlite3_int64>(att.version > 0 ? att.version : 1));
                     Check(sqlite3_step(ins.value),db_);
                 }
                 // Verified-byte finalization gate: seal committed files and verify attribute before transaction commit
@@ -1422,7 +1525,7 @@ namespace mayasaba
         while ((rc=sqlite3_step(p.value))==SQLITE_ROW)
         {
             Contribution c{Text(p.value,0),Text(p.value,1),Text(p.value,2)};
-            Statement att(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,created_at FROM attachments WHERE submission_id=?1 ORDER BY rowid;");
+            Statement att(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,version,created_at FROM attachments WHERE submission_id=?1 ORDER BY rowid;");
             Bind(att.value,1,c.submissionId);
             int attRc=SQLITE_OK;
             while ((attRc=sqlite3_step(att.value))==SQLITE_ROW)
@@ -1439,7 +1542,8 @@ namespace mayasaba
                     Text(att.value,8),
                     Text(att.value,9),
                     Text(att.value,10),
-                    Text(att.value,11)
+                    static_cast<uint64_t>(sqlite3_column_int64(att.value,11)),
+                    Text(att.value,12)
                 });
             }
             result.push_back(std::move(c));
@@ -1527,9 +1631,9 @@ namespace mayasaba
     {
         std::lock_guard lock(mutex_);
         CheckWriteCapacity();
-        Statement q(db_, "INSERT INTO draft_attachments(attachment_id,project_id,file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message) "
-                         "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) "
-                         "ON CONFLICT(attachment_id) DO UPDATE SET file_size=excluded.file_size,sha256=excluded.sha256,staged_path=excluded.staged_path,status=excluded.status,error_message=excluded.error_message;");
+        Statement q(db_, "INSERT INTO draft_attachments(attachment_id,project_id,file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,version) "
+                         "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1) "
+                         "ON CONFLICT(attachment_id) DO UPDATE SET file_size=excluded.file_size,sha256=excluded.sha256,staged_path=excluded.staged_path,status=excluded.status,error_message=excluded.error_message,version=draft_attachments.version+1;");
         Bind(q.value,1,att.id);
         Bind(q.value,2,projectId);
         Bind(q.value,3,att.fileName);
@@ -1563,7 +1667,7 @@ namespace mayasaba
     std::vector<AttachmentRecord> Storage::GetDraftAttachments(std::string const& projectId)
     {
         std::lock_guard lock(mutex_);
-        Statement q(db_, "SELECT attachment_id,project_id,'',file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,created_at FROM draft_attachments WHERE project_id=?1 ORDER BY rowid;");
+        Statement q(db_, "SELECT attachment_id,project_id,'',file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,version,created_at FROM draft_attachments WHERE project_id=?1 ORDER BY rowid;");
         Bind(q.value,1,projectId);
         std::vector<AttachmentRecord> result;
         int rc=SQLITE_OK;
@@ -1581,7 +1685,8 @@ namespace mayasaba
                 Text(q.value,8),
                 Text(q.value,9),
                 Text(q.value,10),
-                Text(q.value,11)
+                static_cast<uint64_t>(sqlite3_column_int64(q.value,11)),
+                Text(q.value,12)
             });
         }
         Check(rc,db_);
@@ -1591,7 +1696,7 @@ namespace mayasaba
     std::vector<AttachmentRecord> Storage::GetAttachmentsForContribution(std::string const& submissionId)
     {
         std::lock_guard lock(mutex_);
-        Statement q(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,created_at FROM attachments WHERE submission_id=?1 ORDER BY rowid;");
+        Statement q(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,version,created_at FROM attachments WHERE submission_id=?1 ORDER BY rowid;");
         Bind(q.value,1,submissionId);
         std::vector<AttachmentRecord> result;
         int rc=SQLITE_OK;
@@ -1609,7 +1714,8 @@ namespace mayasaba
                 Text(q.value,8),
                 Text(q.value,9),
                 Text(q.value,10),
-                Text(q.value,11)
+                static_cast<uint64_t>(sqlite3_column_int64(q.value,11)),
+                Text(q.value,12)
             });
         }
         Check(rc,db_);
@@ -1619,7 +1725,7 @@ namespace mayasaba
     std::vector<AttachmentRecord> Storage::GetCommittedAttachmentsForProject(std::string const& projectId)
     {
         std::lock_guard lock(mutex_);
-        Statement q(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,created_at FROM attachments WHERE project_id=?1 ORDER BY rowid;");
+        Statement q(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,version,created_at FROM attachments WHERE project_id=?1 ORDER BY rowid;");
         Bind(q.value,1,projectId);
         std::vector<AttachmentRecord> result;
         int rc=SQLITE_OK;
@@ -1637,7 +1743,8 @@ namespace mayasaba
                 Text(q.value,8),
                 Text(q.value,9),
                 Text(q.value,10),
-                Text(q.value,11)
+                static_cast<uint64_t>(sqlite3_column_int64(q.value,11)),
+                Text(q.value,12)
             });
         }
         Check(rc,db_);
@@ -1659,200 +1766,300 @@ namespace mayasaba
         return ss.str();
         }
 
-        ActionCenterResult Storage::QueryActionCenter(ActionCenterQuery const& query)
+    ActionCenterResult Storage::QueryActionCenter(ActionCenterQuery const& query)
+    {
+        std::lock_guard lock(mutex_);
+        ActionCenterResult result;
+        try
         {
-            std::lock_guard lock(mutex_);
-            ActionCenterResult result;
-            try
+            if (query.pageSize < 1 || query.pageSize > 200)
+                throw std::runtime_error("Action Center query exceeds page bounds");
+
+            size_t offset = 0;
+            if (!query.continuationToken.empty())
             {
-                if (query.pageSize < 1 || query.pageSize > 200)
-                    throw std::runtime_error("Action Center query exceeds page bounds");
-
-                // 1. Unresolved submissions whose physical outcome is unknown.
-                {
-                    Statement q(db_, "SELECT submission_id, body, attachment_manifest FROM pending_submissions "
-                                     "WHERE project_id=?1 ORDER BY rowid LIMIT ?2;");
-                    Bind(q.value, 1, query.projectId);
-                    sqlite3_bind_int(q.value, 2, static_cast<int>(query.pageSize));
-                    int rc = SQLITE_OK;
-                    while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
-                    {
-                        ActionCenterItem item;
-                        item.itemId = Text(q.value, 0);
-                        item.projectId = query.projectId;
-                        item.sourceOwner = "MESSAGE_CONTRIBUTION_SERVICE";
-                        item.sourceRecordId = Text(q.value, 0);
-                        item.kind = ActionCenterKind::UnresolvedSubmission;
-                        item.state = "UNKNOWN_EFFECT";
-                        item.titleEn = "Unresolved submission awaiting reconciliation";
-                        item.explanationEn =
-                            "A Send outcome could not be confirmed. The draft and submission identity are "
-                            "retained; use the existing reconciliation path before resending. No duplicate "
-                            "contribution will be created.";
-                        item.sourceReference = "pending_submissions." + Text(q.value, 1);
-                        item.availableAction = "Recheck outcome";
-                        result.items.push_back(std::move(item));
-                    }
-                    Check(rc, db_);
+                try {
+                    offset = std::stoull(query.continuationToken);
+                } catch (...) {
+                    throw std::runtime_error("Invalid continuation token");
                 }
+            }
 
-                // 2. Failed draft attachments: preparation failed, timed out, or source changed.
+            std::vector<ActionCenterItem> allItems;
+
+            // 1. Unresolved submissions whose physical outcome is unknown.
+            {
+                Statement q(db_, "SELECT submission_id, body, attachment_manifest FROM pending_submissions "
+                                 "WHERE project_id=?1 ORDER BY rowid;");
+                Bind(q.value, 1, query.projectId);
+                int rc = SQLITE_OK;
+                while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
                 {
-                    Statement q(db_, "SELECT attachment_id, file_name, status, error_message FROM draft_attachments "
-                                     "WHERE project_id=?1 AND (status='REJECTED' OR status='SourceChangedDuringPreparation' "
-                                     "OR status='TimedOut') ORDER BY rowid LIMIT ?2;");
-                    Bind(q.value, 1, query.projectId);
-                    sqlite3_bind_int(q.value, 2, static_cast<int>(query.pageSize));
-                    int rc = SQLITE_OK;
-                    while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
-                    {
-                        ActionCenterItem item;
-                        item.itemId = Text(q.value, 0);
-                        item.projectId = query.projectId;
-                        item.sourceOwner = "SQLITE_STORAGE";
-                        item.sourceRecordId = Text(q.value, 0);
-                        item.kind = ActionCenterKind::FailedAttachment;
-                        item.state = "COMPLETE";
-                        item.titleEn = "Attachment requires attention: " + Text(q.value, 1);
-                        item.explanationEn =
-                            "Attachment preparation failed or the source file changed. Remove or re-attach "
-                            "it before sending; nothing is sent automatically.";
-                        item.sourceReference = "draft_attachments." + Text(q.value, 0);
-                        item.availableAction = "Remove or re-attach";
-                        if (!Text(q.value, 3).empty())
-                            item.explanationEn += " Detail: " + Text(q.value, 3);
-                        result.items.push_back(std::move(item));
-                    }
-                    Check(rc, db_);
+                    ActionCenterItem item;
+                    item.itemId = "unresolved-sub-" + Text(q.value, 0);
+                    item.projectId = query.projectId;
+                    item.sourceOwner = "MESSAGE_CONTRIBUTION_SERVICE";
+                    item.sourceRecordId = Text(q.value, 0);
+                    item.sourceRecordVersion = "1";
+                    item.kind = ActionCenterKind::UnresolvedSubmission;
+                    item.state = "UNKNOWN_EFFECT";
+                    item.titleEn = "Unresolved submission awaiting reconciliation";
+                    item.explanationEn =
+                        "A Send outcome could not be confirmed. The draft and submission identity are "
+                        "retained; use the existing reconciliation path before resending. No duplicate "
+                        "contribution will be created.";
+                    item.sourceReference = "pending_submissions." + Text(q.value, 0);
+                    item.availableAction = "Recheck outcome";
+                    allItems.push_back(std::move(item));
                 }
+                Check(rc, db_);
+            }
 
-                // 3. Closed-project restriction.
+            // 2. Failed draft attachments: preparation failed, timed out, or source changed.
+            // Uses exact persisted statuses from AttachmentService: REJECTED, SOURCE_CHANGED, TIMED_OUT.
+            {
+                Statement q(db_, "SELECT attachment_id, file_name, status, error_message, version FROM draft_attachments "
+                                 "WHERE project_id=?1 AND (status='REJECTED' OR status='SOURCE_CHANGED' "
+                                 "OR status='TIMED_OUT') ORDER BY rowid;");
+                Bind(q.value, 1, query.projectId);
+                int rc = SQLITE_OK;
+                while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
                 {
-                    Statement q(db_, "SELECT id, closed FROM projects WHERE id=?1;");
-                    Bind(q.value, 1, query.projectId);
-                    int rc = sqlite3_step(q.value);
-                    if (rc == SQLITE_ROW && sqlite3_column_int(q.value, 1) != 0)
-                    {
-                        ActionCenterItem item;
-                        item.itemId = "closed-project-" + query.projectId;
-                        item.projectId = query.projectId;
-                        item.sourceOwner = "PROJECT_SERVICE";
-                        item.sourceRecordId = query.projectId;
-                        item.kind = ActionCenterKind::ClosedProjectRestriction;
-                        item.state = "COMPLETE";
-                        item.titleEn = "Project is closed";
-                        item.explanationEn =
-                            "Work is blocked until an explicit, authorized Reopen Project action is taken. "
-                            "History remains readable; Send and Start remain gated.";
-                        item.sourceReference = "projects." + query.projectId;
-                        item.availableAction = "Reopen Project";
-                        result.items.push_back(std::move(item));
-                    }
-                    Check(rc, db_);
+                    ActionCenterItem item;
+                    item.itemId = "failed-att-" + Text(q.value, 0);
+                    item.projectId = query.projectId;
+                    item.sourceOwner = "SQLITE_STORAGE";
+                    item.sourceRecordId = Text(q.value, 0);
+                    item.sourceRecordVersion = std::to_string(sqlite3_column_int64(q.value, 4));
+                    item.kind = ActionCenterKind::FailedAttachment;
+                    item.state = "COMPLETE";
+                    item.titleEn = "Attachment requires attention: " + Text(q.value, 1);
+                    item.explanationEn =
+                        "Attachment preparation failed or the source file changed. Remove or re-attach "
+                        "it before sending; nothing is sent automatically.";
+                    item.sourceReference = "draft_attachments." + Text(q.value, 0);
+                    item.availableAction = "Remove or re-attach";
+                    if (!Text(q.value, 3).empty())
+                        item.explanationEn += " Detail: " + Text(q.value, 3);
+                    allItems.push_back(std::move(item));
                 }
+                Check(rc, db_);
+            }
 
-                // Closed-project restriction handled above. Directory-operation
-                // recovery remains in the selector (no project context on these
-                // calls); do not project non-project-scoped records here.
+            // 3. Closed-project restriction.
+            {
+                Statement q(db_, "SELECT id, closed, version FROM projects WHERE id=?1;");
+                Bind(q.value, 1, query.projectId);
+                int rc = sqlite3_step(q.value);
+                if (rc == SQLITE_ROW && sqlite3_column_int(q.value, 1) != 0)
+                {
+                    ActionCenterItem item;
+                    item.itemId = "closed-project-" + query.projectId;
+                    item.projectId = query.projectId;
+                    item.sourceOwner = "PROJECT_SERVICE";
+                    item.sourceRecordId = query.projectId;
+                    item.sourceRecordVersion = std::to_string(sqlite3_column_int64(q.value, 2));
+                    item.kind = ActionCenterKind::ClosedProjectRestriction;
+                    item.state = "COMPLETE";
+                    item.titleEn = "Project is closed";
+                    item.explanationEn =
+                        "Work is blocked until an explicit, authorized Reopen Project action is taken. "
+                        "History remains readable; Send and Start remain gated.";
+                    item.sourceReference = "projects." + query.projectId;
+                    item.availableAction = "Reopen Project";
+                    allItems.push_back(std::move(item));
+                }
+                Check(rc, db_);
+            }
 
+            // Aggregate bounded pagination with truthful completeness & continuation
+            size_t total = allItems.size();
+            if (offset >= total)
+            {
+                result.items = {};
                 result.isComplete = true;
+                result.continuationToken = "";
             }
-            catch (std::exception const& e)
+            else
             {
-                result.isComplete = false;
-                result.errorMessage = e.what();
-                result.ownerUnavailable = false;
+                size_t count = std::min(query.pageSize, total - offset);
+                result.items.assign(
+                    std::make_move_iterator(allItems.begin() + offset),
+                    std::make_move_iterator(allItems.begin() + offset + count));
+                if (offset + count < total)
+                {
+                    result.isComplete = false;
+                    result.continuationToken = std::to_string(offset + count);
+                }
+                else
+                {
+                    result.isComplete = true;
+                    result.continuationToken = "";
+                }
             }
-            return result;
         }
-
-        AttachmentInspectionResult Storage::InspectAttachment(AttachmentInspectionQuery const& query)
+        catch (std::exception const& e)
         {
-            AttachmentInspectionResult result;
+            result.isComplete = false;
+            result.errorMessage = e.what();
+            result.ownerUnavailable = false;
+        }
+        return result;
+    }
+
+    AttachmentInspectionResult Storage::InspectAttachment(AttachmentInspectionQuery const& query)
+    {
+        AttachmentInspectionResult result;
+
+        struct RecordSnapshot
+        {
+            bool found{false};
+            std::string attachmentId;
+            std::string projectId;
+            std::string sourceRecordId;
+            std::string sourceRecordVersion;
+            std::string fileName;
+            uint64_t fileSize{0};
+            std::string sha256;
+            std::string detectedType;
+            std::string storagePath;
+            std::string sourcePath;
+            std::string status;
+            std::string errorMessage;
+            bool isCommitted{false};
+        } snap;
+
+        // Step 1: Query database records under storage mutex lock
+        {
             std::lock_guard lock(mutex_);
             try
             {
-                // Look in draft attachments first, then committed attachments.
-                Statement q(db_, "SELECT attachment_id,project_id,'',file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,created_at "
+                // Look in draft attachments first
+                Statement q(db_, "SELECT attachment_id,project_id,file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,version "
                                  "FROM draft_attachments WHERE attachment_id=?1 AND project_id=?2;");
                 Bind(q.value, 1, query.attachmentId);
                 Bind(q.value, 2, query.projectId);
                 int rc = sqlite3_step(q.value);
                 if (rc == SQLITE_ROW)
                 {
-                    result.found = true;
-                    result.inspection.attachmentId = Text(q.value, 0);
-                    result.inspection.projectId = Text(q.value, 1);
-                    result.inspection.sourceRecordId = query.attachmentId;
-                    result.inspection.sourceRecordVersion = "1";
-                    result.inspection.fileName = Text(q.value, 3);
-                    result.inspection.fileSize = static_cast<uint64_t>(sqlite3_column_int64(q.value, 4));
-                    result.inspection.sha256 = Text(q.value, 5);
-                    result.inspection.detectedType = Text(q.value, 6);
-                    result.inspection.storagePath = Text(q.value, 7);
-                    result.inspection.status = Text(q.value, 9);
-                    result.inspection.isManaged = !Text(q.value, 7).empty();
-                    result.inspection.integrityVerified = VerifyManagedAttachment(
-                        Text(q.value, 7), Text(q.value, 5), result.inspection.fileSize);
-                    result.inspection.titleEn = "Attachment: " + Text(q.value, 3);
-                    result.inspection.explanationEn =
-                        "Read-only inspection of staged draft attachment bytes. Original source path is not "
-                        "reopened for reading; only the verified managed copy is exposed.";
-                    result.inspection.previewEligible =
-                        result.inspection.detectedType == "text/plain" ||
-                        result.inspection.detectedType == "text/markdown";
-                    if (!result.inspection.previewEligible)
-                    {
-                        result.inspection.previewUnavailableReasonEn =
-                            "No approved preview renderer for content type " +
-                            (result.inspection.detectedType.empty() ? "(unspecified)" : result.inspection.detectedType);
-                    }
-                    Check(rc, db_);
-                    return result;
+                    snap.found = true;
+                    snap.attachmentId = Text(q.value, 0);
+                    snap.projectId = Text(q.value, 1);
+                    snap.sourceRecordId = query.attachmentId;
+                    snap.sourceRecordVersion = std::to_string(sqlite3_column_int64(q.value, 10));
+                    snap.fileName = Text(q.value, 2);
+                    snap.fileSize = static_cast<uint64_t>(sqlite3_column_int64(q.value, 3));
+                    snap.sha256 = Text(q.value, 4);
+                    snap.detectedType = Text(q.value, 5);
+                    snap.storagePath = Text(q.value, 6);
+                    snap.sourcePath = Text(q.value, 7);
+                    snap.status = Text(q.value, 8);
+                    snap.errorMessage = Text(q.value, 9);
+                    snap.isCommitted = false;
                 }
-                Statement q2(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,created_at "
-                                       "FROM attachments WHERE attachment_id=?1 AND project_id=?2;");
+                else
+                {
+                    // Look in committed attachments
+                    Statement q2(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,version "
+                                      "FROM attachments WHERE attachment_id=?1 AND project_id=?2;");
                     Bind(q2.value, 1, query.attachmentId);
                     Bind(q2.value, 2, query.projectId);
                     rc = sqlite3_step(q2.value);
                     if (rc == SQLITE_ROW)
                     {
-                        result.found = true;
-                        result.inspection.attachmentId = Text(q2.value, 0);
-                        result.inspection.projectId = Text(q2.value, 1);
-                        result.inspection.sourceRecordId = query.attachmentId;
-                        result.inspection.sourceRecordVersion = "1";
-                        result.inspection.fileName = Text(q2.value, 3);
-                        result.inspection.fileSize = static_cast<uint64_t>(sqlite3_column_int64(q2.value, 4));
-                        result.inspection.sha256 = Text(q2.value, 5);
-                        result.inspection.detectedType = Text(q2.value, 6);
-                        result.inspection.storagePath = Text(q2.value, 7);
-                        result.inspection.status = Text(q2.value, 9);
-                        result.inspection.isManaged = !Text(q2.value, 7).empty();
-                        result.inspection.integrityVerified = VerifyManagedAttachment(
-                            Text(q2.value, 7), Text(q2.value, 5), result.inspection.fileSize);
-                        result.inspection.titleEn = "Attachment: " + Text(q2.value, 3);
-                        result.inspection.explanationEn =
-                            "Read-only inspection of managed attachment bytes. Original source path is not "
-                            "reopened for reading; only the verified managed copy is exposed.";
-                        result.inspection.previewEligible =
-                            result.inspection.detectedType == "text/plain" ||
-                            result.inspection.detectedType == "text/markdown";
-                        if (!result.inspection.previewEligible)
-                        {
-                            result.inspection.previewUnavailableReasonEn =
-                                "No approved preview renderer for content type " +
-                                (result.inspection.detectedType.empty() ? "(unspecified)" : result.inspection.detectedType);
-                        }
+                        snap.found = true;
+                        snap.attachmentId = Text(q2.value, 0);
+                        snap.projectId = Text(q2.value, 1);
+                        snap.sourceRecordId = query.attachmentId;
+                        snap.sourceRecordVersion = std::to_string(sqlite3_column_int64(q2.value, 11));
+                        snap.fileName = Text(q2.value, 3);
+                        snap.fileSize = static_cast<uint64_t>(sqlite3_column_int64(q2.value, 4));
+                        snap.sha256 = Text(q2.value, 5);
+                        snap.detectedType = Text(q2.value, 6);
+                        snap.storagePath = Text(q2.value, 7);
+                        snap.sourcePath = Text(q2.value, 8);
+                        snap.status = Text(q2.value, 9);
+                        snap.errorMessage = Text(q2.value, 10);
+                        snap.isCommitted = true;
                     }
-                    Check(rc, db_);
-                    return result;
+                }
+                Check(rc, db_);
             }
             catch (std::exception const& e)
             {
                 result.found = false;
                 result.errorMessage = e.what();
+                return result;
             }
+        } // Storage mutex lock released! File I/O and hashing happen completely outside lock!
+
+        if (!snap.found)
+        {
+            result.found = false;
             return result;
         }
+
+        result.found = true;
+        result.inspection.attachmentId = snap.attachmentId;
+        result.inspection.projectId = snap.projectId;
+        result.inspection.sourceRecordId = snap.sourceRecordId;
+        result.inspection.sourceRecordVersion = snap.sourceRecordVersion;
+        result.inspection.fileName = snap.fileName;
+        result.inspection.fileSize = snap.fileSize;
+        result.inspection.sha256 = snap.sha256;
+        result.inspection.detectedType = snap.detectedType;
+        result.inspection.storagePath = snap.storagePath;
+        result.inspection.status = snap.status;
+        result.inspection.titleEn = "Attachment: " + snap.fileName;
+        result.inspection.explanationEn = snap.isCommitted ?
+            "Read-only inspection of managed attachment bytes. Original source path is not reopened for reading; only the verified managed copy is exposed." :
+            "Read-only inspection of staged draft attachment bytes. Original source path is not reopened for reading; only the verified managed copy is exposed.";
+
+        // Step 2: Establish managed-path identity outside storage mutex
+        result.inspection.isManaged = IsManagedStoragePath(snap.storagePath, snap.sourcePath, snap.isCommitted);
+
+        // Step 3: Compute file SHA-256 outside storage mutex and verify integrity
+        if (result.inspection.isManaged)
+        {
+            auto hashRes = ComputeFileSha256Safe(Utf8ToWide(snap.storagePath));
+            result.inspection.integrityVerified = (hashRes.success &&
+                                                   hashRes.size == snap.fileSize &&
+                                                   hashRes.sha256 == snap.sha256 &&
+                                                   !snap.sha256.empty());
+        }
+        else
+        {
+            result.inspection.integrityVerified = false;
+        }
+
+        // Step 4: Strict preview eligibility
+        if (!result.inspection.isManaged)
+        {
+            result.inspection.previewEligible = false;
+            result.inspection.previewUnavailableReasonEn = "Managed copy is not available in approved isolated storage or path is invalid.";
+        }
+        else if (!result.inspection.integrityVerified)
+        {
+            result.inspection.previewEligible = false;
+            result.inspection.previewUnavailableReasonEn = "Attachment bytes failed integrity verification: size or SHA-256 digest mismatch.";
+        }
+        else if (snap.status != "READY" && snap.status != "COMMITTED")
+        {
+            result.inspection.previewEligible = false;
+            result.inspection.previewUnavailableReasonEn = "Attachment is in non-ready status (" + snap.status + ") and cannot be previewed.";
+        }
+        else if (snap.detectedType != "text/plain" && snap.detectedType != "text/markdown")
+        {
+            result.inspection.previewEligible = false;
+            result.inspection.previewUnavailableReasonEn = "No approved preview renderer for content type " +
+                (snap.detectedType.empty() ? "(unspecified)" : snap.detectedType);
+        }
+        else
+        {
+            result.inspection.previewEligible = true;
+            result.inspection.previewUnavailableReasonEn = "";
+        }
+
+        return result;
+    }
 }

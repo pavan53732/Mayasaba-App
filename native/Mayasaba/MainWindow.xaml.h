@@ -29,6 +29,8 @@ namespace winrt::Mayasaba::implementation
         void OnComposerKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnSend(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnAttachFiles(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnComposerDragOver(IInspectable const&, Microsoft::UI::Xaml::DragEventArgs const&);
+        winrt::fire_and_forget OnComposerDrop(IInspectable const&, Microsoft::UI::Xaml::DragEventArgs const&);
         void OnStart(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnPause(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnStop(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
@@ -201,7 +203,9 @@ namespace winrt::Mayasaba::implementation
         std::string fixtureMode_;
 
         // Action Center read-only projection state.
+        uint64_t actionCenterRequestSeq_{0};
         bool actionCenterRefreshing_{false};
+        bool actionCenterPendingRerun_{false};
         std::vector<mayasaba::ActionCenterItem> actionCenterItems_;
 
         // Incremental timeline rendering. Only entries appended after the first
@@ -270,6 +274,8 @@ namespace winrt::Mayasaba::implementation
         winrt::fire_and_forget LocateProjectAsync(std::string id);
         winrt::fire_and_forget PickFolderAsync();
         winrt::fire_and_forget OnCreateAndOpenFolderAsync();
+        void InspectAttachment(std::string const& attachmentId);
+        winrt::fire_and_forget ProcessCandidatePathsAsync(std::vector<std::wstring> candidatePaths);
     };
 }
 namespace winrt::Mayasaba::factory_implementation

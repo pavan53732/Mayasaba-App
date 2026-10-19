@@ -64,6 +64,7 @@ namespace mayasaba
         std::string sourcePath;
         std::string status; // "SELECTED", "PREPARING", "READY", "REJECTED", "COMMITTED"
         std::string errorMessage;
+        uint64_t version{1};
         std::string createdAt;
     };
     struct Contribution
@@ -153,12 +154,14 @@ namespace mayasaba
     {
         std::string projectId;
         size_t pageSize{50};
+        std::string continuationToken;
     };
 
     struct ActionCenterResult
     {
         std::vector<ActionCenterItem> items;
         bool isComplete{true};
+        std::string continuationToken;
         std::string errorMessage;
         bool ownerUnavailable{false};
     };

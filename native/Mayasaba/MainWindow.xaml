@@ -641,6 +641,7 @@
                                                             <Border x:Name="ActionCenterPanel" Grid.Row="2" Grid.ColumnSpan="2" Visibility="Collapsed"
                                                                     Style="{StaticResource MayasabaCardSurface}" Padding="12"
                                                                     BorderBrush="{ThemeResource MayasabaAmberBrush}" BorderThickness="1"
+                                                                    AutomationProperties.AutomationId="ActionCenterPanel"
                                                                     AutomationProperties.Name="Action Center" AutomationProperties.LiveSetting="Polite" Margin="0,10,0,0">
                                                                 <StackPanel Spacing="8">
                                                                     <Grid ColumnSpacing="12">
@@ -676,6 +677,12 @@
                                                             </Border>
                                                             <StackPanel x:Name="ChatReadinessPanel" Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="15"
                                                                         HorizontalAlignment="Right" AutomationProperties.Name="CLI readiness">
+                                                                <TextBlock x:Name="HermesStatus" FontSize="11.5"
+                                                                           Text="Hermes Agent CLI · UNSUPPORTED"/>
+                                                                <TextBlock x:Name="KiloStatus" FontSize="11.5"
+                                                                           Text="Kilo Code CLI · UNSUPPORTED"/>
+                                                                <TextBlock x:Name="ClaudeStatus" FontSize="11.5"
+                                                                           Text="Claude Code CLI · UNSUPPORTED"/>
                                                             </StackPanel>
                                                         </Grid>
                         </Border>
@@ -859,13 +866,15 @@
                         <Border x:Name="ComposerPanel"
                                 Padding="13" CornerRadius="{StaticResource MayasabaRadiusComposer}"
                                 Background="{ThemeResource MayasabaPanelBrush}"
-                                BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1">
+                                BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
+                                AllowDrop="True" DragOver="OnComposerDragOver" Drop="OnComposerDrop">
                             <StackPanel Spacing="9">
                                 <TextBox x:Name="ComposerBox" AcceptsReturn="True" TextWrapping="Wrap"
                                          MinHeight="76" MaxHeight="200"
                                          PlaceholderText="Message Mayasaba..."
                                          TextChanged="OnDraftChanged"
                                          PreviewKeyDown="OnComposerKeyDown"
+                                         AllowDrop="True" DragOver="OnComposerDragOver" Drop="OnComposerDrop"
                                          AutomationProperties.Name="Chat message"/>
                                 <ScrollViewer x:Name="AttachmentChipsScroller" HorizontalScrollBarVisibility="Auto"
                                               VerticalScrollBarVisibility="Disabled" HorizontalScrollMode="Enabled"

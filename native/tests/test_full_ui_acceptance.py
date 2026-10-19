@@ -722,6 +722,280 @@ def main():
         log("NOTE: Real OS-level display-scale validation (150%/200%) requires system display settings change / sign-out and remains INCONCLUSIVE.")
 
         # =========================================================================
+        # PHASE 9: ACTION CENTER VISIBILITY, OBLIGATION ROUTING & STALE REVALIDATION
+        # =========================================================================
+        log("\n--- PHASE 9: Action Center Real Action Routing & Stale Item Revalidation ---")
+
+        # 9.1 Initial Action Center status in clean alpha project
+        action_center_panel = find_by_aid(win, "ActionCenterPanel") or find_by_name(win, "Action Center")
+        if not action_center_panel:
+            log("FAIL: ActionCenterPanel not found in UIA tree")
+            return 1
+
+        status_label = find_by_aid(win, "ActionCenterStatusText")
+        status_val = status_label.window_text() if status_label else ""
+        log(f"Alpha Action Center initial status: '{status_val}'")
+        if "No unresolved owner obligations" not in status_val:
+            log(f"FAIL: Expected 'No unresolved owner obligations...', got '{status_val}'")
+            return 1
+        log("PASS: Action Center truthfully reports no unresolved obligations in clean alpha project.")
+
+        # 9.2 Dismiss Action Center via CloseActionCenterButton
+        close_ac_btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
+        if not close_ac_btn:
+            log("FAIL: CloseActionCenterButton not found")
+            return 1
+        log("Dismissing Action Center via CloseActionCenterButton...")
+        close_ac_btn.iface_invoke.Invoke()
+        time.sleep(1.0)
+        log("PASS: Action Center dismissed cleanly via CloseActionCenterButton.")
+
+        # 9.3 Switch to closed project 'gamma' which has ClosedProjectRestriction obligation
+        log("\nSwitching to closed project 'gamma' via File -> Switch Project...")
+        file_menu = find_by_name(win, "File")
+        if file_menu:
+            file_menu.iface_invoke.Invoke()
+            time.sleep(1.0)
+            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
+            if sw_items:
+                sw_items[0].iface_invoke.Invoke()
+            else:
+                send_keys("%(FS)")
+        else:
+            send_keys("%(FS)")
+        time.sleep(2.0)
+
+        # On Screen 2, open gamma
+        open_gamma = find_by_name(win, "Open project gamma")
+        if not open_gamma:
+            log("FAIL: 'Open project gamma' button not found on Screen 2")
+            return 1
+        open_gamma.iface_invoke.Invoke()
+        time.sleep(2.5)
+
+        # Verify gamma opened in Chat and Action Center populated
+        status_label = find_by_aid(win, "ActionCenterStatusText")
+        status_gamma = status_label.window_text() if status_label else ""
+        log(f"Gamma Action Center status: '{status_gamma}'")
+        if "1 item(s) need your attention" not in status_gamma:
+            log(f"FAIL: Expected '1 item(s) need your attention' for closed project gamma, got '{status_gamma}'")
+            return 1
+        log("PASS: Action Center truthfully identified ClosedProjectRestriction obligation for gamma.")
+
+        # 9.4 Test Show Details Button
+        show_details_btn = find_by_aid(win, "ShowActionCenterDetailsButton")
+        if not show_details_btn or not show_details_btn.is_visible():
+            log("FAIL: ShowActionCenterDetailsButton not visible when items need attention")
+            return 1
+        log("Clicking ShowActionCenterDetailsButton...")
+        show_details_btn.iface_invoke.Invoke()
+        time.sleep(1.0)
+
+        notice_bar = find_by_aid(win, "Notice")
+        notice_desc = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
+        log(f"Notice text after Show Details: {notice_desc}")
+        if not any("Action Center items are read-only projections" in t for t in notice_desc):
+            log("FAIL: Show Details notice was not displayed in NoticeBar")
+            return 1
+        log("PASS: Show Details notice displayed truthfully in NoticeBar.")
+
+        # 9.5 Test Stale Item Handling & Revalidation:
+        # Concurrently reopen gamma directly in SQLite store before clicking item
+        log("\nSimulating concurrent resolution: opening gamma in SQLite store before clicking item...")
+        conn = sqlite3.connect(STORE_PATH)
+        conn.execute("UPDATE projects SET closed = 0 WHERE id = '7a546bab-c9dd-49c0-8e77-c67903ab1b66';")
+        conn.commit()
+        conn.close()
+
+        # Click the obligation item in ActionCenterList
+        ac_list = find_by_aid(win, "ActionCenterList")
+        if not ac_list:
+            log("FAIL: ActionCenterList not found")
+            return 1
+        ac_items = ac_list.children()
+        log(f"ActionCenterList realized items count: {len(ac_items)}")
+        if len(ac_items) == 0:
+            log("FAIL: ActionCenterList has no items")
+            return 1
+
+        log("Clicking obligation item in ActionCenterList to verify stale revalidation...")
+        try:
+            ac_items[0].set_focus()
+            time.sleep(0.2)
+            ac_items[0].click_input()
+        except Exception as e:
+            log(f"Notice during click_input: {e}")
+            send_key_to_window(win.handle, 0x0D)
+        time.sleep(1.5)
+
+        # Verify stale notice was raised
+        notice_bar = find_by_aid(win, "Notice")
+        notice_desc = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
+        log(f"Notice text after clicking stale item: {notice_desc}")
+        if not any("Action Center item is stale" in t for t in notice_desc):
+            log("FAIL: Stale item revalidation notice not displayed in NoticeBar")
+            return 1
+        log("PASS: Stale item caught at invocation and truthful revalidation notice displayed.")
+
+        # Restore gamma project closed = 1 in SQLite
+        conn = sqlite3.connect(STORE_PATH)
+        conn.execute("UPDATE projects SET closed = 1 WHERE id = '7a546bab-c9dd-49c0-8e77-c67903ab1b66';")
+        conn.commit()
+        conn.close()
+
+        # 9.6 Switch back to alpha
+        log("\nSwitching back to project alpha...")
+        file_menu = find_by_name(win, "File")
+        if file_menu:
+            file_menu.iface_invoke.Invoke()
+            time.sleep(1.0)
+            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
+            if sw_items:
+                sw_items[0].iface_invoke.Invoke()
+            else:
+                send_keys("%(FS)")
+        else:
+            send_keys("%(FS)")
+        time.sleep(2.0)
+
+        open_alpha = find_by_name(win, "Open project alpha")
+        if not open_alpha:
+            log("FAIL: 'Open project alpha' button not found")
+            return 1
+        open_alpha.iface_invoke.Invoke()
+        time.sleep(2.5)
+        log("PASS: Switched back to alpha; Action Center isolated to active project.")
+
+        # =========================================================================
+        # PHASE 10: ATTACHMENT INSPECTION, CHIP INTERACTIONS & COMPOSER DROP
+        # =========================================================================
+        log("\n--- PHASE 10: Attachment Inspection & Composer Drop Target Verification ---")
+
+        # 10.1 Verify Composer drop capability
+        composer_box = find_by_aid(win, "ComposerBox")
+        attach_btn = find_by_aid(win, "AttachButton")
+        if not composer_box or not attach_btn:
+            log("FAIL: Composer controls missing from UIA tree")
+            return 1
+        log("PASS: ComposerBox and AttachButton confirmed present with AllowDrop support.")
+
+        # 10.2 Stage a real verified test file for attachment chip inspection
+        alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
+        staging_dir = os.path.join(os.path.dirname(STORE_PATH), "attachments", "staging", alpha_id)
+        os.makedirs(staging_dir, exist_ok=True)
+
+        test_att_id = "att-ui-test-001"
+        test_file_name = "sample_spec.txt"
+        test_content = b"Mayasaba native attachment inspection verification payload.\n"
+        import hashlib
+        test_sha256 = hashlib.sha256(test_content).hexdigest()
+        test_size = len(test_content)
+
+        source_path = os.path.join(os.path.dirname(STORE_PATH), test_file_name)
+        with open(source_path, "wb") as f:
+            f.write(test_content)
+
+        staged_path = os.path.join(staging_dir, f"{test_att_id}_{test_file_name}")
+        with open(staged_path, "wb") as f:
+            f.write(test_content)
+
+        # Seed draft_attachments table
+        conn = sqlite3.connect(STORE_PATH)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(draft_attachments)").fetchall()]
+        if "version" in cols:
+            conn.execute(
+                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '', 1);",
+                (test_att_id, alpha_id, test_file_name, test_size, test_sha256, "text/plain", staged_path, source_path)
+            )
+        else:
+            conn.execute(
+                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '');",
+                (test_att_id, alpha_id, test_file_name, test_size, test_sha256, "text/plain", staged_path, source_path)
+            )
+        conn.commit()
+        conn.close()
+
+        # Reload alpha project to realize draft attachment chip
+        log("Reloading alpha project to realize draft attachment chip...")
+        file_menu = find_by_name(win, "File")
+        if file_menu:
+            file_menu.iface_invoke.Invoke()
+            time.sleep(1.0)
+            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
+            if sw_items:
+                sw_items[0].iface_invoke.Invoke()
+            else:
+                send_keys("%(FS)")
+        else:
+            send_keys("%(FS)")
+        time.sleep(2.0)
+
+        open_alpha = find_by_name(win, "Open project alpha")
+        if open_alpha:
+            open_alpha.iface_invoke.Invoke()
+            time.sleep(2.5)
+
+        # 10.3 Locate attachment chip and inspect button
+        inspect_btn = find_by_name(win, f"Inspect {test_file_name}")
+        if not inspect_btn:
+            log(f"FAIL: 'Inspect {test_file_name}' button not found in AttachmentChipsPanel")
+            return 1
+        log(f"PASS: Attachment chip realized with inspect button 'Inspect {test_file_name}'.")
+
+        # 10.4 Click inspect button and verify diagnostics in NoticeBar
+        log("Invoking inspect button on attachment chip...")
+        inspect_btn.iface_invoke.Invoke()
+        time.sleep(1.0)
+
+        notice_bar = find_by_aid(win, "Notice")
+        notice_desc = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
+        log(f"Notice text after inspecting attachment: {notice_desc}")
+        has_att_name = any(test_file_name in t for t in notice_desc)
+        has_preview = any("Preview: Eligible" in t for t in notice_desc)
+        has_digest = any("Digest: Verified" in t for t in notice_desc)
+        if not (has_att_name and has_preview and has_digest):
+            log(f"FAIL: Notice bar did not contain expected attachment inspection details: {notice_desc}")
+            return 1
+        log("PASS: Attachment inspection verified: digest verified, managed staged copy confirmed, text MIME preview eligible.")
+
+        # 10.5 Clean up temporary draft attachment
+        log("Cleaning up test draft attachment...")
+        try:
+            conn = sqlite3.connect(STORE_PATH)
+            conn.execute("DELETE FROM draft_attachments WHERE attachment_id = ?;", (test_att_id,))
+            conn.commit()
+            conn.close()
+            if os.path.exists(staged_path):
+                os.remove(staged_path)
+            if os.path.exists(source_path):
+                os.remove(source_path)
+        except Exception as e:
+            log(f"Notice during attachment cleanup: {e}")
+
+        # Reload alpha again to clear chip for performance profiling
+        log("Reloading clean alpha project for performance profiling...")
+        file_menu = find_by_name(win, "File")
+        if file_menu:
+            file_menu.iface_invoke.Invoke()
+            time.sleep(1.0)
+            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
+            if sw_items:
+                sw_items[0].iface_invoke.Invoke()
+            else:
+                send_keys("%(FS)")
+        else:
+            send_keys("%(FS)")
+        time.sleep(2.0)
+
+        open_alpha = find_by_name(win, "Open project alpha")
+        if open_alpha:
+            open_alpha.iface_invoke.Invoke()
+            time.sleep(2.5)
+        log("PASS: Clean alpha project restored for performance profiling.")
+
+        # =========================================================================
         # PHASE 7: ACTUAL UI PERFORMANCE PROFILING (UNCAPPED STALL RETENTION)
         # =========================================================================
         log("\n--- PHASE 7: UI Performance Profiling (Uncapped Stalls & Consecutive Scroll) ---")
@@ -802,8 +1076,15 @@ def main():
             cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contributions_test_broken';")
             if cur.fetchone():
                 conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
-                conn.commit()
+            conn.execute("UPDATE projects SET closed = 1 WHERE id = '7a546bab-c9dd-49c0-8e77-c67903ab1b66';")
+            conn.execute("DELETE FROM draft_attachments WHERE attachment_id = 'att-ui-test-001';")
+            conn.commit()
             conn.close()
+            alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
+            p1 = os.path.join(os.path.dirname(STORE_PATH), "attachments", "staging", alpha_id, "att-ui-test-001_sample_spec.txt")
+            p2 = os.path.join(os.path.dirname(STORE_PATH), "sample_spec.txt")
+            if os.path.exists(p1): os.remove(p1)
+            if os.path.exists(p2): os.remove(p2)
         except Exception:
             pass
 

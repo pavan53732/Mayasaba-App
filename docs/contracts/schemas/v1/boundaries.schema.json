@@ -247,6 +247,7 @@
         "projection": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{2,127}$" },
         "snapshot_consistency_token": { "$ref": "core.schema.json#/$defs/Sha256" },
         "page_size": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "projection_scope": { "type": "string", "enum": ["PROJECT_SCOPED", "CROSS_PROJECT"] },
         "continuation_token": { "type": "string", "minLength": 1, "maxLength": 4096 }
       }
     },
@@ -285,6 +286,7 @@
         "query_id": { "$ref": "core.schema.json#/$defs/Uuid" },
         "projection": { "enum": ["RECENT_PROJECTS"] },
         "page_size": { "type": "integer", "minimum": 1, "maximum": 200 },
+        "projection_scope": { "type": "string", "enum": ["PROJECT_SCOPED", "CROSS_PROJECT"] },
         "continuation_token": { "type": "string", "minLength": 1, "maxLength": 4096 }
       }
     },

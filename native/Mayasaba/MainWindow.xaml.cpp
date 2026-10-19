@@ -614,8 +614,11 @@ namespace winrt::Mayasaba::implementation
 
         CreateFolderPanel().Visibility(Visibility::Collapsed);
         DraftCollisionPanel().Visibility(Visibility::Collapsed);
-
-
+        actionCenterItems_.clear();
+        ActionCenterList().Items().Clear();
+        ActionCenterPanel().Visibility(Visibility::Collapsed);
+        ActionCenterStatusText().Text(L"");
+        ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
 
         RefreshRecentProjects();
         motion_.Enter(FolderStack(), 10, 0);
@@ -662,6 +665,11 @@ namespace winrt::Mayasaba::implementation
         if (!error.empty() || !project) { ShowNotice(L"Chat restoration blocked: " + Utf16(error), true); co_return; }
         activeProject_=id;
         projectClosed_=project->closed;
+        actionCenterItems_.clear();
+        ActionCenterList().Items().Clear();
+        ActionCenterPanel().Visibility(Visibility::Collapsed);
+        ActionCenterStatusText().Text(L"");
+        ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
         historyCache_ = std::move(history);
         draftTimer_.Stop();
         motion_.CancelAll();
@@ -703,6 +711,7 @@ namespace winrt::Mayasaba::implementation
             RenderAttachmentChips();
         }
         UpdateComposerState();
+        RefreshActionCenterAsync(gen);
         if (pending) ShowNotice(L"A previous Send is unresolved. Its exact text and submission identity are locked; use Reconcile Send.");
 
         // A restored project opens in its final layout immediately: no entrance
@@ -1346,6 +1355,7 @@ namespace winrt::Mayasaba::implementation
         ApplyChatLayout(false);
         if(returnFocus_ && returnFocus_.IsEnabled()) returnFocus_.Focus(FocusState::Programmatic);
         else ComposerBox().Focus(FocusState::Programmatic);
+        RefreshActionCenterAsync(selectorGeneration_.load());
     }
     void MainWindow::OnCancelSwitch(IInspectable const&, RoutedEventArgs const&)
     {
@@ -1492,6 +1502,36 @@ namespace winrt::Mayasaba::implementation
             sizeText.VerticalAlignment(VerticalAlignment::Center);
             content.Children().Append(sizeText);
 
+            auto weak = get_weak();
+            auto attId = att.id;
+
+            nameText.IsHitTestVisible(true);
+            nameText.Tapped([weak, attId](auto const&, auto const&)
+            {
+                if (auto self = weak.get())
+                {
+                    self->InspectAttachment(attId);
+                }
+            });
+
+            Button inspectBtn{};
+            inspectBtn.Content(box_value(L"ℹ"));
+            inspectBtn.FontSize(10);
+            inspectBtn.Padding(Thickness{4, 1, 4, 1});
+            inspectBtn.CornerRadius(CornerRadius{4});
+            inspectBtn.Background(SolidColorBrush{});
+            inspectBtn.BorderThickness(Thickness{0});
+            inspectBtn.VerticalAlignment(VerticalAlignment::Center);
+            Automation::AutomationProperties::SetName(inspectBtn, L"Inspect " + Utf16(att.fileName));
+            inspectBtn.Click([weak, attId](auto const&, auto const&)
+            {
+                if (auto self = weak.get())
+                {
+                    self->InspectAttachment(attId);
+                }
+            });
+            content.Children().Append(inspectBtn);
+
             Button removeBtn{};
             removeBtn.Content(box_value(L"✕"));
             removeBtn.FontSize(10);
@@ -1505,8 +1545,6 @@ namespace winrt::Mayasaba::implementation
             bool canRemove = !busy_ && pendingAttemptId_.empty() && !attachmentsPreparing_;
             removeBtn.IsEnabled(canRemove);
 
-            auto weak = get_weak();
-            auto attId = att.id;
             removeBtn.Click([weak, attId](auto const&, auto const&)
             {
                 if (auto self = weak.get())
@@ -1597,6 +1635,17 @@ namespace winrt::Mayasaba::implementation
         {
             candidatePaths.push_back(std::wstring{files.GetAt(i).Path().c_str()});
         }
+
+        ProcessCandidatePathsAsync(candidatePaths);
+    }
+
+    winrt::fire_and_forget MainWindow::ProcessCandidatePathsAsync(std::vector<std::wstring> candidatePaths)
+    {
+        if (windowClosed_ || busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_)
+        {
+            co_return;
+        }
+        if (attachmentsPreparing_) co_return;
 
         if (!attachmentService_)
         {
@@ -1700,11 +1749,118 @@ namespace winrt::Mayasaba::implementation
                     break;
                 }
             }
-            if (!hasProblem)
+            if (!hasProblem && !prepared.empty())
             {
-                ShowNotice(L"Attachments prepared and verified (SHA-256 computed).");
+                ShowNotice(winrt::hstring{L"Attached and verified "} + winrt::to_hstring(prepared.size()) + L" file(s) (SHA-256 computed).", false);
             }
         }
+    }
+
+    void MainWindow::OnComposerDragOver(IInspectable const&, DragEventArgs const& e)
+    {
+        if (windowClosed_ || busy_ || navigationBusy_ || activeProject_.empty() || projectClosed_)
+        {
+            e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::None);
+            return;
+        }
+        if (e.DataView().Contains(Windows::ApplicationModel::DataTransfer::StandardDataFormats::StorageItems()))
+        {
+            e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);
+        }
+        else
+        {
+            e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::None);
+        }
+    }
+
+    winrt::fire_and_forget MainWindow::OnComposerDrop(IInspectable const&, DragEventArgs const& e)
+    {
+        if (windowClosed_ || busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_)
+        {
+            co_return;
+        }
+        if (attachmentsPreparing_)
+        {
+            ShowNotice(L"Cannot attach files while previous attachments are being prepared.", true);
+            co_return;
+        }
+        if (!e.DataView().Contains(Windows::ApplicationModel::DataTransfer::StandardDataFormats::StorageItems()))
+        {
+            co_return;
+        }
+
+        auto def = e.GetDeferral();
+        Windows::Foundation::Collections::IVectorView<Windows::Storage::IStorageItem> items{nullptr};
+        try
+        {
+            items = co_await e.DataView().GetStorageItemsAsync();
+        }
+        catch (std::exception const& ex)
+        {
+            def.Complete();
+            ShowNotice(L"Drop failed: " + Utf16(ex.what()), true);
+            co_return;
+        }
+        catch (winrt::hresult_error const& ex)
+        {
+            def.Complete();
+            ShowNotice(L"Drop failed: " + ex.message(), true);
+            co_return;
+        }
+        def.Complete();
+
+        if (!items || items.Size() == 0) co_return;
+
+        std::vector<std::wstring> candidatePaths;
+        candidatePaths.reserve(items.Size());
+        for (uint32_t i = 0; i < items.Size(); ++i)
+        {
+            auto item = items.GetAt(i);
+            if (item.IsOfType(Windows::Storage::StorageItemTypes::File))
+            {
+                candidatePaths.push_back(std::wstring{item.Path().c_str()});
+            }
+        }
+
+        if (candidatePaths.empty())
+        {
+            ShowNotice(L"Only individual files may be attached; folders cannot be attached directly.", true);
+            co_return;
+        }
+
+        ProcessCandidatePathsAsync(candidatePaths);
+    }
+
+    void MainWindow::InspectAttachment(std::string const& attachmentId)
+    {
+        if (!storage_ || activeProject_.empty() || attachmentId.empty()) return;
+
+        mayasaba::AttachmentInspectionQuery query{ activeProject_, attachmentId };
+        auto result = storage_->InspectAttachment(query);
+        if (!result.found)
+        {
+            ShowNotice(L"Attachment not found or inaccessible in current project.", true);
+            return;
+        }
+
+        auto const& insp = result.inspection;
+        winrt::hstring details = winrt::hstring{L"Attachment: "} + Utf16(insp.fileName) +
+            L" (" + Utf16(mayasaba::AttachmentService::FormatFileSize(insp.fileSize)) + L")" +
+            L" · Type: " + Utf16(insp.detectedType.empty() ? "(unknown)" : insp.detectedType) +
+            L" · Status: " + Utf16(insp.status) +
+            L" · Staged: " + (insp.isManaged ? L"Yes" : L"No") +
+            L" · Digest: " + (insp.integrityVerified ? (L"Verified (" + Utf16(insp.sha256.substr(0, 8)) + L"…)") : winrt::hstring{L"FAILED"});
+
+        if (insp.previewEligible)
+        {
+            details = details + L" · Preview: Eligible";
+        }
+        else
+        {
+            details = details + L" · Preview unavailable: " + Utf16(insp.previewUnavailableReasonEn);
+        }
+
+        ShowNotice(details, !insp.integrityVerified);
     }
 
     void MainWindow::OnDraftChanged(IInspectable const&, TextChangedEventArgs const&)
@@ -2934,9 +3090,10 @@ namespace winrt::Mayasaba::implementation
     // ------------------------------------------------------------------
     void MainWindow::OnCloseActionCenter(IInspectable const&, RoutedEventArgs const&)
     {
+        actionCenterItems_.clear();
+        ActionCenterList().Items().Clear();
         ActionCenterPanel().Visibility(Visibility::Collapsed);
         ActionCenterStatusText().Text(L"");
-        ActionCenterList().Items().Clear();
         ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
     }
 
@@ -2958,46 +3115,76 @@ namespace winrt::Mayasaba::implementation
             if (ActionCenterList().Items().GetAt(i) == item) { index = i; break; }
         }
         if (index < 0 || index >= static_cast<int32_t>(actionCenterItems_.size())) return;
-        auto const& clicked = actionCenterItems_[static_cast<size_t>(index)];
+        auto const clicked = actionCenterItems_[static_cast<size_t>(index)];
 
-        // Revalidation at invocation: current project, source identity, record
-        // version, current state, authorization, and existing operation identity.
-        if (activeProject_.empty() || clicked.projectId != activeProject_)
+        // Revalidation at invocation: project identity
+        if (activeProject_.empty() || clicked.projectId != activeProject_ || !storage_)
         {
             ShowNotice(L"Action Center item is not associated with the current project.", false);
             return;
         }
 
-        auto const kind = clicked.kind;
-        auto const action = winrt::to_hstring(clicked.availableAction);
-
-        // Route through existing services only; the Action Center issues no new command.
-        switch (kind)
+        // Route through existing services only after revalidating underlying source records
+        switch (clicked.kind)
         {
         case mayasaba::ActionCenterKind::UnresolvedSubmission:
-            // Reuse the original submission identity via the existing reconciliation
-            // path. No duplicate contribution, no alternate retry mechanism.
-            if (!action.empty())
+        {
+            // Revalidate against pending_submissions table
+            auto pending = storage_->Pending(activeProject_);
+            if (!pending || pending->id != clicked.sourceRecordId)
             {
-                ShowNotice(L"Recheck outcome for submission " + winrt::to_hstring(clicked.sourceRecordId) +
-                           L". Source identity revalidated against current project.", false);
+                ShowNotice(L"Action Center item is stale: pending submission has already been resolved or changed.", false);
+                RefreshActionCenterAsync(selectorGeneration_.load());
+                return;
             }
+            // Execute existing reconciliation flow via SubmitAsync
+            ShowNotice(L"Reconciling pending submission " + Utf16(pending->id) + L"...", false);
+            SubmitAsync(activeProject_, pending->id, pending->body);
             break;
+        }
         case mayasaba::ActionCenterKind::FailedAttachment:
-            // Navigate to the relevant chip or existing removal/reselection action.
-            ShowNotice(L"Attachment requires attention: " + winrt::to_hstring(clicked.titleEn) +
-                       L" — " + winrt::to_hstring(clicked.explanationEn), false);
+        {
+            // Revalidate against draft_attachments table
+            auto drafts = storage_->GetDraftAttachments(activeProject_);
+            auto it = std::find_if(drafts.begin(), drafts.end(), [&](auto const& d) {
+                return d.id == clicked.sourceRecordId;
+            });
+            if (it == drafts.end() ||
+                (it->status != "REJECTED" && it->status != "SOURCE_CHANGED" && it->status != "TIMED_OUT"))
+            {
+                ShowNotice(L"Action Center item is stale: attachment is no longer in a failed state.", false);
+                RefreshActionCenterAsync(selectorGeneration_.load());
+                return;
+            }
+            // Navigate to attachment: make scroller visible, inspect the attachment, and notify
+            AttachmentChipsScroller().Visibility(Visibility::Visible);
+            InspectAttachment(clicked.sourceRecordId);
+            ShowNotice(L"Navigated to failed attachment '" + Utf16(clicked.titleEn) +
+                       L"'. Remove or re-attach to proceed.", true);
             break;
+        }
         case mayasaba::ActionCenterKind::ClosedProjectRestriction:
-            // Existing Project-service reopening rules. Never reopen implicitly.
-            ShowNotice(L"Project is closed. Use the existing Reopen Project action to restore work "
-                       L"authorization; Send and Start remain gated until reopened.", false);
+        {
+            // Revalidate project closure record
+            auto proj = storage_->Project(activeProject_);
+            if (!proj || !proj->closed)
+            {
+                ShowNotice(L"Action Center item is stale: project is already open.", false);
+                RefreshActionCenterAsync(selectorGeneration_.load());
+                return;
+            }
+            // Invoke existing authorized reopening flow
+            ChangeClosureAsync(false);
             break;
+        }
         case mayasaba::ActionCenterKind::StorageFailure:
         case mayasaba::ActionCenterKind::UnknownOutcome:
-            ShowNotice(L"Storage outcome unresolved: " + winrt::to_hstring(clicked.sourceRecordId) +
-                       L". Use Inspect affected files to reconcile before proceeding.", false);
+        {
+            ShowNotice(L"Storage outcome unresolved: " + Utf16(clicked.sourceRecordId) +
+                       L". Rechecking Action Center records...", false);
+            RefreshActionCenterAsync(selectorGeneration_.load());
             break;
+        }
         default:
             ShowNotice(L"No action available for this item.", false);
             break;
@@ -3006,54 +3193,90 @@ namespace winrt::Mayasaba::implementation
 
     winrt::fire_and_forget MainWindow::RefreshActionCenterAsync(uint64_t gen)
     {
-        if (actionCenterRefreshing_) co_return;
         if (!storage_ || activeProject_.empty()) co_return;
+
+        uint64_t const reqSeq = ++actionCenterRequestSeq_;
+        if (actionCenterRefreshing_)
+        {
+            actionCenterPendingRerun_ = true;
+            co_return;
+        }
         actionCenterRefreshing_ = true;
 
         auto alive = get_strong();
         auto ui = DispatcherQueue();
-        auto projectId = activeProject_;
 
-        co_await selectorQueue_.Background();
-        mayasaba::ActionCenterQuery query;
-        query.projectId = projectId;
-        query.pageSize = 50;
-        auto result = storage_->QueryActionCenter(query);
-
-        if (!co_await resume_foreground(ui)) co_return;
-        if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != gen)
+        while (true)
         {
-            actionCenterRefreshing_ = false;
-            co_return;
+            actionCenterPendingRerun_ = false;
+            auto projectId = activeProject_;
+            auto currentGen = selectorGeneration_.load();
+
+            co_await selectorQueue_.Background();
+            mayasaba::ActionCenterQuery query;
+            query.projectId = projectId;
+            query.pageSize = 50;
+            auto result = storage_->QueryActionCenter(query);
+
+            if (!co_await resume_foreground(ui)) co_return;
+
+            // Reject obsolete completions: project changed, generation changed, or window closed
+            if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != currentGen)
+            {
+                if (activeProject_ != projectId)
+                {
+                    actionCenterItems_.clear();
+                    ActionCenterList().Items().Clear();
+                    ActionCenterPanel().Visibility(Visibility::Collapsed);
+                    ActionCenterStatusText().Text(L"");
+                    ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+                }
+                break;
+            }
+
+            // If a newer refresh request arrived while in background, rerun loop
+            if (actionCenterPendingRerun_ || reqSeq != actionCenterRequestSeq_)
+            {
+                continue;
+            }
+
+            // Atomically replace backing and visible collections together
+            actionCenterItems_.clear();
+            ActionCenterList().Items().Clear();
+
+            if (!result.errorMessage.empty())
+            {
+                ActionCenterStatusText().Text(L"Storage unavailable: " + Utf16(result.errorMessage));
+                ActionCenterPanel().Visibility(Visibility::Visible);
+                ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+                break;
+            }
+
+            if (result.items.empty())
+            {
+                ActionCenterStatusText().Text(L"No unresolved owner obligations need your attention.");
+                ActionCenterPanel().Visibility(Visibility::Visible);
+                ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+                break;
+            }
+
+            for (auto const& item : result.items)
+            {
+                auto entry = winrt::to_hstring(item.titleEn) + L" — " + winrt::to_hstring(item.explanationEn);
+                ActionCenterList().Items().Append(winrt::box_value(entry));
+                actionCenterItems_.push_back(item);
+            }
+
+            ActionCenterStatusText().Text(std::to_wstring(result.items.size()) + L" item(s) need your attention.");
+            ActionCenterPanel().Visibility(Visibility::Visible);
+            ShowActionCenterDetailsButton().Visibility(Visibility::Visible);
+            break;
         }
 
         actionCenterRefreshing_ = false;
-        ActionCenterList().Items().Clear();
-
-        if (!result.errorMessage.empty())
+        if (actionCenterPendingRerun_ && !windowClosed_ && !activeProject_.empty())
         {
-            ActionCenterStatusText().Text(L"Storage unavailable: " + Utf16(result.errorMessage));
-            ActionCenterPanel().Visibility(Visibility::Visible);
-            co_return;
+            RefreshActionCenterAsync(selectorGeneration_.load());
         }
-
-        if (result.items.empty())
-        {
-            ActionCenterStatusText().Text(L"No unresolved owner obligations need your attention.");
-            ActionCenterPanel().Visibility(Visibility::Visible);
-            ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
-            co_return;
-        }
-
-        for (auto const& item : result.items)
-        {
-            auto entry = winrt::to_hstring(item.titleEn) + L" — " + winrt::to_hstring(item.explanationEn);
-            ActionCenterList().Items().Append(winrt::box_value(entry));
-            actionCenterItems_.push_back(item);
-        }
-
-        ActionCenterStatusText().Text(std::to_wstring(result.items.size()) + L" item(s) need your attention.");
-        ActionCenterPanel().Visibility(Visibility::Visible);
-        ShowActionCenterDetailsButton().Visibility(Visibility::Visible);
     }
 }
