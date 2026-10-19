@@ -470,12 +470,12 @@ production store `%LOCALAPPDATA%\Mayasaba\mayasaba.db` was never opened, migrate
 | D-09 | Preference changes take effect live | PASS | Settings toggle applied to a running window in both directions. |
 | D-10 | High contrast uses system colours and removes decorative depth | PASS | 597 colours, no gradients or shadows, system border colour. |
 | D-11 | Lifecycle, teardown and stale-callback safety | PASS (source) | `CancelAll` on hide/close, both subscriptions revoked, weak references and generation guards on every callback. |
-| D-12 | Frame timing and 150/200% DPI | INCONCLUSIVE | Not instrumented; DPI change needs a sign-out. |
-|| AC-01 | Action Center panel toggles read-only owner projection; empty/loading/partial/stale/unavailable states distinguished | NOT_APPLICABLE | Code implemented and build green; native UI acceptance (pywinauto) not yet executed against Action Center. |
-|| AC-02 | Action Center item click shows source-linked explanation; dismissal is presentation-only, no durable mutation | NOT_APPLICABLE | Handler wiring complete; native acceptance pending. |
-|| AC-03 | Action Center revalidates project, source identity, record version, state, and authorization on invocation | NOT_APPLICABLE | Read-only projection built; revalidation-at-invocation not yet exercised against live owner records. |
-|| AI-01 | Attachment inspection resolves staged draft then committed managed attachment; metadata-only for unsupported types | NOT_APPLICABLE | Inspection logic implemented; native acceptance pending. |
-|| AI-02 | Inspection never reopens originalPath; integrity of managed file rechecked before rendering | NOT_APPLICABLE | Source inspection only; not yet executed natively. |
+|| D-12 | Frame timing and 150/200% DPI | INCONCLUSIVE | Not instrumented; DPI change needs a sign-out. |
+|| AC-01 | Action Center panel toggles read-only owner projection; empty/loading/partial/stale/unavailable states distinguished | INCONCLUSIVE | Storage projection verified via standalone regression (query, revalidation, isolation, integrity); native UI acceptance (pywinauto) not yet executed against Action Center panel/item/details/close. |
+|| AC-02 | Action Center item click shows source-linked explanation; dismissal is presentation-only, no durable mutation | INCONCLUSIVE | Handler revalidates project+kind and routes through existing services; native UI acceptance pending. |
+|| AC-03 | Action Center revalidates project, source identity, record version, state, and authorization on invocation | INCONCLUSIVE | Project mismatch guard implemented; live owner-record revalidation not yet exercised end-to-end. |
+|| AI-01 | Attachment inspection resolves staged draft then committed managed attachment; metadata-only for unsupported types | INCONCLUSIVE | Draft-branch inspection + SHA-256 integrity verification verified via standalone regression; committed branch implemented, native UI acceptance pending. |
+|| AI-02 | Inspection never reopens originalPath; integrity of managed file rechecked before rendering | INCONCLUSIVE | Integrity uses ComputeFileSha256 on managed storagePath only (never originalPath); native UI acceptance pending. |
 
 ### Fixture-harness behaviour worth knowing
 

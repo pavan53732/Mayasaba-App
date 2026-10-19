@@ -108,6 +108,17 @@ namespace mayasaba
             }
             return ss.str();
         }
+
+        inline bool VerifyManagedAttachment(std::string const& storagePathUtf8,
+                                            std::string const& expectedSha256,
+                                            uint64_t expectedSize)
+        {
+            if (storagePathUtf8.empty() || expectedSha256.empty()) return false;
+            std::wstring const storagePath = Utf8ToWide(storagePathUtf8);
+            uint64_t actualSize = 0;
+            std::string const actualSha = ComputeFileSha256(storagePath, &actualSize);
+            return actualSha == expectedSha256 && actualSize == expectedSize;
+        }
 #endif
     }
 
@@ -1659,7 +1670,7 @@ namespace mayasaba
 
                 // 1. Unresolved submissions whose physical outcome is unknown.
                 {
-                    Statement q(db_, "SELECT id, submission_id, body, created_at FROM pending_submissions "
+                    Statement q(db_, "SELECT submission_id, body, attachment_manifest FROM pending_submissions "
                                      "WHERE project_id=?1 ORDER BY rowid LIMIT ?2;");
                     Bind(q.value, 1, query.projectId);
                     sqlite3_bind_int(q.value, 2, static_cast<int>(query.pageSize));
@@ -1670,7 +1681,7 @@ namespace mayasaba
                         item.itemId = Text(q.value, 0);
                         item.projectId = query.projectId;
                         item.sourceOwner = "MESSAGE_CONTRIBUTION_SERVICE";
-                        item.sourceRecordId = Text(q.value, 1);
+                        item.sourceRecordId = Text(q.value, 0);
                         item.kind = ActionCenterKind::UnresolvedSubmission;
                         item.state = "UNKNOWN_EFFECT";
                         item.titleEn = "Unresolved submission awaiting reconciliation";
@@ -1740,30 +1751,9 @@ namespace mayasaba
                     Check(rc, db_);
                 }
 
-                // 4. Storage failures recorded in directory operations.
-                {
-                    Statement q4(db_, "SELECT operation_id, error_message, updated_at FROM directory_operations "
-                                         "WHERE state='FAILED' OR state='INTENDED' ORDER BY rowid LIMIT ?2;");
-                    sqlite3_bind_int(q4.value, 2, static_cast<int>(query.pageSize));
-                    int rc4 = SQLITE_OK;
-                    while ((rc4 = sqlite3_step(q4.value)) == SQLITE_ROW)
-                    {
-                        ActionCenterItem item;
-                        item.itemId = Text(q4.value, 0);
-                        item.sourceOwner = "SQLITE_STORAGE";
-                        item.sourceRecordId = Text(q4.value, 0);
-                        item.kind = ActionCenterKind::StorageFailure;
-                        item.state = "UNKNOWN_EFFECT";
-                        item.titleEn = "Directory operation requires reconciliation: " + Text(q4.value, 0);
-                        item.explanationEn =
-                            "A directory creation outcome could not be confirmed. Review the affected files "
-                            "and choose a safe recovery action before proceeding.";
-                        item.sourceReference = "directory_operations." + Text(q4.value, 0);
-                        item.availableAction = "Inspect affected files";
-                        result.items.push_back(std::move(item));
-                    }
-                    Check(rc4, db_);
-                }
+                // Closed-project restriction handled above. Directory-operation
+                // recovery remains in the selector (no project context on these
+                // calls); do not project non-project-scoped records here.
 
                 result.isComplete = true;
             }
@@ -1800,9 +1790,10 @@ namespace mayasaba
                     result.inspection.sha256 = Text(q.value, 5);
                     result.inspection.detectedType = Text(q.value, 6);
                     result.inspection.storagePath = Text(q.value, 7);
-                    result.inspection.status = Text(q.value, 8);
+                    result.inspection.status = Text(q.value, 9);
                     result.inspection.isManaged = !Text(q.value, 7).empty();
-                    result.inspection.integrityVerified = !Text(q.value, 5).empty();
+                    result.inspection.integrityVerified = VerifyManagedAttachment(
+                        Text(q.value, 7), Text(q.value, 5), result.inspection.fileSize);
                     result.inspection.titleEn = "Attachment: " + Text(q.value, 3);
                     result.inspection.explanationEn =
                         "Read-only inspection of staged draft attachment bytes. Original source path is not "
@@ -1838,7 +1829,8 @@ namespace mayasaba
                         result.inspection.storagePath = Text(q2.value, 7);
                         result.inspection.status = Text(q2.value, 9);
                         result.inspection.isManaged = !Text(q2.value, 7).empty();
-                        result.inspection.integrityVerified = !Text(q2.value, 5).empty();
+                        result.inspection.integrityVerified = VerifyManagedAttachment(
+                            Text(q2.value, 7), Text(q2.value, 5), result.inspection.fileSize);
                         result.inspection.titleEn = "Attachment: " + Text(q2.value, 3);
                         result.inspection.explanationEn =
                             "Read-only inspection of managed attachment bytes. Original source path is not "

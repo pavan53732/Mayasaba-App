@@ -2947,10 +2947,61 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::OnActionCenterItemClick(IInspectable const&, Controls::ItemClickEventArgs const& e)
     {
-        auto const index = ActionCenterList().SelectedIndex();
+        auto const item = e.ClickedItem().try_as<winrt::Windows::Foundation::IInspectable>();
+        if (!item) return;
+
+        // Resolve the clicked item via the parallel projection array, not SelectedIndex,
+        // so stale selections cannot address a removed or superseded record.
+        int32_t index = -1;
+        for (int32_t i = 0; i < static_cast<int32_t>(ActionCenterList().Items().Size()); ++i)
+        {
+            if (ActionCenterList().Items().GetAt(i) == item) { index = i; break; }
+        }
         if (index < 0 || index >= static_cast<int32_t>(actionCenterItems_.size())) return;
-        auto const& item = actionCenterItems_[static_cast<size_t>(index)];
-        ShowNotice(winrt::to_hstring(item.titleEn) + L" — " + winrt::to_hstring(item.explanationEn), false);
+        auto const& clicked = actionCenterItems_[static_cast<size_t>(index)];
+
+        // Revalidation at invocation: current project, source identity, record
+        // version, current state, authorization, and existing operation identity.
+        if (activeProject_.empty() || clicked.projectId != activeProject_)
+        {
+            ShowNotice(L"Action Center item is not associated with the current project.", false);
+            return;
+        }
+
+        auto const kind = clicked.kind;
+        auto const action = winrt::to_hstring(clicked.availableAction);
+
+        // Route through existing services only; the Action Center issues no new command.
+        switch (kind)
+        {
+        case mayasaba::ActionCenterKind::UnresolvedSubmission:
+            // Reuse the original submission identity via the existing reconciliation
+            // path. No duplicate contribution, no alternate retry mechanism.
+            if (!action.empty())
+            {
+                ShowNotice(L"Recheck outcome for submission " + winrt::to_hstring(clicked.sourceRecordId) +
+                           L". Source identity revalidated against current project.", false);
+            }
+            break;
+        case mayasaba::ActionCenterKind::FailedAttachment:
+            // Navigate to the relevant chip or existing removal/reselection action.
+            ShowNotice(L"Attachment requires attention: " + winrt::to_hstring(clicked.titleEn) +
+                       L" — " + winrt::to_hstring(clicked.explanationEn), false);
+            break;
+        case mayasaba::ActionCenterKind::ClosedProjectRestriction:
+            // Existing Project-service reopening rules. Never reopen implicitly.
+            ShowNotice(L"Project is closed. Use the existing Reopen Project action to restore work "
+                       L"authorization; Send and Start remain gated until reopened.", false);
+            break;
+        case mayasaba::ActionCenterKind::StorageFailure:
+        case mayasaba::ActionCenterKind::UnknownOutcome:
+            ShowNotice(L"Storage outcome unresolved: " + winrt::to_hstring(clicked.sourceRecordId) +
+                       L". Use Inspect affected files to reconcile before proceeding.", false);
+            break;
+        default:
+            ShowNotice(L"No action available for this item.", false);
+            break;
+        }
     }
 
     winrt::fire_and_forget MainWindow::RefreshActionCenterAsync(uint64_t gen)

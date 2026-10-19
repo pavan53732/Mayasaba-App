@@ -664,7 +664,7 @@
                                                                                Style="{StaticResource MayasabaMicroText}"
                                                                                Foreground="{ThemeResource MayasabaMutedBrush}"
                                                                                AutomationProperties.LiveSetting="Polite"/>
-                                                                    <ListView x:Name="ActionCenterList" SelectionMode="None" IsItemClickEnabled="True" ItemClick="OnActionCenterItemClick" MaxHeight="220"
+                                                                    <ListView x:Name="ActionCenterList" SelectionMode="Single" IsItemClickEnabled="True" ItemClick="OnActionCenterItemClick" MaxHeight="220"
                                                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
                                                                                 HorizontalContentAlignment="Stretch"
                                                                                 AutomationProperties.Name="Action Center items"/>

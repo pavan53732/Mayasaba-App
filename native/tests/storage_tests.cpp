@@ -1883,8 +1883,113 @@ int main()
             }
         }
 
+        // Action Center: read-only projection over owner records
+        {
+            mayasaba::Storage ac(folder / "action_center.db");
+            ac.BindProject("proj-ac", "AC Project", "C:/AC");
+            ac.SetClosure("proj-ac", 0, false);
+
+            // Unresolved submission appears; rechecked by project id.
+            ac.StageSubmission("proj-ac", "sub-ac-1", "unresolved body");
+            mayasaba::ActionCenterQuery q{ "proj-ac", 50 };
+            auto res = ac.QueryActionCenter(q);
+            EXPECT(res.isComplete);
+            EXPECT(res.errorMessage.empty());
+            bool foundSubmission = false;
+            for (auto const& item : res.items)
+            {
+                if (item.kind == mayasaba::ActionCenterKind::UnresolvedSubmission)
+                {
+                    foundSubmission = true;
+                    EXPECT(item.projectId == "proj-ac");
+                    EXPECT(item.sourceRecordId == "sub-ac-1");
+                    EXPECT(item.availableAction == "Recheck outcome");
+                }
+            }
+            EXPECT(foundSubmission);
+
+            // Resolving the submission removes the item.
+            EXPECT(ac.SaveContribution("proj-ac", "sub-ac-1", "unresolved body") == mayasaba::SaveDisposition::Saved);
+            auto res2 = ac.QueryActionCenter(q);
+            bool stillHasSubmission = false;
+            for (auto const& item : res2.items)
+                if (item.kind == mayasaba::ActionCenterKind::UnresolvedSubmission) stillHasSubmission = true;
+            EXPECT(!stillHasSubmission);
+
+            // Failed attachment item.
+            mayasaba::AttachmentRecord att{};
+            att.id = "att-ac-1"; att.projectId = "proj-ac"; att.fileName = "bad.bin";
+            att.fileSize = 0; att.sha256 = ""; att.detectedType = "application/octet-stream";
+            att.storagePath = ""; att.sourcePath = ""; att.status = "REJECTED"; att.errorMessage = "hash mismatch";
+            ac.SaveDraftAttachment("proj-ac", att);
+            auto res3 = ac.QueryActionCenter(q);
+            bool foundAttachment = false;
+            for (auto const& item : res3.items)
+                if (item.kind == mayasaba::ActionCenterKind::FailedAttachment) { foundAttachment = true; EXPECT(item.availableAction == "Remove or re-attach"); }
+            EXPECT(foundAttachment);
+
+            // Closed-project item.
+            ac.SetClosure("proj-ac", 0, true);
+            auto res4 = ac.QueryActionCenter(q);
+            bool foundClosed = false;
+            for (auto const& item : res4.items)
+                if (item.kind == mayasaba::ActionCenterKind::ClosedProjectRestriction)
+                { foundClosed = true; EXPECT(item.availableAction == "Reopen Project"); }
+            EXPECT(foundClosed);
+
+            // Page bound respected.
+            mayasaba::ActionCenterQuery qPage{ "proj-ac", 1 };
+            auto res5 = ac.QueryActionCenter(qPage);
+            EXPECT(res5.items.size() <= 1);
+
+            // Project isolation: items never leak to another project.
+            auto res6 = ac.QueryActionCenter(mayasaba::ActionCenterQuery{ "other-proj", 50 });
+            bool leaked = false;
+            for (auto const& item : res6.items)
+                if (item.projectId == "proj-ac") leaked = true;
+            EXPECT(!leaked);
+        }
+
+        // Attachment inspection: draft attachment integrity verified against disk
+        {
+            mayasaba::Storage ai(folder / "attachment_inspect.db");
+            ai.BindProject("proj-ai", "AI Project", "C:/AI");
+
+            std::string physicalPath = (folder / "note.md").string();
+            std::ofstream of(physicalPath, std::ios::binary);
+            of.write("abcd", 4);
+            of.close();
+
+            mayasaba::AttachmentRecord draft{};
+            draft.id = "att-draft-1"; draft.projectId = "proj-ai"; draft.fileName = "note.md";
+            draft.fileSize = 4; draft.sha256 = "88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589";
+            draft.detectedType = "text/markdown"; draft.storagePath = physicalPath;
+            draft.sourcePath = "C:/source/note.md"; draft.status = "READY"; draft.errorMessage = "";
+            ai.SaveDraftAttachment("proj-ai", draft);
+
+            mayasaba::AttachmentInspectionQuery qi{ "proj-ai", "att-draft-1" };
+            auto ri = ai.InspectAttachment(qi);
+            EXPECT(ri.found);
+            EXPECT(ri.inspection.attachmentId == "att-draft-1");
+            EXPECT(ri.inspection.projectId == "proj-ai");
+            EXPECT(ri.inspection.fileName == "note.md");
+            EXPECT(ri.inspection.fileSize == 4);
+            EXPECT(ri.inspection.detectedType == "text/markdown");
+            EXPECT(ri.inspection.storagePath == physicalPath);
+            EXPECT(!ri.inspection.sourceRecordId.empty());
+            EXPECT(ri.inspection.previewEligible);
+            EXPECT(ri.inspection.previewUnavailableReasonEn.empty());
+            EXPECT(ri.inspection.isManaged);
+            EXPECT(ri.inspection.integrityVerified);
+
+            // Inspecting an unknown attachment returns not found.
+            auto rn = ai.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "proj-ai", "does-not-exist" });
+            EXPECT(!rn.found);
+            EXPECT(rn.errorMessage.empty());
+        }
+
         fs::remove_all(folder);
-        std::cout << "PASS: 22 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search, action center, attachment inspection)\n";
+        std::cout << "PASS: 22 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search, action center, attachment inspection)\\n";
         return 0;
     }
     catch (std::exception const& e)
