@@ -1,7 +1,10 @@
 #include "../Mayasaba/Storage.h"
 #include "../Mayasaba/AttachmentService.h"
+#include "../Mayasaba/AttachmentIngestionCoordinator.h"
 #include "../Mayasaba/ActionCenterPresenter.h"
 #include <chrono>
+#include <thread>
+#include <mutex>
 #include <fstream>
 #include <iostream>
 #include <filesystem>
@@ -676,7 +679,7 @@ int main()
         EXPECT(resFolder.accepted == false);
         EXPECT(resFolder.reason == mayasaba::ValidationFailureReason::InaccessibleFile);
 
-        // 4. Delayed drop with project switching (A -> B) through actual production ingestion path
+        // 4a. Already-canceled preparation (boundary check prior to preparation start)
         std::string activeProject = "proj-A";
         uint64_t currentGen = 1;
 
@@ -711,6 +714,166 @@ int main()
 
         auto draftsB = attService.LoadDraftAttachments("proj-B");
         EXPECT(draftsB.empty()); // Dropped file was NOT admitted to target project B
+
+        // 4b. Controlled in-flight asynchronous project switch during preparation boundary (shared production coordination)
+        // Seed existing drafts in Project A and Project B to verify draft preservation
+        mayasaba::AttachmentCandidate draftAExisting;
+        draftAExisting.id = "draft-a-existing";
+        draftAExisting.fileName = "existing_a.txt";
+        draftAExisting.fileSize = 100;
+        draftAExisting.status = mayasaba::AttachmentStatus::Ready;
+        draftAExisting.detectedType = "text/plain";
+        draftAExisting.originalPath = L"C:/alpha/existing_a.txt";
+        attService.SaveDraftAttachments("proj-A", { draftAExisting });
+
+        mayasaba::AttachmentCandidate draftBExisting;
+        draftBExisting.id = "draft-b-existing";
+        draftBExisting.fileName = "existing_b.txt";
+        draftBExisting.fileSize = 200;
+        draftBExisting.status = mayasaba::AttachmentStatus::Ready;
+        draftBExisting.detectedType = "text/plain";
+        draftBExisting.originalPath = L"C:/beta/existing_b.txt";
+        attService.SaveDraftAttachments("proj-B", { draftBExisting });
+
+        // Thread-safe state representing MainWindow active project and generation
+        std::mutex stateMutex;
+        std::string currentActiveProject = "proj-A";
+        uint64_t currentActiveGen = 10;
+
+        auto getCurrentProject = [&]() {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            return currentActiveProject;
+        };
+        auto getCurrentGen = [&]() {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            return currentActiveGen;
+        };
+
+        // Create DropContext for Project A at generation 10
+        auto dropCtx = mayasaba::AttachmentIngestionCoordinator::CreateContext(getCurrentProject(), getCurrentGen());
+
+        std::atomic<bool> heldAtBoundary{false};
+        std::atomic<bool> resumeBoundary{false};
+        bool dropResult = true;
+
+        std::thread inFlightDropThread([&]() {
+            dropResult = mayasaba::AttachmentIngestionCoordinator::CoordinateDrop(
+                dropCtx,
+                getCurrentProject,
+                getCurrentGen,
+                // Asynchronous retrieval:
+                [&]() -> std::vector<std::wstring> {
+                    return { singleFile.wstring() };
+                },
+                // Asynchronous preparation held at boundary:
+                [&](std::vector<std::wstring> const& paths, std::function<bool()> const& isCancelledFn) {
+                    heldAtBoundary = true;
+                    while (!resumeBoundary)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    }
+                    return attService.PrepareBatch("proj-A", paths, isCancelledFn, 120);
+                },
+                // Commit drafts
+                [&](std::vector<mayasaba::AttachmentCandidate> const& preparedBatch) {
+                    attService.SaveDraftAttachments("proj-A", preparedBatch);
+                }
+            );
+        });
+
+        // Main thread: wait until background drop is actively held at the asynchronous preparation boundary
+        while (!heldAtBoundary)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        // Perform explicit project switch to Project B while operation for A is in flight:
+        {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            currentActiveProject = "proj-B";
+            currentActiveGen = 11;
+        }
+
+        // Resume completion of the in-flight operation
+        resumeBoundary = true;
+        inFlightDropThread.join();
+
+        // CoordinateDrop must return false (drop cancelled because project switched during operation)
+        EXPECT(dropResult == false);
+
+        // Assert no admission to either project and preservation of their existing drafts
+        auto postDraftsA = attService.LoadDraftAttachments("proj-A");
+        EXPECT(postDraftsA.size() == 1);
+        EXPECT(postDraftsA[0].id == "draft-a-existing");
+        EXPECT(postDraftsA[0].fileName == "existing_a.txt");
+
+        auto postDraftsB = attService.LoadDraftAttachments("proj-B");
+        EXPECT(postDraftsB.size() == 1);
+        EXPECT(postDraftsB[0].id == "draft-b-existing");
+        EXPECT(postDraftsB[0].fileName == "existing_b.txt");
+
+        // 4c. Controlled in-flight asynchronous project switch during retrieval boundary
+        std::atomic<bool> heldAtRetrievalBoundary{false};
+        std::atomic<bool> resumeRetrievalBoundary{false};
+        bool dropRetrievalResult = true;
+
+        {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            currentActiveProject = "proj-A";
+            currentActiveGen = 20;
+        }
+        auto dropCtxRetrieval = mayasaba::AttachmentIngestionCoordinator::CreateContext(getCurrentProject(), getCurrentGen());
+
+        std::thread inFlightRetrievalThread([&]() {
+            dropRetrievalResult = mayasaba::AttachmentIngestionCoordinator::CoordinateDrop(
+                dropCtxRetrieval,
+                getCurrentProject,
+                getCurrentGen,
+                // Asynchronous retrieval held at boundary:
+                [&]() -> std::vector<std::wstring> {
+                    heldAtRetrievalBoundary = true;
+                    while (!resumeRetrievalBoundary)
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    }
+                    return { singleFile.wstring() };
+                },
+                // Asynchronous preparation:
+                [&](std::vector<std::wstring> const& paths, std::function<bool()> const& isCancelledFn) {
+                    return attService.PrepareBatch("proj-A", paths, isCancelledFn, 120);
+                },
+                // Commit drafts
+                [&](std::vector<mayasaba::AttachmentCandidate> const& preparedBatch) {
+                    attService.SaveDraftAttachments("proj-A", preparedBatch);
+                }
+            );
+        });
+
+        while (!heldAtRetrievalBoundary)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        // Switch project to B while retrieval was in flight:
+        {
+            std::lock_guard<std::mutex> lock(stateMutex);
+            currentActiveProject = "proj-B";
+            currentActiveGen = 21;
+        }
+
+        resumeRetrievalBoundary = true;
+        inFlightRetrievalThread.join();
+
+        EXPECT(dropRetrievalResult == false);
+
+        // Assert drafts untouched
+        auto retrievalDraftsA = attService.LoadDraftAttachments("proj-A");
+        EXPECT(retrievalDraftsA.size() == 1);
+        EXPECT(retrievalDraftsA[0].id == "draft-a-existing");
+
+        auto retrievalDraftsB = attService.LoadDraftAttachments("proj-B");
+        EXPECT(retrievalDraftsB.size() == 1);
+        EXPECT(retrievalDraftsB[0].id == "draft-b-existing");
 
         // 5. Overlapping drop guard
         bool dropProcessing = false;

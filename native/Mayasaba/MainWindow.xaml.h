@@ -4,6 +4,7 @@
 #include "SerialQueue.h"
 #include "ProjectService.h"
 #include "AttachmentService.h"
+#include "AttachmentIngestionCoordinator.h"
 #include "ProjectRoot.h"
 #include "Motion.h"
 #include "Timeline.h"

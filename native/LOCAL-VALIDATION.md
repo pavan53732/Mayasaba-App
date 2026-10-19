@@ -1270,5 +1270,82 @@ This section documents the specific corrections and empirical evidence resolving
   - `native/tests/test_full_ui_acceptance.py`: Full execution completed (13 PASS, 2 INCONCLUSIVE, 0 FAIL).
 - **Observed results:** Inconclusive drop execution is truthfully propagated to the acceptance matrix and report, while all ingestion path invariants are verified.
 
+---
+
+## 13. Review of `9d35691` Corrections & Verification Evidence
+
+This section documents the specific corrections and empirical evidence resolving the three review findings of commit `9d35691`.
+
+### 13.1 Item 1: Independent Side-Effect Verification & Drop Verdict Classification
+
+- **Finding:** In `test_full_ui_acceptance.py:994–1069`, the single-drop branch executed its assertions only when `drop_proc_returncode == 0 and len(dropped_records) == 1`. Every other outcome became `INCONCLUSIVE`, allowing confirmed violations (such as duplicate attachment admission `len > 1` or unexpected contribution/pending submission creation) to escape failure classification.
+- **Actual correction:**
+  - Decoupled prohibited side-effect checking from helper process return code. Prohibited side effects (duplicate admission, unexpected contribution creation, unexpected pending submission creation, modified composer text, corrupted metadata, or missing staged copy) now produce `FAIL` immediately.
+  - Reserved `INCONCLUSIVE` strictly for genuinely insufficient delivery evidence (0 records admitted, no prohibited side effects observed).
+  - Extracted pure classification function `classify_drop_verdict(...)` in `native/tests/test_full_ui_acceptance.py`.
+  - Added deterministic unit test suite `test_drop_verdict_classification()` executed at the start of `test_full_ui_acceptance.py` main suite, asserting:
+    1. Successful delivery with zero records -> `INCONCLUSIVE` (`Zero records admitted (helper exit code 0); genuinely insufficient delivery evidence`).
+    2. Successful delivery with one valid record -> `PASS` (`Admitted exactly 1 valid single file 'native_drop_single.txt'`).
+    3. Successful delivery with multiple records -> `FAIL` (`Duplicate admission violation: expected at most 1 record, got 2`).
+    4. Unexpected pending submission creation -> `FAIL` (`Unexpected pending submission creation: count changed from 0 to 1`).
+    5. Unexpected contribution creation -> `FAIL` (`Unexpected contribution creation: count changed from 0 to 1`).
+    6. Record admitted with missing staged copy -> `FAIL` (`Staged file does not exist on disk`).
+- **Discriminating tests & evidence:**
+  - `native/tests/test_full_ui_acceptance.py` startup unit tests: all 6 cases passed with explicit assertions.
+  - Live Phase 10.1 single-drop evaluation uses `classify_drop_verdict(...)` directly.
+- **Observed results:** Confirmed violations cannot escape `FAIL` classification; `INCONCLUSIVE` is strictly reserved for genuinely insufficient delivery evidence.
+
+### 13.2 Item 2: Correction of Mixed-Batch Control Lookup & Rejection Notice Inspection
+
+- **Finding:** In `test_full_ui_acceptance.py:1042`, mixed-batch rejection searched for automation ID `"NoticeBar"`, but the actual XAML control is named `"Notice"` (`MainWindow.xaml:974`). This could keep mixed-batch acceptance inconclusive even when the application truthfully displayed the rejection.
+- **Actual correction:**
+  - Located the actual control `find_by_aid(win, "Notice")` and inspected its descendant text elements.
+  - Implemented `clear_notice(win)` to dismiss any pre-existing notice (via its UIA close button) before initiating the mixed-batch drop operation.
+  - Implemented `wait_for_notice_text(win, "Folders cannot be attached; entire batch rejected.", timeout=3.5)` to await the fresh rejection notice tied to the attempted batch.
+  - Verified in SQLite that `COUNT(*) FROM draft_attachments` for the mixed batch is 0, and that no contributions or pending submissions were created.
+- **Discriminating tests & evidence:**
+  - `native/tests/test_full_ui_acceptance.py` Phase 10.1: `clear_notice(win)` clears previous notice, executes mixed batch, awaits fresh rejection on `"Notice"`, and checks database for 0 admitted records and 0 side effects.
+- **Observed results:** Notice control is located truthfully by its exact XAML automation ID (`"Notice"`), pre-existing notices are cleared, and message content is inspected.
+
+### 13.3 Item 3: Controlled In-Flight Asynchronous Project Switching Test
+
+- **Finding:** In `verify_ac_ai.cpp` Test 5, the project switch test changed its local `activeProject` and generation before calling `PrepareBatch()`. Preparation therefore began already canceled. It did not exercise the actual MainWindow ingestion coordinator or prove that a project switch during asynchronous file retrieval or preparation is handled correctly.
+- **Actual correction:**
+  - Created shared production coordination component `native/Mayasaba/AttachmentIngestionCoordinator.h` defining `DropContext`, `ValidateBoundary(ctx, currentProject, currentGen)`, and `CoordinateDrop(ctx, getCurrentProject, getCurrentGen, retrievePaths, prepareBatch, commitDrafts)`.
+  - Wired `AttachmentIngestionCoordinator` into production `MainWindow.xaml.cpp`:
+    - `OnComposerDrop` creates `DropContext` and validates boundary immediately after `GetStorageItemsAsync`.
+    - `ProcessCandidatePathsAsync` validates boundary inside `PrepareBatch` cancellation predicate and upon resuming the UI thread before calling `SaveDraftAttachments`.
+  - In `verify_ac_ai.cpp` Test 5:
+    - Retained and explicitly labeled the existing test case as `4a. Already-canceled preparation (boundary check prior to preparation start)`.
+    - Added `4b. Controlled in-flight asynchronous project switch during preparation boundary (shared production coordination)`:
+      - Seeded existing draft attachments in Project A (`existing_a.txt`) and Project B (`existing_b.txt`) via `SaveDraftAttachments`.
+      - Dispatched `CoordinateDrop` for Project A on a background thread.
+      - Held the operation at the asynchronous preparation boundary.
+      - Main thread performed an explicit project switch from Project A to Project B (`activeProject = "proj-B"`, `generation = 11`).
+      - Resumed completion of the background operation.
+      - Verified `CoordinateDrop` returned `false` (drop cancelled/rejected due to in-flight project switch).
+      - Asserted no admission of the dropped file to Project A or Project B.
+      - Asserted Project A's existing draft is preserved intact (`LoadDraftAttachments("proj-A")` contains exactly `existing_a.txt`).
+      - Asserted Project B's existing draft is preserved intact (`LoadDraftAttachments("proj-B")` contains exactly `existing_b.txt`).
+    - Added `4c. Controlled in-flight asynchronous project switch during retrieval boundary`:
+      - Held during async retrieval; switched to Project B; resumed.
+      - Verified `CoordinateDrop` returned `false` and drafts in both projects remained preserved.
+- **Discriminating tests & evidence:**
+  - `native/tests/bin/verify_ac_ai.exe` Test 5: all 3 project switch cases (4a already-canceled, 4b in-flight preparation switch with draft preservation, 4c in-flight retrieval switch) pass with 10/10 total tests passed.
+- **Observed results:** In-flight asynchronous project switching during both file retrieval and file preparation boundaries is proven to cleanly cancel the drop without admitting files to either project or mutating either project's drafts.
+
+### 13.4 Summary Acceptance Matrix
+
+| Verification Suite | Result | Details |
+| --- | --- | --- |
+| Drop Verdict Classification Unit Tests | PASS (6/6) | Zero records (`INCONCLUSIVE`), one record (`PASS`), multiple records (`FAIL`), unexpected pending submission (`FAIL`), unexpected contribution (`FAIL`), missing staged file (`FAIL`). |
+| Standalone AC + AI Suites (`verify_ac_ai.exe`) | PASS (10/10) | Tests 1–10 pass, including 4a, 4b, and 4c in-flight project switch tests with draft preservation. |
+| Core Native Regressions (`storage_tests.exe`) | PASS (22/22) | 22 isolated native regression groups pass cleanly. |
+| Contract Registry (`validate_contract_registry.py`) | PASS (124/124) | 124 schema and slice contract checks pass. |
+| Live UI Acceptance (`test_full_ui_acceptance.py`) | 13 PASS, 2 INCONCLUSIVE, 0 FAIL | Inconclusive synthetic desktop OLE drag-drop execution retained truthfully. All other 13 criteria PASS. |
+| Production Database Checksum | UNTOUCHED | SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
+| Real Multi-DPI & Narrator Speech | INCOMPLETE | Retained as separately incomplete per project acceptance rules. |
+
+
 
 

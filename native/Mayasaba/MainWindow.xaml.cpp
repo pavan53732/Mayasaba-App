@@ -1682,16 +1682,17 @@ namespace winrt::Mayasaba::implementation
 
         auto alive = get_strong();
         auto ui = DispatcherQueue();
-        auto projectId = activeProject_;
-        uint64_t gen = selectorGeneration_.load();
+        auto const dropCtx = mayasaba::AttachmentIngestionCoordinator::CreateContext(activeProject_, selectorGeneration_.load());
 
         std::vector<mayasaba::AttachmentCandidate> prepared;
         std::string prepError;
         try
         {
             co_await selectorQueue_.Background();
-            prepared = attachmentService_->PrepareBatch(projectId, candidatePaths,
-                [this, gen] { return windowClosed_ || selectorGeneration_.load() != gen; },
+            prepared = attachmentService_->PrepareBatch(dropCtx.boundProjectId, candidatePaths,
+                [this, dropCtx] {
+                    return windowClosed_ || !mayasaba::AttachmentIngestionCoordinator::ValidateBoundary(dropCtx, activeProject_, selectorGeneration_.load());
+                },
                 mayasaba::PREPARATION_TIMEOUT_SECONDS);
         }
         catch (std::exception const& e)
@@ -1700,7 +1701,7 @@ namespace winrt::Mayasaba::implementation
         }
 
         if (!co_await resume_foreground(ui)) co_return;
-        if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != gen)
+        if (windowClosed_ || !mayasaba::AttachmentIngestionCoordinator::ValidateBoundary(dropCtx, activeProject_, selectorGeneration_.load()))
         {
             co_return;
         }
@@ -1804,8 +1805,7 @@ namespace winrt::Mayasaba::implementation
             ~DropGuard() { if (self) self->dropProcessing_ = false; }
         } dropGuard{this};
 
-        std::string const capturedProjectId = activeProject_;
-        uint64_t const capturedGen = selectorGeneration_.load();
+        auto const dropCtx = mayasaba::AttachmentIngestionCoordinator::CreateContext(activeProject_, selectorGeneration_.load());
 
         auto def = e.GetDeferral();
         Windows::Foundation::Collections::IVectorView<Windows::Storage::IStorageItem> items{nullptr};
@@ -1827,8 +1827,8 @@ namespace winrt::Mayasaba::implementation
         }
         def.Complete();
 
-        // Project boundary check immediately after await
-        if (windowClosed_ || activeProject_ != capturedProjectId || selectorGeneration_.load() != capturedGen || projectClosed_)
+        // Project boundary check immediately after async retrieval
+        if (windowClosed_ || projectClosed_ || !mayasaba::AttachmentIngestionCoordinator::ValidateBoundary(dropCtx, activeProject_, selectorGeneration_.load()))
         {
             ShowNotice(L"Attachment drop cancelled: project selection changed.", false);
             co_return;

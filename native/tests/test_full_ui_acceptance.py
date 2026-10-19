@@ -71,6 +71,206 @@ def send_key_to_window(win_handle, vk_code):
     user32.PostMessageW(target, WM_KEYDOWN, vk_code, 0)
     user32.PostMessageW(target, WM_KEYUP, vk_code, 0)
 
+def classify_drop_verdict(
+    drop_proc_returncode: int,
+    dropped_records: list,
+    contribs_before: int,
+    contribs_after: int,
+    pending_before: int,
+    pending_after: int,
+    composer_text_before: str = "",
+    composer_text_after: str = "",
+    expected_filename: str = "native_drop_single.txt",
+    expected_size: int = 0,
+    expected_sha256: str = "",
+    staged_file_exists: bool = True
+) -> tuple:
+    """
+    Classifies the drop operation verdict independently of helper success.
+    Prohibited side effects produce FAIL independently of helper returncode.
+    INCONCLUSIVE is reserved strictly for genuinely insufficient delivery evidence (0 records admitted).
+    """
+    # 1. Prohibited side effect: unexpected contribution creation
+    if contribs_after != contribs_before:
+        return "FAIL", f"Unexpected contribution creation: count changed from {contribs_before} to {contribs_after}"
+
+    # 2. Prohibited side effect: unexpected pending submission creation
+    if pending_after != pending_before:
+        return "FAIL", f"Unexpected pending submission creation: count changed from {pending_before} to {pending_after}"
+
+    # 3. Prohibited side effect: composer text modified
+    if composer_text_after != composer_text_before:
+        return "FAIL", f"Composer text was modified by drop operation: '{composer_text_after}'"
+
+    # 4. Prohibited side effect: duplicate / multiple admission
+    if len(dropped_records) > 1:
+        return "FAIL", f"Duplicate admission violation: expected at most 1 record, got {len(dropped_records)}"
+
+    # 5. Exactly 1 record admitted: verify metadata and staged copy integrity
+    if len(dropped_records) == 1:
+        rec = dropped_records[0]
+        # rec format: (id, file_name, file_size, status, sha256, staged_path)
+        if expected_filename and rec[1] != expected_filename:
+            return "FAIL", f"Admitted record filename mismatch: expected '{expected_filename}', got '{rec[1]}'"
+        if expected_size and rec[2] != expected_size:
+            return "FAIL", f"Admitted record size mismatch: expected {expected_size}, got {rec[2]}"
+        if rec[3] != "READY":
+            return "FAIL", f"Admitted record status mismatch: expected 'READY', got '{rec[3]}'"
+        if expected_sha256 and rec[4] != expected_sha256:
+            return "FAIL", f"Admitted record digest mismatch: expected '{expected_sha256}', got '{rec[4]}'"
+        if not staged_file_exists:
+            staged = rec[5] if len(rec) > 5 else ""
+            return "FAIL", f"Staged file does not exist on disk: {staged}"
+
+        if drop_proc_returncode == 0:
+            return "PASS", f"Admitted exactly 1 valid single file '{rec[1]}' (size={rec[2]}, status={rec[3]}, digest={rec[4]}). Absence of automatic Send verified."
+        else:
+            return "FAIL", f"Record admitted but helper process exited with code {drop_proc_returncode}"
+
+    # 6. Zero records admitted: genuinely insufficient delivery evidence
+    return "INCONCLUSIVE", f"Zero records admitted (helper exit code {drop_proc_returncode}); genuinely insufficient delivery evidence"
+
+
+def test_drop_verdict_classification():
+    log("Running unit tests for drop verdict classification logic...")
+    sample_rec = ("att-1", "native_drop_single.txt", 100, "READY", "abc123hash", "C:/staged/att-1")
+
+    # Case 1: Successful delivery with zero records -> INCONCLUSIVE
+    v, reason = classify_drop_verdict(
+        drop_proc_returncode=0,
+        dropped_records=[],
+        contribs_before=0,
+        contribs_after=0,
+        pending_before=0,
+        pending_after=0,
+        composer_text_before="",
+        composer_text_after="",
+        expected_filename="native_drop_single.txt",
+        expected_size=100,
+        expected_sha256="abc123hash"
+    )
+    assert v == "INCONCLUSIVE", f"Expected INCONCLUSIVE, got {v} ({reason})"
+    log(f"  [CASE 1 PASS] Successful delivery with zero records -> {v} ({reason})")
+
+    # Case 2: Successful delivery with one record -> PASS
+    v, reason = classify_drop_verdict(
+        drop_proc_returncode=0,
+        dropped_records=[sample_rec],
+        contribs_before=0,
+        contribs_after=0,
+        pending_before=0,
+        pending_after=0,
+        composer_text_before="",
+        composer_text_after="",
+        expected_filename="native_drop_single.txt",
+        expected_size=100,
+        expected_sha256="abc123hash",
+        staged_file_exists=True
+    )
+    assert v == "PASS", f"Expected PASS, got {v} ({reason})"
+    log(f"  [CASE 2 PASS] Successful delivery with one valid record -> {v} ({reason})")
+
+    # Case 3: Successful delivery with multiple records (duplicate admission violation) -> FAIL
+    sample_rec2 = ("att-2", "native_drop_single.txt", 100, "READY", "abc123hash", "C:/staged/att-2")
+    v, reason = classify_drop_verdict(
+        drop_proc_returncode=0,
+        dropped_records=[sample_rec, sample_rec2],
+        contribs_before=0,
+        contribs_after=0,
+        pending_before=0,
+        pending_after=0,
+        composer_text_before="",
+        composer_text_after="",
+        expected_filename="native_drop_single.txt",
+        expected_size=100,
+        expected_sha256="abc123hash"
+    )
+    assert v == "FAIL", f"Expected FAIL for duplicate admission, got {v} ({reason})"
+    assert "Duplicate admission violation" in reason
+    log(f"  [CASE 3 PASS] Successful delivery with multiple records -> {v} ({reason})")
+
+    # Case 4: Unexpected pending submission creation -> FAIL
+    v, reason = classify_drop_verdict(
+        drop_proc_returncode=0,
+        dropped_records=[],
+        contribs_before=0,
+        contribs_after=0,
+        pending_before=0,
+        pending_after=1,
+        composer_text_before="",
+        composer_text_after=""
+    )
+    assert v == "FAIL", f"Expected FAIL for unexpected pending submission, got {v} ({reason})"
+    assert "Unexpected pending submission creation" in reason
+    log(f"  [CASE 4 PASS] Unexpected pending submission creation -> {v} ({reason})")
+
+    # Case 5: Unexpected contribution creation -> FAIL
+    v, reason = classify_drop_verdict(
+        drop_proc_returncode=0,
+        dropped_records=[],
+        contribs_before=0,
+        contribs_after=1,
+        pending_before=0,
+        pending_after=0,
+        composer_text_before="",
+        composer_text_after=""
+    )
+    assert v == "FAIL", f"Expected FAIL for unexpected contribution creation, got {v} ({reason})"
+    assert "Unexpected contribution creation" in reason
+    log(f"  [CASE 5 PASS] Unexpected contribution creation -> {v} ({reason})")
+
+    # Case 6: Record admitted with corrupted metadata or missing staged file -> FAIL
+    v, reason = classify_drop_verdict(
+        drop_proc_returncode=0,
+        dropped_records=[sample_rec],
+        contribs_before=0,
+        contribs_after=0,
+        pending_before=0,
+        pending_after=0,
+        expected_filename="native_drop_single.txt",
+        expected_size=100,
+        expected_sha256="abc123hash",
+        staged_file_exists=False
+    )
+    assert v == "FAIL", f"Expected FAIL for missing staged file, got {v} ({reason})"
+    log(f"  [CASE 6 PASS] Missing staged file -> {v} ({reason})")
+
+    log("PASS: All unit tests of drop verdict classification logic passed.\n")
+
+
+def clear_notice(win):
+    """Clears any active notice in the Window's Notice InfoBar."""
+    notice_bar = find_by_aid(win, "Notice")
+    if not notice_bar:
+        return
+    for d in notice_bar.descendants():
+        if d.element_info.control_type == "Button" and (d.element_info.automation_id in ("CloseButton", "DismissButton") or d.element_info.name in ("Close", "Dismiss")):
+            try:
+                if hasattr(d, "iface_invoke") and d.iface_invoke:
+                    d.iface_invoke.Invoke()
+                elif hasattr(d, "click_input"):
+                    d.click_input()
+                time.sleep(0.3)
+                break
+            except Exception:
+                pass
+
+
+def wait_for_notice_text(win, expected_substring, timeout=3.5):
+    """Waits for expected substring to appear in Notice InfoBar descendants."""
+    start = time.time()
+    while time.time() - start < timeout:
+        notice_bar = find_by_aid(win, "Notice")
+        if notice_bar:
+            texts = [d.window_text() for d in notice_bar.descendants() if d.window_text()]
+            if any(expected_substring in t for t in texts):
+                return True, texts
+        time.sleep(0.2)
+    notice_bar = find_by_aid(win, "Notice")
+    texts = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
+    return False, texts
+
+
 def main():
     log("=================================================================")
     log("STARTING STRENGTHENED NATIVE UI ACCEPTANCE AND PERF VERIFICATION")
@@ -78,6 +278,9 @@ def main():
     log(f"Executable: {EXE_PATH}")
     log(f"Store:      {STORE_PATH}")
     log(f"Perf log:   {PERF_LOG_PATH}")
+
+    # Run unit tests of drop verdict classification logic
+    test_drop_verdict_classification()
 
     # Ensure store schema is in clean state before launch
     try:
@@ -991,81 +1194,93 @@ def main():
         criterion_drop_execution = "INCONCLUSIVE"
         criterion_mixed_batch = "INCONCLUSIVE"
 
-        if drop_proc_returncode == 0 and len(dropped_records) == 1:
-            rec = dropped_records[0]
-            # Require exactly one newly admitted attachment with matching identity, size, digest, and ready state
-            if rec[1] != "native_drop_single.txt" or rec[2] != single_drop_size or rec[3] != "READY" or rec[4] != single_drop_sha256:
-                log(f"FAIL: Admitted record mismatch: {rec}")
-                return 1
-            if not os.path.exists(rec[5]):
-                log(f"FAIL: Staged file does not exist on disk: {rec[5]}")
-                return 1
+        comp_text = composer_box.window_text() if composer_box else ""
+        staged_exists = os.path.exists(dropped_records[0][5]) if len(dropped_records) == 1 else True
 
-            # Assert absence of automatic Send: compare contributions and pending submissions before and after
-            if contribs_after != contribs_before:
-                log(f"FAIL: Contributions count changed from {contribs_before} to {contribs_after} after drop")
-                return 1
-            if pending_after != pending_before:
-                log(f"FAIL: Pending submissions count changed from {pending_before} to {pending_after} after drop")
-                return 1
-            comp_text = composer_box.window_text() if composer_box else ""
-            if comp_text != "":
-                log("FAIL: Composer text was modified by drop operation")
-                return 1
-            log(f"PASS: Native OLE drag-drop admitted exactly 1 single file '{rec[1]}' (size={rec[2]}, status={rec[3]}, digest={rec[4]}).")
-            log("PASS: Absence of automatic Send verified: contributions and pending submissions unchanged, composer text untouched.")
+        # Evaluate single-drop verdict using pure classification function (independently of helper success)
+        drop_verdict, drop_reason = classify_drop_verdict(
+            drop_proc_returncode=drop_proc_returncode,
+            dropped_records=dropped_records,
+            contribs_before=contribs_before,
+            contribs_after=contribs_after,
+            pending_before=pending_before,
+            pending_after=pending_after,
+            composer_text_before="",
+            composer_text_after=comp_text,
+            expected_filename="native_drop_single.txt",
+            expected_size=single_drop_size,
+            expected_sha256=single_drop_sha256,
+            staged_file_exists=staged_exists
+        )
+
+        if drop_verdict == "FAIL":
+            log(f"FAIL: Drop operation violation: {drop_reason}")
+            return 1
+        elif drop_verdict == "PASS":
+            log(f"PASS: {drop_reason}")
             criterion_drop_execution = "PASS"
-
-            # Test Mixed-Batch Rejection (Folder + File in batch):
-            log("\nTesting mixed-batch rejection (folder + file)...")
-            sub_folder = os.path.join(test_drop_dir, "test_folder")
-            os.makedirs(sub_folder, exist_ok=True)
-            mixed_drop_file = os.path.join(test_drop_dir, "test_mixed_file.txt")
-            with open(mixed_drop_file, "wb") as f:
-                f.write(b"Mixed batch test file.\n")
-
-            mixed_proc_returncode = -1
-            try:
-                mixed_batch_proc = subprocess.run(
-                    [OLE_DROP_EXE, str(win.handle), sub_folder, mixed_drop_file],
-                    capture_output=True,
-                    text=True,
-                    timeout=4
-                )
-                mixed_proc_returncode = mixed_batch_proc.returncode
-            except subprocess.TimeoutExpired:
-                log("Mixed batch ole_drop.exe reached bounded timeout.")
-
-            time.sleep(1.0)
-
-            # Prove mixed batch reached application: verify NoticeBar rejection notice
-            notice_bar = find_by_aid(win, "NoticeBar")
-            notice_text = notice_bar.window_text() if notice_bar else ""
-            log(f"NoticeBar text after mixed-batch drop: '{notice_text}'")
-
-            conn = sqlite3.connect(STORE_PATH)
-            mixed_admitted = conn.execute(
-                "SELECT COUNT(*) FROM draft_attachments WHERE project_id = ? AND (file_name LIKE '%test_folder%' OR file_name LIKE '%test_mixed_file%');",
-                (alpha_id,)
-            ).fetchone()[0]
-            conn.close()
-
-            if mixed_admitted > 0:
-                log(f"FAIL: Mixed batch items admitted ({mixed_admitted} records found)")
-                return 1
-            if "Folders cannot be attached; entire batch rejected." not in notice_text:
-                log("DIAGNOSTIC: Mixed batch drop did not present expected rejection notice in NoticeBar.")
-                criterion_mixed_batch = "INCONCLUSIVE"
-            else:
-                log("PASS: Mixed batch rejection proven: NoticeBar displays 'Folders cannot be attached; entire batch rejected.' and 0 files/folders admitted.")
-                criterion_mixed_batch = "PASS"
-        else:
+        else: # INCONCLUSIVE
             log("DIAGNOSTIC: Native synthetic desktop OLE drag-drop execution did not complete via synthetic injection.")
             log(f"  ole_drop exit code: {drop_proc_returncode}")
             log(f"  dropped records count: {len(dropped_records)} (expected 1 on pass)")
             log("NOTE: Synthetic cross-process OLE drag-and-drop in headless/automation environment has OS-level security/session constraints (UIPI/modal loop timeout).")
-            log("In accordance with review instructions, marking native desktop drop criteria as INCONCLUSIVE while preserving discrete outcomes.")
+            log(f"  Classification: {drop_reason}")
             criterion_drop_execution = "INCONCLUSIVE"
+
+        # Test Mixed-Batch Rejection (Folder + File in batch) independently:
+        log("\nTesting mixed-batch rejection (folder + file)...")
+        # Clear any previous notice before the operation
+        clear_notice(win)
+        time.sleep(0.3)
+
+        sub_folder = os.path.join(test_drop_dir, "test_folder")
+        os.makedirs(sub_folder, exist_ok=True)
+        mixed_drop_file = os.path.join(test_drop_dir, "test_mixed_file.txt")
+        with open(mixed_drop_file, "wb") as f:
+            f.write(b"Mixed batch test file.\n")
+
+        mixed_proc_returncode = -1
+        try:
+            mixed_batch_proc = subprocess.run(
+                [OLE_DROP_EXE, str(win.handle), sub_folder, mixed_drop_file],
+                capture_output=True,
+                text=True,
+                timeout=4
+            )
+            mixed_proc_returncode = mixed_batch_proc.returncode
+        except subprocess.TimeoutExpired:
+            log("Mixed batch ole_drop.exe reached bounded timeout.")
+
+        # Locate actual control "Notice" and wait for fresh rejection tied to the attempted batch
+        rejection_msg = "Folders cannot be attached; entire batch rejected."
+        found_rejection, notice_desc = wait_for_notice_text(win, rejection_msg, timeout=3.5)
+        log(f"Notice text after mixed-batch drop: {notice_desc}")
+
+        conn = sqlite3.connect(STORE_PATH)
+        mixed_admitted = conn.execute(
+            "SELECT COUNT(*) FROM draft_attachments WHERE project_id = ? AND (file_name LIKE '%test_folder%' OR file_name LIKE '%test_mixed_file%');",
+            (alpha_id,)
+        ).fetchone()[0]
+        mixed_contribs = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+        mixed_pending = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+        conn.close()
+
+        # Prohibited side effect checks for mixed batch:
+        if mixed_admitted > 0:
+            log(f"FAIL: Mixed batch items admitted ({mixed_admitted} records found)")
+            return 1
+        if mixed_contribs != contribs_before:
+            log(f"FAIL: Contributions created during mixed-batch drop ({mixed_contribs} != {contribs_before})")
+            return 1
+        if mixed_pending != pending_before:
+            log(f"FAIL: Pending submissions created during mixed-batch drop ({mixed_pending} != {pending_before})")
+            return 1
+
+        if found_rejection:
+            log("PASS: Mixed batch rejection proven: Notice control displays 'Folders cannot be attached; entire batch rejected.' and 0 files/folders admitted.")
+            criterion_mixed_batch = "PASS"
+        else:
+            log("DIAGNOSTIC: Mixed batch drop did not present expected rejection notice in Notice control (insufficient delivery evidence).")
             criterion_mixed_batch = "INCONCLUSIVE"
 
         # Clean up dropped test records
