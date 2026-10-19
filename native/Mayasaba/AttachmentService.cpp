@@ -193,6 +193,7 @@ namespace mayasaba
                 result.accepted = false;
                 result.reason = ValidationFailureReason::InaccessibleFile;
                 result.errorMessage = "File does not exist or is inaccessible: " + fileName;
+                result.validatedFiles.clear();
                 return result;
             }
 
@@ -205,6 +206,7 @@ namespace mayasaba
                 result.accepted = false;
                 result.reason = ValidationFailureReason::InaccessibleFile;
                 result.errorMessage = "Cannot open file: " + fileName;
+                result.validatedFiles.clear();
                 return result;
             }
 
@@ -215,6 +217,7 @@ namespace mayasaba
                 result.accepted = false;
                 result.reason = ValidationFailureReason::InaccessibleFile;
                 result.errorMessage = "Cannot query file size: " + fileName;
+                result.validatedFiles.clear();
                 return result;
             }
 
@@ -225,6 +228,7 @@ namespace mayasaba
                 result.accepted = false;
                 result.reason = ValidationFailureReason::EmptyFile;
                 result.errorMessage = "File '" + fileName + "' is empty (0 bytes). Empty files cannot be attached.";
+                result.validatedFiles.clear();
                 return result;
             }
 
@@ -235,6 +239,7 @@ namespace mayasaba
                 result.reason = ValidationFailureReason::FileTooLarge;
                 result.errorMessage = "File '" + fileName + "' (" + FormatFileSize(size) +
                     ") exceeds the 100 MiB limit per file.";
+                result.validatedFiles.clear();
                 return result;
             }
 
@@ -246,6 +251,7 @@ namespace mayasaba
                 result.reason = ValidationFailureReason::AggregateTooLarge;
                 result.errorMessage = "Total attachment size (" + FormatFileSize(existingBytes + batchBytes) +
                     ") exceeds the 500 MiB aggregate limit.";
+                result.validatedFiles.clear();
                 return result;
             }
 

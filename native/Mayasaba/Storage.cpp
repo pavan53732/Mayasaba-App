@@ -320,10 +320,11 @@ namespace mayasaba
 
             if (tokens.empty()) return false;
 
-            // 3. Positive English lexicon for verifiable source prose
-            // Contains common English vocabulary, technical identifiers, and Mayasaba domain terms.
-            // In accordance with presentation policy: EVERY alphabetic word token must be verifiable as English.
-            // If any word in source prose cannot be established as English, fail closed (withhold content preview).
+            // 3. Conservative positive validation of source prose against an English lexicon.
+            // Under the presentation policy, this check does not claim to prove that arbitrary prose is English;
+            // rather, it enforces a conservative positive filter to withhold content preview whenever
+            // language eligibility cannot be established. Presence of punctuation, digits, or underscores
+            // does not grant automatic permission. If any token cannot be positively verified, fail closed.
             static const std::unordered_set<std::string_view> englishLexicon = {
                 // Articles, pronouns, prepositions, conjunctions
                 "a", "an", "the", "this", "that", "these", "those", "i", "you", "he", "she", "it", "we", "they",
@@ -464,23 +465,34 @@ namespace mayasaba
 
                 std::string core = token.substr(start, end - start);
 
-                // Check if technical identity: contains digits, underscores, hex prefixes, path separators, or UUID dashes
-                bool isTechnical = false;
+                // Check if purely numeric literal (e.g. "123", "3.14")
+                bool allDigitsOrDecimal = true;
+                bool hasDigits = false;
                 for (char ch : core)
                 {
-                    if (isdigit(static_cast<unsigned char>(ch)) || ch == '_' || ch == '/' || ch == '\\' || ch == '.' || ch == ':')
+                    if (isdigit(static_cast<unsigned char>(ch)))
                     {
-                        isTechnical = true;
+                        hasDigits = true;
+                    }
+                    else if (ch == '.')
+                    {
+                        // decimal separator
+                    }
+                    else
+                    {
+                        allDigitsOrDecimal = false;
                         break;
                     }
                 }
-                if (isTechnical)
+                if (allDigitsOrDecimal && hasDigits)
                 {
-                    // Permitted technical identity / code identifier / URL / path / hash
+                    // Pure numeric literal, permitted
                     continue;
                 }
 
-                // Alphabetic prose word: convert to lowercase
+                // If token contains letters mixed with digits, underscores, or punctuation
+                // (e.g. "hola1", "hola_mundo", "test_1"), it cannot bypass language verification
+                // based solely on token shape.
                 std::string word;
                 word.reserve(core.size());
                 for (char ch : core)
@@ -495,7 +507,7 @@ namespace mayasaba
                 else if (word.size() > 3 && word.ends_with("'ll")) word.resize(word.size() - 3);
                 else if (word.size() > 3 && word.ends_with("'re")) word.resize(word.size() - 3);
 
-                // If word contains internal non-letters (and wasn't technical), it is invalid
+                // Word must consist entirely of alphabetic ASCII letters ('a' through 'z')
                 bool allLetters = true;
                 for (char ch : word)
                 {
@@ -507,8 +519,8 @@ namespace mayasaba
                 }
                 if (!allLetters) return false;
 
-                // EVERY prose word must be a verified English word.
-                // If any prose word cannot be verified, English eligibility fails.
+                // EVERY prose word must be recognized by the English lexicon or standard morphological stem.
+                // If any prose word cannot be positively verified, fail closed (withhold content preview).
                 if (!isRecognizedEnglishWord(word))
                 {
                     return false;

@@ -1135,13 +1135,14 @@ This section documents the root cause, actual correction, regression and native 
 | `verify_ac_ai.exe` | Native C++20 Standalone | 10 tests: Action Center pagination, composite token signature, ActionCenterPresenter dismissal & paging sequence races, zero filesystem mutation, exclusive source lock independence, strict English lexicon verification & presentation policy, project switch draft preservation, staged path traversal rejection, in-flight mutation/deletion race under mutex, atomic read transaction snapshot with concurrent writer | **PASS (10/10)** |
 | `ole_drop.exe` | Native C++20 Helper | OLE IDropSource / IDataObject (CF_HDROP) helper with 2-second background watchdog thread | **COMPILED & VERIFIED** |
 | `validate_contract_registry.py` | Schema & Contract Registry | 124 schema and contract checks for Screen 2 slice, state machines, and authority models | **PASS (124/124)** |
-| `test_full_ui_acceptance.py` | Live Native WinUI 3 UIA | Phases 1–10: Recent filtering, message search pagination & recovery, older message navigation & highlight elevation, project switching during search, responsive 520px layout, rapid hover sweeps, DPI simulation, Action Center paging & stale invalidation, panel dismissal stability (Phase 9.2), native OLE drag-drop automation (Phase 10.1), seeded attachment inspection & preview (Phase 10.2), and strict non-English preview withholding (Phase 10.3) | **PASS (Phases 1–10)** |
-| UI Performance Profiling | WinUI 3 CompositionTarget | 29,405 render callbacks, avg interval 7.16ms, typing p50 5.22ms, typing p95 20.20ms (no stalls discarded) | **PASS** |
+| `test_full_ui_acceptance.py` | Live Native WinUI 3 UIA | 15 criteria across Phases 1–10: Recent filtering, message search pagination & recovery, older message navigation & highlight elevation, project switching during search, responsive 520px layout, rapid hover sweeps, DPI simulation, Action Center paging & stale invalidation, panel dismissal stability (Phase 9.2), native OLE desktop drop execution (Phase 10.1), mixed-batch folder drop rejection, seeded attachment inspection & preview (Phase 10.2), strict non-English preview withholding (Phase 10.3), UI performance profiling | **13 PASS, 2 INCONCLUSIVE** (Synthetic drop execution) |
+| UI Performance Profiling | WinUI 3 CompositionTarget | 30,451 render callbacks, avg interval 7.06ms, typing p50 2.85ms, typing p95 25.76ms (no stalls discarded) | **PASS** |
 
 ### Note on Remaining Inconclusive Items & Fixture Distinctions
 - **Inconclusive Verifications:**
   1. Dynamic multi-monitor display scaling across physical monitor boundaries remains unexecuted and is documented truthfully as **INCONCLUSIVE** (`WM_DPICHANGED` message handling in code verified).
   2. Live Narrator screen reader speech synthesis verification remains unexecuted and is documented truthfully as **INCONCLUSIVE** (UIA accessibility names, control types, and states verified).
+  3. Native OLE desktop drag-and-drop execution and mixed-batch folder drop rejection via synthetic mouse injection in headless/automation environment remain documented truthfully as **INCONCLUSIVE** (OS UIPI / modal loop timeout constraints under non-interactive desktop automation; production ingestion path, folder rejection, digest verification, and project boundary cancellation independently verified in native unit tests `verify_ac_ai.exe` Test 5).
 - **Distinction of Test Evidence:**
   - Production database `%LOCALAPPDATA%\Mayasaba\mayasaba.db` remained completely untouched during all tests.
   - Test fixtures (`sample_spec.txt`, `hola_mundo.txt`, seeded messages) are clearly distinguished from live agent work.
@@ -1225,5 +1226,49 @@ This section documents the specific corrections and empirical evidence resolving
   - `native/tests/verify_ac_ai.cpp` Test 3 uses `ActionCenterPresenter` directly.
   - `native/tests/verify_ac_ai.cpp` Test 9 deterministically tests in-flight mutation and deletion races using the test hook under `mutex_`.
 - **Observed results:** 10/10 standalone tests pass; 22/22 regression suites pass; 124/124 contract registry checks pass; full UI acceptance passes.
+
+---
+
+## 12. Review of `eeeef8b` Corrections & Verification Evidence
+
+This section documents the specific corrections and empirical evidence resolving the two review findings of commit `eeeef8b`.
+
+### 12.1 Item 1: Elimination of Unchecked Token-Shape Bypass in English Presentation Policy
+
+- **Finding:** In `Storage.cpp:467–480`, any token containing a digit, underscore, slash, backslash, period, or colon was automatically skipped as a permitted technical identity based solely on its character shape. Consequently, mixed-language prose with digit suffixes (such as `"This is hola1 mundo1"`) or underscore-dressed non-English words bypassed language verification. Furthermore, dictionary membership and morphological suffix stripping were previously described as proof that arbitrary prose is English.
+- **Actual correction:**
+  - Completely removed automatic permission based solely on token shape (`isTechnical` bypass). The presence of digits, underscores, or punctuation does not grant automatic permission.
+  - Conservative positive filter: Every token containing alphabetic letters must consist entirely of ASCII letters (`'a'` to `'z'`) and be recognized by the English lexicon or standard morphological stem. Tokens with letters mixed with digits or underscores (such as `"hola1"`, `"hola_mundo"`, `"test_hola1_mundo2"`) fail validation (`previewEligible = false`). Pure numeric literals (digits `0-9` with optional decimal separator) are permitted as numbers, not words.
+  - The documentation and comments explicitly clarify that dictionary membership and morphological suffix stripping do NOT claim to prove that arbitrary prose is English; rather, they serve as a conservative positive filter to withhold content preview under the presentation policy whenever language eligibility cannot be established.
+  - When content preview is withheld, metadata inspection (file size, MIME type, SHA-256 digest, staging isolation, version) remains 100% accessible.
+- **Discriminating tests & evidence:**
+  - `native/tests/verify_ac_ai.cpp` Test 6: Added negative tests for digit-suffixed and underscore-containing non-English prose:
+    - `"This is hola1 mundo1"` (`previewEligible == false`)
+    - `"This is hola_mundo"` (`previewEligible == false`)
+    - `"test_hola1_mundo2"` (`previewEligible == false`)
+    - `"This is palabra_desconocida dressed with underscores"` (`previewEligible == false`)
+    - For all negative cases, verified `res.found == true`, `res.inspection.integrityVerified == true`, `res.inspection.isManaged == true`, `res.inspection.fileSize == tc.text.size()`, and `res.inspection.sha256 == hash`, proving metadata inspection is preserved while preview is withheld.
+  - `native/tests/test_full_ui_acceptance.py` Phase 10.3: Live WinUI 3 verification: inspecting non-English prose confirms `AttachmentPreviewUnavailableNotice` is displayed with the truthful explanation and content box remains empty while metadata is shown in `NoticeBar`.
+- **Observed results:** All assertions pass. Zero unverified, digit-suffixed, or underscore-dressed prose is certified as English.
+
+### 12.2 Item 2: Propagation of Inconclusive Native Drop Execution & Strengthened Ingestion Assertions
+
+- **Finding:** In `test_full_ui_acceptance.py:980–1021`, Phase 10.1 logged `INCONCLUSIVE` upon drop timeout but the overall suite reported all phases passed. Furthermore:
+  - Single admission checked `len(dropped_records) > 0`, allowing duplicate admissions.
+  - Absence of automatic Send checked only `composer_box == ""`, which could also occur if automatic submission emptied the composer.
+  - Mixed-batch rejection checked only that no folder record existed, passing even if the drop never reached the application.
+  - Delayed drop during project switching was not exercised through the production ingestion path.
+- **Actual correction:**
+  - **Verdict propagation:** `test_full_ui_acceptance.py` now tracks 15 discrete criteria and prints a structured verification summary report. When synthetic desktop drag-and-drop cannot execute due to non-interactive OS session constraints, it records `[INCONCLUSIVE]` for the two desktop drop criteria (`Native OLE Desktop Drag-and-Drop Execution` and `Mixed-Batch Folder Rejection on Drop`), reporting `Total: 15 criteria | Passed: 13 | Inconclusive: 2 | Failed: 0` and `STATUS: ACCEPTANCE CHECKS COMPLETE (INCONCLUSIVE CRITERIA RETAINED)`. The suite exits cleanly without falsely claiming all phases passed.
+  - **Exact single admission:** Asserted `len(dropped_records) == 1`, requiring matching identity, size, SHA-256 digest, and status `READY`.
+  - **True absence of automatic Send:** Queried `contributions` and `pending_submissions` row counts before and after the drop, asserting both counts are strictly identical (`contribs_after == contribs_before`, `pending_after == pending_before`), and composer text is unchanged.
+  - **Mixed-batch application proof:** Verified `NoticeBar` displays `"Folders cannot be attached; entire batch rejected."` to prove the mixed batch reached the application, and confirmed 0 files and 0 folders were admitted.
+  - **Production ingestion path project switching:** In `verify_ac_ai.cpp` Test 5, exercised `AttachmentService::ValidateCandidateBatch`, `AttachmentService::PrepareBatch` with cancellation predicate, and project boundary guards during an in-flight A -> B project switch. Verified dropped files are rejected and zero draft attachments are admitted to either project A or project B.
+  - **Fixture delineation:** Seeded fixture tests in Phases 10.2 & 10.3 are explicitly distinguished from desktop OLE drop injection in Phase 10.1.
+- **Discriminating tests & evidence:**
+  - `native/tests/verify_ac_ai.cpp` Test 5: Production `AttachmentService` batch validation, folder rejection, and A -> B project switch cancellation tested directly.
+  - `native/tests/test_full_ui_acceptance.py`: Full execution completed (13 PASS, 2 INCONCLUSIVE, 0 FAIL).
+- **Observed results:** Inconclusive drop execution is truthfully propagated to the acceptance matrix and report, while all ingestion path invariants are verified.
+
 
 

@@ -7,6 +7,6 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <PropertyGroup><OutDir>$(MSBuildProjectDirectory)\bin\</OutDir><IntDir>$(MSBuildProjectDirectory)\obj\verify_ac_ai\</IntDir></PropertyGroup>
   <ItemDefinitionGroup><ClCompile><LanguageStandard>stdcpp20</LanguageStandard><WarningLevel>Level4</WarningLevel><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions><PreprocessorDefinitions>NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile><Link><AdditionalDependencies>winsqlite3.lib;shell32.lib;ole32.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies></Link></ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="verify_ac_ai.cpp"/><ClCompile Include="..\Mayasaba\Storage.cpp"/><ClCompile Include="..\Mayasaba\ProjectRoot.cpp"/></ItemGroup>
+  <ItemGroup><ClCompile Include="verify_ac_ai.cpp"/><ClCompile Include="..\Mayasaba\Storage.cpp"/><ClCompile Include="..\Mayasaba\ProjectRoot.cpp"/><ClCompile Include="..\Mayasaba\AttachmentService.cpp"/></ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

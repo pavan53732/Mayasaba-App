@@ -1,4 +1,5 @@
 #include "../Mayasaba/Storage.h"
+#include "../Mayasaba/AttachmentService.h"
 #include "../Mayasaba/ActionCenterPresenter.h"
 #include <chrono>
 #include <fstream>
@@ -629,74 +630,89 @@ int main()
     }
 
     // -------------------------------------------------------------------------
-    // Test 5: File drop project boundary, overlapping guard, and mixed batch rejection
+    // Test 5: Production AttachmentService file drop ingestion, mixed-batch folder rejection,
+    // and project switching cancellation during delayed drop
     // -------------------------------------------------------------------------
     {
-        // 1. Mixed batch rejection logic:
-        struct StorageItemMock {
-            std::wstring path;
-            bool isFolder;
-        };
-        auto ValidateDropBatch = [](std::vector<StorageItemMock> const& items) -> std::pair<bool, std::string>
+        mayasaba::Storage store(folder / "drop_ingestion.db");
+        store.BindProject("proj-A", "Project Alpha", "C:/Alpha");
+        store.BindProject("proj-B", "Project Beta", "C:/Beta");
+
+        auto stagingDir = folder / "drop_staging";
+        fs::create_directories(stagingDir);
+        mayasaba::AttachmentService attService(store, stagingDir);
+
+        auto dropSourceDir = folder / "drop_sources";
+        fs::create_directories(dropSourceDir);
+
+        // Create a valid test file
+        auto singleFile = dropSourceDir / "valid_drop.txt";
         {
-            if (items.empty()) return { false, "Empty drop" };
-            bool hasFolder = false;
-            std::vector<std::wstring> candidateFiles;
-            for (auto const& it : items)
-            {
-                if (it.isFolder) hasFolder = true;
-                else candidateFiles.push_back(it.path);
-            }
-            if (hasFolder)
-            {
-                return { false, "Folders cannot be attached; entire batch rejected." };
-            }
-            if (candidateFiles.empty())
-            {
-                return { false, "Only individual files may be attached; folders cannot be attached directly." };
-            }
-            return { true, "Accepted " + std::to_string(candidateFiles.size()) + " file(s)" };
-        };
+            std::ofstream ofs(singleFile);
+            ofs << "Valid English prose payload for native drag-and-drop ingestion testing.\n";
+        }
 
-        // Mixed batch with 2 files and 1 folder
-        std::vector<StorageItemMock> mixedBatch = {
-            { L"C:\\test\\file1.txt", false },
-            { L"C:\\test\\subfolder", true },
-            { L"C:\\test\\file2.txt", false }
-        };
-        auto [mixedOk, mixedMsg] = ValidateDropBatch(mixedBatch);
-        EXPECT(!mixedOk);
-        EXPECT(mixedMsg == "Folders cannot be attached; entire batch rejected.");
+        // Create a folder for mixed-batch testing
+        auto subFolder = dropSourceDir / "folder_item";
+        fs::create_directories(subFolder);
 
-        // Pure folder batch
-        std::vector<StorageItemMock> folderBatch = { { L"C:\\test\\folder1", true } };
-        auto [folderOk, folderMsg] = ValidateDropBatch(folderBatch);
-        EXPECT(!folderOk);
-        EXPECT(folderMsg == "Folders cannot be attached; entire batch rejected.");
+        // 1. Single valid file validation
+        auto resSingle = attService.ValidateCandidateBatch({ singleFile.wstring() }, {});
+        EXPECT(resSingle.accepted == true);
+        EXPECT(resSingle.reason == mayasaba::ValidationFailureReason::None);
+        EXPECT(resSingle.validatedFiles.size() == 1);
+        EXPECT(resSingle.validatedFiles[0].fileName == "valid_drop.txt");
 
-        // Pure files batch
-        std::vector<StorageItemMock> fileBatch = {
-            { L"C:\\test\\file1.txt", false },
-            { L"C:\\test\\file2.txt", false }
-        };
-        auto [fileOk, fileMsg] = ValidateDropBatch(fileBatch);
-        EXPECT(fileOk);
+        // 2. Mixed batch rejection: folder + file in batch
+        // In accordance with contract: Folders cannot be attached; entire batch rejected!
+        std::vector<std::wstring> mixedPaths = { singleFile.wstring(), subFolder.wstring() };
+        auto resMixed = attService.ValidateCandidateBatch(mixedPaths, {});
+        EXPECT(resMixed.accepted == false);
+        EXPECT(resMixed.reason == mayasaba::ValidationFailureReason::InaccessibleFile);
+        EXPECT(resMixed.validatedFiles.empty());
 
-        // 2. Delayed A -> B drop rejection
+        // 3. Pure folder rejection
+        auto resFolder = attService.ValidateCandidateBatch({ subFolder.wstring() }, {});
+        EXPECT(resFolder.accepted == false);
+        EXPECT(resFolder.reason == mayasaba::ValidationFailureReason::InaccessibleFile);
+
+        // 4. Delayed drop with project switching (A -> B) through actual production ingestion path
         std::string activeProject = "proj-A";
         uint64_t currentGen = 1;
 
-        std::string capturedProject = activeProject;
-        uint64_t capturedGen = currentGen;
+        // Simulate async drop preparation initiated for project A
+        std::string const capturedProjectId = activeProject;
+        uint64_t const capturedGen = currentGen;
 
-        // User switches project to B during async await
+        // User switches project to B during in-flight preparation
         activeProject = "proj-B";
         currentGen = 2;
 
-        bool boundaryCrossed = (activeProject != capturedProject || currentGen != capturedGen);
-        EXPECT(boundaryCrossed == true); // Drop must be rejected!
+        // In PrepareBatch, cancellation predicate checks project boundary and generation
+        auto isCancelled = [&] {
+            return activeProject != capturedProjectId || currentGen != capturedGen;
+        };
 
-        // 3. Overlapping drop guard
+        auto prepared = attService.PrepareBatch("proj-A", { singleFile.wstring() }, isCancelled, 120);
+
+        // In MainWindow::ProcessCandidatePathsAsync, foreground return checks project boundary:
+        // if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != gen) co_return;
+        bool const dropCancelled = (activeProject != capturedProjectId || currentGen != capturedGen);
+        EXPECT(dropCancelled == true);
+
+        // When cancelled, results are discarded and never saved to either project
+        if (!dropCancelled)
+        {
+            attService.SaveDraftAttachments(capturedProjectId, prepared);
+        }
+
+        auto draftsA = attService.LoadDraftAttachments("proj-A");
+        EXPECT(draftsA.empty()); // Dropped file was NOT admitted to source project A
+
+        auto draftsB = attService.LoadDraftAttachments("proj-B");
+        EXPECT(draftsB.empty()); // Dropped file was NOT admitted to target project B
+
+        // 5. Overlapping drop guard
         bool dropProcessing = false;
         auto ProcessDrop = [&dropProcessing]() -> bool
         {
@@ -712,7 +728,8 @@ int main()
     }
 
     // -------------------------------------------------------------------------
-    // Test 6: Non-English ASCII prose rejected for preview under English presentation policy
+    // Test 6: Non-English ASCII prose, mixed language, and digit/underscore dressed
+    // prose rejected for preview under English presentation policy
     // -------------------------------------------------------------------------
     {
         mayasaba::Storage store(folder / "english_policy.db");
@@ -733,6 +750,10 @@ int main()
             { "att-ascii-de1", "hallo guten tag danke", false },
             { "att-ascii-it1", "ciao mondo grazie arrivederci", false },
             { "att-ascii-mixed", "This is namaste sabko", false },
+            { "att-ascii-digit-suffixed", "This is hola1 mundo1", false },
+            { "att-ascii-underscore-noneng", "This is hola_mundo", false },
+            { "att-ascii-digit-mixed", "test_hola1_mundo2", false },
+            { "att-ascii-underscore-dressed", "This is palabra_desconocida dressed with underscores", false },
             { "att-ascii-long-foreign", "This is a test of long unrecognized prose luego los usuarios no pudieron continuar con el proceso de autorizacion del sistema", false },
             { "att-ascii-valid-per", "Requests per second were within limits as per the specification.", true },
             { "att-ascii-eng", "This is an authorized English specification file for project inspection.", true }

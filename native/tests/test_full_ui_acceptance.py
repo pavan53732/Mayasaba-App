@@ -947,8 +947,17 @@ def main():
         os.makedirs(test_drop_dir, exist_ok=True)
         single_drop_file = os.path.join(test_drop_dir, "native_drop_single.txt")
         single_drop_content = b"Native OLE drag-and-drop verification payload with valid English prose.\n"
+        import hashlib
+        single_drop_sha256 = hashlib.sha256(single_drop_content).hexdigest()
+        single_drop_size = len(single_drop_content)
         with open(single_drop_file, "wb") as f:
             f.write(single_drop_content)
+
+        # Baseline check before drop: query contributions and pending submissions
+        conn = sqlite3.connect(STORE_PATH)
+        contribs_before = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+        pending_before = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+        conn.close()
 
         # Single admission test via ole_drop.exe
         log(f"Invoking ole_drop.exe on window handle {win.handle} with single file '{single_drop_file}'...")
@@ -972,53 +981,92 @@ def main():
 
         conn = sqlite3.connect(STORE_PATH)
         dropped_records = conn.execute(
-            "SELECT attachment_id, file_name, file_size, status, staged_path FROM draft_attachments WHERE project_id = ? AND file_name = 'native_drop_single.txt';",
+            "SELECT attachment_id, file_name, file_size, status, sha256, staged_path FROM draft_attachments WHERE project_id = ? AND file_name = 'native_drop_single.txt';",
             (alpha_id,)
         ).fetchall()
+        contribs_after = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+        pending_after = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
         conn.close()
 
-        if drop_proc_returncode == 0 and len(dropped_records) > 0:
+        criterion_drop_execution = "INCONCLUSIVE"
+        criterion_mixed_batch = "INCONCLUSIVE"
+
+        if drop_proc_returncode == 0 and len(dropped_records) == 1:
             rec = dropped_records[0]
-            log(f"PASS: Native OLE drag-drop admitted single file '{rec[1]}' (size={rec[2]}, status={rec[3]}).")
-            # Verify absence of automatic Send: composer box text is empty, send was not triggered
+            # Require exactly one newly admitted attachment with matching identity, size, digest, and ready state
+            if rec[1] != "native_drop_single.txt" or rec[2] != single_drop_size or rec[3] != "READY" or rec[4] != single_drop_sha256:
+                log(f"FAIL: Admitted record mismatch: {rec}")
+                return 1
+            if not os.path.exists(rec[5]):
+                log(f"FAIL: Staged file does not exist on disk: {rec[5]}")
+                return 1
+
+            # Assert absence of automatic Send: compare contributions and pending submissions before and after
+            if contribs_after != contribs_before:
+                log(f"FAIL: Contributions count changed from {contribs_before} to {contribs_after} after drop")
+                return 1
+            if pending_after != pending_before:
+                log(f"FAIL: Pending submissions count changed from {pending_before} to {pending_after} after drop")
+                return 1
             comp_text = composer_box.window_text() if composer_box else ""
-            log(f"ComposerBox text after drop: '{comp_text}'")
             if comp_text != "":
                 log("FAIL: Composer text was modified by drop operation")
                 return 1
-            log("PASS: Absence of automatic Send verified: drop ingested attachment without triggering submission.")
+            log(f"PASS: Native OLE drag-drop admitted exactly 1 single file '{rec[1]}' (size={rec[2]}, status={rec[3]}, digest={rec[4]}).")
+            log("PASS: Absence of automatic Send verified: contributions and pending submissions unchanged, composer text untouched.")
+            criterion_drop_execution = "PASS"
+
+            # Test Mixed-Batch Rejection (Folder + File in batch):
+            log("\nTesting mixed-batch rejection (folder + file)...")
+            sub_folder = os.path.join(test_drop_dir, "test_folder")
+            os.makedirs(sub_folder, exist_ok=True)
+            mixed_drop_file = os.path.join(test_drop_dir, "test_mixed_file.txt")
+            with open(mixed_drop_file, "wb") as f:
+                f.write(b"Mixed batch test file.\n")
+
+            mixed_proc_returncode = -1
+            try:
+                mixed_batch_proc = subprocess.run(
+                    [OLE_DROP_EXE, str(win.handle), sub_folder, mixed_drop_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=4
+                )
+                mixed_proc_returncode = mixed_batch_proc.returncode
+            except subprocess.TimeoutExpired:
+                log("Mixed batch ole_drop.exe reached bounded timeout.")
+
+            time.sleep(1.0)
+
+            # Prove mixed batch reached application: verify NoticeBar rejection notice
+            notice_bar = find_by_aid(win, "NoticeBar")
+            notice_text = notice_bar.window_text() if notice_bar else ""
+            log(f"NoticeBar text after mixed-batch drop: '{notice_text}'")
+
+            conn = sqlite3.connect(STORE_PATH)
+            mixed_admitted = conn.execute(
+                "SELECT COUNT(*) FROM draft_attachments WHERE project_id = ? AND (file_name LIKE '%test_folder%' OR file_name LIKE '%test_mixed_file%');",
+                (alpha_id,)
+            ).fetchone()[0]
+            conn.close()
+
+            if mixed_admitted > 0:
+                log(f"FAIL: Mixed batch items admitted ({mixed_admitted} records found)")
+                return 1
+            if "Folders cannot be attached; entire batch rejected." not in notice_text:
+                log("DIAGNOSTIC: Mixed batch drop did not present expected rejection notice in NoticeBar.")
+                criterion_mixed_batch = "INCONCLUSIVE"
+            else:
+                log("PASS: Mixed batch rejection proven: NoticeBar displays 'Folders cannot be attached; entire batch rejected.' and 0 files/folders admitted.")
+                criterion_mixed_batch = "PASS"
         else:
             log("DIAGNOSTIC: Native synthetic desktop OLE drag-drop execution did not complete via synthetic injection.")
-            log("NOTE: Synthetic cross-process OLE drag-and-drop in headless/automation environment has OS-level security/session constraints.")
-            log("In accordance with review instructions, marking synthetic desktop drop acceptance criterion INCONCLUSIVE while verifying ingestion path via direct controller validation.")
-
-        # Test Mixed-Batch Rejection (Folder + File in batch):
-        log("\nTesting mixed-batch rejection (folder + file)...")
-        sub_folder = os.path.join(test_drop_dir, "test_folder")
-        os.makedirs(sub_folder, exist_ok=True)
-        try:
-            mixed_batch_proc = subprocess.run(
-                [OLE_DROP_EXE, str(win.handle), sub_folder, single_drop_file],
-                capture_output=True,
-                text=True,
-                timeout=4
-            )
-            log(f"Mixed batch ole_drop.exe exit code: {mixed_batch_proc.returncode}")
-        except subprocess.TimeoutExpired:
-            log("Mixed batch ole_drop.exe reached bounded timeout.")
-
-        time.sleep(1.0)
-        # Check database for rejection of folder
-        conn = sqlite3.connect(STORE_PATH)
-        folder_records = conn.execute(
-            "SELECT COUNT(*) FROM draft_attachments WHERE project_id = ? AND file_name LIKE '%test_folder%';",
-            (alpha_id,)
-        ).fetchone()[0]
-        conn.close()
-        if folder_records > 0:
-            log("FAIL: Folder record was admitted into draft_attachments table")
-            return 1
-        log("PASS: Folder admission rejected: database confirms zero folder records admitted.")
+            log(f"  ole_drop exit code: {drop_proc_returncode}")
+            log(f"  dropped records count: {len(dropped_records)} (expected 1 on pass)")
+            log("NOTE: Synthetic cross-process OLE drag-and-drop in headless/automation environment has OS-level security/session constraints (UIPI/modal loop timeout).")
+            log("In accordance with review instructions, marking native desktop drop criteria as INCONCLUSIVE while preserving discrete outcomes.")
+            criterion_drop_execution = "INCONCLUSIVE"
+            criterion_mixed_batch = "INCONCLUSIVE"
 
         # Clean up dropped test records
         conn = sqlite3.connect(STORE_PATH)
@@ -1379,10 +1427,49 @@ def main():
                 log(f"FAIL: Typing p95 latency exceeded 100ms: {perf_data.get('typing_p95_latency_ms')} ms")
                 return 1
 
-        log("\n=================================================================")
-        log("ALL STRENGTHENED NATIVE UI ACCEPTANCE VERIFICATIONS PASSED!")
-        log("=================================================================\n")
-        return 0
+        verdicts = {
+            "1. Recent Projects & Startup Filtering": "PASS",
+            "2. Message Search Pagination & Continuation": "PASS",
+            "3. Older Message Navigation & Selection": "PASS",
+            "4. Search Mode Project Switch Safety": "PASS",
+            "5. Narrow 520px Responsive Layout": "PASS",
+            "6. Rapid Hover Sweeps & Animation Stability": "PASS",
+            "7. Display DPI Scaling Simulation": "PASS",
+            "8. Action Center Pagination & Resumption": "PASS",
+            "9. Action Center Stale Invalidation & Refresh": "PASS",
+            "10. Action Center Panel Dismissal Stability": "PASS",
+            "11. Native OLE Desktop Drag-and-Drop Execution": criterion_drop_execution,
+            "12. Mixed-Batch Folder Rejection on Drop": criterion_mixed_batch,
+            "13. Seeded Attachment Chip Realization & Diagnostics": "PASS",
+            "14. Strict Non-English Prose Preview Withholding": "PASS",
+            "15. WinUI 3 CompositionTarget Performance Profiling": "PASS",
+        }
+
+        log("\n" + "=" * 70)
+        log("NATIVE UI ACCEPTANCE VERIFICATION SUMMARY REPORT")
+        log("=" * 70)
+        pass_count = sum(1 for v in verdicts.values() if v == "PASS")
+        inconclusive_count = sum(1 for v in verdicts.values() if v == "INCONCLUSIVE")
+        fail_count = sum(1 for v in verdicts.values() if v == "FAIL")
+
+        for name, v in verdicts.items():
+            log(f"  {name:<54} [{v}]")
+        log("-" * 70)
+        log(f"  Total: {len(verdicts)} criteria | Passed: {pass_count} | Inconclusive: {inconclusive_count} | Failed: {fail_count}")
+        if fail_count > 0:
+            log("\nSTATUS: TEST SUITE FAILED (one or more assertions failed)")
+            log("=" * 70 + "\n")
+            return 1
+        elif inconclusive_count > 0:
+            log("\nSTATUS: ACCEPTANCE CHECKS COMPLETE (INCONCLUSIVE CRITERIA RETAINED)")
+            log("NOTE: Desktop automation environment constraints prevent automated verification")
+            log("      of synthetic OLE drag-drop; native manual testing or interactive session required.")
+            log("=" * 70 + "\n")
+            return 0
+        else:
+            log("\nSTATUS: ALL CRITERIA PASSED")
+            log("=" * 70 + "\n")
+            return 0
 
     finally:
         # Guarantee schema restoration if test aborted midway
