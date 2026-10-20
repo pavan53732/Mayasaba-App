@@ -329,6 +329,12 @@ namespace mayasaba
         // reported as an UNKNOWN physical outcome and quarantines the store, instead of
         // being claimed as a definite rollback. Test-only.
         void SetForceRollbackFailureForTesting(bool force) noexcept { forceRollbackFailureForTesting_ = force; }
+        // Simulates a seal that did not take effect on the Nth verified attachment, so the
+        // partial-sealing compensation path can be executed deterministically.
+        void SetSealFailureIndexForTesting(std::size_t index) noexcept { sealFailureIndexForTesting_ = index; }
+        // Simulates a read-transaction COMMIT that fails while the transaction is still
+        // open - the state the previous bookkeeping silently forgot.
+        void SetForceActionCenterCommitFailureForTesting(bool force) noexcept { forceActionCenterCommitFailureForTesting_ = force; }
         bool IsQuarantinedForTesting() const noexcept { return poisoned_; }
 
     private:
@@ -342,6 +348,8 @@ namespace mayasaba
         std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
         bool forceHashFailureForTesting_{false};
         bool forceRollbackFailureForTesting_{false};
+        std::size_t sealFailureIndexForTesting_{ static_cast<std::size_t>(-1) };
+        bool forceActionCenterCommitFailureForTesting_{false};
         // Set when a transaction could not be returned to a known state. While set, write
         // operations fail closed with an explicit reason instead of issuing SQL on a
         // connection whose transaction state is UNKNOWN. Only reopening the store clears it.

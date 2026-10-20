@@ -150,6 +150,26 @@ namespace mayasaba
         std::filesystem::path stagingRoot_;
         std::function<void()> preparationChunkHook_;
 
+        // Proves, before anything is deleted, that a recorded staged path names a regular
+        // file inside this project's managed staging subtree. A stored path is metadata,
+        // and corrupted or untrusted metadata must never become authority to delete an
+        // arbitrary filesystem object. A string-prefix test is not enough: junctions,
+        // reparse points, path aliases and short names all defeat it, so the comparison is
+        // made on canonical identities and the target's reparse attribute is checked.
+        // Returns false and sets `reason` when containment cannot be established.
+        bool ProveContainedStagedFile(
+            std::string const& projectId,
+            std::string const& storagePath,
+            std::string* reason) const;
+
+        // Deletes a staged copy only after containment is proven. An unprovable path is
+        // left in place and reported, because an unresolved cleanup obligation is always
+        // safer than a deletion that cannot be justified.
+        bool RemoveContainedStagedFile(
+            std::string const& projectId,
+            std::string const& storagePath,
+            std::string* reason);
+
         static std::string Utf16ToUtf8(std::wstring const& w);
         static std::wstring Utf8ToUtf16(std::string const& u);
     };

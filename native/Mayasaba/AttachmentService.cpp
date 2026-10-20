@@ -1,4 +1,5 @@
 #include "AttachmentService.h"
+#include "AttachmentRecoveryPolicy.h"
 #include <cwctype>
 #include <iomanip>
 #include <sstream>
@@ -653,6 +654,92 @@ namespace mayasaba
         return result;
     }
 
+    namespace
+    {
+        // A project identity must be exactly one path component. Anything that can walk
+        // upwards or switch volumes would let a caller choose which directory the
+        // containment proof is performed against.
+        bool IsSinglePathComponent(std::wstring const& name)
+        {
+            if (name.empty() || name == L"." || name == L"..") return false;
+            for (wchar_t const ch : name)
+            {
+                if (ch == L'/' || ch == L'\\' || ch == L':') return false;
+            }
+            return true;
+        }
+    }
+
+    bool AttachmentService::ProveContainedStagedFile(
+        std::string const& projectId,
+        std::string const& storagePath,
+        std::string* reason) const
+    {
+        auto const refuse = [reason](char const* why)
+        {
+            if (reason) *reason = why;
+            return false;
+        };
+
+        if (projectId.empty()) return refuse("the project identity is empty");
+        std::wstring const projectW = Utf8ToUtf16(projectId);
+        if (!IsSinglePathComponent(projectW)) return refuse("the project identity is not a single path component");
+        if (storagePath.empty()) return refuse("the recorded staged path is empty");
+
+        std::wstring const target = Utf8ToUtf16(storagePath);
+
+        // Inspect the path as recorded, before any resolution: a final-component link or
+        // reparse point is exactly what must not be followed.
+        std::error_code statusEc;
+        auto const recordedStatus = std::filesystem::symlink_status(target, statusEc);
+        if (statusEc) return refuse("the recorded staged path has no readable status");
+        if (!std::filesystem::exists(recordedStatus)) return refuse("the recorded staged path does not exist");
+        if (std::filesystem::is_symlink(recordedStatus)) return refuse("the recorded staged path is a link");
+        if (!std::filesystem::is_regular_file(recordedStatus)) return refuse("the recorded staged path is not a regular file");
+#ifdef _WIN32
+        DWORD const attributes = GetFileAttributesW(target.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES) return refuse("the recorded staged path has no readable attributes");
+        if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) return refuse("the recorded staged path is a reparse point");
+#endif
+
+        std::error_code rootEc;
+        auto const root = std::filesystem::weakly_canonical(stagingRoot_ / L"staging" / projectW, rootEc);
+        if (rootEc) return refuse("the project staging directory could not be resolved");
+
+        std::error_code targetEc;
+        auto const resolved = std::filesystem::weakly_canonical(target, targetEc);
+        if (targetEc) return refuse("the recorded staged path could not be resolved");
+
+        // The directory is what must match, not the whole string: the file name is free.
+        // Comparing canonical parents also collapses aliases, short names and junctions.
+        if (resolved.parent_path() != root)
+        {
+            return refuse("the recorded staged path is outside this project's managed staging directory");
+        }
+        return true;
+    }
+
+    bool AttachmentService::RemoveContainedStagedFile(
+        std::string const& projectId,
+        std::string const& storagePath,
+        std::string* reason)
+    {
+        if (!ProveContainedStagedFile(projectId, storagePath, reason)) return false;
+
+        auto const target = Utf8ToUtf16(storagePath);
+        std::error_code ec;
+#ifdef _WIN32
+        SetFileAttributesW(target.c_str(), FILE_ATTRIBUTE_NORMAL);
+#endif
+        std::filesystem::remove(target, ec);
+        if (ec)
+        {
+            if (reason) *reason = "the staged copy could not be removed";
+            return false;
+        }
+        return true;
+    }
+
     void AttachmentService::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
     {
         auto draft = LoadDraftAttachments(projectId);
@@ -660,13 +747,13 @@ namespace mayasaba
         {
             if (c.id == attachmentId)
             {
-                std::error_code ec;
-                if (!c.stagedPath.empty() && std::filesystem::exists(c.stagedPath, ec))
+                // The record's staged path is metadata. It is deleted only when it is
+                // proven to name a file inside this project's managed staging directory;
+                // an unprovable path is left in place rather than trusted.
+                if (!c.stagedPath.empty())
                 {
-#ifdef _WIN32
-                    SetFileAttributesW(c.stagedPath.c_str(), FILE_ATTRIBUTE_NORMAL);
-#endif
-                    std::filesystem::remove(c.stagedPath, ec);
+                    std::string reason;
+                    RemoveContainedStagedFile(projectId, Utf16ToUtf8(c.stagedPath), &reason);
                 }
                 break;
             }
@@ -679,14 +766,9 @@ namespace mayasaba
         auto draft = LoadDraftAttachments(projectId);
         for (auto const& c : draft)
         {
-            std::error_code ec;
-            if (!c.stagedPath.empty() && std::filesystem::exists(c.stagedPath, ec))
-            {
-#ifdef _WIN32
-                SetFileAttributesW(c.stagedPath.c_str(), FILE_ATTRIBUTE_NORMAL);
-#endif
-                std::filesystem::remove(c.stagedPath, ec);
-            }
+            if (c.stagedPath.empty()) continue;
+            std::string reason;
+            RemoveContainedStagedFile(projectId, Utf16ToUtf8(c.stagedPath), &reason);
         }
         storage_.ClearDraftAttachments(projectId);
     }
@@ -719,17 +801,16 @@ namespace mayasaba
 
             if (!d.storagePath.empty())
             {
-                auto p = Utf8ToUtf16(d.storagePath);
-                std::error_code removeEc;
-#ifdef _WIN32
-                SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
-#endif
-                std::filesystem::remove(p, removeEc);
-                if (removeEc)
+                // The stored path came from durable metadata, which may be corrupt or may
+                // have been written by a build that trusted it. It is not authority to
+                // delete: containment inside this project's staging subtree is proven
+                // first, and an unprovable path is left for a human to reconcile.
+                std::string reason;
+                if (!RemoveContainedStagedFile(projectId, d.storagePath, &reason))
                 {
-                    // The staged copy could not be removed. Keep the durable record so a
-                    // later pass can retry; dropping it would orphan the bytes and hide
-                    // the failure.
+                    // The staged copy could not be removed, or could not be proven to be
+                    // ours. Keep the durable record so a later pass can retry; dropping it
+                    // would orphan the bytes and hide the failure.
                     continue;
                 }
             }
@@ -790,6 +871,8 @@ namespace mayasaba
         if (std::filesystem::exists(stagingDir, dirEc) && !dirEc &&
             std::filesystem::is_directory(stagingDir, dirEc) && !dirEc)
         {
+            std::error_code dirCanonEc;
+            auto const canonicalDir = std::filesystem::weakly_canonical(stagingDir, dirCanonEc);
             std::error_code iterEc;
             std::filesystem::directory_iterator it(stagingDir, iterEc);
             if (!iterEc)
@@ -804,15 +887,35 @@ namespace mayasaba
                     }
                     auto const& entry = *it;
                     std::error_code fileEc;
-                    if (!entry.is_regular_file(fileEc) || fileEc)
+                    // symlink_status, not status: a link planted inside the staging
+                    // directory would otherwise be followed and its target judged by the
+                    // target's own properties.
+                    auto const entryStatus = entry.symlink_status(fileEc);
+                    if (fileEc || !std::filesystem::is_regular_file(entryStatus) ||
+                        std::filesystem::is_symlink(entryStatus))
                     {
                         continue;
                     }
+#ifdef _WIN32
+                    {
+                        DWORD const attributes = GetFileAttributesW(entry.path().c_str());
+                        if (attributes == INVALID_FILE_ATTRIBUTES ||
+                            (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+                        {
+                            continue;
+                        }
+                    }
+#endif
                     std::error_code canonEc;
                     auto const canonical = std::filesystem::weakly_canonical(entry.path(), canonEc);
                     if (canonEc)
                     {
                         // Cannot prove this file is untracked; leave it in place.
+                        continue;
+                    }
+                    if (canonical.parent_path() != canonicalDir)
+                    {
+                        // Resolution left the managed directory; it is not ours to delete.
                         continue;
                     }
                     if (trackedPaths.find(to_lower(canonical.wstring())) == trackedPaths.end())
@@ -841,46 +944,67 @@ namespace mayasaba
         auto candidates = LoadDraftAttachments(projectId);
         for (auto& c : candidates)
         {
-            if (c.status == AttachmentStatus::Committed)
-            {
-                continue;
-            }
-            if (preparationActive && c.status == AttachmentStatus::Preparing)
-            {
-                // Live preparation owns this record. Its staged copy may be absent or
-                // partially written, so verifying it here would replace in-flight work with
-                // a spurious failure and could overwrite the worker's own persistence.
-                continue;
-            }
+            // Establish whether the bytes are intact BEFORE deciding what that means. The
+            // previous implementation treated "the hash matches" as sufficient for READY,
+            // which promoted REJECTED, SOURCE_CHANGED and TIMED_OUT records on the strength
+            // of a physical fact that does not address why they failed.
+            bool bytesIntact = false;
+            bool examined = false;
+            std::string intactFailureReason;
 
             std::error_code ec;
             if (c.stagedPath.empty() || !std::filesystem::exists(c.stagedPath, ec))
             {
-                c.status = AttachmentStatus::Rejected;
-                c.errorMessage = "Staged attachment file is missing after recovery: " + c.fileName + ". Please reselect or remove it.";
+                examined = true;
+                intactFailureReason = "The staged copy is missing for " + c.fileName + ".";
             }
             else
             {
                 uint64_t actualSize = 0;
                 try
                 {
-                    std::string actualSha256 = ComputeFileSha256(c.stagedPath, &actualSize);
-                    if (actualSize != c.fileSize || actualSha256 != c.sha256)
+                    std::string const actualSha256 = ComputeFileSha256(c.stagedPath, &actualSize);
+                    examined = true;
+                    if (actualSize == c.fileSize && actualSha256 == c.sha256)
                     {
-                        c.status = AttachmentStatus::Rejected;
-                        c.errorMessage = "Staged attachment integrity verification failed for " + c.fileName + ". Please reselect or remove it.";
+                        bytesIntact = true;
                     }
                     else
                     {
-                        c.status = AttachmentStatus::Ready;
-                        c.errorMessage.clear();
+                        intactFailureReason = "The staged copy of " + c.fileName + " no longer matches its recorded size or SHA-256.";
                     }
                 }
                 catch (std::exception const& ex)
                 {
-                    c.status = AttachmentStatus::Rejected;
-                    c.errorMessage = std::string("Integrity check failed: ") + ex.what();
+                    examined = true;
+                    intactFailureReason = std::string("Integrity check failed for ") + c.fileName + ": " + ex.what();
                 }
+            }
+
+            RecoveryVerdict const verdict = EvaluateRecoveryVerdict(c.status, bytesIntact, preparationActive);
+            switch (verdict.outcome)
+            {
+            case RecoveryOutcome::LeaveUntouched:
+                break;
+
+            case RecoveryOutcome::KeepReady:
+                c.status = AttachmentStatus::Ready;
+                c.errorMessage.clear();
+                break;
+
+            case RecoveryOutcome::KeepFailure:
+                // The prior status and its original reason stand. A second recovery pass
+                // with no intervening change therefore produces no change at all.
+                break;
+
+            case RecoveryOutcome::MarkRejected:
+                c.status = AttachmentStatus::Rejected;
+                // Prefer the concrete physical finding when there is one; otherwise use the
+                // policy's explanation of why this attempt cannot stand.
+                c.errorMessage = examined && !intactFailureReason.empty()
+                    ? intactFailureReason + " " + verdict.reason
+                    : verdict.reason;
+                break;
             }
         }
         SaveDraftAttachments(projectId, candidates);

@@ -2032,10 +2032,43 @@ namespace mayasaba
             constexpr DWORD BUFFER_SIZE = 64 * 1024;
             std::vector<BYTE> buffer(BUFFER_SIZE);
             DWORD bytesRead = 0;
+            uint64_t actualBytes = 0;
             SetFilePointer(h, 0, nullptr, FILE_BEGIN);
-            while (ReadFile(h, buffer.data(), BUFFER_SIZE, &bytesRead, nullptr) && bytesRead > 0)
+            // A failed read is NOT end-of-file. The previous loop
+            // (ReadFile(...) && bytesRead > 0) treated a read error as a clean EOF and
+            // ignored the BCryptHashData result, so a truncated or partly unreadable
+            // attachment could still produce a digest that was compared as if complete.
+            for (;;)
             {
-                BCryptHashData(hHash, buffer.data(), bytesRead, 0);
+                if (!ReadFile(h, buffer.data(), BUFFER_SIZE, &bytesRead, nullptr))
+                {
+                    BCryptDestroyHash(hHash);
+                    BCryptCloseAlgorithmProvider(hAlg, 0);
+                    CloseHandle(h);
+                    return reject(SaveDisposition::Conflict,
+                        "A staged attachment could not be read in full, so its integrity is unverified; nothing was saved.");
+                }
+                if (bytesRead == 0) break;
+
+                actualBytes += bytesRead;
+                bStatus = BCryptHashData(hHash, buffer.data(), bytesRead, 0);
+                if (!BCRYPT_SUCCESS(bStatus))
+                {
+                    BCryptDestroyHash(hHash);
+                    BCryptCloseAlgorithmProvider(hAlg, 0);
+                    CloseHandle(h);
+                    return reject(SaveDisposition::Conflict,
+                        "A SHA-256 operation failed while verifying a staged attachment; nothing was saved.");
+                }
+            }
+
+            if (actualBytes != att.fileSize)
+            {
+                BCryptDestroyHash(hHash);
+                BCryptCloseAlgorithmProvider(hAlg, 0);
+                CloseHandle(h);
+                return reject(SaveDisposition::Conflict,
+                    "A staged attachment is not the length it was recorded with, so its integrity is unverified; nothing was saved.");
             }
 
             BYTE hashBytes[32];
@@ -2081,6 +2114,32 @@ namespace mayasaba
         // connection's own autocommit state decides. Only a connection that is still inside
         // a transaction is quarantined; that case can no longer be used safely and every
         // later transaction attempt fails closed with an explicit reason.
+        // Restores the attributes of files this operation sealed. Called only when the
+        // transaction outcome is proven to be "not committed": on an unknown commit the
+        // sealed state may be the only remaining evidence that these bytes were bound to a
+        // contribution, so it is preserved and the outcome is reconciled instead.
+        auto compensateSealedFiles = [&]() -> bool {
+            bool allRestored = true;
+#ifdef _WIN32
+            for (auto& lockPtr : openLocks)
+            {
+                if (!lockPtr->sealed) continue;
+                // The return code is checked: an attribute restore that silently failed
+                // would leave a file the reader can no longer remove or re-attach, and the
+                // caller must be told that rather than assume a clean rollback.
+                if (SetFileAttributesW(lockPtr->path.c_str(), FILE_ATTRIBUTE_NORMAL))
+                {
+                    lockPtr->sealed = false;
+                }
+                else
+                {
+                    allRestored = false;
+                }
+            }
+#endif
+            return allRestored;
+        };
+
         auto rollbackAndReject = [&](SaveDisposition disposition, std::string reason) -> SaveDisposition {
             detail.reasonEn = std::move(reason);
             char* message = nullptr;
@@ -2120,6 +2179,15 @@ namespace mayasaba
                         "reopened and the submission outcome is reconciled.";
                     return SaveDisposition::Unknown;
                 }
+            }
+            // The rollback is proven, so no file this operation sealed is bound to a
+            // contribution any more: restore it. Before this compensation existed, a
+            // failure on the second attachment left the first one read-only for good, which
+            // also made it unremovable through the ordinary path.
+            if (!compensateSealedFiles())
+            {
+                detail.reasonEn += " One or more already-sealed attachments could not have their "
+                    "read-only attribute restored; they may still be read-only on disk.";
             }
             return disposition;
         };
@@ -2294,15 +2362,25 @@ namespace mayasaba
                 }
                 // Verified-byte finalization gate: seal committed files and verify attribute before transaction commit
 #ifdef _WIN32
+                std::size_t sealIndex = 0;
                 for (auto& lockPtr : openLocks)
                 {
+                    // Injected failure: skip the seal for one attachment so the verification
+                    // below fails, exercising the compensation path deterministically.
+                    bool const injectSealFailure = (sealIndex == sealFailureIndexForTesting_);
+                    ++sealIndex;
+
                     FILE_BASIC_INFO basicInfo{};
-                    if (GetFileInformationByHandleEx(lockPtr->handle, FileBasicInfo, &basicInfo, sizeof(basicInfo)))
+                    if (!injectSealFailure &&
+                        GetFileInformationByHandleEx(lockPtr->handle, FileBasicInfo, &basicInfo, sizeof(basicInfo)))
                     {
                         basicInfo.FileAttributes |= FILE_ATTRIBUTE_READONLY;
                         SetFileInformationByHandle(lockPtr->handle, FileBasicInfo, &basicInfo, sizeof(basicInfo));
                     }
-                    SetFileAttributesW(lockPtr->path.c_str(), FILE_ATTRIBUTE_READONLY);
+                    if (!injectSealFailure)
+                    {
+                        SetFileAttributesW(lockPtr->path.c_str(), FILE_ATTRIBUTE_READONLY);
+                    }
                     DWORD attr = GetFileAttributesW(lockPtr->path.c_str());
                     if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_READONLY))
                     {
@@ -2345,15 +2423,9 @@ namespace mayasaba
         }
         catch (std::exception const& e)
         {
-#ifdef _WIN32
-            for (auto& lockPtr : openLocks)
-            {
-                if (lockPtr->sealed)
-                {
-                    SetFileAttributesW(lockPtr->path.c_str(), FILE_ATTRIBUTE_NORMAL);
-                }
-            }
-#endif
+            // Compensation happens AFTER the transaction state is established, not before.
+            // Unsealing first would turn a file back into a writable object even when the
+            // commit outcome is unknown and the bytes may already be bound to a contribution.
             // Preserve the reason instead of returning a bare Unknown, and establish the
             // actual transaction state. A failure to roll back is NOT reported as a definite
             // rollback: if a transaction is still open the connection is quarantined and the
@@ -2364,7 +2436,8 @@ namespace mayasaba
             bool const wasInTransaction = (sqlite3_get_autocommit(db_) == 0);
             if (!began && !wasInTransaction)
             {
-                // The failure happened before the transaction started; nothing was written.
+                // The failure happened before the transaction started; nothing was written
+                // and nothing was sealed.
                 detail.rollbackConfirmed = true;
                 detail.connectionUsable = !poisoned_;
                 detail.reasonEn = "The submission could not be prepared for saving: " + reason +
@@ -2393,8 +2466,14 @@ namespace mayasaba
             }
             else
             {
+                // Proven not committed, so the sealed files are bound to nothing.
                 detail.reasonEn = "The submission was not saved: " + reason +
                     ". The transaction was rolled back and the store is usable; the message can be retried safely.";
+                if (!compensateSealedFiles())
+                {
+                    detail.reasonEn += " One or more already-sealed attachments could not have their "
+                        "read-only attribute restored; they may still be read-only on disk.";
+                }
             }
             return SaveDisposition::Unknown;
         }
@@ -2810,8 +2889,12 @@ namespace mayasaba
             struct ReadTxGuard
             {
                 sqlite3* db;
+                bool* quarantined;
+                bool forceCommitFailure;
                 bool active{true};
-                ReadTxGuard(sqlite3* d) : db(d)
+
+                ReadTxGuard(sqlite3* d, bool* quarantinedFlag, bool forceFailure)
+                    : db(d), quarantined(quarantinedFlag), forceCommitFailure(forceFailure)
                 {
                     char* err = nullptr;
                     int rc = sqlite3_exec(db, "BEGIN DEFERRED;", nullptr, nullptr, &err);
@@ -2831,20 +2914,56 @@ namespace mayasaba
                 }
                 void Commit()
                 {
-                    if (active && db)
+                    if (!active || !db) return;
+
+                    if (forceCommitFailure)
                     {
-                        char* err = nullptr;
-                        int rc = sqlite3_exec(db, "COMMIT;", nullptr, nullptr, &err);
+                        // Injected: report a failed commit WITHOUT completing it. The
+                        // transaction is deliberately left open, which is exactly the state
+                        // the previous bookkeeping forgot about: it cleared `active` before
+                        // establishing whether SQLite had finished, so the destructor
+                        // declined to clean up and the transaction leaked into the next
+                        // operation on this connection.
+                        active = true; // guard still owns it; the destructor cleans up
+                        throw std::runtime_error("Injected read-transaction commit failure");
+                    }
+
+                    char* err = nullptr;
+                    int rc = sqlite3_exec(db, "COMMIT;", nullptr, nullptr, &err);
+                    if (rc == SQLITE_OK)
+                    {
                         active = false;
-                        if (rc != SQLITE_OK)
+                        return;
+                    }
+
+                    std::string msg = err ? err : sqlite3_errmsg(db);
+                    if (err) sqlite3_free(err);
+
+                    // Ownership of the transaction is only relinquished once it is PROVEN
+                    // to have ended. If a transaction is still open, clean it up here; if
+                    // that also fails the connection can no longer be trusted and the store
+                    // is quarantined, matching the write path's policy.
+                    if (sqlite3_get_autocommit(db) == 0)
+                    {
+                        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                        if (sqlite3_get_autocommit(db) == 0)
                         {
-                            std::string msg = err ? err : "Failed to commit read transaction";
-                            sqlite3_free(err);
-                            throw std::runtime_error(msg);
+                            if (quarantined) *quarantined = true;
+                            msg += " The read transaction could not be closed, so the store is quarantined "
+                                   "until it is reopened.";
+                        }
+                        else
+                        {
+                            active = false;
                         }
                     }
+                    else
+                    {
+                        active = false;
+                    }
+                    throw std::runtime_error(msg);
                 }
-            } tx(db_);
+            } tx(db_, &poisoned_, forceActionCenterCommitFailureForTesting_);
 
             std::string consistencyDigestInput;
             consistencyDigestInput.reserve(512);

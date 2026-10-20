@@ -980,14 +980,36 @@ int main()
             EXPECT(reverifiedCorrupt.size() == 1);
             EXPECT(reverifiedCorrupt[0].status == mayasaba::AttachmentStatus::Rejected);
 
-            // Restore valid staged content
+            // Restore valid staged content. This does NOT clear the rejection: a corruption
+            // finding is a decision about this attempt, not merely a doubt about the bytes,
+            // so recovery must not promote it back to READY on the strength of a hash match.
             {
                 std::ofstream ofs(candidate.stagedPath, std::ios::trunc);
                 ofs << payload;
             }
             auto reverifiedFixed = attService.ReverifyDraftAttachments(projectId);
             EXPECT(reverifiedFixed.size() == 1);
-            EXPECT(reverifiedFixed[0].status == mayasaba::AttachmentStatus::Ready);
+            EXPECT(reverifiedFixed[0].status == mayasaba::AttachmentStatus::Rejected);
+            EXPECT(!reverifiedFixed[0].errorMessage.empty());
+
+            // Only an explicit, authorized revalidation by the record's owner may move it
+            // back to READY. That is the transition the recovery policy reserves.
+            {
+                mayasaba::AttachmentRecord revalidated;
+                revalidated.id = candidate.id;
+                revalidated.projectId = projectId;
+                revalidated.fileName = candidate.fileName;
+                revalidated.fileSize = candidate.fileSize;
+                revalidated.sha256 = candidate.sha256;
+                revalidated.detectedType = candidate.detectedType;
+                revalidated.storagePath = WideToUtf8(candidate.stagedPath);
+                revalidated.sourcePath = WideToUtf8(candidate.originalPath);
+                revalidated.status = "READY";
+                store.SaveDraftAttachment(projectId, revalidated);
+            }
+            auto reverifiedAfterRevalidation = attService.ReverifyDraftAttachments(projectId);
+            EXPECT(reverifiedAfterRevalidation.size() == 1);
+            EXPECT(reverifiedAfterRevalidation[0].status == mayasaba::AttachmentStatus::Ready);
 
             // 10. Atomic submission with UserContribution
             std::string const subId = "sub-att-1";
@@ -3334,6 +3356,335 @@ int main()
             EXPECT(slot.Owner() == second);
             EXPECT(slot.Release(second));
             EXPECT(!slot.Held());
+            CASES_END();
+        }
+
+        // ------------------------------------------------------------------
+        // S2 recovery and file-integrity correctness.
+        // ------------------------------------------------------------------
+
+        // 36. F07: recovery must not promote a terminal failure to READY just because the
+        // bytes happen to hash. A physical fact does not address why the attempt failed.
+        {
+            CASES_BEGIN("36. Recovery honours the prior status instead of promoting on a hash match");
+            mayasaba::Storage store(folder / "recovery.db");
+            auto staging = folder / "recovery-stage";
+            mayasaba::AttachmentService service(store, staging);
+
+            auto seed = [&](std::string const& projectId, std::string const& id,
+                            mayasaba::AttachmentStatus status, std::string const& content)
+            {
+                store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+                auto dir = staging / "staging" / projectId;
+                fs::create_directories(dir);
+                auto path = dir / (id + ".txt");
+                {
+                    std::ofstream of(path, std::ios::binary);
+                    of.write(content.data(), static_cast<std::streamsize>(content.size()));
+                }
+                mayasaba::AttachmentCandidate c;
+                c.id = id;
+                c.fileName = id + ".txt";
+                c.fileSize = content.size();
+                c.detectedType = "text/plain";
+                c.originalPath = L"C:/source/" + std::wstring(id.begin(), id.end());
+                c.stagedPath = path.wstring();
+                c.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+                c.status = status;
+                if (status != mayasaba::AttachmentStatus::Ready)
+                {
+                    c.errorMessage = "original failure reason for " + id;
+                }
+                service.SaveDraftAttachments(projectId, { c });
+            };
+
+            auto statusAfter = [&](std::string const& projectId, std::string const& id, bool preparationActive)
+            {
+                auto const after = service.ReverifyDraftAttachments(projectId, preparationActive);
+                for (auto const& c : after) if (c.id == id) return c;
+                throw std::runtime_error("attachment disappeared during recovery: " + id);
+            };
+
+            constexpr char const* kContent = "intact staged payload";
+
+            // READY + intact bytes stays READY.
+            seed("rec-ready", "att-r", mayasaba::AttachmentStatus::Ready, kContent);
+            EXPECT(statusAfter("rec-ready", "att-r", false).status == mayasaba::AttachmentStatus::Ready);
+
+            // REJECTED + intact bytes STAYS rejected, with its original reason intact.
+            seed("rec-rejected", "att-j", mayasaba::AttachmentStatus::Rejected, kContent);
+            {
+                auto const c = statusAfter("rec-rejected", "att-j", false);
+                EXPECT(c.status == mayasaba::AttachmentStatus::Rejected);
+                EXPECT(c.errorMessage.find("original failure reason") != std::string::npos);
+            }
+
+            // SOURCE_CHANGED + intact bytes stays SOURCE_CHANGED: reselection is still required.
+            seed("rec-changed", "att-s", mayasaba::AttachmentStatus::SourceChangedDuringPreparation, kContent);
+            EXPECT(statusAfter("rec-changed", "att-s", false).status ==
+                   mayasaba::AttachmentStatus::SourceChangedDuringPreparation);
+
+            // TIMED_OUT + intact bytes does not erase the timeout.
+            seed("rec-timeout", "att-t", mayasaba::AttachmentStatus::TimedOut, kContent);
+            {
+                auto const c = statusAfter("rec-timeout", "att-t", false);
+                EXPECT(c.status == mayasaba::AttachmentStatus::TimedOut);
+                EXPECT(c.errorMessage.find("original failure reason") != std::string::npos);
+            }
+
+            // READY whose bytes were altered becomes an explicit rejection.
+            seed("rec-corrupt", "att-c", mayasaba::AttachmentStatus::Ready, kContent);
+            {
+                auto dir = staging / "staging" / "rec-corrupt";
+                std::ofstream of(dir / "att-c.txt", std::ios::binary | std::ios::trunc);
+                of.write("tampered", 8);
+            }
+            {
+                auto const c = statusAfter("rec-corrupt", "att-c", false);
+                EXPECT(c.status == mayasaba::AttachmentStatus::Rejected);
+                EXPECT(!c.errorMessage.empty());
+            }
+
+            // A live preparation owns its record; recovery must not touch it.
+            seed("rec-live", "att-l", mayasaba::AttachmentStatus::Preparing, kContent);
+            EXPECT(statusAfter("rec-live", "att-l", true).status == mayasaba::AttachmentStatus::Preparing);
+
+            // An abandoned preparation is reclaimed rather than silently promoted.
+            seed("rec-abandoned", "att-a", mayasaba::AttachmentStatus::Preparing, kContent);
+            {
+                auto const after = service.ReverifyDraftAttachments("rec-abandoned", false);
+                EXPECT(after.empty());
+            }
+
+            // Idempotence: a second pass with no intervening change changes nothing.
+            {
+                auto const first = statusAfter("rec-rejected", "att-j", false);
+                auto const second = statusAfter("rec-rejected", "att-j", false);
+                EXPECT(second.status == first.status);
+                EXPECT(second.errorMessage == first.errorMessage);
+            }
+            CASES_END();
+        }
+
+        // 37. F09: a stored path is metadata. Cleanup must prove containment inside the
+        // project's managed staging subtree before deleting anything.
+        {
+            CASES_BEGIN("37. Staging cleanup cannot delete outside the managed staging directory");
+            mayasaba::Storage store(folder / "containment.db");
+            auto staging = folder / "containment-stage";
+            mayasaba::AttachmentService service(store, staging);
+
+            auto outside = folder / "containment-outside";
+            fs::create_directories(outside);
+            auto victim = outside / "victim.txt";
+            {
+                std::ofstream of(victim, std::ios::binary);
+                of.write("must not be deleted", 19);
+            }
+
+            store.BindProject("proj-c", "C", "C:/Projects/C");
+
+            // A PREPARING record whose stored path points at a sibling directory.
+            mayasaba::AttachmentCandidate c;
+            c.id = "att-escape";
+            c.fileName = "victim.txt";
+            c.fileSize = 19;
+            c.detectedType = "text/plain";
+            c.stagedPath = victim.wstring();
+            c.sha256 = ComputeSha256ForTestFile(WideToUtf8(victim.wstring()));
+            c.status = mayasaba::AttachmentStatus::Preparing;
+            service.SaveDraftAttachments("proj-c", { c });
+
+            service.ReclaimInterruptedPreparation("proj-c");
+
+            // The out-of-bound file survives, and the record is kept because the cleanup
+            // could not be proven safe rather than being silently dropped.
+            EXPECT(fs::exists(victim));
+            EXPECT(store.GetDraftAttachments("proj-c").size() == 1);
+
+            // A path that escapes with a parent traversal is refused the same way.
+            auto traversal = outside / ".." / "containment-outside" / "victim.txt";
+            mayasaba::AttachmentRecord t;
+            t.id = "att-traversal";
+            t.projectId = "proj-c";
+            t.fileName = "victim.txt";
+            t.fileSize = 19;
+            t.sha256 = c.sha256;
+            t.detectedType = "text/plain";
+            t.storagePath = WideToUtf8(traversal.wstring());
+            t.status = "PREPARING";
+            store.SaveDraftAttachment("proj-c", t);
+            service.ReclaimInterruptedPreparation("proj-c");
+            EXPECT(fs::exists(victim));
+
+            // A legitimate abandoned file inside the managed staging directory IS reclaimed,
+            // so the containment check does not simply disable cleanup.
+            auto dir = staging / "staging" / "proj-c";
+            fs::create_directories(dir);
+            auto orphan = dir / "orphan.bin";
+            { std::ofstream of(orphan, std::ios::binary); of.write("orphan", 6); }
+            service.ReclaimInterruptedPreparation("proj-c");
+            EXPECT(!fs::exists(orphan));
+            CASES_END();
+        }
+
+        // 38. F12: the commit path must not treat a read error or a short read as a clean
+        // end-of-file. A staged file whose length disagrees with its record is refused even
+        // when the recorded digest matches the bytes that were actually read.
+        {
+            CASES_BEGIN("38. Attachment commit verifies the read length, not only the digest");
+            mayasaba::Storage store(folder / "hash-length.db");
+            auto staging = folder / "hash-length-stage";
+            mayasaba::AttachmentService service(store, staging);
+
+            store.BindProject("proj-len", "Len", "C:/Projects/Len");
+            auto dir = staging / "staging" / "proj-len";
+            fs::create_directories(dir);
+            auto path = dir / "att-len.txt";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("0123456789", 10);
+            }
+
+            mayasaba::AttachmentCandidate c;
+            c.id = "att-len";
+            c.fileName = "att-len.txt";
+            // The digest is correct for the bytes on disk; the recorded length is not.
+            c.fileSize = 999;
+            c.detectedType = "text/plain";
+            c.stagedPath = path.wstring();
+            c.originalPath = L"C:/source/att-len.txt";
+            c.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+            c.status = mayasaba::AttachmentStatus::Ready;
+            service.SaveDraftAttachments("proj-len", { c });
+
+            EXPECT(store.StageSubmission("proj-len", "sub-len", "body") == "sub-len");
+
+            mayasaba::AttachmentRecord rec;
+            rec.id = c.id;
+            rec.projectId = "proj-len";
+            rec.submissionId = "sub-len";
+            rec.fileName = c.fileName;
+            rec.fileSize = c.fileSize;
+            rec.sha256 = c.sha256;
+            rec.detectedType = c.detectedType;
+            rec.storagePath = WideToUtf8(path.wstring());
+            rec.sourcePath = "C:/source/att-len.txt";
+            rec.status = "COMMITTED";
+
+            mayasaba::SaveContributionDetail detail;
+            auto const disposition = store.SaveContribution("proj-len", "sub-len", "body", { rec }, detail);
+            EXPECT(disposition == SaveDisposition::Conflict);
+            EXPECT(store.Contributions("proj-len").empty());
+            // A length disagreement is refused. Note the admission path already compares the
+            // stat size at Storage.cpp:1994, so this assertion does not by itself prove the
+            // read loop's own length check ran; it proves the observable invariant holds.
+            EXPECT(detail.reasonEn.find("size") != std::string::npos ||
+                   detail.reasonEn.find("length") != std::string::npos);
+            CASES_END();
+        }
+
+        // 39. F15: a read transaction that fails to commit must not be forgotten. The
+        // previous guard cleared its ownership flag before establishing whether SQLite had
+        // finished, so a still-open transaction leaked into the next operation.
+        {
+            CASES_BEGIN("39. A failed read-transaction commit does not leak the transaction");
+            mayasaba::Storage store(folder / "readtx.db");
+            store.BindProject("proj-tx", "TX", "C:/Projects/TX");
+            store.StageSubmission("proj-tx", "sub-tx", "unresolved body");
+
+            store.SetForceActionCenterCommitFailureForTesting(true);
+            auto const failed = store.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-tx", 10, "" });
+            store.SetForceActionCenterCommitFailureForTesting(false);
+
+            EXPECT(!failed.isComplete);
+            EXPECT(!failed.errorMessage.empty());
+
+            // The connection is still usable: a leaked transaction would make the next
+            // BEGIN fail and the projection would come back incomplete again.
+            auto const after = store.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-tx", 10, "" });
+            EXPECT(after.isComplete);
+            EXPECT(after.errorMessage.empty());
+            EXPECT(after.items.size() == 1);
+            EXPECT(!store.IsQuarantinedForTesting());
+            CASES_END();
+        }
+
+        // 40. F08: a failure part-way through sealing must restore the attributes of the
+        // files it already sealed, or the reader is left with files they cannot re-attach
+        // or remove.
+        {
+            CASES_BEGIN("40. Partial sealing failure restores the attributes it already changed");
+            mayasaba::Storage store(folder / "sealing.db");
+            auto staging = folder / "sealing-stage";
+            mayasaba::AttachmentService service(store, staging);
+
+            store.BindProject("proj-seal", "Seal", "C:/Projects/Seal");
+            auto dir = staging / "staging" / "proj-seal";
+            fs::create_directories(dir);
+
+            auto makeFile = [&](std::string const& id)
+            {
+                auto path = dir / (id + ".txt");
+                { std::ofstream of(path, std::ios::binary); of.write("sealed payload", 14); }
+                return path;
+            };
+
+            auto first = makeFile("att-s1");
+            auto second = makeFile("att-s2");
+
+            std::vector<mayasaba::AttachmentCandidate> batch;
+            for (auto const& entry : std::vector<std::pair<std::string, fs::path>>{
+                     { "att-s1", first }, { "att-s2", second } })
+            {
+                mayasaba::AttachmentCandidate c;
+                c.id = entry.first;
+                c.fileName = entry.first + ".txt";
+                c.fileSize = 14;
+                c.detectedType = "text/plain";
+                c.stagedPath = entry.second.wstring();
+                c.originalPath = L"C:/source/" + std::wstring(entry.first.begin(), entry.first.end()) + L".txt";
+                c.sha256 = ComputeSha256ForTestFile(WideToUtf8(entry.second.wstring()));
+                c.status = mayasaba::AttachmentStatus::Ready;
+                batch.push_back(c);
+            }
+            service.SaveDraftAttachments("proj-seal", batch);
+
+            EXPECT(store.StageSubmission("proj-seal", "sub-seal", "body") == "sub-seal");
+
+            std::vector<mayasaba::AttachmentRecord> records;
+            for (auto const& c : batch)
+            {
+                mayasaba::AttachmentRecord r;
+                r.id = c.id; r.projectId = "proj-seal"; r.submissionId = "sub-seal";
+                r.fileName = c.fileName; r.fileSize = c.fileSize; r.sha256 = c.sha256;
+                r.detectedType = c.detectedType; r.storagePath = WideToUtf8(c.stagedPath);
+                r.sourcePath = "C:/source/x.txt"; r.status = "COMMITTED";
+                records.push_back(std::move(r));
+            }
+
+            // The second seal does not take effect, so the gate fails after the first file
+            // has already been made read-only.
+            store.SetSealFailureIndexForTesting(1);
+            mayasaba::SaveContributionDetail detail;
+            auto const disposition = store.SaveContribution("proj-seal", "sub-seal", "body", records, detail);
+            store.SetSealFailureIndexForTesting(static_cast<std::size_t>(-1));
+
+            EXPECT(disposition == SaveDisposition::Conflict);
+            EXPECT(store.Contributions("proj-seal").empty());
+
+            // Neither file may be left read-only: the first was sealed, the transaction was
+            // rolled back, and the compensation must have restored it.
+            for (auto const& path : { first, second })
+            {
+                DWORD const attrs = GetFileAttributesW(path.wstring().c_str());
+                EXPECT(attrs != INVALID_FILE_ATTRIBUTES);
+                EXPECT((attrs & FILE_ATTRIBUTE_READONLY) == 0);
+            }
+
+            // The draft survives so the reader can retry.
+            EXPECT(store.GetDraftAttachments("proj-seal").size() == 2);
+            EXPECT(store.Pending("proj-seal").has_value());
             CASES_END();
         }
 
