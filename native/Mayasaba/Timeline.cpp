@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "Timeline.h"
 #include "RichText.h"
+#include "ThemeBrushes.h"
 
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
@@ -14,16 +15,6 @@ namespace mayasaba::ui
 
     namespace
     {
-        Brush Token(wchar_t const* key)
-        {
-            auto const value = Application::Current().Resources().TryLookup(box_value(key));
-            if (auto const brush = value.try_as<Brush>())
-            {
-                return brush;
-            }
-            return SolidColorBrush{};
-        }
-
         FontFamily BodyFont() { return FontFamily{L"Segoe UI Variable Text"}; }
         FontFamily MonoFont() { return FontFamily{L"Cascadia Mono"}; }
         using FontWeight = winrt::Windows::UI::Text::FontWeight;

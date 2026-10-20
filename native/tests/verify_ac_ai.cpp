@@ -11,6 +11,7 @@
 #include <set>
 #include <unordered_set>
 #include <sstream>
+#include <vector>
 #include <iomanip>
 #include <windows.h>
 #include <bcrypt.h>
@@ -22,6 +23,60 @@
             return 1; \
         } \
     } while (0)
+
+// ---------------------------------------------------------------------------
+// Executed-case reporting.
+//
+// The previous summary printed a fixed "12/12" regardless of what ran. A case that
+// silently stopped executing, or an older binary left in place, could still print
+// the same banner. Each named case is now recorded when it starts and marked only
+// when it finishes, so the summary is derived from execution and a failure names
+// the case. This changes reporting only; no assertion is weakened or removed.
+// ---------------------------------------------------------------------------
+namespace
+{
+    struct ExecutedCases
+    {
+        struct Row { std::string name; bool finished{false}; };
+        std::vector<Row> rows;
+        std::string current;
+
+        void Begin(std::string name)
+        {
+            current = std::move(name);
+            rows.push_back(Row{current, false});
+        }
+        void End()
+        {
+            if (!rows.empty()) rows.back().finished = true;
+            current.clear();
+        }
+        std::size_t Passed() const
+        {
+            std::size_t count = 0;
+            for (auto const& row : rows) if (row.finished) ++count;
+            return count;
+        }
+        std::size_t Failed() const { return rows.size() - Passed(); }
+        void Print(std::ostream& out) const
+        {
+            for (auto const& row : rows)
+            {
+                out << "  " << (row.finished ? "PASS " : "FAIL ") << row.name << "\n";
+            }
+        }
+    };
+
+    ExecutedCases& Cases()
+    {
+        static ExecutedCases cases;
+        return cases;
+    }
+}
+
+#define CASES_BEGIN(name) Cases().Begin(name)
+#define CASES_END() Cases().End()
+
 
 inline std::string ComputeSha256ForTestFile(std::string const& path)
 {
@@ -56,6 +111,7 @@ int main()
 
     // Action Center projection
     {
+        CASES_BEGIN("Test 1: Action Center unresolved submission projection");
         mayasaba::Storage ac(folder / "action_center.db");
         ac.BindProject("proj-ac", "AC Project", "C:/AC");
         ac.SetClosure("proj-ac", 0, false);
@@ -199,10 +255,12 @@ int main()
         for (auto const& item : resIsolation.items)
             if (item.projectId == "proj-ac") leaked = true;
         EXPECT(!leaked);
+        CASES_END();
     }
 
     // Attachment inspection: comprehensive verification outside storage lock
     {
+        CASES_BEGIN("Test 2: Attachment inspection diagnostics");
         mayasaba::Storage ai(folder / "attachment_inspect.db");
         ai.BindProject("proj-ai", "AI Project", "C:/AI");
 
@@ -428,6 +486,7 @@ int main()
         auto rn = ai.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "proj-ai", "does-not-exist" });
         EXPECT(!rn.found);
         EXPECT(rn.errorMessage.empty());
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
@@ -437,6 +496,7 @@ int main()
     // - Refresh sequence capture, supersession by newer refresh, and coalesced publication
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 3: Production Action Center Presenter & Presentation Invariants");
         mayasaba::Storage store(folder / "refresh_loop.db");
         store.BindProject("proj-rl", "Refresh Loop Proj", "C:/RL");
 
@@ -595,12 +655,14 @@ int main()
         EXPECT(rerunC3 == false);
         EXPECT(presenter.Items().size() == 1);
         EXPECT(presenter.Items()[0].titleEn == "Coalesced Final Item");
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
     // Test 4: Action Center expected-version verification at invocation
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 4: Action Center expected-version verification at invocation");
         mayasaba::Storage store(folder / "invocation_version.db");
         store.BindProject("proj-iv", "Invocation Proj", "C:/IV");
         store.SetClosure("proj-iv", 0, false);
@@ -631,6 +693,7 @@ int main()
         // Stale check compares displayed item version ("1") with current record version ("2")
         bool isStale = (std::to_string(drafts[0].version) != item.sourceRecordVersion);
         EXPECT(isStale == true); // Stale detected! Must refuse to apply stale action.
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
@@ -638,6 +701,7 @@ int main()
     // and project switching cancellation during delayed drop
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 5: Production AttachmentService file drop ingestion, mixed-batch folder rejection,");
         mayasaba::Storage store(folder / "drop_ingestion.db");
         store.BindProject("proj-A", "Project Alpha", "C:/Alpha");
         store.BindProject("proj-B", "Project Beta", "C:/Beta");
@@ -1300,6 +1364,7 @@ int main()
         EXPECT(ProcessDrop() == false); // Overlapping drop rejected!
         dropProcessing = false;
         EXPECT(ProcessDrop() == true);
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
@@ -1307,6 +1372,7 @@ int main()
     // prose rejected for preview under English presentation policy
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 6: Non-English ASCII prose, mixed language, and digit/underscore dressed");
         mayasaba::Storage store(folder / "english_policy.db");
         store.BindProject("proj-eng", "English Policy Proj", "C:/Eng");
         auto attDir = store.ManagedAttachmentRoot();
@@ -1377,12 +1443,14 @@ int main()
                 EXPECT(res.inspection.previewUnavailableReasonEn.find("non-English") != std::string::npos);
             }
         }
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
     // Test 7: Inspection without original source file access and zero filesystem mutations
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 7: Inspection without original source file access and zero filesystem mutations");
         mayasaba::Storage store(folder / "readonly_inspect.db");
         store.BindProject("proj-ro", "Readonly Inspect", "C:/RO");
         auto attDir = store.ManagedAttachmentRoot();
@@ -1477,12 +1545,14 @@ int main()
         EXPECT(resEmpty.inspection.previewUnavailableReasonEn == "Managed attachment storage directory is unavailable.");
         // Crucial check: nonExistentManagedRoot was NOT created!
         EXPECT(!fs::exists(nonExistentManagedRoot));
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
     // Test 8: Continuation token invalidation when participating records change between pages
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 8: Continuation token invalidation when participating records change between pages");
         mayasaba::Storage store(folder / "continuation_consistency.db");
         store.BindProject("proj-pages", "Pages Proj", "C:/Pages");
         store.SetClosure("proj-pages", 0, false);
@@ -1597,12 +1667,14 @@ int main()
             EXPECT(!resMut4.isComplete);
             EXPECT(resMut4.errorMessage.find("participating record set mutated") != std::string::npos);
         }
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
     // Test 9: Deterministic in-flight inspection-mutation race handling under mutex
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 9: Deterministic in-flight inspection-mutation race handling under mutex");
         mayasaba::Storage store(folder / "race_inspect.db");
         store.BindProject("proj-race", "Race Proj", "C:/Race");
         auto attDir = store.ManagedAttachmentRoot();
@@ -1662,12 +1734,14 @@ int main()
         EXPECT(resDel.errorMessage.find("during inspection") != std::string::npos);
 
         store.SetInspectionFileHashedHookForTesting(nullptr);
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
     // Test 10: Atomic SQLite read transaction snapshot in QueryActionCenter
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 10: Atomic SQLite read transaction snapshot in QueryActionCenter");
         mayasaba::Storage store(folder / "snapshot_consistency.db");
         store.BindProject("proj-snap", "Snap Proj", "C:/Snap");
         store.SetClosure("proj-snap", 0, false);
@@ -1717,6 +1791,7 @@ int main()
         auto r2 = store.QueryActionCenter(q2);
         EXPECT(!r2.isComplete);
         EXPECT(r2.errorMessage.find("participating record set mutated between pages") != std::string::npos);
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
@@ -1726,6 +1801,7 @@ int main()
     // placeholders and report success. The selection stays recoverable.
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 11: Incomplete / malformed preparation result sets");
         using Outcome = mayasaba::AttachmentIngestionCoordinator::BatchCommitOutcome;
         namespace fs2 = std::filesystem;
 
@@ -1996,12 +2072,14 @@ int main()
                 EXPECT(drafts[i].id == attService.LoadDraftAttachments("proj-inc")[i].id);
             }
         }
+        CASES_END();
     }
 
     // -------------------------------------------------------------------------
     // Test 12: Staging reconciliation must not reclaim live or unprovable files
     // -------------------------------------------------------------------------
     {
+        CASES_BEGIN("Test 12: Staging reconciliation must not reclaim live or unprovable files");
         namespace fs2 = std::filesystem;
         mayasaba::Storage store(folder / "reconcile.db");
         store.BindProject("proj-rec", "Reconcile", "C:/Rec");
@@ -2094,9 +2172,21 @@ int main()
         {
             if (d.id == "att-live-2") EXPECT(d.status == mayasaba::AttachmentStatus::Rejected);
         }
+        CASES_END();
     }
 
     fs::remove_all(folder);
-    std::cout << "PASS: standalone Action Center + attachment inspection verification (12/12 tests passed)\n";
+    // The summary is derived from the cases that actually ran, not a fixed count.
+    auto const& cases = Cases();
+    if (cases.Failed() != 0)
+    {
+        std::cerr << "FAIL: " << cases.Passed() << " of " << cases.rows.size()
+                  << " verification cases passed" << std::endl;
+        cases.Print(std::cerr);
+        return 1;
+    }
+    std::cout << "PASS: " << cases.Passed() << " of " << cases.rows.size()
+              << " executed Action Center and attachment inspection verification cases" << std::endl;
+    cases.Print(std::cout);
     return 0;
 }

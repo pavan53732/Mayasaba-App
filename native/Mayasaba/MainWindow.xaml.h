@@ -280,6 +280,13 @@ namespace winrt::Mayasaba::implementation
         // Removes the stage perspective and the sculpted rotations in high contrast.
         void ApplyHeroPerspective(bool decorative);
         void ApplyHighContrast();
+        // Repaints imperatively built surfaces after a live light/dark switch. It
+        // recolours the shared brush instances in place, so focus, reading position and
+        // expanded details survive; it never rebuilds a card.
+        void ApplyThemeChange();
+        winrt::event_token actualThemeChangedToken_{};
+        bool themeSubscriptionActive_{false};
+        void RevokeThemeSubscription();
         void RevokeMotionSubscription();
         void RevokeAccessibilitySubscription();
         void ApplyElevationCues();

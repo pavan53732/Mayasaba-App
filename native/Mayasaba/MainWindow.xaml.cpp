@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "MainWindow.xaml.h"
 #include "Fixtures.h"
+#include "ThemeBrushes.h"
 #if __has_include("MainWindow.g.cpp")
 #include "MainWindow.g.cpp"
 #endif
@@ -26,6 +27,10 @@ namespace winrt::Mayasaba::implementation
     using namespace Microsoft::UI::Xaml::Controls;
     using namespace Microsoft::UI::Xaml::Media;
     using namespace Windows::Storage::Pickers;
+    // The shared theme-following brush cache. Every code-built surface resolves its
+    // colours through this, so a live light/dark switch repaints them in place instead
+    // of leaving stale brushes behind.
+    using mayasaba::ui::Token;
 
     namespace
     {
@@ -61,18 +66,6 @@ namespace winrt::Mayasaba::implementation
             element.Visibility(show ? Visibility::Visible : Visibility::Collapsed);
         }
         std::string SubmissionId() { return mayasaba::NewUuid(); }
-
-        // Theme-aware brush lookup with a safe fallback, so a missing brand token
-        // can never take down the timeline or a selector row.
-        Brush Token(wchar_t const* key)
-        {
-            auto const value = Application::Current().Resources().TryLookup(winrt::box_value(key));
-            if (auto const brush = value.try_as<Brush>())
-            {
-                return brush;
-            }
-            return SolidColorBrush{};
-        }
 
         GridLength StarLength() { return GridLengthHelper::FromValueAndType(1, GridUnitType::Star); }
         GridLength AutoLength() { return GridLengthHelper::FromValueAndType(1, GridUnitType::Auto); }
@@ -231,6 +224,7 @@ namespace winrt::Mayasaba::implementation
                 self->ApplyHeroMotion(false);
                 self->RevokeMotionSubscription();
                 self->RevokeAccessibilitySubscription();
+                self->RevokeThemeSubscription();
                 if (self->timeline_) self->timeline_->SetCopyHandler(nullptr);
             }
         });
@@ -240,6 +234,23 @@ namespace winrt::Mayasaba::implementation
         ChooseFolderButton().IsEnabled(false);
         CreateNewProjectButton().IsEnabled(false);
         ApplyMotionPreference();
+
+        // A live light/dark switch recolours the code-built surfaces in place. This is
+        // driven by the observed effective theme of the surface rather than by re-reading
+        // the app setting, so it fires exactly when what is on screen actually changes.
+        // ActualThemeChanged belongs to FrameworkElement and Window is not one, so it is
+        // observed on the root layout, which spans every screen and every code-built card.
+        auto const themeWeak = get_weak();
+        actualThemeChangedToken_ = RootLayout().ActualThemeChanged(
+            [themeWeak](winrt::Windows::Foundation::IInspectable const&, winrt::Windows::Foundation::IInspectable const&)
+            {
+                if (auto const self = themeWeak.get())
+                {
+                    self->ApplyThemeChange();
+                }
+            });
+        themeSubscriptionActive_ = true;
+
         InitializeStoreAsync();
         InitPerfMeasurement();
     }
@@ -255,6 +266,7 @@ namespace winrt::Mayasaba::implementation
         FlushPerfLog();
         RevokeMotionSubscription();
         RevokeAccessibilitySubscription();
+        RevokeThemeSubscription();
     }
 
     winrt::fire_and_forget MainWindow::InitializeStoreAsync()
@@ -393,6 +405,45 @@ namespace winrt::Mayasaba::implementation
             double const offset = HistoryScroller().VerticalOffset();
             RenderHistory(false);
             HistoryScroller().ChangeView(nullptr, offset, nullptr, true);
+        }
+    }
+
+    // A live light/dark switch must reach the surfaces built in code, not only the ones
+    // declared in XAML. `{ThemeResource}` references re-resolve themselves; a brush read
+    // out of the dictionary at build time does not, so a card realized before the switch
+    // would keep the old palette and could leave dark ink on a dark panel.
+    //
+    // Rebuilding those cards would also work, but it would throw away focus, the reading
+    // position and any expanded detail. Repainting the shared brush instances in place
+    // avoids all of that: the elements already hold those objects, so they simply repaint.
+    void MainWindow::ApplyThemeChange()
+    {
+        if (windowClosed_) return;
+
+        mayasaba::ui::RefreshThemeBrushes();
+
+        // The timeline caches its brushes per card, and a recycled element is rebuilt from
+        // the entry, so a rebuild of the realized items is unnecessary: they hold the
+        // shared instances. What does need re-applying is anything that read a colour into
+        // a non-brush property, which is handled by the high-contrast path below.
+        ApplyHighContrast();
+        ApplyElevationCues();
+    }
+
+    void MainWindow::RevokeThemeSubscription()
+    {
+        if (!themeSubscriptionActive_) return;
+        themeSubscriptionActive_ = false;
+        try
+        {
+            if (auto const root = RootLayout())
+            {
+                root.ActualThemeChanged(actualThemeChangedToken_);
+            }
+        }
+        catch (...)
+        {
+            // The window is going away; the handler dies with it.
         }
     }
 

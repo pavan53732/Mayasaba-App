@@ -115,6 +115,7 @@
     <ClInclude Include="RichText.h" />
     <ClInclude Include="Timeline.h" />
     <ClInclude Include="TimelineEntry.h" />
+    <ClInclude Include="ThemeBrushes.h" />
     <ClInclude Include="Fixtures.h" />
     <ClInclude Include="SearchController.h" />
   </ItemGroup>
@@ -124,6 +125,7 @@
     <ClCompile Include="MainWindow.xaml.cpp"><DependentUpon>MainWindow.xaml</DependentUpon></ClCompile>
     <ClCompile Include="Motion.cpp" />
     <ClCompile Include="RichText.cpp" />
+    <ClCompile Include="ThemeBrushes.cpp" />
     <ClCompile Include="Timeline.cpp" />
     <ClCompile Include="Fixtures.cpp" />
     <!-- Portable storage, project root and attachment service do not include pch.h. -->

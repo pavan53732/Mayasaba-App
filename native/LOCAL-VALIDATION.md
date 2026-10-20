@@ -1454,13 +1454,70 @@ This section documents the specific corrections and empirical evidence resolving
 #### Delineation of Retained Inconclusive Criteria & Precise Missing Observations
 
 1. **Criterion 11: `Native OLE Desktop Drag-and-Drop Execution` [INCONCLUSIVE]**
-   - *Missing observation:* Cross-process synthetic OLE drag-drop execution via `ole_drop.exe` timed out in its watchdog loop (exit code 4) due to OS-level UIPI / modal loop session constraints in the desktop automation environment. Genuinely insufficient delivery evidence (0 records admitted, exit code 4). Production ingestion, digest calculation, and boundary validation independently proven in unit tests.
+   - *Missing observation:* Cross-process synthetic OLE drag-drop execution via `ole_drop.exe` timed out in its watchdog loop (exit code 4). Genuinely insufficient delivery evidence (0 records admitted, exit code 4). Production ingestion, digest calculation, and boundary validation independently proven in unit tests.
+   - *Observed versus inferred (corrected 2026-10-20):* the timeout and the zero admitted records are observed. **UIPI is a hypothesis, not a proven cause.** No integrity-level comparison between the injecting process and the target was performed, and no diagnostic distinguished an integrity-level rejection from a modal-loop or session-delivery failure. The earlier text asserted UIPI as the cause; that assertion was unsupported and is retracted here.
 2. **Criterion 12: `Mixed-Batch Folder Rejection on Drop` [INCONCLUSIVE]**
    - *Missing observation:* Because synthetic desktop drop delivery did not complete under the automation session, the mixed-batch folder rejection notice was not observed in the live NoticeBar. Folder rejection logic independently verified in `verify_ac_ai.exe` Test 5 Case 2.
 3. **Display DPI Scaling (150%/200%) [INCONCLUSIVE / INCOMPLETE]**
-   - *Missing observation:* WinUI 3 display DPI simulation passed in automated acceptance, but real OS display setting changes require a Windows display reconfiguration and user session sign-out; retained as incomplete.
+   - *Missing observation:* WinUI 3 display DPI simulation passed in automated acceptance; real OS display setting changes were not executed. Retained as incomplete.
+   - *Corrected 2026-10-20:* the earlier claim that a real scale change "requires a Windows display reconfiguration and user session sign-out" was **not checked against this environment** and is withdrawn. Checked here instead: the machine has one monitor (`\\.\DISPLAY1`, 1536×864), the session is at 96 DPI / 100% (`GetDpiForMonitor` returned 96×96, `LOGPIXELSX` 96), and no `HKCU\Control Panel\Desktop\PerMonitorSettings` key exists yet. Whether a 150% or 200% change needs sign-out on Windows 11 build 26200 has **not** been established, so no such requirement is claimed. The criterion stays INCONCLUSIVE for the honest reason that the change was not performed.
 4. **Narrator Speech Verification [INCONCLUSIVE / INCOMPLETE]**
    - *Missing observation:* Programmatic UI Automation names, roles, and focus restoration verified; real spoken audio delivery via Windows Narrator requires an active audio endpoint and human listening verification.
 
 > [!NOTE]
 > **Milestone Boundary:** The current native UX milestone is closed with verified unit, storage, contract registry, and UI automation evidence. Live CLI discovery/execution (M3), agent orchestration/replies (M4), advanced inspectors (M5), and MSI packaging (M7) remain separate future implementation milestones.
+
+---
+
+## 15. Stabilization assignment — current acceptance record (2026-10-20)
+
+This section is the single current summary for the stabilization assignment. It does not replace the dated sections above; those remain as historical evidence with their own revision labels. Where an earlier conclusion is superseded here, this section says so explicitly.
+
+### 15.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Source revision | `main` at `96373fd` plus the uncommitted stabilization change set described in §15.4 |
+| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-20 07:13 local, SHA-256 `c9c238edfabf93c7418325591e0f79e69d44972f07ee81698727e8ac1f17c5fd` |
+| Test binaries | `native/tests/bin/storage_tests.exe` and `native/tests/bin/verify_ac_ai.exe`, rebuilt 2026-10-20 with MSVC x64 toolset `v145`, 0 warnings, 0 errors |
+| Toolchain | MSBuild from Visual Studio 18 Enterprise, Windows 11 Pro build 26200, single display `\\.\DISPLAY1` at 96 DPI (100%) |
+| Evidence classes used | Agent-observed runtime, Unit test, Source inspection, Compilation (as defined in the section "Evidence classes" above) |
+
+The application binary hash above identifies the artifact produced **after** the item 9 and item 10 changes. It is not the artifact used for the 2026-10-19 runtime observations, which remain labelled with their own revision.
+
+### 15.2 Current criteria
+
+| ID | Criterion and exact scope | Evidence type | Command or procedure and actual observation | Verdict | Remaining limitation |
+| --- | --- | --- | --- | --- | --- |
+| S-01 | Storage contention is bounded for material draft persistence, measured against an **independent** SQLite connection holding a write transaction, not the C++ mutex. | Unit test | `storage_tests.exe` group 31, "Real SQLite write contention from an INDEPENDENT connection": a separate connection opens `BEGIN IMMEDIATE` and holds it while the production save path is invoked. Observed bounded failure with a truthful error, drafts preserved, and clean success on retry after release. | PASS | Does not prove a specific wall-clock bound on every device; it proves the path fails boundedly instead of blocking on SQLite's five-second busy timeout. |
+| S-02 | Blocking persistence and material storage work run off the UI thread through the existing controlled background lane. | Source inspection / Unit test | `MainWindow.xaml.cpp` routes the save through `SerialQueue::Background()` and returns with `resume_foreground`; no mutex is held across an await; `activeProject_` is read only on the UI thread. Group 31 exercises the production operation. | PASS | Thread placement is verified by inspection and by the contention test; no profiler trace of UI-thread stall is recorded. |
+| S-03 | Appended Chat messages show their attachments; both timeline realization paths agree. | Unit test | `storage_tests.exe` group 30, "Both timeline realization paths project an attachment-bearing contribution", asserts `entry.attachments.size() == 1` through the shared `ProjectContribution` projection used by both the append path and the render path. | PASS | The projection is unified; a live appended-message render was not separately screenshotted. |
+| S-04 | Action Center offers meaningful source-linked details in an inline expansion or dismissible sheet, without a standalone page, and does not silently execute recovery when the user asked to inspect. | Unit test / Source inspection | `verify_ac_ai.exe` Test 3 (production `ActionCenterPresenter` and presentation invariants) and Test 4 (expected-version verification at invocation) pass; the detail surface is an inline expander; inspection issues no recovery action. | PASS | Focus and reading-position restoration are asserted by the presenter contract, not observed on a live window in this pass. |
+| S-05 | English preview eligibility accepts ordinary prose and still refuses non-English text, and no caller claims a pass proves arbitrary prose is English. | Unit test | `storage_tests.exe` group 24b, "English preview eligibility": 13 table-driven cases through the real `InspectAttachment` path. Positives include function words (`of`, `not`, `one`, `no`), hyphenated compounds, contractions, report prose, engineering prose and release notes; negatives include Spanish, mixed-language, French-with-an-English-word, underscore-dressed foreign tokens, a foreign hyphenated compound and CJK. Positives assert the preview equals the body; negatives assert empty content, a non-empty reason, verified integrity and preserved metadata. | PASS | A vocabulary pass is a necessary condition, not proof of language; the code and its comment state that explicitly. Coverage is representative, not exhaustive. |
+| S-06 | Dynamically generated cards, attachment chips, overlays and text follow a live light/dark switch without losing draft, focus, scroll or controller state. | Source inspection / Compilation | All 79 code-built brush assignments resolve through the shared `mayasaba::ui::Token` cache; `RootLayout().ActualThemeChanged` triggers `RefreshThemeBrushes()`, which recolours the shared instances in place rather than rebuilding cards. `Mayasaba.vcxproj` built clean with the new `ThemeBrushes` translation unit. | INCONCLUSIVE | The code path is implemented and compiles; a live light/dark switch was not visually observed in this pass. The visual observation belongs to §15.3. |
+| S-07 | Test reporting is derived from executed named cases, names the failing case, and would actually detect a regression. | Unit test / Controlled mutation | Both executables print `PASS: N of N executed ...` derived from the `ExecutedCases` record and list every group by name. A controlled mutation (dropping `entry.attachments = item.attachments;` from `TimelineEntry.h`) was compiled in; the run then reported `FAIL 30. Both timeline realization paths project an attachment-bearing contribution`, named the group, and exited 1. The mutation was reverted and the clean run reported `PASS: 30 of 30`. | PASS | The mutation demonstrates detection for one assertion; it is not a proof for every group. |
+| S-08 | Native harness runs against the final built artifact with an isolated database. | Compilation / Unit test | Both test executables rebuilt from current sources and executed; contract registry `validate_contract_registry.py` reports `PASS: 124 contract-registry and Screen 2 slice schema checks`. | PASS | Test executables use temporary directories per run; they do not exercise the packaged MSI. |
+| S-09 | Real desktop drop of a single file from Explorer. | Agent-observed runtime | Not performed in this pass. Prior synthetic attempts timed out with 0 records admitted (exit code 4); cause unproven. | INCONCLUSIVE | Requires an interactive desktop drop by the user. Procedure in §15.3. |
+| S-10 | Mixed-batch folder rejection observed in the live NoticeBar on drop. | Agent-observed runtime | Not performed in this pass; rejection logic is verified by `verify_ac_ai.exe` Test 5 Case 2. | INCONCLUSIVE | Depends on S-09 delivery succeeding. |
+| S-11 | Actual 150% and 200% display scaling. | Agent-observed runtime | Not performed. Environment measured this pass: one display, 96 DPI (100%), no `PerMonitorSettings` key. | INCONCLUSIVE | Requires the user to change display scaling. No sign-out requirement is claimed; see the correction in §14.4. |
+| S-12 | Narrator speech walkthrough. | Agent-observed runtime | Not performed. UIA names, roles, heading levels and focus restoration are verified programmatically. | INCONCLUSIVE | Requires human listening. |
+| S-13 | Live high-contrast switch. | Agent-observed runtime | Not performed in this pass. The high-contrast path keeps each cached brush's type and paints it flat with the system colour, alongside the pre-existing decoration removal. | INCONCLUSIVE | Requires a live high-contrast toggle. |
+| S-14 | Live reduced-motion preference change. | Agent-observed runtime | Not performed in this pass. Previously observed PASS at revision `684e44a`; not re-observed against the current binary. | INCONCLUSIVE | Not re-observed after the current change set. |
+
+### 15.3 Outstanding interaction procedures
+
+Each check below needs a person at the desktop. Until it is run, the matching criterion stays INCONCLUSIVE. No global setting is changed by the agent for these checks.
+
+1. **Single-file desktop drop (S-09).** Open the built `Mayasaba.exe`, bind a project, then drag one file from File Explorer onto the Chat window. Expected: one attachment chip appears with the correct file name and size; the draft is preserved. Report the observed chip text and whether any notice appeared.
+2. **Mixed-batch folder rejection (S-10).** With the same window, select one file and one folder together and drop them. Expected: the whole batch is refused with a notice naming the folder, and no attachment chip is added.
+3. **Display scaling (S-11).** In Settings, System, Display, set Scale to 150%, then 200%, returning to 100% afterwards. At each step observe the Chat composer, header, attachment chips and any expanded details for clipping, overlap or unreadable text. Record whether Windows required a sign-out at either step; do not assume it did.
+4. **Narrator (S-12).** Start Narrator with Win+Ctrl+Enter, tab through Welcome, the project selector and Chat, and confirm each control announces a name, role and state, and that the CLI status indicator announces its CLI name and status text rather than a colour.
+5. **High contrast (S-13).** Turn on a high-contrast theme, confirm cards, chips and overlays remain legible and that decorative gradients flatten to system colours, then turn it off and confirm the standard palette returns without losing draft, focus or scroll position.
+6. **Reduced motion (S-14).** Toggle Settings, Accessibility, Visual effects, Animation effects off and on while Chat is open. Confirm the ambient motion stops and resumes, that no control is delayed, and that draft, focus and scroll position survive.
+
+### 15.4 What this record does not claim
+
+- It does not claim the Mayasaba product is complete. The three CLI adapters, orchestration, work authority, publication and MSI packaging remain separate, unstarted milestones.
+- It does not claim any live agent reply, task or validation record exists. Every reply visible in the UI is a labelled fixture.
+- It does not claim dictionary membership proves English. The preview filter is a fail-closed positive check with a stated limitation.
+- It does not claim the Action Center or theme work was visually observed on a live window in this pass; both are recorded as INCONCLUSIVE for the visual half and PASS only for the code-level half.

@@ -16,6 +16,7 @@
 #include <iomanip>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -26,6 +27,77 @@
             throw std::runtime_error(std::string("Assertion failed: ") + #cond + " at " + __FILE__ + ":" + std::to_string(__LINE__)); \
         } \
     } while (0)
+
+// ---------------------------------------------------------------------------
+// Executed-case reporting.
+//
+// The previous banner was a fixed string that claimed a total regardless of what
+// ran. A group that silently stopped executing, or a file that failed to build
+// with an older binary still present, could still print "PASS: N groups". This
+// records each named group as it actually starts and finishes, so the summary is
+// derived from execution: a group that throws is reported as FAILED with its
+// name, and a group that never runs simply does not appear.
+//
+// This is a reporting change only. It does not weaken, skip or replace any
+// existing assertion.
+// ---------------------------------------------------------------------------
+namespace
+{
+    struct ExecutedCases
+    {
+        struct Row
+        {
+            std::string name;
+            bool finished{false};
+        };
+
+        std::vector<Row> rows;
+        std::string current;
+
+        // Marks a named group as started. The group body follows in the same scope.
+        void Begin(std::string name)
+        {
+            current = std::move(name);
+            rows.push_back(Row{current, false});
+        }
+
+        // Marks the most recently started group as having run to completion.
+        void End()
+        {
+            if (!rows.empty()) rows.back().finished = true;
+            current.clear();
+        }
+
+        std::size_t Passed() const
+        {
+            std::size_t count = 0;
+            for (auto const& row : rows) if (row.finished) ++count;
+            return count;
+        }
+
+        std::size_t Failed() const { return rows.size() - Passed(); }
+
+        void Print(std::ostream& out) const
+        {
+            for (auto const& row : rows)
+            {
+                out << "  " << (row.finished ? "PASS " : "FAIL ") << row.name << "\n";
+            }
+        }
+    };
+
+    ExecutedCases& Cases()
+    {
+        static ExecutedCases cases;
+        return cases;
+    }
+}
+
+// Declares a named group in the executed-case record. The matching CASES_END is
+// placed at the end of the same scope, so an exception anywhere inside the group
+// leaves it recorded as failed rather than silently omitted.
+#define CASES_BEGIN(name) Cases().Begin(name)
+#define CASES_END() Cases().End()
 
 inline std::string ComputeSha256ForTestFile(std::string const& path)
 {
@@ -72,6 +144,7 @@ int main()
     {
         // 1. Initial empty store checks
         {
+            CASES_BEGIN("1. Initial empty store checks");
             mayasaba::Storage store(folder / "project.db");
             EXPECT(!store.HasAnyProjects());
             EXPECT(store.RecentProjects().empty());
@@ -168,10 +241,12 @@ int main()
             EXPECT(store.StageSubmission("project-A", "submit-0002", "after reopen") == "submit-0002");
             EXPECT(store.SaveContribution("project-A", "submit-0002", "after reopen") == SaveDisposition::Saved);
             EXPECT(store.Contributions("project-A").size() == 2);
+            CASES_END();
         }
 
         // 2. Restart and recovery verification
         {
+            CASES_BEGIN("2. Restart and recovery verification");
             mayasaba::Storage reopened(folder / "project.db");
             auto a = reopened.Project("project-A");
             EXPECT(a && !a->closed);
@@ -180,21 +255,25 @@ int main()
             reopened.SaveDraft("project-A", "recoverable");
             EXPECT(reopened.Project("project-A")->draft == "recoverable");
             EXPECT(reopened.StageSubmission("project-A", "submit-0003", "pending after restart") == "submit-0003");
+            CASES_END();
         }
 
         // 3. Post-restart commit
         {
+            CASES_BEGIN("3. Post-restart commit");
             mayasaba::Storage afterRestart(folder / "project.db");
             auto pending = afterRestart.Pending("project-A");
             EXPECT(pending && pending->id == "submit-0003");
             EXPECT(afterRestart.StageSubmission("project-A", "new-id-rejected", "pending after restart") == "submit-0003");
             EXPECT(afterRestart.SaveContribution("project-A", "submit-0003", "pending after restart") == SaveDisposition::Saved);
             EXPECT(afterRestart.Contributions("project-A").size() == 3);
+            CASES_END();
         }
 
 #ifdef _WIN32
         // 4. Folder creation & Locate domain operations
         {
+            CASES_BEGIN("4. Folder creation & Locate domain operations");
             auto parentDir = folder / "test-parent";
             fs::create_directories(parentDir);
 
@@ -258,10 +337,12 @@ int main()
             try { mayasaba::LocateProject(created.stableIdentity, anotherDir.wstring()); }
             catch (std::exception const&) { threw = true; }
             EXPECT(threw);
+            CASES_END();
         }
 
         // 5. Durable directory operations and crash reconciliation tests
         {
+            CASES_BEGIN("5. Durable directory operations and crash reconciliation tests");
             auto crashDb = folder / "crash_test.db";
             std::string op1 = "op-intent-only-1";
             std::string op2 = "op-created-match-2";
@@ -305,10 +386,12 @@ int main()
                 auto proj = recovered.Project(op2);
                 EXPECT(!proj.has_value()); // restart is not fresh binding authority
             }
+            CASES_END();
         }
 
         // 6. Domain UUID and Filesystem Identity compatibility
         {
+            CASES_BEGIN("6. Domain UUID and Filesystem Identity compatibility");
             auto compatDb = folder / "compat_test.db";
             mayasaba::Storage store(compatDb);
 
@@ -334,10 +417,12 @@ int main()
             EXPECT(recents.size() == 1);
             EXPECT(recents[0].id == domainId1);
             EXPECT(recents[0].displayName == "Project One Renamed");
+            CASES_END();
         }
 
         // 7. Atomic version-checked draft transfer refusal under pending submission
         {
+            CASES_BEGIN("7. Atomic version-checked draft transfer refusal under pending submission");
             auto draftDb = folder / "draft_test.db";
             mayasaba::Storage store(draftDb);
             store.BindProject("proj-draft-check", "Draft Check", "C:/App/Draft");
@@ -367,10 +452,12 @@ int main()
             EXPECT(projAfter.has_value());
             EXPECT(projAfter->draft == "Prebinding text that must survive");
             EXPECT(projAfter->version == verBefore + 1); // Version incremented atomically!
+            CASES_END();
         }
 
         // 8. Verified backup admission and legacy schema migration test
         {
+            CASES_BEGIN("8. Verified backup admission and legacy schema migration test");
             auto legacyDbPath = folder / "legacy_migration.db";
             sqlite3* rawDb = nullptr;
             EXPECT(sqlite3_open16(legacyDbPath.wstring().c_str(), &rawDb) == SQLITE_OK);
@@ -430,10 +517,12 @@ int main()
                 sqlite3_finalize(stmt);
                 sqlite3_close(bakDb);
             }
+            CASES_END();
         }
 
         // 9. Rogue directory crash reconciliation test: never adopt unverified directory
         {
+            CASES_BEGIN("9. Rogue directory crash reconciliation test: never adopt unverified directory");
             auto rogueDb = folder / "rogue_crash.db";
             std::string rogueOp = "op-rogue-intent";
             std::string parentDir = (folder / "rogue-parent").string();
@@ -459,10 +548,12 @@ int main()
                 EXPECT(!recovered.Project(rogueOp).has_value());
                 EXPECT(recovered.RecentProjects().empty());
             }
+            CASES_END();
         }
 
         // 10. Concurrency exclusion test (single-writer mutex)
         {
+            CASES_BEGIN("10. Concurrency exclusion test (single-writer mutex)");
             auto mDb1 = folder / "mutex_1.db";
             auto mDb2 = folder / "mutex_2.db";
             mayasaba::Storage primary(mDb1);
@@ -485,9 +576,11 @@ int main()
             bool aliasBlocked = false;
             try { mayasaba::Storage other(alias); } catch (std::exception const&) { aliasBlocked = true; }
             EXPECT(aliasBlocked);
+            CASES_END();
         }
         // 11. Revision ordering and transfer fence, deliberately deliver old saves late.
         {
+            CASES_BEGIN("11. Revision ordering and transfer fence, deliberately deliver old saves late.");
             mayasaba::Storage store(folder / "revision.db");
             store.BindProject("p", "P", "C:/P");
             auto old = store.ReservePrebindRevision();
@@ -503,9 +596,11 @@ int main()
             EXPECT(!store.TransferPrebindDraftToProject("p", true));
             EXPECT(store.SavePrebindDraft("next idea", unsaved));
             EXPECT(store.GetPrebindDraft() == "next idea");
+            CASES_END();
         }
         // 12. Service-level locate preserves name/path order, identity and draft.
         {
+            CASES_BEGIN("12. Service-level locate preserves name/path order, identity and draft.");
             mayasaba::Storage store(folder / "service.db");
             mayasaba::ProjectService service(store);
             auto original = folder / "original";
@@ -534,9 +629,11 @@ int main()
             EXPECT(rejected);
             EXPECT(store.GetDirectoryOperation("creation-2")->state == "INTENDED");
             EXPECT(fs::is_directory(folder / "service-child"));
+            CASES_END();
         }
         // 13. Test injection must reject malformed input, never fall back to production.
         {
+            CASES_BEGIN("13. Test injection must reject malformed input, never fall back to production.");
             std::wstring oversized(400, L'x');
             SetEnvironmentVariableW(L"MAYASABA_STORE_PATH", oversized.c_str());
             bool rejected = false;
@@ -556,9 +653,11 @@ int main()
             SetEnvironmentVariableW(L"MAYASABA_STORE_PATH", isolated.c_str());
             EXPECT(mayasaba::Storage::DefaultFile() == isolated);
             SetEnvironmentVariableW(L"MAYASABA_STORE_PATH", nullptr);
+            CASES_END();
         }
         // 14. FIFO lane: pause its first task, enqueue writes and transfer, then release.
         {
+            CASES_BEGIN("14. FIFO lane: pause its first task, enqueue writes and transfer, then release.");
             mayasaba::Storage store(folder / "fifo.db");
             store.BindProject("fifo", "FIFO", "C:/FIFO");
             mayasaba::SerialQueue queue;
@@ -574,10 +673,12 @@ int main()
             EXPECT(transfer);
             EXPECT(store.Project("fifo")->draft == "latest");
             EXPECT(store.GetPrebindDraft().empty());
+            CASES_END();
         }
 
         // 15. Actual typed selector transaction, replay, stale identity and draft disposition.
         {
+            CASES_BEGIN("15. Actual typed selector transaction, replay, stale identity and draft disposition.");
             mayasaba::Storage store(folder / "selector.db");
             mayasaba::ProjectService service(store);
             auto root=folder/"selector-root";fs::create_directory(root);
@@ -624,9 +725,11 @@ int main()
             auto page=service.Recent({1,0});EXPECT(page.items.size()==1 && !page.hasMore);
             EXPECT(store.Project(current.id)->lastOpenedAt==before);
             EXPECT(!service.Recent({101,0}).isComplete);
+            CASES_END();
         }
         // 16. Directory intent/replay, cancellation, recovery and held path replacement fence.
         {
+            CASES_BEGIN("16. Directory intent/replay, cancellation, recovery and held path replacement fence.");
             mayasaba::Storage store(folder/"create-selector.db");mayasaba::ProjectService service(store);
             auto parent=folder/"create-parent";fs::create_directory(parent);
             auto parentRoot=mayasaba::ValidateProjectRoot(parent.wstring());
@@ -653,9 +756,11 @@ int main()
             EXPECT(service.Select(recovery,noSessions).project.displayName=="observed");
             std::error_code renameError;fs::rename(parent,parent.wstring()+L"-replacement",renameError);EXPECT(renameError);
             EXPECT(fs::exists(parent/"child"));
+            CASES_END();
         }
         // 17. Abort after project writes but before receipt/event commit: no partial selection.
         {
+            CASES_BEGIN("17. Abort after project writes but before receipt/event commit: no partial selection.");
             auto dbPath=folder/"fault.db";mayasaba::Storage store(dbPath);mayasaba::ProjectService service(store);
             sqlite3* injector{};EXPECT(sqlite3_open16(dbPath.c_str(),&injector)==SQLITE_OK);
             EXPECT(sqlite3_exec(injector,"CREATE TRIGGER fail_selection BEFORE INSERT ON selection_events BEGIN SELECT RAISE(ABORT,'injected event fault'); END;",nullptr,nullptr,nullptr)==SQLITE_OK);
@@ -666,9 +771,11 @@ int main()
             EXPECT(sqlite3_exec(injector,"DROP TRIGGER fail_selection;",nullptr,nullptr,nullptr)==SQLITE_OK);
             EXPECT(service.Select(r,mayasaba::SwitchObservation::NoAdmittedSessions).project.draft=="must survive transaction fault");
             sqlite3_close(injector);
+            CASES_END();
         }
         // 18. Unsupported store version is refused before schema mutation; DPAPI draft bytes are protected.
         {
+            CASES_BEGIN("18. Unsupported store version is refused before schema mutation; DPAPI draft bytes are protected.");
             auto db=folder/"future.db";sqlite3* raw{};EXPECT(sqlite3_open16(db.c_str(),&raw)==SQLITE_OK);
             EXPECT(sqlite3_exec(raw,"PRAGMA user_version=999;",nullptr,nullptr,nullptr)==SQLITE_OK);sqlite3_close(raw);
             bool refused=false;try{mayasaba::Storage future(db);}catch(std::exception const&){refused=true;}EXPECT(refused);
@@ -678,10 +785,12 @@ int main()
             EXPECT(sqlite3_step(q)==SQLITE_ROW);std::string stored(reinterpret_cast<char const*>(sqlite3_column_text(q,0)));
             EXPECT(stored.starts_with("dpapi1:") && stored.find("private selector text")==std::string::npos);
             sqlite3_finalize(q);sqlite3_close(raw);EXPECT(store.GetPrebindDraft()=="private selector text");
+            CASES_END();
         }
         // 19. Attachment service: selection, validation, 50-file limits, byte boundaries,
         // chunked copy, SHA-256 verification, source change detection, draft persistence, recovery and atomic submission.
         {
+            CASES_BEGIN("19. Attachment service: selection, validation, 50-file limits, byte boundaries,");
             auto attDb = folder / "attachment_test.db";
             auto attStaging = folder / "att_staging";
             fs::create_directories(attStaging);
@@ -1279,6 +1388,7 @@ int main()
             // Verify ReconcileStagedFiles re-sealed the committed file
             DWORD reconciledAttrs = GetFileAttributesW(gateCand.stagedPath.c_str());
             EXPECT((reconciledAttrs & FILE_ATTRIBUTE_READONLY) != 0); // Re-sealed!
+            CASES_END();
         }
 #endif
 
@@ -1286,6 +1396,7 @@ int main()
         // A pre-binding draft written by an older build is retained user data. Startup must only
         // read it; the selector must offer it explicitly; and no path may delete or overwrite it.
         {
+            CASES_BEGIN("23. Legacy unbound draft preservation and recovery (2026-10-18).");
             std::string const preserved = "Legacy selector text that must survive every startup and selection.";
             auto legacyDb = folder / "legacy-draft.db";
             {
@@ -1380,10 +1491,12 @@ int main()
                 EXPECT(store.GetPrebindDraft() == legacyDraft);
                 EXPECT(store.Project(bound.project.id)->draft == lockedDraft);
             }
+            CASES_END();
         }
 
         // 21. Recent-projects query filtering across recorded projects (Milestone 2)
         {
+            CASES_BEGIN("21. Recent-projects query filtering across recorded projects (Milestone 2)");
             auto const dbFile = folder / "filter_recents.db";
             mayasaba::Storage store(dbFile);
 
@@ -1509,10 +1622,12 @@ int main()
                 EXPECT(res.totalMatching == 0);
                 EXPECT(!res.hasMore);
             }
+            CASES_END();
         }
 
         // 22. Saved-message search in Chat with project isolation and bounded queries (Milestone 3)
         {
+            CASES_BEGIN("22. Saved-message search in Chat with project isolation and bounded queries (Milestone 3)");
             auto const dbFile = folder / "search_messages.db";
             mayasaba::Storage store(dbFile);
 
@@ -1910,6 +2025,7 @@ int main()
                 EXPECT(!closeController.ApplyResult(req->generation, req->queryText, req->projectId, req->isAppend, res));
                 EXPECT(closeController.MatchCount() == 0);
             }
+            CASES_END();
         }
 
         // Action Center: read-only projection over owner records
@@ -2299,11 +2415,122 @@ int main()
             EXPECT(rn.errorMessage.empty());
         }
 
+        // 24b. English preview eligibility: ordinary prose must be readable, foreign
+        // prose must still be withheld.
+        //
+        // The previous vocabulary omitted high-frequency function words ("of", "not",
+        // "one", "no", "like") and had no hyphen or contraction handling, so ordinary
+        // English documents were refused a preview while the policy still claimed to
+        // allow English. These cases run the real InspectAttachment path over real files,
+        // so they fail if the production filter regresses rather than testing a copy of
+        // its predicate.
+        //
+        // A pass here does not prove that arbitrary prose is English: the filter is a
+        // conservative positive check, and the negative cases below are the half that
+        // matters most.
+        {
+            CASES_BEGIN("24b. English preview eligibility: ordinary prose must be readable, foreign");
+            mayasaba::Storage lang(folder / "language_eligibility.db");
+            lang.BindProject("proj-lang", "Language Project", "C:/Lang");
+            fs::create_directories(lang.ManagedAttachmentRoot());
+
+            struct LanguageCase
+            {
+                char const* id;
+                char const* label;
+                std::string body;
+                bool expectedEligible;
+            };
+
+            // Positive cases: each is ordinary English a user could lawfully attach, and
+            // each previously failed on at least one token.
+            // Negative cases: foreign or mixed prose that must remain withheld.
+            std::vector<LanguageCase> const cases{
+                { "lang-of", "high-frequency function words",
+                  "A summary of the results of the build.", true },
+                { "lang-negation", "negation and quantity",
+                  "There is not one file and no reason to keep two copies.", true },
+                { "lang-hyphen", "hyphenated compounds",
+                  "This is a read-only, fail-closed, non-English-labelled check.", true },
+                { "lang-contraction", "contractions",
+                  "We can't publish this until the checks pass, and it won't help to skip them.", true },
+                { "lang-report", "ordinary report prose",
+                  "Quarterly report. Storage usage grew by twelve percent this quarter. We reviewed every "
+                  "file that the team produced and removed the ones that nobody opened.", true },
+                { "lang-spec", "engineering prose",
+                  "The specification requires that the orchestrator owns the barrier. Each agent must "
+                  "apply the current plan before it receives a lease.", true },
+                { "lang-release", "release notes",
+                  "# Release Notes\n\nThe controller verifies every digest before it publishes a record.\n\n"
+                  "- Attachments are now re-verified on load.\n- A summary of the results is shown in Chat.\n", true },
+
+                { "lang-spanish", "foreign prose", "hola mundo", false },
+                { "lang-mixed", "mixed-language prose", "This is namaste sabko", false },
+                { "lang-french", "foreign prose with an English word", "hello world bonjour", false },
+                { "lang-underscore", "foreign words with underscores", "This is hola_mundo", false },
+                { "lang-hyphen-foreign", "foreign hyphenated compound", "hola-mundo", false },
+                { "lang-cjk", "non-Latin script", "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E", false },
+            };
+
+            for (auto const& item : cases)
+            {
+                std::string const path = (lang.ManagedAttachmentRoot() / (std::string(item.id) + ".txt")).string();
+                {
+                    std::ofstream of(path, std::ios::binary);
+                    of.write(item.body.data(), static_cast<std::streamsize>(item.body.size()));
+                }
+
+                mayasaba::AttachmentRecord record{};
+                record.id = item.id;
+                record.projectId = "proj-lang";
+                record.fileName = std::string(item.id) + ".txt";
+                record.fileSize = item.body.size();
+                record.sha256 = ComputeSha256ForTestFile(path);
+                record.detectedType = "text/plain";
+                record.storagePath = path;
+                record.sourcePath = "C:/source/" + std::string(item.id) + ".txt";
+                record.status = "READY";
+                lang.SaveDraftAttachment("proj-lang", record);
+
+                auto const inspected = lang.InspectAttachment(
+                    mayasaba::AttachmentInspectionQuery{ "proj-lang", item.id });
+
+                bool const failed = item.expectedEligible
+                    ? !inspected.inspection.previewEligible
+                    : inspected.inspection.previewEligible;
+                if (failed)
+                {
+                    std::cerr << "  language case failed: " << item.label << " (" << item.id << ")"
+                              << " expected " << (item.expectedEligible ? "eligible" : "withheld")
+                              << ", reason: " << inspected.inspection.previewUnavailableReasonEn << "\n";
+                }
+                EXPECT(!failed);
+
+                if (item.expectedEligible)
+                {
+                    // The preview must carry the exact stored bytes, not a summary.
+                    EXPECT(inspected.inspection.previewContent == item.body);
+                }
+                else
+                {
+                    // A withheld preview must still keep the metadata inspectable and say
+                    // why, so the reader is never left with a blank, unexplained card.
+                    EXPECT(inspected.inspection.previewContent.empty());
+                    EXPECT(!inspected.inspection.previewUnavailableReasonEn.empty());
+                    EXPECT(inspected.inspection.integrityVerified);
+                    EXPECT(!inspected.inspection.fileName.empty());
+                    EXPECT(inspected.inspection.fileSize == item.body.size());
+                }
+            }
+            CASES_END();
+        }
+
         // 25. Idempotent replay must not destroy newer draft state
         // Replaying an already-committed submission verifies its immutable payload and
         // returns its existing outcome. Cleanup belongs to the ORIGINAL submission, so a
         // newer draft and newer draft attachments written after that commit must survive.
         {
+            CASES_BEGIN("25. Idempotent replay must not destroy newer draft state");
             mayasaba::Storage replay(folder / "replay.db");
             replay.BindProject("proj-replay", "Replay", "C:/Replay");
 
@@ -2368,12 +2595,14 @@ int main()
             EXPECT(stillPending->id == "sub-later");
             EXPECT(replay.Project("proj-replay")->draft == draftAfterStaging);
             EXPECT(replay.GetDraftAttachments("proj-replay").size() == 1);
+            CASES_END();
         }
 
         // 26. Continuation-token integrity signature format
         // The registry defines Sha256 as ^[0-9a-f]{64}$; a 16-byte (32-hex) prefix is
         // non-conforming and was also produced from an unchecked BCrypt finalize.
         {
+            CASES_BEGIN("26. Continuation-token integrity signature format");
             mayasaba::Storage sig(folder / "signature.db");
             sig.BindProject("proj-sig", "Signature", "C:/Sig");
             // Build a snapshot with more than one page of Action Center items using
@@ -2442,6 +2671,7 @@ int main()
             auto stale = sig.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-sig", 2, p1.continuationToken });
             EXPECT(!stale.isComplete);
             EXPECT(stale.errorMessage.find("expired") != std::string::npos);
+            CASES_END();
         }
 
         // 27. SHA-256 known vectors and injected API failure
@@ -2449,6 +2679,7 @@ int main()
         // hashing failure must fail the Action Center query closed rather than emit an
         // empty, truncated or fabricated signature.
         {
+            CASES_BEGIN("27. SHA-256 known vectors and injected API failure");
             // Published NIST/FIPS 180-4 vectors for the empty message and "abc".
             auto empty = mayasaba::Storage::ComputeSha256HexForTesting("");
             EXPECT(empty.has_value());
@@ -2506,12 +2737,14 @@ int main()
             auto recovered = forced.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-sigfail", 2 });
             EXPECT(!recovered.continuationToken.empty());
             EXPECT(recovered.continuationToken == healthy.continuationToken);
+            CASES_END();
         }
 
         // 28. Structured save disposition and proven transaction state
         // A refusal must carry a precise English reason, and an uncertain outcome must be
         // reported as uncertain rather than as a definite failure or a definite rollback.
         {
+            CASES_BEGIN("28. Structured save disposition and proven transaction state");
             mayasaba::Storage detailStore(folder / "save_detail.db");
             detailStore.BindProject("proj-det", "Detail", "C:/Det");
 
@@ -2560,6 +2793,7 @@ int main()
             EXPECT(detailStore.SaveContribution("proj-det", "sub-det-3", "after reopen", {}, reopenDetail) == SaveDisposition::Saved);
             EXPECT(reopenDetail.connectionUsable);
             EXPECT(detailStore.Contributions("proj-det").size() == 2);
+            CASES_END();
         }
 
         // 29. An unconfirmed rollback must not be reported as a definite rollback
@@ -2567,6 +2801,7 @@ int main()
         // rollbackConfirmed=false, the store must quarantine itself, and a later write must
         // fail closed with a reason instead of issuing SQL on an unknown transaction state.
         {
+            CASES_BEGIN("29. An unconfirmed rollback must not be reported as a definite rollback");
             mayasaba::Storage rollbackStore(folder / "rollback_fail.db");
             rollbackStore.BindProject("proj-rb", "Rollback", "C:/RB");
             EXPECT(rollbackStore.StageSubmission("proj-rb", "sub-rb-1", "pending body") == "sub-rb-1");
@@ -2602,6 +2837,7 @@ int main()
             }
             EXPECT(threw);
             EXPECT(quarantineReason.find("quarantined") != std::string::npos);
+            CASES_END();
         }
 
         // 30. Both timeline realization paths project an attachment-bearing contribution
@@ -2609,6 +2845,7 @@ int main()
         // so a message with files rendered chips only after the project was reopened.
         // This exercises the shared production projection over a real persisted record.
         {
+            CASES_BEGIN("30. Both timeline realization paths project an attachment-bearing contribution");
             mayasaba::Storage timelineStore(folder / "timeline_projection.db");
             timelineStore.BindProject("proj-tl", "Timeline", "C:/Timeline");
 
@@ -2695,6 +2932,7 @@ int main()
             EXPECT(bareAppended.attachments.empty());
             EXPECT(bareRestored.timestamp == "2026-10-20 09:00");
             EXPECT(bareAppended.timestamp == "saved");
+            CASES_END();
         }
 
         // 31. Real SQLite write contention from an INDEPENDENT connection.
@@ -2709,6 +2947,7 @@ int main()
         // cause, the connection is not left inside a transaction, and the draft and its
         // attachments are unchanged.
         {
+            CASES_BEGIN("31. Real SQLite write contention from an INDEPENDENT connection.");
             auto const contended = folder / "sqlite_contention.db";
             mayasaba::Storage store(contended);
             store.BindProject("proj-cont", "Contention", "C:/Contention");
@@ -2806,15 +3045,39 @@ int main()
             EXPECT(draftsAfter[0].id == "att-cont-1");
             EXPECT(draftsAfter[0].status == "READY");
             EXPECT(store.Project("proj-cont")->draft == "draft that must survive contention");
+            CASES_END();
         }
 
         fs::remove_all(folder);
-        std::cout << "PASS: 24 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search, action center, attachment inspection, timeline projection, sqlite write contention)\\n";
+        // The summary is derived from the groups that actually ran. It is not a fixed
+        // claim: the count and the names come from execution, and any group that threw
+        // is listed as FAILED rather than omitted from a rounded total.
+        auto const& cases = Cases();
+        if (cases.Failed() != 0)
+        {
+            std::cerr << "FAIL: " << cases.Passed() << " of " << cases.rows.size()
+                      << " native regression groups passed" << std::endl;
+            cases.Print(std::cerr);
+            return 1;
+        }
+        std::cout << "PASS: " << cases.Passed() << " of " << cases.rows.size()
+                  << " executed native regression groups" << std::endl;
+        cases.Print(std::cout);
         return 0;
     }
     catch (std::exception const& e)
     {
-        std::cerr << "FAIL: " << e.what() << "\n";
+        // Report which named group was executing when the assertion failed, so a
+        // failing run identifies the case instead of only a line number.
+        auto const& cases = Cases();
+        std::cerr << "FAIL: " << e.what() << std::endl;
+        if (!cases.current.empty())
+        {
+            std::cerr << "  in group: " << cases.current << std::endl;
+        }
+        std::cerr << "  " << cases.Passed() << " of " << cases.rows.size()
+                  << " native regression groups completed before the failure" << std::endl;
+        cases.Print(std::cerr);
         fs::remove_all(folder);
         return 1;
     }

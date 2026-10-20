@@ -352,87 +352,346 @@ namespace mayasaba
             if (tokens.empty()) return false;
 
             // 3. Conservative positive validation of source prose against an English lexicon.
-            // Under the presentation policy, this check does not claim to prove that arbitrary prose is English;
-            // rather, it enforces a conservative positive filter to withhold content preview whenever
-            // language eligibility cannot be established. Presence of punctuation, digits, or underscores
-            // does not grant automatic permission. If any token cannot be positively verified, fail closed.
-            static const std::unordered_set<std::string_view> englishLexicon = {
-                // Articles, pronouns, prepositions, conjunctions
-                "a", "an", "the", "this", "that", "these", "those", "i", "you", "he", "she", "it", "we", "they",
-                "me", "him", "her", "us", "them", "my", "your", "his", "her", "its", "our", "their", "mine", "yours",
-                "in", "on", "at", "to", "for", "with", "from", "by", "about", "into", "through", "during", "before",
-                "after", "above", "below", "between", "under", "behind", "per", "via", "across", "against", "along",
-                "among", "off", "over", "up", "down", "out", "and", "or", "but", "so", "yet", "nor", "if", "because",
-                "although", "though", "while", "unless", "since", "until", "where", "when", "whenever", "wherever",
-                "whether", "as", "than", "then", "now", "here", "there", "why", "how", "what", "which", "who", "whom", "whose",
+            //
+            // This check does not prove that arbitrary prose is English, and no caller may
+            // present a pass as such a proof. It is the positive half of a fail-closed
+            // filter: when language eligibility cannot be positively established, the
+            // content preview is withheld and only metadata is shown. Presence of
+            // punctuation, digits or underscores grants no permission, and one
+            // unrecognized token is enough to withhold the preview.
+            //
+            // The vocabulary is deliberately broad with everyday English, because a filter
+            // that rejects ordinary prose withholds content the user can lawfully read. It
+            // stays strict about non-Latin scripts, mixed-script tokens and words it does
+            // not know. The previous list omitted high-frequency function words such as
+            // "of", "not", "one", "no" and "like", so ordinary English was refused.
+            static constexpr std::string_view englishVocabulary =
+                // Articles, determiners, pronouns, quantifiers
+                "a an the this that these those i you he she it we they me him her us them my your his its "
+                "our their mine yours hers ours theirs myself yourself himself herself itself ourselves "
+                "themselves who whom whose which what when where why how whoever whatever whichever "
+                "whether either neither each every all any some none both few many much more most less "
+                "least several other another such same own only one two three four five six seven eight "
+                "nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen "
+                "twenty thirty forty fifty sixty seventy eighty ninety hundred thousand million billion "
+                "trillion dozen quarter half zero first second third fourth fifth sixth seventh eighth "
+                "ninth tenth last next "
+                // Prepositions and conjunctions
+                "of in on at to for with from by about into through during before after above below "
+                "between under over up down out off across against along among around behind beyond near "
+                "since until within without upon onto toward towards per via than as and or but nor so if "
+                "because although though while unless whereas whilst then thus hence therefore however "
+                "moreover furthermore nevertheless nonetheless instead otherwise meanwhile "
+                // Auxiliaries and modals
+                "be is am are was were been being have has had having do does did done doing will would "
+                "shall should can could may might must ought need dare used "
+                // Common verbs, including irregular past forms
+                "accept achieve acknowledge acquire act adapt add address adjust admit adopt advance advise "
+                "affect agree aim align allocate allow alter analyze announce answer anticipate appear apply "
+                "appreciate approach approve argue arrange arrive assess assign assist assume assure attach "
+                "attack attempt attend attract avoid await back balance base bear beat become begin begun "
+                "behave belong benefit block borrow bother break broke broken bring brought broaden build "
+                "built burn buy bought calculate call came capture care carry catch caught cause challenge "
+                "change charge check choose chose chosen cite claim clarify clean clear close collect "
+                "combine come comment commit communicate compare compete compile complete compose compute "
+                "conclude conduct confirm connect consider consist constitute construct consult consume "
+                "contain continue contribute control convert convince correct cost count cover create "
+                "critique cross cut deal decide declare decline decrease define delay deliver demand "
+                "demonstrate deny depend describe design desire destroy detect determine develop differ "
+                "direct disagree discover discuss dismiss display distribute divide document double doubt "
+                "draft draw drew drawn drive drove driven drop earn edit effect eliminate employ enable "
+                "encourage end enforce ensure enter establish estimate evaluate examine exceed exchange "
+                "exclude execute exhibit exist expand expect explain explore express extend face fail fall "
+                "fell fallen favor fear feature feel felt fetch fight figure file fill filter find finish "
+                "fit fix fly flew flown focus follow force forecast forget forgot forgotten form forward "
+                "frame fulfill fund gain gather generate get give gave given go went gone govern grant grow "
+                "grew grown guarantee handle hang happen harm hate head hear heard help hide highlight "
+                "hire hold held honor hope host identify ignore illustrate imagine implement imply import "
+                "impose improve include incorporate increase indicate influence inform inherit initiate "
+                "injure insert insist inspect install intend interact interpret introduce invest "
+                "investigate invite involve isolate issue join judge justify keep kept kick know knew known "
+                "label land last launch lead led learn leave left lend let level lie lift light like limit "
+                "link list listen live load locate lock look lose lost love lower maintain make made manage "
+                "map mark match matter mean meant measure meet met mention merge migrate mind minimize miss "
+                "mitigate mix modify monitor mount move multiply name navigate need negotiate note notice "
+                "number observe obtain occur offer open operate oppose optimize order organize output "
+                "overcome override overwrite own pack pair parse pass pause pay paid perform permit "
+                "persist pick place plan play please point poll prepare present preserve prevent print "
+                "prioritize proceed process produce prohibit promise promote prompt propose protect prove "
+                "provide publish pull purchase push put qualify query question quote raise ran range rate "
+                "reach react read realize reason rebuild receive recognize recommend reconcile record "
+                "recover reduce refer reflect refuse regard register reject relate release rely remain "
+                "remember remind remove render repeat replace reply report represent request require "
+                "rescue reserve reset resolve respond restore restrict result retain retrieve return "
+                "reveal reverse review revise reward rewrite ride rise risk roll round rule run satisfy "
+                "save say said scan schedule score search secure see saw seen seek seem select sell send "
+                "sent separate serve set settle share shift ship shorten show showed shown shrink shut "
+                "sign signal simplify sit sat skip sleep slept slow solve sort sound specify spend spent "
+                "split spread stand stood start state stay step stick stop store stream strengthen strike "
+                "strip study submit succeed suffer suggest summarize supply support suppose suppress "
+                "surface survive suspend switch take took taken talk target teach taught tell tend "
+                "terminate test thank think thought throw threw thrown tie track train transfer transform "
+                "treat trigger trust try turn type understand understood undertake unify update upgrade "
+                "upload use used utilize validate value vary verify view visit vote wait wake walk want "
+                "warn watch wear wore worn weigh welcome win won withdraw wish work worry write wrote "
+                "written "
+                // Common nouns
+                "ability access account accuracy action activity address age agency agent agreement aim "
+                "air algorithm alternative amount analysis answer application approach area argument art "
+                "article aspect assessment asset assumption attention attitude authority availability "
+                "average awareness background backup balance barrier base basis batch behavior benefit "
+                "body book boundary branch budget bug build business byte card case category cause cell "
+                "center century chain chance change channel chapter character charge chart check child "
+                "choice circumstance city claim class client code collection column combination comment "
+                "commission committee community company comparison compatibility complexity component "
+                "composition concept concern conclusion condition configuration conflict consequence "
+                "consideration consistency constraint construction contact content context control "
+                "conversation copy core corner cost council count country couple course court coverage "
+                "criteria criterion culture currency current customer cut damage data database date day "
+                "deal death debt decision declaration decline default defect definition degree delay "
+                "delivery demand department dependency description design desire detail detail detection "
+                "development device difference difficulty dimension direction directory discipline "
+                "discovery discussion disk display distinction distribution document domain door draft "
+                "drive duty edge effect effort element emergency employee end energy engine entry "
+                "environment epoch error essay estimate evaluation event evidence example exception "
+                "exchange execution exercise existence expansion expectation experience experiment "
+                "expert explanation exposure expression extension extent facility fact factor failure "
+                "family feature fee field figure file filename filter finding firm flag floor flow focus "
+                "folder force form format foundation frame framework freedom function funding game gap "
+                "general goal good government grade grant group growth guarantee guard guidance guideline "
+                "habit hand handle harm hash head health height help history hold home hope hour house "
+                "human hypothesis idea identity image impact implementation importance impression "
+                "improvement incident inclusion increase independence index individual industry "
+                "information infrastructure initial input inquiry inside insight instance institution "
+                "instruction instrument integration integrity intent intention interest interface "
+                "interpretation interval intervention inventory investigation investment issue item job "
+                "journal judgment jurisdiction key kind knowledge label lack language law layer leader "
+                "learning lease length level library license life limit line link list literature load "
+                "loan local location log logic loss lot maintenance management manager manner map margin "
+                "market master match material matrix matter meaning measure mechanism media medium "
+                "member memory mention message method metric middle minimum minute mission mistake mode "
+                "model modification module moment money month move movement name nation nature need "
+                "network news node noise norm note notice notion number object objective obligation "
+                "observation obstacle occasion offer office operation opinion opportunity option order "
+                "organization origin outcome output overview owner page paper paragraph parameter "
+                "parent part participant partner party passage path pattern pause payment peak peer "
+                "percentage performance period permission person perspective phase phone phrase place "
+                "plan platform point policy position possibility potential power practice precedent "
+                "precision preference premise preparation presence pressure price principle priority "
+                "procedure process product production profile program progress project promise property "
+                "proposal proposition protection protocol provision publication purpose quality quantity "
+                "question quota race range rate ratio reach reaction reader reason receipt record "
+                "recovery reference region register relation relationship release relevance reliability "
+                "remainder remark removal repair repeat replacement report representation request "
+                "requirement rescue research reserve resolution resource respect response "
+                "responsibility rest result retention review revision reward risk role room root route "
+                "rule run safety sample satisfaction scale schedule scope score screen search section "
+                "security segment selection sense sequence series service session set setting severity "
+                "shape share shift side sign signal signature size situation skill slice source space "
+                "specification speed stability staff stage stake standard start state statement status "
+                "step stock storage story strategy stream strength stress structure study style subject "
+                "submission subset substance success suggestion summary supply support surface survey "
+                "switch symbol system table tag target task team technique technology term test text "
+                "theme theory thing thread threat threshold time timestamp title token tool topic total "
+                "trace track trade traffic training transaction transfer transformation transition "
+                "treatment trend trial trigger trust truth turn type unit usage user utility validation "
+                "validity value variable variant vector version view violation vision visit voice "
+                "volume wait wall want warning way weakness wealth web week weight window wish word "
+                "work worker workflow workspace world worry worth writing year zone "
+                // Adjectives
+                "able absent absolute abstract acceptable accessible accurate active actual additional "
+                "adequate adjacent administrative advanced adverse affected aggressive alert alive "
+                "alone alternate alternative amazing ambiguous ancient angry annual anonymous apparent "
+                "applicable appropriate approximate arbitrary architectural artificial assistant "
+                "associated atomic attractive audio automatic available average aware awful bad "
+                "balanced bare basic beautiful beneficial best better big binary blank blind blocked "
+                "blue bold brief bright broad broken brown busy calm capable capital careful casual "
+                "central certain cheap chief chronic circular civic civil classic clean clear clever "
+                "clinical closed coarse cognitive cold collaborative collective commercial common "
+                "compact comparable compatible competitive complete complex compliant comprehensive "
+                "compulsory concrete conditional confident confidential consecutive conscious "
+                "considerable consistent constant constitutional contemporary content contiguous "
+                "continuous conventional convenient cool cooperative core corporate correct costly "
+                "critical crucial cultural cumulative current custom daily dark dead deaf dear decent "
+                "deep default defensive definite deliberate delicate dense dependent deployed detailed "
+                "different difficult digital direct dirty disabled distant distinct distinguished "
+                "diverse domestic dominant double doubtful dry dual due dull dynamic eager early "
+                "eastern easy economic educational effective efficient eight either elderly electric "
+                "electronic elegant eligible embedded emotional empty enabled enormous entire equal "
+                "equivalent essential eternal ethical even eventual evident exact excellent "
+                "exceptional excessive exclusive exotic expected expensive experimental explicit "
+                "external extra extreme fair faithful familiar famous fast fatal favorable federal "
+                "fellow few fierce final financial fine finite firm fiscal fit five fixed flat "
+                "flexible fluent following foreign formal former forth forward four fragile free "
+                "frequent fresh friendly full functional fundamental funny future general generic "
+                "gentle genuine given glad global golden good gradual grand grateful great green grey "
+                "gross guilty half handy happy hard harmful harsh healthy heavy helpful hidden high "
+                "historical hollow holy honest horizontal hostile hot huge human humble hundred ideal "
+                "identical idle ill illegal immediate immense immune imperative imperial implicit "
+                "important impossible impressive inadequate inclined independent indirect individual "
+                "industrial inevitable infinite informal inherent initial inner innocent innovative "
+                "intact integral intelligent intense interactive interested interesting internal "
+                "international intimate invalid invisible involved inward iron irregular isolated "
+                "joint just keen key kind known large last late later latter lazy leading least left "
+                "legal legislative lengthy less level liable liberal light likely limited linear "
+                "liquid literary little live lively local logical lonely long loose lost loud low "
+                "loyal lucky major male manual marginal marine massive material mathematical mature "
+                "maximum mean medical medium mental mere middle mild military minimal minimum minor "
+                "minute mixed mobile moderate modern modest moral multiple mutual narrow national "
+                "native natural naval near necessary negative nervous neutral new next nice noble "
+                "noisy nominal normal northern notable novel numerous objective obvious occasional "
+                "odd official old only open opposite optimal ordinary organic original other outer "
+                "outgoing outside overall overseas own painful parallel partial particular passive "
+                "past patient peaceful peculiar perfect permanent persistent personal physical "
+                "plain pleasant pleased plus polite poor popular portable positive possible "
+                "potential powerful practical precious precise predictable pregnant preliminary "
+                "premium prepared present presidential pretty previous primary prime principal "
+                "prior private probable productive professional profound progressive prominent "
+                "prompt proper proportional protective proud provincial public pure qualified quick "
+                "quiet random rapid rare raw ready real realistic reasonable recent recursive red "
+                "reduced redundant regional regular relative relevant reliable religious reluctant "
+                "remaining remarkable remote repeated representative residential resilient "
+                "resistant responsible retail rich right rigid ripe rival robust romantic rough "
+                "round routine royal rural sacred sad safe same satisfied scarce scientific "
+                "secondary secret secure select senior sensible sensitive separate serious seven "
+                "severe shallow sharp sheer short shy sick significant silent silly similar simple "
+                "single skilled slight slim slow small smart smooth social soft solar sole solid "
+                "sophisticated sound sour southern spare spatial special specific spectacular "
+                "spiritual splendid stable standard static statistical steady steep stiff still "
+                "straight strange strategic strict strong structural stupid subsequent substantial "
+                "subtle successful successive sudden sufficient suitable summary super superb "
+                "superior sure surplus surprising suspicious sweet swift symbolic tactical tall "
+                "technical temporary tender tense terminal terrible tertiary thick thin third "
+                "thorough three tight tiny tired tolerant top total tough toxic traditional tragic "
+                "transparent tremendous tropical true typical ugly ultimate unable uncertain under "
+                "unique united universal unknown unusual upper upset urban urgent useful usual "
+                "vague valid valuable variable various vast verbal vertical viable vibrant vicious "
+                "visible visual vital vivid vocal voluntary vulnerable warm weak wealthy weekly "
+                "weird welcome western wet white whole wide wild willing wise wonderful wooden "
+                "worried worse worst worthy wrong yellow young "
+                // Adverbs and connectives
+                "abroad absolutely accordingly accurately actually additionally admittedly "
+                "afterwards again ago ahead almost alone along already also alternatively always "
+                "annually apparently approximately around aside automatically away backward badly "
+                "barely basically before behind below beneath beside besides better between beyond "
+                "briefly broadly carefully certainly cheaply clearly closely commonly completely "
+                "consequently considerably consistently constantly correctly currently daily "
+                "deeply definitely deliberately directly downward dramatically earlier easily "
+                "effectively efficiently elsewhere entirely equally especially essentially "
+                "eventually ever exactly exceedingly excessively exclusively explicitly extremely "
+                "fairly far fast finally firmly first forever fortunately forward frequently fully "
+                "furthermore generally gently gradually greatly hardly heavily hence highly "
+                "honestly hopefully immediately increasingly indeed independently inevitably "
+                "initially instead inward largely last lately later least less likely likewise "
+                "literally little locally long mainly merely mildly mostly much namely naturally "
+                "nearly necessarily neither never nevertheless newly next no nobody none "
+                "nonetheless nor normally not notably nothing now nowhere obviously occasionally "
+                "often once only openly otherwise out outside over overall particularly partly "
+                "perhaps permanently personally plainly please poorly possibly potentially "
+                "practically precisely preferably presumably previously primarily probably "
+                "properly quickly quite rarely rather readily really recently regularly "
+                "relatively remarkably repeatedly respectively rightly roughly routinely sadly "
+                "scarcely second seldom seriously severely sharply shortly significantly "
+                "similarly simply since slightly slowly so sometime sometimes soon specifically "
+                "steadily still straight strongly subsequently substantially successfully "
+                "suddenly sufficiently surely then thereafter therefore thoroughly though thus "
+                "today together tomorrow tonight too totally traditionally truly twice typically "
+                "ultimately under unfortunately uniformly uniquely unlikely until unusually up "
+                "upon usually utterly very virtually voluntarily well whatever when whenever "
+                "where whereas wherever whether while wholly widely willingly within without "
+                "worse yes yesterday yet "
+                // Domain, software, engineering and testing vocabulary
+                "api array assertion attribute authentication authorization bitmap breakpoint "
+                "buffer cache callback certificate channel checkpoint checksum cli codec cluster "
+                "commit compiler compression concatenation connection console constant container "
+                "contract controller cookie corruption counter cpu credential cursor daemon "
+                "dataset debug decimal decoder deploy deployment descriptor desktop destination "
+                "diagnostic dictionary diff digest disable dispatch download driver dump "
+                "duplicate edition element email encode encryption endpoint enum escape "
+                "evidence executable experiment export factory fallback fetch firmware fragment "
+                "gateway generation generator graph grid hardware header heap hierarchy host html "
+                "http icon identifier image import inference install instruction integer "
+                "interrupt iteration json kernel latency launch layer lease ledger lifecycle "
+                "load lock log login loop machine macro manifest markup memory menu message "
+                "metadata migration mode module monitor mutex namespace native network "
+                "notification null offset operation operator option output package packet "
+                "panel parameter parse parser partition password patch path pattern payload peer "
+                "permission persistence pipeline pixel platform plugin pointer policy port "
+                "portal preference prefix preview process processor profile prompt property "
+                "provider proxy publish queue quota race record recovery redirect renderer "
+                "reply repository request requirement resource response result retry revision "
+                "rollback route runtime schema script search secret sector server service "
+                "session setting sha shadow shell signature slice snapshot socket source "
+                "spec sql sqlite stack staging statement status storage stream string "
+                "submission subset suffix suite summary switch symbol syntax table tag target "
+                "task template tenant test testing thread threshold timestamp token tool trace traffic "
+                "transaction transfer transform transport tree trigger tuple type unit update "
+                "upload utility validation value variable variant vector version view virtual "
+                "volume warning web widget window worker workflow workspace wrapper write "
+                "mayasaba english prose markdown spec hello drag drop details detail rule "
+                "rules task tasks action actions directory results found unresolved "
+                "restriction recheck remove reopen eligible sha guid uuid composite "
+                "attribute handle containment canonical managed manage management isolate "
+                "isolated isolation verify verified modify modified modification limits "
+                "limit requests authorize authorized authorization within second seconds "
+                "race races criteria matrix invariant invariants "
+                // Everyday words carried over from the original narrower list, plus the
+                // inflections and domain nouns that ordinary technical prose uses. These
+                // are listed explicitly rather than left to the suffix rules so a change
+                // to the stemmer cannot silently narrow what the user is allowed to read.
+                "acceptance added agreed allowed appeared ask asked attachment attachments began "
+                "believe believed building bytes called car carried caused changed chat committed "
+                "considered continued covered created decided developed die died drafts education "
+                "explained eye false files followed foot friend got gotten ground happened heart "
+                "here hit hoped included info inspection learned listened lived looked morning "
+                "moved night offered opened others passed pending people percent played pointed "
+                "problem produced provided pulled raised reached received remained remembered "
+                "reported required returned road seemed served site speak spoke spoken staged "
+                "stayed stopped street suggested supported there told town tried verification "
+                "verifies verified verifying waited walked wanted war watched water worked "
+                "orchestrator controller agent agents lease leases barrier epoch council "
+                "requirement requirements decision decisions review reviews peer peers "
+                "reply replies response responses";
 
-                // Auxiliary, modal, and common verbs
-                "be", "is", "am", "are", "was", "were", "been", "being", "have", "has", "had", "having",
-                "do", "does", "did", "done", "doing", "will", "would", "shall", "should", "can", "could", "may",
-                "might", "must", "make", "made", "see", "saw", "seen", "know", "knew", "known", "take", "took",
-                "taken", "get", "got", "gotten", "go", "went", "gone", "come", "came", "think", "thought",
-                "look", "looked", "want", "wanted", "give", "gave", "given", "use", "used", "find", "found",
-                "tell", "told", "ask", "asked", "work", "worked", "seem", "seemed", "feel", "felt", "try", "tried",
-                "leave", "left", "call", "called", "keep", "kept", "let", "begin", "began", "begun", "show",
-                "showed", "shown", "hear", "heard", "play", "played", "run", "ran", "move", "moved", "live", "lived",
-                "believe", "believed", "bring", "brought", "happen", "happened", "write", "wrote", "written",
-                "read", "provide", "provided", "sit", "sat", "stand", "stood", "lose", "lost", "pay", "paid",
-                "meet", "met", "include", "included", "continue", "continued", "set", "learn", "learned",
-                "change", "changed", "lead", "led", "understand", "understood", "watch", "watched", "follow",
-                "followed", "stop", "stopped", "create", "created", "speak", "spoke", "spoken", "allow", "allowed",
-                "add", "added", "spend", "spent", "grow", "grew", "grown", "open", "opened", "walk", "walked",
-                "win", "won", "offer", "offered", "remember", "remembered", "consider", "considered", "appear",
-                "appeared", "buy", "bought", "wait", "waited", "serve", "served", "die", "died", "send", "sent",
-                "expect", "expected", "build", "built", "stay", "stayed", "fall", "fell", "fallen", "cut",
-                "reach", "reached", "remain", "remained", "suggest", "suggested", "raise", "raised", "pass",
-                "passed", "require", "required", "report", "reported", "decide", "decided", "pull", "pulled",
-                "return", "returned", "explain", "explained", "hope", "hoped", "develop", "developed", "carry",
-                "carried", "break", "broke", "broken", "receive", "received", "agree", "agreed", "support",
-                "supported", "hit", "produce", "produced", "cover", "covered", "catch", "caught", "draw", "drew",
-                "drawn", "choose", "chose", "chosen", "cause", "caused", "point", "pointed", "listen", "listened",
+            static std::unordered_set<std::string_view> const englishLexicon = []()
+            {
+                std::unordered_set<std::string_view> set;
+                std::size_t index = 0;
+                while (index < englishVocabulary.size())
+                {
+                    while (index < englishVocabulary.size() && englishVocabulary[index] == ' ') ++index;
+                    std::size_t const start = index;
+                    while (index < englishVocabulary.size() && englishVocabulary[index] != ' ') ++index;
+                    if (index > start) set.insert(englishVocabulary.substr(start, index - start));
+                }
+                return set;
+            }();
 
-                // Common nouns, adjectives, adverbs
-                "time", "year", "people", "way", "day", "world", "state", "group", "problem", "part", "place",
-                "case", "week", "company", "system", "program", "question", "work", "number", "night", "point",
-                "home", "water", "room", "area", "money", "story", "fact", "month", "lot", "right", "study",
-                "book", "eye", "job", "word", "business", "issue", "side", "kind", "head", "house", "service",
-                "friend", "power", "hour", "game", "line", "end", "member", "law", "car", "city", "community",
-                "name", "team", "minute", "idea", "body", "information", "back", "face", "others", "level",
-                "office", "door", "health", "person", "art", "war", "history", "party", "result", "change",
-                "morning", "reason", "research", "moment", "air", "force", "education", "foot", "age", "policy",
-                "process", "market", "sense", "nation", "plan", "interest", "experience", "effect", "use",
-                "class", "control", "care", "field", "development", "role", "effort", "rate", "heart", "show",
-                "leader", "light", "voice", "mind", "price", "view", "report", "decision", "town", "road",
-                "difference", "value", "building", "action", "model", "position", "record", "data", "paper",
-                "space", "ground", "form", "event", "matter", "center", "site", "project", "activity", "table",
-                "need", "situation", "cost", "industry", "figure", "street", "image", "title", "note", "summary",
-                "good", "new", "first", "last", "long", "great", "little", "own", "other", "old", "right",
-                "big", "high", "different", "small", "large", "next", "early", "young", "important", "few",
-                "public", "bad", "same", "able", "full", "simple", "general", "local", "hard", "sure", "free",
-                "low", "true", "false", "real", "clear", "easy", "strong", "safe", "complete", "valid", "ready",
-                "single", "multiple", "active", "closed", "pending", "draft", "staging", "committed", "only",
-                "just", "also", "well", "even", "any", "all", "some", "most", "more", "less", "much", "very",
-
-                // Domain, software, engineering, and testing terms
-                "mayasaba", "verification", "inspection", "attachment", "payload", "acceptance", "native", "file",
-                "spec", "specification", "code", "system", "test", "testing", "error", "data", "staged",
-                "source", "markdown", "text", "version", "valid", "content", "sample", "authorized", "document",
-                "english", "prose", "drag", "drop", "hello", "user", "start", "stop", "pause", "read", "write",
-                "root", "entry", "output", "input", "line", "item", "list", "check", "pass", "fail", "info",
-                "status", "hash", "digest", "size", "byte", "bytes", "format", "string", "type", "rule", "rules",
-                "task", "tasks", "action", "detail", "details", "directory", "results", "found", "unresolved",
-                "restriction", "recheck", "remove", "reopen", "policy", "preview", "eligible", "reason", "sha",
-                "state", "epoch", "requirement", "decision", "council", "review", "peer", "response", "reply",
-                "drafts", "files", "guid", "uuid", "sqlite", "query", "token", "offset", "signature", "composite",
-                "session", "process", "thread", "mutex", "lock", "guard", "boundary", "storage", "database",
-                "attribute", "handle", "containment", "canonical", "path", "filename", "managed", "manage", "management",
-                "isolate", "isolated", "isolation", "verify", "verified", "verification",
-                "modify", "modified", "modification", "limits", "limit",
-                "request", "requests", "authorize", "authorized", "authorization",
-                "within", "second", "seconds", "race", "races", "criteria", "matrix", "invariant", "invariants"
+            // Productive English bound prefixes. They carry no lexical meaning alone, so a
+            // hyphenated compound may use one as a part ("re-verified", "non-English",
+            // "self-hosted") without the prefix itself being a dictionary word. This is
+            // only a licence for the prefix part; the remaining parts must still be
+            // recognized words, so an unrecognized stem still fails the whole token.
+            static constexpr std::string_view boundPrefixes =
+                "re non pre post sub super anti auto co counter de dis ex in inter intra "
+                "meta micro mini multi over semi under un up out cross well self half "
+                "full low high long short mid near off on one two three all any ever never "
+                "by side end front back top bottom left right hard soft fast slow";
+            auto isBoundPrefix = [](std::string_view part) -> bool
+            {
+                std::size_t index = 0;
+                while (index < boundPrefixes.size())
+                {
+                    while (index < boundPrefixes.size() && boundPrefixes[index] == ' ') ++index;
+                    std::size_t const start = index;
+                    while (index < boundPrefixes.size() && boundPrefixes[index] != ' ') ++index;
+                    if (index > start && part == boundPrefixes.substr(start, index - start)) return true;
+                }
+                return false;
             };
 
             auto isRecognizedEnglishWord = [&](std::string_view w) -> bool {
+
                 if (englishLexicon.find(w) != englishLexicon.end()) return true;
 
                 // Standard morphological stems:
@@ -451,6 +710,24 @@ namespace mayasaba
                 {
                     std::string withY = std::string(w.substr(0, w.size() - 3)) + "y";
                     if (englishLexicon.find(withY) != englishLexicon.end()) return true;
+                }
+                // -ies -> -y (plural / 3rd person of a consonant+y stem: copies -> copy,
+                // carries -> carry, verifies -> verify). Only -ied was handled before, so
+                // ordinary plurals were refused.
+                if (w.size() > 4 && w.ends_with("ies"))
+                {
+                    std::string withY = std::string(w.substr(0, w.size() - 3)) + "y";
+                    if (englishLexicon.find(withY) != englishLexicon.end()) return true;
+                }
+                // Doubled final consonant before -ed / -ing (stopped -> stop, running -> run).
+                if (w.size() > 4 && (w.ends_with("ed") || w.ends_with("ing")))
+                {
+                    std::size_t const cut = w.ends_with("ed") ? 2 : 3;
+                    std::string_view const stem = w.substr(0, w.size() - cut);
+                    if (stem.size() > 2 && stem[stem.size() - 1] == stem[stem.size() - 2])
+                    {
+                        if (englishLexicon.find(stem.substr(0, stem.size() - 1)) != englishLexicon.end()) return true;
+                    }
                 }
                 // -ed
                 if (w.size() > 4 && w.ends_with("ed"))
@@ -531,12 +808,46 @@ namespace mayasaba
                     word.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
                 }
 
-                // Strip common English apostrophe suffixes (e.g. "user's", "it's", "don't")
+                // A hyphenated compound ("re-verified", "fail-closed", "read-only") is
+                // ordinary English prose, and the whole token is not itself a dictionary
+                // entry. Each part must pass the same check on its own, so a compound of
+                // recognized words is accepted while a compound carrying an unrecognized
+                // part still fails closed. Without this, hyphenated prose was rejected.
+                // A bound prefix ("re-", "non-", "pre-", "self-", ...) is not a word, so
+                // those are permitted as parts; every other part must still be recognized,
+                // which is why "hola-mundo" remains refused.
+                if (word.find('-') != std::string::npos)
+                {
+                    std::size_t partStart = 0;
+                    while (partStart <= word.size())
+                    {
+                        std::size_t const dash = word.find('-', partStart);
+                        std::size_t const partEnd = (dash == std::string::npos) ? word.size() : dash;
+                        std::string_view const part(word.data() + partStart, partEnd - partStart);
+                        if (!part.empty() && !isRecognizedEnglishWord(part) && !isBoundPrefix(part))
+                        {
+                            return false;
+                        }
+                        if (dash == std::string::npos) break;
+                        partStart = dash + 1;
+                    }
+                    verifiedEnglishCount++;
+                    continue;
+                }
+
+                // Strip common English apostrophe suffixes (e.g. "user's", "it's", "don't").
+                // Contractions are checked before the base word so "can't" reduces to "can"
+                // rather than to the non-word "ca", and "won't"/"shan't" are handled by the
+                // irregular map below because their stems are not the literal prefix.
                 if (word.size() > 2 && word.ends_with("'s")) word.resize(word.size() - 2);
+                else if (word == "can't") word = "can";
+                else if (word == "won't") word = "will";
+                else if (word == "shan't") word = "shall";
                 else if (word.size() > 2 && word.ends_with("n't")) word.resize(word.size() - 3);
                 else if (word.size() > 3 && word.ends_with("'ve")) word.resize(word.size() - 3);
                 else if (word.size() > 3 && word.ends_with("'ll")) word.resize(word.size() - 3);
                 else if (word.size() > 3 && word.ends_with("'re")) word.resize(word.size() - 3);
+                else if (word.size() > 3 && word.ends_with("'d")) word.resize(word.size() - 2);
 
                 // Word must consist entirely of alphabetic ASCII letters ('a' through 'z')
                 bool allLetters = true;
