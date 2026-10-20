@@ -1552,3 +1552,89 @@ Item 8 was reported complete in commit `96373fd`. Measuring the built binary sho
 Measured after that change, at 1440×740 / 1600×900 / 1920×1040 respectively: the item list is **75 / 217 / 262 px** (previously 30 / 172 / 217), the card is 185 / 328 / 373 px, and `SendButton` still clears the Notice bar at every size. At widths 520, 700, 900 and 1200 px the title, the list and all three actions render inside the card's bounds with no horizontal overflow and the list stays at 74–75 px. The full native harness re-ran at 13 PASS, 2 INCONCLUSIVE, 0 FAIL.
 
 **Harness gap closed.** Phase 9.4 previously asserted that the panel existed. A zero-sized panel still exists in the UIA tree, so that assertion could not fail for this defect. It now asserts a usable rendered height, and separately that the list and card actions keep rendered size after the sheet closes.
+
+---
+
+## 16. Authorization-before-deletion correction and S4 acceptance record (2026-10-21)
+
+This section supersedes §15 as the current summary. §15 and everything above it remain as historical evidence tied to their own revisions and are **not** re-claimed here.
+
+### 16.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Source revision | `main` at `ee0be9de578f66249a71ea79944fe1f011d8eba4` (parent `0fe09fb`) |
+| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-20 20:45 local from the working tree that became `ee0be9d`, SHA-256 `CBCE9878D0DB8185FCD7A5D569F0DB6FE0769D0DFE82F9C1C64B502831B35DBB` |
+| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `50353CD298844F5CCA9C72AC094DD92B1E59F04C1497819C15E58C34335901BC` |
+| Test binaries | `storage_tests.exe` `9106AA4C347A8622522F78DE43BF386E14ABA5594A171B2D46966C0A72303D41`; `verify_ac_ai.exe` `752F2B09885DAB4A6E2257DBE62F5C180374334722BF964A510549635EBD32BF`; `perf_benchmarks.exe` `43C5CDD0ACC6D67A363793602B6B638D3CA8FFE874AB4D68D12837586D5123FF` |
+| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 125% scaling |
+| Build hygiene | Application rebuild: 0 warnings, 0 errors. `perf_benchmarks` reports two pre-existing `C4100` unreferenced-parameter warnings (`argc`, `argv` at `perf_benchmarks.cpp:379`) that are not from this change set. |
+
+No source file changed between the application build and commit `ee0be9d`, so the hash above identifies the binary built from that commit. `MainWindow.xbf` is **unchanged** from the previous build: this change set touches no XAML, so the compiled XAML identity is identical while the executable identity is not. Recording both is what makes that visible.
+
+**The native UI harness was not executed in this pass.** Its result in §15 (13 PASS, 2 INCONCLUSIVE) belongs to an older artifact and is not evidence for `ee0be9d`. Its code was changed (see A-08) and syntax-checked, but it was not run, so no harness verdict is claimed here.
+
+### 16.2 The corrected defect
+
+`AttachmentService::RemoveDraftAttachment` and `ClearDraftAttachments` deleted the staged copies first and consulted Storage second. Storage refuses to remove a draft row that a locked pending submission's manifest covers, so the refusal arrived **after** the bytes were gone: an operation the authoritative layer would not permit could still destroy a pending submission's protected payload.
+
+The corrected protocol makes authorization and record removal one serialized step and lets the caller delete only what that step authorized:
+
+| Property | How it is now guaranteed |
+| --- | --- |
+| Authorization precedes deletion | Storage decides and removes in the same `mutex_`-held `BEGIN IMMEDIATE` transaction; the staged path is returned only for a row that was actually deleted. |
+| No check-then-delete window | A refusal throws before any filesystem call; a pending submission cannot appear between the decision and the delete because both are in one serialized section. |
+| No stale-path deletion | The deleted row's own `staged_path` is returned, so the caller never deletes a path it read earlier and recovery may since have replaced. |
+| Recoverable after cleanup failure | Order is record-then-bytes; a failed byte deletion leaves an untracked file inside the managed staging directory, which the containment-checked reconciliation reclaims. It is reported via `DraftRemovalOutcome.unresolvedReason`, never presented as a clean removal. |
+| Project isolation | The pending check and the delete are both scoped by `project_id`; a lock in one project neither blocks nor endangers another. |
+
+The `PREPARING` reclaim path in `ReconcileStagedFiles` intentionally keeps its file-then-record order: it only targets `PREPARING` rows, which the pending-manifest guard never refuses, and its containment gate already refuses to delete an unprovable path.
+
+### 16.3 Criteria for this assignment
+
+| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
+| --- | --- | --- | --- | --- | --- |
+| A-01 | A refused single removal preserves the SQLite record, the staged file and the pending row. | Unit test | `storage_tests.exe` group 41: `service.RemoveDraftAttachment` on a locked project throws; `fs::exists(staged)` true; one `READY` row retained; `Pending` still present. | PASS | Service-level; the composer already refuses earlier, so this is the boundary a direct caller reaches. |
+| A-02 | A refused clear preserves the whole set. | Unit test | Group 41: `service.ClearDraftAttachments` throws; file and row retained; pending retained. | PASS | Same boundary as A-01. |
+| A-03 | Legitimate removal and clear still work. | Unit test | Group 42: single removal and clear both return `recordRemoved` and `bytesRemoved` true; files gone; rows gone. | PASS | Uses isolated temp stores, not the production database. |
+| A-04 | Partial cleanup failure is reported and stays recoverable. | Unit test | Group 42: file held open without delete sharing yields `recordRemoved=true`, `bytesRemoved=false`, non-empty `unresolvedReason`, file still present; after the handle closes, `ReclaimInterruptedPreparation` deletes it. | PASS | The failure is induced by a sharing violation, not by a disk or ACL fault. |
+| A-05 | No cross-project regression. | Unit test | Group 41: while one project is locked, a second project's attachment is removed normally and the locked project's file and row are untouched. | PASS | Two projects in one store; not a concurrency test. |
+| A-06 | Existing S1–S3 protections continue to pass. | Unit test / Registry | `storage_tests.exe` `PASS: 41 of 41 executed native regression groups`; `verify_ac_ai.exe` 12/12 `PASS Test`; `validate_contract_registry.py` `PASS: 124 contract-registry and Screen 2 slice schema checks`. | PASS | Counts are what executed; none were skipped. |
+| A-07 | The new test detects the original defect (controlled mutation). | Controlled mutation | The service was reverted to delete-first, rebuilt, and run: `FAIL: Assertion failed: fs::exists(guardedFile)` in group 41 — the protected file was destroyed. Restored, rebuilt, `PASS: 41 of 41`. | PASS | Demonstrates detection for this defect; not a proof for every assertion in the group. |
+| A-08 | Each result can be tied to the exact executable and compiled XAML. | Source inspection / Compilation | `test_full_ui_acceptance.py` accepts `--exe/--store/--perf-log/--evidence-dir`, computes SHA-256 of the executable and of `MainWindow.xbf`, records the source commit, and writes `artifact-identity.json` into the evidence directory; `py_compile` succeeds. | PASS (code) | The harness was not executed end-to-end this pass, so no identity-stamped harness report exists yet. |
+| A-09 | UI performance measured on this build. | — | `perf_benchmarks.exe` completes with database query timings (e.g. substring search median 11.17 ms, worst-case full scan median 18.87 ms over 100 samples). | INCONCLUSIVE as UI evidence | These are storage benchmarks. Input latency, frame pacing and UI-thread stall were **not** measured on this build. |
+
+### 16.4 S4 native acceptance matrix
+
+Evidence class `Agent-observed runtime` means a screenshot and/or UIA snapshot taken from the running binary identified in §16.1 at 125% scaling with an isolated store.
+
+| ID | Criterion | Evidence type | Observation | Verdict |
+| --- | --- | --- | --- | --- |
+| K-01 | Keyboard-only Welcome → Screen 2, and Escape does not bypass selection into Chat. | Agent-observed runtime | Focus starts on `Continue to project selection`; Enter reaches Screen 2 showing `Pick up where you left off`, `Open an existing project folder`, `Create a new project folder`, `0 projects recorded`, `No recorded projects yet...`, and disabled `Previous/Next projects`. Escape on Screen 2 keeps Screen 2. Screenshots `s4-welcome.png`, `s4-screen2.png`. | PASS |
+| K-02 | Chat workflows: Enter/Shift+Enter, Ctrl+F search, attachment chips, Action Center traversal. | Agent-observed runtime | Not performed: no project was bound, so Chat was never reached in this pass. | INCONCLUSIVE |
+| D-01 | Real Explorer drag-and-drop of one file admitted with correct size and SHA-256. | Agent-observed runtime | Not performed. Procedure: bind a folder under `C:\Users\pavan\PROJECTS\` (the picker fails for `%TEMP%` paths), type a draft, drag one `.txt` from Explorer onto the composer, confirm the chip reaches READY and that no contribution is created by the drop alone. | INCONCLUSIVE |
+| D-02 | Mixed file+folder batch rejected as a whole. | Agent-observed runtime | Not performed; refusal logic is covered by `verify_ac_ai.exe` Test 5 Case 2 at the service level. | INCONCLUSIVE |
+| D-03 | Drop refused while a submission is unresolved. | Agent-observed runtime | Not performed. Admission policy is covered by `storage_tests` group 34. | INCONCLUSIVE |
+| D-04 | Second drop during preparation refused rather than validated against a stale set. | Agent-observed runtime | Not performed. Single-flight reservation covered by `storage_tests` group 35. | INCONCLUSIVE |
+| N-01 | Narrator announces screens, controls and states without false completion claims. | Agent-observed runtime (human listening) | Not performed. UIA exposes accessible names for every control observed on both screens (e.g. `Skip the introduction`, `Continue to project selection`, `Open an existing project folder`, `Filter recent projects`, `Filter by project status`), which is a necessary but not sufficient condition. | INCONCLUSIVE |
+| P-01 | 150% and 200% display scaling. | Agent-observed runtime | Not performed. Environment measured at 125% (one display, 1920×1080, window 1424×732 physical). Changing the scale alters the user's display configuration and was not done unasked. | INCONCLUSIVE |
+| T-01 | Live high-contrast switch. | Agent-observed runtime | Not performed; requires toggling a system accessibility theme. | INCONCLUSIVE |
+| T-02 | Live light/dark switch while Chat is open. | Agent-observed runtime | Not performed; the window rendered in dark theme because the system is dark, but no live switch was observed. | INCONCLUSIVE |
+| T-03 | Reduced-motion preference change during a transition. | Agent-observed runtime | Not performed. | INCONCLUSIVE |
+
+### 16.5 Observations not promoted to defects
+
+At 1424×732 physical (≈1139×586 logical) the Welcome body copy is visibly clipped where the footer bar begins, mid-sentence, while Screen 2 fits entirely. The Welcome body sits in `#WelcomeBodyScroller`, so the content may be reachable by scrolling; that was not tested. Recorded as an unresolved layout observation, **not** as a confirmed defect, and no cause is claimed.
+
+### 16.6 Remaining blockers for S4
+
+Every item below is unverified, not merely unlisted:
+
+1. K-02, D-01…D-04: Chat, Explorer drag-and-drop and mixed-batch refusal observed on a live window with a bound project.
+2. N-01: human Narrator listening pass.
+3. P-01: 150% and 200% scaling on a real display.
+4. T-01…T-03: live high contrast, live theme switch, reduced motion.
+5. A-09: input latency, frame pacing, UI-thread stall and memory measured on this build; only storage benchmarks exist.
+6. The native harness has not been executed against `ee0be9d`; its §15 result belongs to an older artifact.
+
+The CLI adapters, live agent sessions, Council execution, material work authorization and MSI packaging remain out of scope and unimplemented, so the C10 Gate I3 entry criteria are not met.
