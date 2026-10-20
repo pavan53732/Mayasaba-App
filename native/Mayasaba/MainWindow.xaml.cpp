@@ -1864,6 +1864,11 @@ namespace winrt::Mayasaba::implementation
 
     winrt::fire_and_forget MainWindow::AttachFilesAsync()
     {
+        // The picker is an asynchronous boundary and this coroutine does not otherwise hold
+        // the window alive; without this the continuation after the dialog could resume on a
+        // destroyed MainWindow.
+        auto alive = get_strong();
+
         // Same policy as the drop target and the keyboard command, evaluated before the
         // dialog opens. A locked pending submission, a loading draft set or a running
         // ingestion is refused here exactly as it is elsewhere.
@@ -2145,11 +2150,43 @@ namespace winrt::Mayasaba::implementation
                 // Reclaim only preparation intent this finished batch abandoned: PREPARING
                 // records and their staged copies. Durable READY results stay tracked and
                 // are therefore preserved.
-                try { attachmentService_->ReclaimInterruptedPreparation(activeProject_); }
-                catch (std::exception const&) { /* retried on next open */ }
+                //
+                // Both operations query SQLite, walk the staging directory and hash files.
+                // They previously ran on the interface thread inside this coroutine, which
+                // is already resumed on the UI thread - a failure path that froze the window
+                // for as long as the scan took. Only plain values cross the hop.
+                std::string const recoveryProject = activeProject_;
+                uint64_t const recoveryGeneration = selectorGeneration_.load();
+                bool reclaimFailed = false;
+                bool loadFailed = false;
 
-                try { durableDrafts = attachmentService_->LoadDraftAttachments(activeProject_); }
-                catch (std::exception const&) { durableDrafts.clear(); }
+                co_await selectorQueue_.Background();
+                try { attachmentService_->ReclaimInterruptedPreparation(recoveryProject); }
+                catch (std::exception const&) { reclaimFailed = true; }
+
+                try { durableDrafts = attachmentService_->LoadDraftAttachments(recoveryProject); }
+                catch (std::exception const&) { loadFailed = true; }
+
+                if (!co_await resume_foreground(ui)) co_return;
+
+                if (windowClosed_ || activeProject_ != recoveryProject ||
+                    selectorGeneration_.load() != recoveryGeneration)
+                {
+                    // The result belongs to a project that stopped being current. It is not
+                    // adopted into this view and the discard is reported.
+                    durableDrafts.clear();
+                    RenderAttachmentChips();
+                    UpdateComposerState();
+                    ShowNotice(L"Attachment recovery finished for a project that is no longer open. Nothing was added to this draft.", true);
+                    co_return;
+                }
+
+                if (reclaimFailed || loadFailed)
+                {
+                    // An unreadable recovery result is not a reason to invent failures from
+                    // the placeholder list; the explicit per-file failures below still stand.
+                    durableDrafts.clear();
+                }
             }
 
             // Re-attach the selection as explicit, recoverable failures for every selected
@@ -2290,6 +2327,11 @@ namespace winrt::Mayasaba::implementation
     winrt::fire_and_forget MainWindow::OnComposerDrop(IInspectable const&, DragEventArgs const& e)
     {
         e.Handled(true);
+
+        // A fire_and_forget coroutine captures `this` but does not keep the window alive.
+        // Retrieval suspends below, so the strong reference is taken first: without it the
+        // continuation can resume on a destroyed MainWindow.
+        auto alive = get_strong();
 
         // The drop target previously checked the window, the project and a preparation
         // flag - but never the pending submission lock, so a drop could add to a draft
@@ -2593,7 +2635,7 @@ namespace winrt::Mayasaba::implementation
         SubmitAsync(activeProject_, pendingAttemptId_.empty() ? SubmissionId() : pendingAttemptId_, text);
     }
 
-    void MainWindow::ReconcileSubmission()
+    MainWindow::ReconcileOutcome MainWindow::ReconcileSubmission(std::string const& expectedSubmissionId)
     {
         // Reconciling is admitted WHILE a submission is pending - that is its purpose -
         // and refused while another material operation is running. It reuses the original
@@ -2602,27 +2644,39 @@ namespace winrt::Mayasaba::implementation
         if (!admission)
         {
             ShowAdmissionRefusal(admission.reason, L"reconcile the pending submission");
-            return;
+            return ReconcileOutcome::Refused;
+        }
+
+        if (pendingAttemptId_.empty())
+        {
+            ShowNotice(L"There is no unresolved submission to reconcile.", false);
+            return ReconcileOutcome::NotPending;
         }
 
         std::string const project = pendingAttemptProject_.empty() ? activeProject_ : pendingAttemptProject_;
         if (project != activeProject_)
         {
             ShowNotice(L"The unresolved submission belongs to a different project. Switch back to that project to reconcile it.", true);
-            return;
+            return ReconcileOutcome::WrongProject;
         }
-        if (pendingAttemptId_.empty())
+
+        // The caller may name the exact record it means to reconcile. A different identity
+        // is stale: the command refuses rather than reconciling whatever is locked now.
+        if (!expectedSubmissionId.empty() && expectedSubmissionId != pendingAttemptId_)
         {
-            ShowNotice(L"There is no unresolved submission to reconcile.", false);
-            return;
+            ShowNotice(L"That unresolved submission is no longer the one locked for this project. Refreshing the record set.", false);
+            return ReconcileOutcome::WrongSubmission;
         }
 
         std::string const body = !pendingAttemptBody_.empty()
             ? pendingAttemptBody_
             : Utf8(ComposerBox().Text().c_str());
 
+        // busy_ is set synchronously, so a second click - including a rapid double click -
+        // is refused by the admission above instead of starting a second reconciliation.
         busy_ = true; draftTimer_.Stop(); ComposerBox().IsReadOnly(true); SendButton().IsEnabled(false); AttachButton().IsEnabled(false);
         SubmitAsync(project, pendingAttemptId_, body);
+        return ReconcileOutcome::Started;
     }
 
     winrt::fire_and_forget MainWindow::SubmitAsync(std::string id, std::string submission, std::string text)
@@ -4124,7 +4178,6 @@ namespace winrt::Mayasaba::implementation
         enum class Route { Stale, UnresolvedSubmission, FailedAttachment, ClosedProjectRestriction, StorageOutcome, None };
         Route route = Route::None;
         std::string staleReason;
-        std::string pendingBody;
         std::string pendingId;
 
         try
@@ -4144,7 +4197,6 @@ namespace winrt::Mayasaba::implementation
                 {
                     route = Route::UnresolvedSubmission;
                     pendingId = pending->id;
-                    pendingBody = pending->body;
                 }
                 break;
             }
@@ -4215,8 +4267,18 @@ namespace winrt::Mayasaba::implementation
             RefreshActionCenterAsync(selectorGeneration_.load());
             break;
         case Route::UnresolvedSubmission:
-            ShowNotice(L"Reconciling pending submission " + Utf16(pendingId) + L"...", false);
-            SubmitAsync(projectId, pendingId, pendingBody);
+            // The canonical typed command, never a bare SubmitAsync. It re-checks
+            // admission, the project and that this is still the locked submission, and it
+            // takes the single-flight reservation - so a rapid second click is refused
+            // instead of starting a second reconciliation of the same record.
+            if (ReconcileSubmission(pendingId) == ReconcileOutcome::Started)
+            {
+                ShowNotice(L"Reconciling pending submission " + Utf16(pendingId) + L"...", false);
+            }
+            else
+            {
+                RefreshActionCenterAsync(selectorGeneration_.load());
+            }
             break;
         case Route::FailedAttachment:
             AttachmentChipsScroller().Visibility(Visibility::Visible);

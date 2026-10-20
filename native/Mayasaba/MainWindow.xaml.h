@@ -225,7 +225,20 @@ namespace winrt::Mayasaba::implementation
 
         // The typed reconciliation command. Reconcile Send and the Action Center both
         // route through this; neither is allowed to be an ordinary Send in disguise.
-        void ReconcileSubmission();
+        enum class ReconcileOutcome
+        {
+            Started,
+            // Nothing is locked for this project.
+            NotPending,
+            // The locked submission belongs to a different project than the visible one.
+            WrongProject,
+            // The caller named a record that is no longer the locked one: stale, not an
+            // invitation to reconcile whatever happens to be locked now.
+            WrongSubmission,
+            // Admission refused: another material operation is running.
+            Refused
+        };
+        ReconcileOutcome ReconcileSubmission(std::string const& expectedSubmissionId = std::string{});
         // True while this attachment's durable removal has not settled. The chip stays
         // visible until then: a disappearing chip is a UI projection, never a receipt.
         bool IsRemovalPending(std::string const& id) const;
