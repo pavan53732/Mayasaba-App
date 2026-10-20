@@ -1479,11 +1479,14 @@ This section is the single current summary for the stabilization assignment. It 
 | --- | --- |
 | Source revision | `main` at `3789fb9` plus the uncommitted stabilization change set described in §15.4 |
 | Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-20 09:07 local, SHA-256 `8052c8095c713f01b8a7634f49201457008a26fab9adf8aac4e73192dae58eb2` |
+| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, built 2026-10-20 16:18 local, SHA-256 `50353cd298844f5cca9c72ac094dd92b1e59f04c1497819c15e58c34335901bc` |
 | Test binaries | `native/tests/bin/storage_tests.exe` and `native/tests/bin/verify_ac_ai.exe`, rebuilt 2026-10-20 with MSVC x64 toolset `v145`, 0 warnings, 0 errors |
 | Toolchain | MSBuild from Visual Studio 18 Enterprise, Windows 11 Pro build 26200, single display `\\.\DISPLAY1` at 120 DPI (125% scaling) |
 | Evidence classes used | Agent-observed runtime, Unit test, Source inspection, Compilation (as defined in the section "Evidence classes" above) |
 
 The application binary hash above identifies the artifact produced **after** the item 9 and item 10 changes. It is not the artifact used for the 2026-10-19 runtime observations, which remain labelled with their own revision.
+
+The exe and the compiled XAML are recorded separately because a layout-only change does not relink the executable: the item 12 follow-up below changed `MainWindow.xaml` only, so `Mayasaba.exe` kept the 09:07 build while `MainWindow.xbf` rebuilt at 16:18. The XBF is where that layout actually ships, so the exe hash alone would not identify the artifact that was measured. A reader reproducing these observations needs both.
 
 **Harness result for this artifact.** `python native/tests/test_full_ui_acceptance.py` completed against the isolated store `C:\Users\pavan\PROJECTS\_ui-verify\multi_test\store.db` with **13 PASS, 2 INCONCLUSIVE, 0 FAIL** across the 15 criteria the harness reports (S-09 and S-10 map to the two INCONCLUSIVE drag-drop criteria). The two INCONCLUSIVE results are environment limits of desktop automation, not product failures; their procedures are in §15.3. The report is derived from the named cases the run actually executed, so a case that does not run cannot appear as a pass.
 
@@ -1543,5 +1546,9 @@ Item 8 was reported complete in commit `96373fd`. Measuring the built binary sho
 **Measured after the repair.** Sheet 926×536 with a 882×417 entry list at 1440×740. Card, item list, **Load more items** and **Show details** all retain rendered size, and `SendButton` clears the Notice bar, at 1440×740, 1600×900 and 1920×1040. Escape and the Close button both close the sheet and return focus to **Show details**.
 
 **Known limitation, not a pass.** At 1440×740 the item list is reduced to roughly one row (30 px). That is the genuine space limit of a 592 DIP tall window that also holds the header, the composer with three attachment chips, and the Notice bar; the alternatives measured were worse — a larger card floor pushed `SendButton` underneath the Notice bar. No item is unreachable, because **Show details** opens the full-height sheet listing every item, and the list itself scrolls. This is recorded as a layout trade-off at the smallest supported window, not as correct spacing.
+
+**Follow-up (same day).** The card was chrome-dominated rather than budget-starved: at 1440×740 its title row (32 px), status line (18 px), separate action row (44 px) and 48 px of spacing and padding cost 155 px around a 30 px list, while the height budget itself was correct (715 px available minus 207 px of the rest of the header, 299 px composer and 24 px margin). Collapsing the card to a summary line was considered and rejected: it frees height for the conversation by deleting the list, which does not improve the list. Instead the **Load more items**, **Show details** and **Close** actions now share the title row, removing one whole row and giving the saved height to the items.
+
+Measured after that change, at 1440×740 / 1600×900 / 1920×1040 respectively: the item list is **75 / 217 / 262 px** (previously 30 / 172 / 217), the card is 185 / 328 / 373 px, and `SendButton` still clears the Notice bar at every size. At widths 520, 700, 900 and 1200 px the title, the list and all three actions render inside the card's bounds with no horizontal overflow and the list stays at 74–75 px. The full native harness re-ran at 13 PASS, 2 INCONCLUSIVE, 0 FAIL.
 
 **Harness gap closed.** Phase 9.4 previously asserted that the panel existed. A zero-sized panel still exists in the UIA tree, so that assertion could not fail for this defect. It now asserts a usable rendered height, and separately that the list and card actions keep rendered size after the sheet closes.
