@@ -704,7 +704,9 @@ namespace winrt::Mayasaba::implementation
         ComposerBox().IsReadOnly(project->closed || pending.has_value());
         if (attachmentService_)
         {
-            draftAttachments_ = attachmentService_->ReverifyDraftAttachments(activeProject_);
+            // Reconciliation must never overlap active preparation: a live batch owns its
+            // PREPARING records and staged copies and will persist its own outcome.
+            draftAttachments_ = attachmentService_->ReverifyDraftAttachments(activeProject_, attachmentsPreparing_);
             RenderAttachmentChips();
         }
         else
@@ -1710,9 +1712,14 @@ namespace winrt::Mayasaba::implementation
 
         if (!co_await resume_foreground(ui)) co_return;
 
-        // Atomically validate post-preparation boundary on UI thread and conditionally commit
+        // Atomically validate post-preparation boundary on UI thread and conditionally commit.
+        // The outcome distinguishes a stale completion, a persistence failure, and a
+        // preparation that produced no trustworthy result for part of the selection; each
+        // needs different recovery and none may be reported as a successful attach.
         std::string saveError;
         bool committed = false;
+        mayasaba::AttachmentIngestionCoordinator::BatchCommitOutcome outcome =
+            mayasaba::AttachmentIngestionCoordinator::BatchCommitOutcome::StaleCompletion;
         try
         {
             committed = ingestionCoordinator_.ValidateAndCommitPreparedBatch(
@@ -1726,33 +1733,114 @@ namespace winrt::Mayasaba::implementation
                 [this](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
                     attachmentService_->SaveDraftAttachments(proj, drafts);
                 },
-                &saveError);
+                &saveError,
+                &outcome);
         }
         catch (std::exception const& ex)
         {
             saveError = ex.what();
             committed = false;
+            outcome = mayasaba::AttachmentIngestionCoordinator::BatchCommitOutcome::PersistenceFailed;
         }
 
         attachmentsPreparing_ = false;
 
         if (!committed)
         {
-            // Clean up uncommitted preparing placeholders to preserve existing drafts
-            // and prevent broken preparing state in composer chips
-            if (!preparingIds.empty())
+            using Outcome = mayasaba::AttachmentIngestionCoordinator::BatchCommitOutcome;
+
+            if (outcome == Outcome::StaleCompletion)
             {
-                std::unordered_set<std::string> prepSet(preparingIds.begin(), preparingIds.end());
-                auto it = std::remove_if(draftAttachments_.begin(), draftAttachments_.end(),
-                    [&](mayasaba::AttachmentCandidate const& c) { return prepSet.count(c.id) > 0; });
-                draftAttachments_.erase(it, draftAttachments_.end());
+                // The completion belongs to a project or generation that is no longer
+                // current. Its placeholders never belonged to this draft list's project and
+                // must not be carried over as failures.
+                if (!preparingIds.empty())
+                {
+                    std::unordered_set<std::string> prepSet(preparingIds.begin(), preparingIds.end());
+                    auto it = std::remove_if(draftAttachments_.begin(), draftAttachments_.end(),
+                        [&](mayasaba::AttachmentCandidate const& c) { return prepSet.count(c.id) > 0; });
+                    draftAttachments_.erase(it, draftAttachments_.end());
+                }
+                RenderAttachmentChips();
+                UpdateComposerState();
+                ShowNotice(L"Attachment preparation was discarded because the project changed. Nothing was added.", true);
+                co_return;
             }
+
+            // Every other outcome leaves the user's selection recoverable, but the durable
+            // store — not this in-memory placeholder list — is the authority on what was
+            // actually prepared. PrepareBatch persists a record per file as it goes, so a
+            // batch that threw part-way may already have durable READY results whose
+            // candidates were lost with the exception. Reload that truth first.
+            std::string const reason = !prepError.empty()
+                ? prepError
+                : (saveError.empty()
+                    ? std::string{"Attachment preparation did not complete for this file. Retry or remove it."}
+                    : saveError);
+
+            std::vector<mayasaba::AttachmentCandidate> durableDrafts;
+            if (attachmentService_ && !activeProject_.empty())
+            {
+                // Reclaim only preparation intent this finished batch abandoned: PREPARING
+                // records and their staged copies. Durable READY results stay tracked and
+                // are therefore preserved.
+                try { attachmentService_->ReclaimInterruptedPreparation(activeProject_); }
+                catch (std::exception const&) { /* retried on next open */ }
+
+                try { durableDrafts = attachmentService_->LoadDraftAttachments(activeProject_); }
+                catch (std::exception const&) { durableDrafts.clear(); }
+            }
+
+            // Re-attach the selection as explicit, recoverable failures for every selected
+            // file that produced no durable record. Identity, file name and source path are
+            // kept so the user can retry or remove it, and Send stays blocked until then.
+            {
+                std::unordered_set<std::wstring> coveredSources;
+                for (auto const& d : durableDrafts)
+                {
+                    if (!d.originalPath.empty()) coveredSources.insert(d.originalPath);
+                }
+
+                std::unordered_set<std::string> prepSet(preparingIds.begin(), preparingIds.end());
+                for (auto const& c : draftAttachments_)
+                {
+                    if (prepSet.count(c.id) == 0) continue;
+                    if (!c.originalPath.empty() && coveredSources.count(c.originalPath) > 0) continue;
+
+                    mayasaba::AttachmentCandidate failed = c;
+                    failed.status = mayasaba::AttachmentStatus::Rejected;
+                    failed.errorMessage = reason;
+                    durableDrafts.push_back(std::move(failed));
+                    if (!c.originalPath.empty()) coveredSources.insert(c.originalPath);
+                }
+            }
+
+            draftAttachments_ = std::move(durableDrafts);
             RenderAttachmentChips();
             UpdateComposerState();
 
-            if (!saveError.empty())
+            // Make the explicit failure state durable so reconciliation cannot later mistake
+            // these records for abandoned preparation. A failure here is reported, not
+            // hidden: the chips remain visible in memory and remain removable.
+            if (attachmentService_ && !activeProject_.empty())
             {
-                ShowNotice(L"Attachment draft persistence failed: " + Utf16(saveError) + L". Existing drafts preserved; please retry.", true);
+                try { attachmentService_->SaveDraftAttachments(activeProject_, draftAttachments_); }
+                catch (std::exception const&) { /* reported below; chips stay visible */ }
+            }
+
+            if (!prepError.empty())
+            {
+                ShowNotice(L"Attachment preparation failed: " + Utf16(prepError) +
+                    L". The selected files are kept as rejected attachments; retry or remove them.", true);
+            }
+            else if (outcome == Outcome::IncompletePreparation || outcome == Outcome::MalformedResult)
+            {
+                ShowNotice(Utf16(reason), true);
+            }
+            else if (!saveError.empty())
+            {
+                ShowNotice(L"Attachment draft persistence failed: " + Utf16(saveError) +
+                    L". Existing drafts preserved; the selected files are kept as rejected attachments so you can retry or remove them.", true);
             }
             co_return;
         }
@@ -1760,7 +1848,14 @@ namespace winrt::Mayasaba::implementation
         RenderAttachmentChips();
         UpdateComposerState();
 
-        if (!prepError.empty())
+        if (!saveError.empty())
+        {
+            // Recoverable portion committed, but at least one selected file produced no
+            // result. It is preserved as an explicit rejected chip so the user can retry or
+            // remove it; it is never silently dropped and never leaves Send unblocked.
+            ShowNotice(Utf16(saveError), true);
+        }
+        else if (!prepError.empty())
         {
             ShowNotice(L"Attachment preparation error: " + Utf16(prepError), true);
         }
@@ -2104,6 +2199,7 @@ namespace winrt::Mayasaba::implementation
     {
         auto alive = get_strong(); auto ui = DispatcherQueue(); std::string error;
         mayasaba::SaveDisposition result = mayasaba::SaveDisposition::Unknown;
+        mayasaba::SaveContributionDetail detail;
         bool wasFirstContribution = historyCache_.empty();
 
         uint64_t totalBytes = 0;
@@ -2140,7 +2236,7 @@ namespace winrt::Mayasaba::implementation
         {
             co_await selectorQueue_.Background();
             submission = storage_->StageSubmission(id, submission, text);
-            result = storage_->SaveContribution(id, submission, text, readyRecords);
+            result = storage_->SaveContribution(id, submission, text, readyRecords, detail);
         }
         catch (std::exception const& e)
         {
@@ -2168,7 +2264,25 @@ namespace winrt::Mayasaba::implementation
             pendingAttemptId_ = submission; pendingAttemptProject_ = id; pendingAttemptBody_ = text;
             ComposerBox().IsReadOnly(true);
             UpdateComposerState();
-            ShowNotice(L"Submission not confirmed. Original draft and identity retained: " + Utf16(error), true);
+
+            // The disposition alone cannot distinguish a definite refusal from an unknown
+            // physical outcome, so report what Storage actually established. A reason is
+            // never left empty: the user always gets a precise cause and a next action.
+            std::string const reason = !detail.reasonEn.empty()
+                ? detail.reasonEn
+                : (!error.empty() ? error
+                    : std::string{"The submission was not confirmed and no further detail is available."});
+
+            if (result == mayasaba::SaveDisposition::Unknown)
+            {
+                ShowNotice(L"Submission outcome is not confirmed. " + Utf16(reason) +
+                    L" The original draft, text and submission identity are preserved; use Reconcile Send to check the outcome before retrying.", true);
+            }
+            else
+            {
+                ShowNotice(L"Submission was not saved. " + Utf16(reason) +
+                    L" The original draft and identity are preserved; correct the cause and retry.", true);
+            }
         }
     }
 

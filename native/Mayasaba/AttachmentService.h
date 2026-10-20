@@ -116,11 +116,18 @@ namespace mayasaba
         void RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
         void ClearDraftAttachments(std::string const& projectId);
 
-        // Reconciles orphaned files in the project's staging directory and clears incomplete preparation intents
-        void ReconcileStagedFiles(std::string const& projectId);
+        // Reconciles orphaned files in the project's staging directory and clears incomplete
+        // preparation intents. When preparationActive is true, live PREPARING records and
+        // their staged copies are preserved: the in-flight batch owns them and will persist
+        // its own result. Only demonstrably abandoned records are reclaimed.
+        void ReconcileStagedFiles(std::string const& projectId, bool preparationActive = false);
+
+        // Reclaims preparation records left behind by a crash or an interrupted batch.
+        // Call only when no preparation is active for the project.
+        void ReclaimInterruptedPreparation(std::string const& projectId);
 
         // Verification and crash recovery: checks that staged draft files exist and match recorded hashes
-        std::vector<AttachmentCandidate> ReverifyDraftAttachments(std::string const& projectId);
+        std::vector<AttachmentCandidate> ReverifyDraftAttachments(std::string const& projectId, bool preparationActive = false);
 
         // Committed attachments query
         std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);

@@ -2298,6 +2298,311 @@ int main()
             EXPECT(rn.errorMessage.empty());
         }
 
+        // 25. Idempotent replay must not destroy newer draft state
+        // Replaying an already-committed submission verifies its immutable payload and
+        // returns its existing outcome. Cleanup belongs to the ORIGINAL submission, so a
+        // newer draft and newer draft attachments written after that commit must survive.
+        {
+            mayasaba::Storage replay(folder / "replay.db");
+            replay.BindProject("proj-replay", "Replay", "C:/Replay");
+
+            // Original submission S commits with no attachments.
+            EXPECT(replay.StageSubmission("proj-replay", "sub-orig", "original body") == "sub-orig");
+            EXPECT(replay.SaveContribution("proj-replay", "sub-orig", "original body") == SaveDisposition::Saved);
+            EXPECT(replay.Project("proj-replay")->draft.empty());
+
+            // User then writes a NEWER draft and stages a NEWER draft attachment.
+            replay.SaveDraft("proj-replay", "newer unsent draft");
+            {
+                mayasaba::AttachmentRecord newer;
+                newer.id = "att-newer-1";
+                newer.projectId = "proj-replay";
+                newer.fileName = "newer.txt";
+                newer.fileSize = 12;
+                newer.sha256 = std::string(64, 'a');
+                newer.detectedType = "text/plain";
+                newer.storagePath = "C:/staging/newer.txt";
+                newer.sourcePath = "C:/src/newer.txt";
+                newer.status = "READY";
+                replay.SaveDraftAttachments("proj-replay", { newer });
+            }
+
+            // Replay of S: identical payload, so the existing outcome is returned.
+            EXPECT(replay.SaveContribution("proj-replay", "sub-orig", "original body") == SaveDisposition::Duplicate);
+
+            // The newer draft must survive the replay unchanged.
+            EXPECT(replay.Project("proj-replay")->draft == "newer unsent draft");
+
+            // The newer draft attachment must survive the replay unchanged.
+            auto survivingDrafts = replay.GetDraftAttachments("proj-replay");
+            EXPECT(survivingDrafts.size() == 1);
+            EXPECT(survivingDrafts[0].id == "att-newer-1");
+            EXPECT(survivingDrafts[0].status == "READY");
+
+            // History is unchanged: exactly one contribution.
+            EXPECT(replay.Contributions("proj-replay").size() == 1);
+
+            // An altered replay is still refused and still does not touch the newer draft.
+            EXPECT(replay.SaveContribution("proj-replay", "sub-orig", "altered body") == SaveDisposition::Conflict);
+            EXPECT(replay.Project("proj-replay")->draft == "newer unsent draft");
+            EXPECT(replay.GetDraftAttachments("proj-replay").size() == 1);
+
+            // Replay from a different project with the same submission identity is refused.
+            replay.BindProject("proj-other", "Other", "C:/Other");
+            EXPECT(replay.SaveContribution("proj-other", "sub-orig", "original body") == SaveDisposition::Conflict);
+            EXPECT(replay.Project("proj-replay")->draft == "newer unsent draft");
+
+            // An unrelated pending submission is never consumed by a replay attempt.
+            // One pending operation is permitted per project, so a replay while a
+            // different submission is pending is refused fail-closed (Conflict). Neither
+            // the pending row nor the draft state is mutated by that refused replay.
+            // (StageSubmission itself writes the new body into the project draft, so the
+            // baseline is captured after staging and only the replay's effect is asserted.)
+            EXPECT(replay.StageSubmission("proj-replay", "sub-later", "later body") == "sub-later");
+            std::string const draftAfterStaging = replay.Project("proj-replay")->draft;
+            EXPECT(draftAfterStaging == "later body");
+            EXPECT(replay.SaveContribution("proj-replay", "sub-orig", "original body") == SaveDisposition::Conflict);
+            auto stillPending = replay.Pending("proj-replay");
+            EXPECT(stillPending.has_value());
+            EXPECT(stillPending->id == "sub-later");
+            EXPECT(replay.Project("proj-replay")->draft == draftAfterStaging);
+            EXPECT(replay.GetDraftAttachments("proj-replay").size() == 1);
+        }
+
+        // 26. Continuation-token integrity signature format
+        // The registry defines Sha256 as ^[0-9a-f]{64}$; a 16-byte (32-hex) prefix is
+        // non-conforming and was also produced from an unchecked BCrypt finalize.
+        {
+            mayasaba::Storage sig(folder / "signature.db");
+            sig.BindProject("proj-sig", "Signature", "C:/Sig");
+            // Build a snapshot with more than one page of Action Center items using
+            // failed draft attachments (the projection reports REJECTED attachments).
+            for (int i = 0; i < 4; ++i)
+            {
+                mayasaba::AttachmentRecord bad;
+                bad.id = "att-sig-" + std::to_string(i);
+                bad.projectId = "proj-sig";
+                bad.fileName = "bad" + std::to_string(i) + ".bin";
+                bad.fileSize = 4;
+                bad.sha256 = std::string(64, 'b');
+                bad.detectedType = "application/octet-stream";
+                bad.storagePath = "C:/staging/bad" + std::to_string(i) + ".bin";
+                bad.sourcePath = "C:/src/bad" + std::to_string(i) + ".bin";
+                bad.status = "REJECTED";
+                bad.errorMessage = "rejected for test";
+                sig.SaveDraftAttachments("proj-sig", { bad });
+            }
+            auto p1 = sig.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-sig", 2 });
+            EXPECT(!p1.continuationToken.empty());
+            EXPECT(p1.continuationToken.rfind("ac:v2:proj-sig:", 0) == 0);
+
+            // Token shape: ac:v2:<project>:<signature>:<offset>
+            std::string const& tok = p1.continuationToken;
+            std::vector<std::string> parts;
+            size_t start = 0;
+            while (start <= tok.size())
+            {
+                size_t pos = tok.find(':', start);
+                if (pos == std::string::npos) { parts.push_back(tok.substr(start)); break; }
+                parts.push_back(tok.substr(start, pos - start));
+                start = pos + 1;
+            }
+            EXPECT(parts.size() == 5);
+            std::string const& signature = parts[3];
+            EXPECT(signature.size() == 64); // conforming Sha256 hex length
+            for (char c : signature)
+            {
+                EXPECT((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'));
+            }
+
+            // The signature is stable across identical queries (deterministic, not random).
+            auto p1again = sig.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-sig", 2 });
+            EXPECT(p1again.continuationToken == p1.continuationToken);
+
+            // The signature is a real digest of the participating record set: mutating the
+            // set must invalidate the token rather than silently accept a stale page.
+            auto p2 = sig.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-sig", 2, p1.continuationToken });
+            EXPECT(p2.items.size() == 2);
+            EXPECT(p2.isComplete);
+
+            mayasaba::AttachmentRecord extra;
+            extra.id = "att-sig-late";
+            extra.projectId = "proj-sig";
+            extra.fileName = "late.bin";
+            extra.fileSize = 4;
+            extra.sha256 = std::string(64, 'c');
+            extra.detectedType = "application/octet-stream";
+            extra.storagePath = "C:/staging/late.bin";
+            extra.sourcePath = "C:/src/late.bin";
+            extra.status = "REJECTED";
+            extra.errorMessage = "rejected for test";
+            sig.SaveDraftAttachments("proj-sig", { extra });
+
+            auto stale = sig.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-sig", 2, p1.continuationToken });
+            EXPECT(!stale.isComplete);
+            EXPECT(stale.errorMessage.find("expired") != std::string::npos);
+        }
+
+        // 27. SHA-256 known vectors and injected API failure
+        // The integrity signature must be the documented full SHA-256 digest, and a
+        // hashing failure must fail the Action Center query closed rather than emit an
+        // empty, truncated or fabricated signature.
+        {
+            // Published NIST/FIPS 180-4 vectors for the empty message and "abc".
+            auto empty = mayasaba::Storage::ComputeSha256HexForTesting("");
+            EXPECT(empty.has_value());
+            EXPECT(*empty == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+            auto abc = mayasaba::Storage::ComputeSha256HexForTesting("abc");
+            EXPECT(abc.has_value());
+            EXPECT(*abc == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+            // A longer, non-ASCII-free message exercises multi-block buffering.
+            std::string const longInput(1000, 'a');
+            auto longHash = mayasaba::Storage::ComputeSha256HexForTesting(longInput);
+            EXPECT(longHash.has_value());
+            EXPECT(longHash->size() == 64);
+            EXPECT(*longHash == "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3");
+
+            // Distinct inputs must not collide to a shared signature.
+            EXPECT(*mayasaba::Storage::ComputeSha256HexForTesting("a") !=
+                   *mayasaba::Storage::ComputeSha256HexForTesting("b"));
+
+            // Injected API failure: the query must fail closed. No page and no
+            // continuation token are issued, and the reason is reported.
+            mayasaba::Storage forced(folder / "signature-fail.db");
+            forced.BindProject("proj-sigfail", "SigFail", "C:/SigFail");
+            for (int i = 0; i < 4; ++i)
+            {
+                mayasaba::AttachmentRecord bad;
+                bad.id = "att-fail-" + std::to_string(i);
+                bad.projectId = "proj-sigfail";
+                bad.fileName = "fail" + std::to_string(i) + ".bin";
+                bad.fileSize = 4;
+                bad.sha256 = std::string(64, 'd');
+                bad.detectedType = "application/octet-stream";
+                bad.storagePath = "C:/staging/fail" + std::to_string(i) + ".bin";
+                bad.sourcePath = "C:/src/fail" + std::to_string(i) + ".bin";
+                bad.status = "REJECTED";
+                bad.errorMessage = "rejected for test";
+                forced.SaveDraftAttachments("proj-sigfail", { bad });
+            }
+
+            // Healthy baseline produces a token.
+            auto healthy = forced.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-sigfail", 2 });
+            EXPECT(!healthy.continuationToken.empty());
+
+            forced.SetForceHashFailureForTesting(true);
+            auto failed = forced.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-sigfail", 2 });
+            EXPECT(!failed.isComplete);
+            EXPECT(failed.continuationToken.empty());
+            EXPECT(!failed.errorMessage.empty());
+            EXPECT(failed.errorMessage.find("signature") != std::string::npos);
+            EXPECT(failed.items.empty());
+
+            // The failure is scoped to the injection: clearing it restores the query.
+            forced.SetForceHashFailureForTesting(false);
+            auto recovered = forced.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-sigfail", 2 });
+            EXPECT(!recovered.continuationToken.empty());
+            EXPECT(recovered.continuationToken == healthy.continuationToken);
+        }
+
+        // 28. Structured save disposition and proven transaction state
+        // A refusal must carry a precise English reason, and an uncertain outcome must be
+        // reported as uncertain rather than as a definite failure or a definite rollback.
+        {
+            mayasaba::Storage detailStore(folder / "save_detail.db");
+            detailStore.BindProject("proj-det", "Detail", "C:/Det");
+
+            // 28.1 Successful save reports a committed, usable connection.
+            EXPECT(detailStore.StageSubmission("proj-det", "sub-det-1", "first body") == "sub-det-1");
+            mayasaba::SaveContributionDetail okDetail;
+            EXPECT(detailStore.SaveContribution("proj-det", "sub-det-1", "first body", {}, okDetail) == SaveDisposition::Saved);
+            EXPECT(okDetail.reasonEn.empty() == false);
+            EXPECT(okDetail.rollbackConfirmed);
+            EXPECT(okDetail.connectionUsable);
+
+            // 28.2 Identical replay is a Duplicate with a reason and a usable connection.
+            mayasaba::SaveContributionDetail dupDetail;
+            EXPECT(detailStore.SaveContribution("proj-det", "sub-det-1", "first body", {}, dupDetail) == SaveDisposition::Duplicate);
+            EXPECT(!dupDetail.reasonEn.empty());
+            EXPECT(dupDetail.rollbackConfirmed);
+            EXPECT(dupDetail.connectionUsable);
+
+            // 28.3 A refusal carries a reason that names the cause, not an empty string.
+            mayasaba::SaveContributionDetail conflictDetail;
+            EXPECT(detailStore.SaveContribution("proj-det", "sub-det-1", "altered body", {}, conflictDetail) == SaveDisposition::Conflict);
+            EXPECT(!conflictDetail.reasonEn.empty());
+            EXPECT(conflictDetail.reasonEn.find("different") != std::string::npos ||
+                   conflictDetail.reasonEn.find("already") != std::string::npos);
+            EXPECT(conflictDetail.rollbackConfirmed);
+            EXPECT(conflictDetail.connectionUsable);
+
+            // 28.4 Empty payload refusal carries a reason.
+            mayasaba::SaveContributionDetail emptyDetail;
+            EXPECT(detailStore.SaveContribution("proj-det", "", "", {}, emptyDetail) == SaveDisposition::Conflict);
+            EXPECT(!emptyDetail.reasonEn.empty());
+
+            // 28.5 Closed-project refusal is RejectedClosed with a reason and no open
+            // transaction left behind: the next save must still work.
+            detailStore.SetClosure("proj-det", detailStore.Project("proj-det")->version, true);
+            mayasaba::SaveContributionDetail closedDetail;
+            EXPECT(detailStore.SaveContribution("proj-det", "sub-det-2", "closed body", {}, closedDetail) == SaveDisposition::RejectedClosed);
+            EXPECT(!closedDetail.reasonEn.empty());
+            EXPECT(closedDetail.reasonEn.find("closed") != std::string::npos);
+            EXPECT(closedDetail.rollbackConfirmed);
+            EXPECT(closedDetail.connectionUsable);
+
+            detailStore.SetClosure("proj-det", detailStore.Project("proj-det")->version, false);
+            EXPECT(detailStore.StageSubmission("proj-det", "sub-det-3", "after reopen") == "sub-det-3");
+            mayasaba::SaveContributionDetail reopenDetail;
+            EXPECT(detailStore.SaveContribution("proj-det", "sub-det-3", "after reopen", {}, reopenDetail) == SaveDisposition::Saved);
+            EXPECT(reopenDetail.connectionUsable);
+            EXPECT(detailStore.Contributions("proj-det").size() == 2);
+        }
+
+        // 29. An unconfirmed rollback must not be reported as a definite rollback
+        // The injected failure leaves the transaction open. The result must be UNKNOWN with
+        // rollbackConfirmed=false, the store must quarantine itself, and a later write must
+        // fail closed with a reason instead of issuing SQL on an unknown transaction state.
+        {
+            mayasaba::Storage rollbackStore(folder / "rollback_fail.db");
+            rollbackStore.BindProject("proj-rb", "Rollback", "C:/RB");
+            EXPECT(rollbackStore.StageSubmission("proj-rb", "sub-rb-1", "pending body") == "sub-rb-1");
+
+            EXPECT(!rollbackStore.IsQuarantinedForTesting());
+            rollbackStore.SetForceRollbackFailureForTesting(true);
+
+            // A conflicting replay reaches the rollback path and the rollback fails.
+            mayasaba::SaveContributionDetail failDetail;
+            auto const disp = rollbackStore.SaveContribution("proj-rb", "sub-rb-1", "different body", {}, failDetail);
+            EXPECT(disp == SaveDisposition::Unknown);
+            EXPECT(!failDetail.rollbackConfirmed);
+            EXPECT(!failDetail.connectionUsable);
+            EXPECT(failDetail.reasonEn.find("UNKNOWN") != std::string::npos);
+            EXPECT(rollbackStore.IsQuarantinedForTesting());
+
+            // The uncertain outcome is not a definite failure: the pending record is intact.
+            auto pendingAfter = rollbackStore.Pending("proj-rb");
+            EXPECT(pendingAfter.has_value());
+            EXPECT(pendingAfter->id == "sub-rb-1");
+
+            // A later write fails closed with a precise reason rather than proceeding.
+            bool threw = false;
+            std::string quarantineReason;
+            try
+            {
+                rollbackStore.StageSubmission("proj-rb", "sub-rb-2", "second body");
+            }
+            catch (std::exception const& ex)
+            {
+                threw = true;
+                quarantineReason = ex.what();
+            }
+            EXPECT(threw);
+            EXPECT(quarantineReason.find("quarantined") != std::string::npos);
+        }
+
         fs::remove_all(folder);
         std::cout << "PASS: 22 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search, action center, attachment inspection)\\n";
         return 0;

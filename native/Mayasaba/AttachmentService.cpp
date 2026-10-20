@@ -691,54 +691,88 @@ namespace mayasaba
         storage_.ClearDraftAttachments(projectId);
     }
 
-    void AttachmentService::ReconcileStagedFiles(std::string const& projectId)
+    void AttachmentService::ReconcileStagedFiles(std::string const& projectId, bool preparationActive)
     {
-        std::error_code ec;
         auto to_lower = [](std::wstring s) {
             for (auto& ch : s) ch = static_cast<wchar_t>(::towlower(ch));
             return s;
         };
 
-        // 1. Remove interrupted PREPARING draft attachments (both file and DB record)
+        // 1. Remove interrupted PREPARING draft attachments (both file and DB record).
+        // A PREPARING row is only reclaimed when the caller has proven that no preparation
+        // is active for this project. Deleting the file first and the record second means a
+        // crash in between leaves a PREPARING record whose staged copy is missing, which
+        // reverification reports as an explicit failure rather than a silently lost
+        // selection.
         auto drafts = storage_.GetDraftAttachments(projectId);
         for (auto const& d : drafts)
         {
-            if (d.status == "PREPARING")
+            if (d.status != "PREPARING") continue;
+
+            if (preparationActive)
             {
-                if (!d.storagePath.empty())
-                {
-                    auto p = Utf8ToUtf16(d.storagePath);
-#ifdef _WIN32
-                    SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
-#endif
-                    std::filesystem::remove(p, ec);
-                }
-                storage_.RemoveDraftAttachment(projectId, d.id);
+                // Preparation may still be writing this staged copy and will persist its own
+                // result. Leave the durable intent and the bytes alone; the batch commit
+                // converts a stranded PREPARING placeholder into an explicit failure.
+                continue;
             }
+
+            if (!d.storagePath.empty())
+            {
+                auto p = Utf8ToUtf16(d.storagePath);
+                std::error_code removeEc;
+#ifdef _WIN32
+                SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL);
+#endif
+                std::filesystem::remove(p, removeEc);
+                if (removeEc)
+                {
+                    // The staged copy could not be removed. Keep the durable record so a
+                    // later pass can retry; dropping it would orphan the bytes and hide
+                    // the failure.
+                    continue;
+                }
+            }
+            storage_.RemoveDraftAttachment(projectId, d.id);
         }
 
-        // 2. Collect all valid tracked storage paths for this project
+        // 2. Collect all valid tracked storage paths for this project.
+        // A path that cannot be canonicalized is NOT proven untracked, so it must not be
+        // treated as deletable. Each canonicalization uses its own error_code; reusing one
+        // across calls makes a later success look like a failure and vice versa.
         std::unordered_set<std::wstring> trackedPaths;
+        auto track = [&](std::string const& storagePath) {
+            if (storagePath.empty()) return;
+            std::filesystem::path p = Utf8ToUtf16(storagePath);
+            std::error_code canonEc;
+            auto const canonical = std::filesystem::weakly_canonical(p, canonEc);
+            if (canonEc)
+            {
+                // Canonicalization failed, so this path is not proven untracked. Track the
+                // raw spelling too: a scan that resolves the same file must not delete it.
+                trackedPaths.insert(to_lower(p.wstring()));
+                return;
+            }
+            trackedPaths.insert(to_lower(canonical.wstring()));
+        };
+
         auto remainingDrafts = storage_.GetDraftAttachments(projectId);
         for (auto const& d : remainingDrafts)
         {
-            if (!d.storagePath.empty())
-            {
-                std::filesystem::path p = Utf8ToUtf16(d.storagePath);
-                trackedPaths.insert(to_lower(std::filesystem::weakly_canonical(p, ec).wstring()));
-            }
+            track(d.storagePath);
         }
 
         auto committed = storage_.GetCommittedAttachmentsForProject(projectId);
         for (auto const& c : committed)
         {
+            track(c.storagePath);
             if (!c.storagePath.empty())
             {
                 std::filesystem::path p = Utf8ToUtf16(c.storagePath);
-                trackedPaths.insert(to_lower(std::filesystem::weakly_canonical(p, ec).wstring()));
+                std::error_code sealEc;
 #ifdef _WIN32
                 // Ensure committed files are sealed as read-only (crash/restart immutability recovery)
-                if (std::filesystem::exists(p, ec))
+                if (std::filesystem::exists(p, sealEc) && !sealEc)
                 {
                     DWORD attrs = GetFileAttributesW(p.c_str());
                     if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_READONLY))
@@ -750,35 +784,72 @@ namespace mayasaba
             }
         }
 
-        // 3. Scan the project's staging directory and remove any untracked regular files
+        // 3. Scan the project's staging directory and remove only files proven untracked.
         auto stagingDir = stagingRoot_ / "staging" / projectId;
-        if (std::filesystem::exists(stagingDir, ec) && std::filesystem::is_directory(stagingDir, ec))
+        std::error_code dirEc;
+        if (std::filesystem::exists(stagingDir, dirEc) && !dirEc &&
+            std::filesystem::is_directory(stagingDir, dirEc) && !dirEc)
         {
-            for (auto const& entry : std::filesystem::directory_iterator(stagingDir, ec))
+            std::error_code iterEc;
+            std::filesystem::directory_iterator it(stagingDir, iterEc);
+            if (!iterEc)
             {
-                if (entry.is_regular_file(ec))
+                for (; it != std::filesystem::directory_iterator(); it.increment(iterEc))
                 {
-                    std::wstring canon = to_lower(std::filesystem::weakly_canonical(entry.path(), ec).wstring());
-                    if (trackedPaths.find(canon) == trackedPaths.end())
+                    if (iterEc)
+                    {
+                        // The enumeration itself failed part-way. Stop rather than treat the
+                        // remaining entries as absent.
+                        break;
+                    }
+                    auto const& entry = *it;
+                    std::error_code fileEc;
+                    if (!entry.is_regular_file(fileEc) || fileEc)
+                    {
+                        continue;
+                    }
+                    std::error_code canonEc;
+                    auto const canonical = std::filesystem::weakly_canonical(entry.path(), canonEc);
+                    if (canonEc)
+                    {
+                        // Cannot prove this file is untracked; leave it in place.
+                        continue;
+                    }
+                    if (trackedPaths.find(to_lower(canonical.wstring())) == trackedPaths.end())
                     {
 #ifdef _WIN32
                         SetFileAttributesW(entry.path().c_str(), FILE_ATTRIBUTE_NORMAL);
 #endif
-                        std::filesystem::remove(entry.path(), ec);
+                        std::error_code removeEc;
+                        std::filesystem::remove(entry.path(), removeEc);
+                        // A failed removal leaves the file for a later pass; it is not reported
+                        // as reclaimed.
                     }
                 }
             }
         }
     }
 
-    std::vector<AttachmentCandidate> AttachmentService::ReverifyDraftAttachments(std::string const& projectId)
+    void AttachmentService::ReclaimInterruptedPreparation(std::string const& projectId)
     {
         ReconcileStagedFiles(projectId);
+    }
+
+    std::vector<AttachmentCandidate> AttachmentService::ReverifyDraftAttachments(std::string const& projectId, bool preparationActive)
+    {
+        ReconcileStagedFiles(projectId, preparationActive);
         auto candidates = LoadDraftAttachments(projectId);
         for (auto& c : candidates)
         {
             if (c.status == AttachmentStatus::Committed)
             {
+                continue;
+            }
+            if (preparationActive && c.status == AttachmentStatus::Preparing)
+            {
+                // Live preparation owns this record. Its staged copy may be absent or
+                // partially written, so verifying it here would replace in-flight work with
+                // a spurious failure and could overwrite the worker's own persistence.
                 continue;
             }
 

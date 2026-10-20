@@ -1717,7 +1717,384 @@ int main()
         EXPECT(r2.errorMessage.find("participating record set mutated between pages") != std::string::npos);
     }
 
+    // -------------------------------------------------------------------------
+    // Test 11: Incomplete / malformed preparation result sets
+    // A preparation that throws, is cancelled mid-batch, or returns a result set that
+    // cannot be attributed to the selection must never commit stranded PREPARING
+    // placeholders and report success. The selection stays recoverable.
+    // -------------------------------------------------------------------------
+    {
+        using Outcome = mayasaba::AttachmentIngestionCoordinator::BatchCommitOutcome;
+        namespace fs2 = std::filesystem;
+
+        mayasaba::Storage store(folder / "incomplete_prep.db");
+        store.BindProject("proj-inc", "Incomplete Prep", "C:/Inc");
+        auto stagingDir = folder / "incomplete_staging";
+        fs2::create_directories(stagingDir);
+        mayasaba::AttachmentService attService(store, stagingDir);
+        mayasaba::AttachmentIngestionCoordinator coordinator;
+
+        auto srcDir = folder / "incomplete_sources";
+        fs2::create_directories(srcDir);
+        auto src1 = srcDir / "first.txt";
+        auto src2 = srcDir / "second.txt";
+        {
+            std::ofstream a(src1); a << "First attachment payload for incomplete batch testing.\n";
+            std::ofstream b(src2); b << "Second attachment payload for incomplete batch testing.\n";
+        }
+
+        std::atomic<bool> windowClosed{false};
+        std::atomic_uint64_t gen{1};
+        auto ctx = coordinator.CreateContext("proj-inc", gen.load(), &windowClosed, &gen);
+
+        auto makeSlot = [](std::string const& id, std::wstring const& path, std::string const& name) {
+            mayasaba::AttachmentCandidate c;
+            c.id = id;
+            c.originalPath = path;
+            c.fileName = name;
+            c.status = mayasaba::AttachmentStatus::Preparing;
+            return c;
+        };
+
+        // 11.1 First-item failure: preparation threw before producing any result.
+        {
+            std::vector<mayasaba::AttachmentCandidate> drafts = {
+                makeSlot("slot-1", src1.wstring(), "first.txt"),
+                makeSlot("slot-2", src2.wstring(), "second.txt")
+            };
+            std::vector<std::string> ids = { "slot-1", "slot-2" };
+            std::string err;
+            Outcome outcome = Outcome::Committed;
+            bool saved = false;
+            bool const committed = coordinator.ValidateAndCommitPreparedBatch(
+                ctx, "proj-inc", gen.load(), false, drafts, {}, ids,
+                [&](std::string const& p, std::vector<mayasaba::AttachmentCandidate> const& d) {
+                    saved = true;
+                    attService.SaveDraftAttachments(p, d);
+                },
+                &err, &outcome);
+
+            // An empty result set for two selected files is an incomplete preparation, not
+            // a successful commit of untouched placeholders.
+            EXPECT(outcome == Outcome::IncompletePreparation);
+            EXPECT(committed == true);          // recoverable portion still persisted
+            EXPECT(saved == true);
+            EXPECT(!err.empty());
+            EXPECT(err.find("missing") != std::string::npos);
+
+            // Every placeholder is now an explicit, recoverable failure that keeps its
+            // identity and source path.
+            EXPECT(drafts.size() == 2);
+            for (auto const& d : drafts)
+            {
+                EXPECT(d.status == mayasaba::AttachmentStatus::Rejected);
+                EXPECT(!d.errorMessage.empty());
+                EXPECT(!d.originalPath.empty());
+            }
+            EXPECT(drafts[0].id == "slot-1");
+            EXPECT(drafts[1].id == "slot-2");
+
+            // Durable state matches memory: nothing is left as PREPARING.
+            auto durable = attService.LoadDraftAttachments("proj-inc");
+            EXPECT(durable.size() == 2);
+            for (auto const& d : durable)
+            {
+                EXPECT(d.status == mayasaba::AttachmentStatus::Rejected);
+            }
+        }
+
+        // 11.2 Later-item failure: the first file prepared, the second did not.
+        {
+            auto firstResult = attService.PrepareAttachment("proj-inc", src1.wstring());
+            EXPECT(firstResult.status == mayasaba::AttachmentStatus::Ready);
+
+            std::vector<mayasaba::AttachmentCandidate> drafts = attService.LoadDraftAttachments("proj-inc");
+            drafts.push_back(makeSlot("slot-a", src1.wstring(), "first.txt"));
+            drafts.push_back(makeSlot("slot-b", src2.wstring(), "second.txt"));
+            std::vector<std::string> ids = { "slot-a", "slot-b" };
+
+            std::string err;
+            Outcome outcome = Outcome::Committed;
+            bool const committed = coordinator.ValidateAndCommitPreparedBatch(
+                ctx, "proj-inc", gen.load(), false, drafts, { firstResult }, ids,
+                [&](std::string const& p, std::vector<mayasaba::AttachmentCandidate> const& d) {
+                    attService.SaveDraftAttachments(p, d);
+                },
+                &err, &outcome);
+
+            EXPECT(outcome == Outcome::IncompletePreparation);
+            EXPECT(committed == true);
+            EXPECT(!err.empty());
+
+            // The prepared file is admitted; the unanswered one is an explicit failure.
+            auto const& a = drafts[drafts.size() - 2];
+            auto const& b = drafts[drafts.size() - 1];
+            EXPECT(a.id == firstResult.id);
+            EXPECT(a.status == mayasaba::AttachmentStatus::Ready);
+            EXPECT(b.id == "slot-b");
+            EXPECT(b.status == mayasaba::AttachmentStatus::Rejected);
+
+            auto durable = attService.LoadDraftAttachments("proj-inc");
+            bool sawReady = false, sawRejectedB = false;
+            for (auto const& d : durable)
+            {
+                if (d.id == firstResult.id && d.status == mayasaba::AttachmentStatus::Ready) sawReady = true;
+                if (d.id == "slot-b" && d.status == mayasaba::AttachmentStatus::Rejected) sawRejectedB = true;
+                EXPECT(d.status != mayasaba::AttachmentStatus::Preparing);
+            }
+            EXPECT(sawReady);
+            EXPECT(sawRejectedB);
+
+            attService.RemoveDraftAttachment("proj-inc", firstResult.id);
+        }
+
+        // 11.3 Explicit rejected results are a COMPLETED preparation, not an incomplete one.
+        // The batch produced one result per selected file; each is a definite outcome.
+        {
+            auto bad = attService.PrepareAttachment("proj-inc", (srcDir / "does-not-exist.txt").wstring());
+            EXPECT(bad.status == mayasaba::AttachmentStatus::Rejected);
+
+            std::vector<mayasaba::AttachmentCandidate> drafts;
+            drafts.push_back(makeSlot("slot-r", (srcDir / "does-not-exist.txt").wstring(), "does-not-exist.txt"));
+
+            std::string err;
+            Outcome outcome = Outcome::Committed;
+            bool const committed = coordinator.ValidateAndCommitPreparedBatch(
+                ctx, "proj-inc", gen.load(), false, drafts, { bad }, { "slot-r" },
+                [&](std::string const& p, std::vector<mayasaba::AttachmentCandidate> const& d) {
+                    attService.SaveDraftAttachments(p, d);
+                },
+                &err, &outcome);
+
+            EXPECT(outcome == Outcome::Committed);
+            EXPECT(committed == true);
+            EXPECT(err.empty());
+            EXPECT(drafts.size() == 1);
+            EXPECT(drafts[0].status == mayasaba::AttachmentStatus::Rejected);
+            EXPECT(!drafts[0].errorMessage.empty());
+        }
+
+        // 11.4 Malformed correspondence: more results than selected files is refused with no
+        // mutation and no persistence.
+        {
+            std::vector<mayasaba::AttachmentCandidate> drafts = {
+                makeSlot("slot-m", src1.wstring(), "first.txt")
+            };
+            std::vector<mayasaba::AttachmentCandidate> tooMany = {
+                attService.PrepareAttachment("proj-inc", src1.wstring()),
+                attService.PrepareAttachment("proj-inc", src2.wstring())
+            };
+            std::string err;
+            Outcome outcome = Outcome::Committed;
+            bool saved = false;
+            bool const committed = coordinator.ValidateAndCommitPreparedBatch(
+                ctx, "proj-inc", gen.load(), false, drafts, tooMany, { "slot-m" },
+                [&](std::string const& p, std::vector<mayasaba::AttachmentCandidate> const& d) {
+                    saved = true;
+                    attService.SaveDraftAttachments(p, d);
+                },
+                &err, &outcome);
+
+            EXPECT(committed == false);
+            EXPECT(saved == false);
+            EXPECT(outcome == Outcome::MalformedResult);
+            EXPECT(!err.empty());
+            EXPECT(drafts.size() == 1);
+            EXPECT(drafts[0].status == mayasaba::AttachmentStatus::Preparing);
+        }
+
+        // 11.5 Duplicate placeholder identities cannot be attributed to files.
+        {
+            auto one = attService.PrepareAttachment("proj-inc", src1.wstring());
+            std::vector<mayasaba::AttachmentCandidate> drafts = {
+                makeSlot("dup", src1.wstring(), "first.txt"),
+                makeSlot("dup", src2.wstring(), "second.txt")
+            };
+            std::string err;
+            Outcome outcome = Outcome::Committed;
+            bool saved = false;
+            bool const committed = coordinator.ValidateAndCommitPreparedBatch(
+                ctx, "proj-inc", gen.load(), false, drafts, { one }, { "dup", "dup" },
+                [&](std::string const& p, std::vector<mayasaba::AttachmentCandidate> const& d) {
+                    saved = true;
+                    attService.SaveDraftAttachments(p, d);
+                },
+                &err, &outcome);
+
+            EXPECT(committed == false);
+            EXPECT(saved == false);
+            EXPECT(outcome == Outcome::MalformedResult);
+            EXPECT(err.find("duplicate") != std::string::npos);
+        }
+
+        // 11.6 Stale completion is still refused and never persists.
+        {
+            std::vector<mayasaba::AttachmentCandidate> drafts = {
+                makeSlot("slot-s", src1.wstring(), "first.txt")
+            };
+            std::string err;
+            Outcome outcome = Outcome::Committed;
+            bool saved = false;
+            bool const committed = coordinator.ValidateAndCommitPreparedBatch(
+                ctx, "proj-inc", gen.load() + 1, false, drafts,
+                { attService.PrepareAttachment("proj-inc", src1.wstring()) }, { "slot-s" },
+                [&](std::string const& p, std::vector<mayasaba::AttachmentCandidate> const& d) {
+                    saved = true;
+                    attService.SaveDraftAttachments(p, d);
+                },
+                &err, &outcome);
+
+            EXPECT(committed == false);
+            EXPECT(saved == false);
+            EXPECT(outcome == Outcome::StaleCompletion);
+            EXPECT(drafts[0].status == mayasaba::AttachmentStatus::Preparing);
+        }
+
+        // 11.7 Persistence failure leaves the draft list unmutated and reports the reason.
+        {
+            std::vector<mayasaba::AttachmentCandidate> drafts = {
+                makeSlot("slot-p", src1.wstring(), "first.txt")
+            };
+            std::string err;
+            Outcome outcome = Outcome::Committed;
+            bool const committed = coordinator.ValidateAndCommitPreparedBatch(
+                ctx, "proj-inc", gen.load(), false, drafts,
+                { attService.PrepareAttachment("proj-inc", src1.wstring()) }, { "slot-p" },
+                [&](std::string const&, std::vector<mayasaba::AttachmentCandidate> const&) {
+                    throw std::runtime_error("simulated persistence failure");
+                },
+                &err, &outcome);
+
+            EXPECT(committed == false);
+            EXPECT(outcome == Outcome::PersistenceFailed);
+            EXPECT(err.find("simulated persistence failure") != std::string::npos);
+            EXPECT(drafts.size() == 1);
+            EXPECT(drafts[0].status == mayasaba::AttachmentStatus::Preparing);
+        }
+
+        // 11.8 Prior drafts survive an incomplete batch.
+        {
+            std::vector<mayasaba::AttachmentCandidate> drafts = attService.LoadDraftAttachments("proj-inc");
+            size_t const before = drafts.size();
+            drafts.push_back(makeSlot("slot-x", src1.wstring(), "first.txt"));
+
+            std::string err;
+            Outcome outcome = Outcome::Committed;
+            coordinator.ValidateAndCommitPreparedBatch(
+                ctx, "proj-inc", gen.load(), false, drafts, {}, { "slot-x" },
+                [&](std::string const& p, std::vector<mayasaba::AttachmentCandidate> const& d) {
+                    attService.SaveDraftAttachments(p, d);
+                },
+                &err, &outcome);
+
+            EXPECT(outcome == Outcome::IncompletePreparation);
+            EXPECT(drafts.size() == before + 1);
+            for (size_t i = 0; i < before; ++i)
+            {
+                EXPECT(drafts[i].id == attService.LoadDraftAttachments("proj-inc")[i].id);
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 12: Staging reconciliation must not reclaim live or unprovable files
+    // -------------------------------------------------------------------------
+    {
+        namespace fs2 = std::filesystem;
+        mayasaba::Storage store(folder / "reconcile.db");
+        store.BindProject("proj-rec", "Reconcile", "C:/Rec");
+        auto stagingDir = folder / "reconcile_staging";
+        fs2::create_directories(stagingDir);
+        mayasaba::AttachmentService attService(store, stagingDir);
+
+        auto srcDir = folder / "reconcile_sources";
+        fs2::create_directories(srcDir);
+        auto src = srcDir / "live.txt";
+        { std::ofstream o(src); o << "Live preparation payload for reconciliation testing.\n"; }
+
+        auto projectStaging = stagingDir / "staging" / "proj-rec";
+
+        // 12.1 A live PREPARING record and its staged copy survive a pass that is told
+        // preparation is active.
+        auto live = attService.PrepareAttachment("proj-rec", src.wstring());
+        EXPECT(live.status == mayasaba::AttachmentStatus::Ready);
+        EXPECT(fs2::exists(live.stagedPath));
+
+        // Rewrite the durable record back into an in-flight intent pointing at the same
+        // staged copy, which is exactly what a genuinely running batch looks like.
+        {
+            mayasaba::AttachmentRecord liveIntent;
+            liveIntent.id = live.id;
+            liveIntent.projectId = "proj-rec";
+            liveIntent.fileName = live.fileName;
+            liveIntent.fileSize = live.fileSize;
+            liveIntent.detectedType = live.detectedType;
+            liveIntent.storagePath = fs2::path(live.stagedPath).string();
+            liveIntent.status = "PREPARING";
+            store.SaveDraftAttachment("proj-rec", liveIntent);
+        }
+
+        attService.ReconcileStagedFiles("proj-rec", /*preparationActive=*/true);
+        EXPECT(fs2::exists(live.stagedPath));
+        auto stillThere = attService.LoadDraftAttachments("proj-rec");
+        bool foundPreparing = false;
+        for (auto const& d : stillThere) if (d.id == live.id && d.status == mayasaba::AttachmentStatus::Preparing) foundPreparing = true;
+        EXPECT(foundPreparing);
+
+        // 12.2 With no preparation active, the abandoned intent is reclaimed and its staged
+        // copy is removed.
+        attService.ReconcileStagedFiles("proj-rec", /*preparationActive=*/false);
+        EXPECT(!fs2::exists(live.stagedPath));
+        bool gone = true;
+        for (auto const& d : attService.LoadDraftAttachments("proj-rec")) if (d.id == live.id) gone = false;
+        EXPECT(gone);
+
+        // 12.3 Tracked READY drafts and their staged copies are never reclaimed.
+        auto kept = attService.PrepareAttachment("proj-rec", src.wstring());
+        EXPECT(kept.status == mayasaba::AttachmentStatus::Ready);
+        attService.ReconcileStagedFiles("proj-rec", false);
+        EXPECT(fs2::exists(kept.stagedPath));
+        auto keptDrafts = attService.LoadDraftAttachments("proj-rec");
+        EXPECT(keptDrafts.size() == 1);
+        EXPECT(keptDrafts[0].id == kept.id);
+        EXPECT(keptDrafts[0].status == mayasaba::AttachmentStatus::Ready);
+
+        // 12.4 A truly untracked file in the project staging directory is reclaimed.
+        auto orphan = projectStaging / "orphan.bin";
+        { std::ofstream o(orphan); o << "orphan"; }
+        EXPECT(fs2::exists(orphan));
+        attService.ReconcileStagedFiles("proj-rec", false);
+        EXPECT(!fs2::exists(orphan));
+        EXPECT(fs2::exists(kept.stagedPath));
+
+        // 12.5 Reverification with active preparation leaves live PREPARING records alone
+        // rather than converting in-flight work into a spurious failure.
+        store.SaveDraftAttachment("proj-rec", [&] {
+            mayasaba::AttachmentRecord live2;
+            live2.id = "att-live-2";
+            live2.projectId = "proj-rec";
+            live2.fileName = "live2.txt";
+            live2.fileSize = 10;
+            live2.detectedType = "text/plain";
+            live2.storagePath = (projectStaging / "att-live-2_live2.txt").string();
+            live2.status = "PREPARING";
+            return live2;
+        }());
+        auto reverified = attService.ReverifyDraftAttachments("proj-rec", /*preparationActive=*/true);
+        bool livePreserved = false;
+        for (auto const& d : reverified) if (d.id == "att-live-2") livePreserved = (d.status == mayasaba::AttachmentStatus::Preparing);
+        EXPECT(livePreserved);
+
+        // With preparation finished the same record is either reclaimed or reported as an
+        // explicit failure — never silently Ready.
+        auto reverified2 = attService.ReverifyDraftAttachments("proj-rec", false);
+        for (auto const& d : reverified2)
+        {
+            if (d.id == "att-live-2") EXPECT(d.status == mayasaba::AttachmentStatus::Rejected);
+        }
+    }
+
     fs::remove_all(folder);
-    std::cout << "PASS: standalone Action Center + attachment inspection verification (10/10 tests passed)\n";
+    std::cout << "PASS: standalone Action Center + attachment inspection verification (12/12 tests passed)\n";
     return 0;
 }

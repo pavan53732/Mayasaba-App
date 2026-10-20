@@ -7,6 +7,14 @@
 #include <sstream>
 #include <iomanip>
 #include <unordered_set>
+#include <array>
+#include <optional>
+#include <string_view>
+#include <thread>
+#include <chrono>
+#include <algorithm>
+#include <memory>
+#include <cctype>
 #ifdef _WIN32
 #include <shlobj.h>
 #include <bcrypt.h>
@@ -220,37 +228,60 @@ namespace mayasaba
             return res;
         }
 
-        inline std::string ComputeStringHashHex(std::string_view input)
+        // Returns the lowercase hex SHA-256 of `input`, or std::nullopt when any BCrypt
+        // operation fails. Callers must treat nullopt as "no integrity signature available"
+        // and fail closed; a partially-initialised digest must never be emitted.
+        // The digest is the full 32 bytes (64 hex characters) per the registry's
+        // Sha256 definition (^[0-9a-f]{64}$).
+        inline std::optional<std::string> ComputeStringHashHex(std::string_view input)
         {
+            if (input.size() > static_cast<size_t>(ULONG_MAX)) return std::nullopt;
+
             BCRYPT_ALG_HANDLE hAlg = nullptr;
             NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
-            if (!BCRYPT_SUCCESS(status)) return {};
+            if (!BCRYPT_SUCCESS(status)) return std::nullopt;
+
+            struct AlgCloser
+            {
+                BCRYPT_ALG_HANDLE handle;
+                ~AlgCloser() { if (handle) BCryptCloseAlgorithmProvider(handle, 0); }
+            } algCloser{ hAlg };
 
             DWORD hashObjSize = 0, dataLen = 0;
-            BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PBYTE>(&hashObjSize), sizeof(DWORD), &dataLen, 0);
+            status = BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH,
+                reinterpret_cast<PBYTE>(&hashObjSize), sizeof(DWORD), &dataLen, 0);
+            if (!BCRYPT_SUCCESS(status) || hashObjSize == 0) return std::nullopt;
+
             std::vector<BYTE> hashObj(hashObjSize);
 
             BCRYPT_HASH_HANDLE hHash = nullptr;
             status = BCryptCreateHash(hAlg, &hHash, hashObj.data(), hashObjSize, nullptr, 0, 0);
-            if (!BCRYPT_SUCCESS(status))
+            if (!BCRYPT_SUCCESS(status)) return std::nullopt;
+
+            struct HashCloser
             {
-                BCryptCloseAlgorithmProvider(hAlg, 0);
-                return {};
-            }
+                BCRYPT_HASH_HANDLE handle;
+                ~HashCloser() { if (handle) BCryptDestroyHash(handle); }
+            } hashCloser{ hHash };
 
-            BCryptHashData(hHash, reinterpret_cast<PBYTE>(const_cast<char*>(input.data())), static_cast<ULONG>(input.size()), 0);
+            status = BCryptHashData(hHash,
+                reinterpret_cast<PBYTE>(const_cast<char*>(input.data())),
+                static_cast<ULONG>(input.size()), 0);
+            if (!BCRYPT_SUCCESS(status)) return std::nullopt;
 
-            BYTE hash[32];
-            BCryptFinishHash(hHash, hash, 32, 0);
-            BCryptDestroyHash(hHash);
-            BCryptCloseAlgorithmProvider(hAlg, 0);
+            std::array<BYTE, 32> digest{};
+            status = BCryptFinishHash(hHash, digest.data(), static_cast<ULONG>(digest.size()), 0);
+            if (!BCRYPT_SUCCESS(status)) return std::nullopt;
 
-            std::ostringstream ss;
-            for (int j = 0; j < 16; ++j)
+            static char const* kHex = "0123456789abcdef";
+            std::string hex;
+            hex.reserve(digest.size() * 2);
+            for (BYTE byte : digest)
             {
-                ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hash[j]);
+                hex.push_back(kHex[byte >> 4]);
+                hex.push_back(kHex[byte & 0x0F]);
             }
-            return ss.str();
+            return hex;
         }
 
         inline bool IsEnglishSafeText(std::string_view text)
@@ -542,7 +573,16 @@ namespace mayasaba
     }
     void Storage::Exec(char const* sql)
     {
-        if(std::string_view(sql).starts_with("BEGIN IMMEDIATE")) CheckWriteCapacity();
+        if(std::string_view(sql).starts_with("BEGIN IMMEDIATE"))
+        {
+            if (poisoned_)
+            {
+                throw std::runtime_error(
+                    "The store is quarantined after an unconfirmed transaction rollback. "
+                    "Reopen the project store and reconcile the unresolved submission before retrying.");
+            }
+            CheckWriteCapacity();
+        }
         char* error = nullptr;
         auto const rc = sqlite3_exec(db_, sql, nullptr, nullptr, &error);
         if (rc != SQLITE_OK)
@@ -1521,9 +1561,23 @@ namespace mayasaba
 
     SaveDisposition Storage::SaveContribution(std::string const& id, std::string const& submission, std::string const& body, std::vector<AttachmentRecord> const& attachments)
     {
-        if (submission.empty() || (body.empty() && attachments.empty())) return SaveDisposition::Conflict;
+        SaveContributionDetail ignored;
+        return SaveContribution(id, submission, body, attachments, ignored);
+    }
+
+    SaveDisposition Storage::SaveContribution(std::string const& id, std::string const& submission, std::string const& body, std::vector<AttachmentRecord> const& attachments, SaveContributionDetail& detail)
+    {
+        detail = SaveContributionDetail{};
+        auto reject = [&detail](SaveDisposition d, std::string reason) {
+            detail.reasonEn = std::move(reason);
+            return d;
+        };
+
+        if (submission.empty() || (body.empty() && attachments.empty()))
+            return reject(SaveDisposition::Conflict, "Submission identity or payload is empty.");
         // P0: Enforce 50-file limit inside Storage boundary
-        if (attachments.size() > 50) return SaveDisposition::Conflict;
+        if (attachments.size() > 50)
+            return reject(SaveDisposition::Conflict, "The submission exceeds the 50-attachment limit.");
 
         // Phase 1: Pre-transaction validation, exclusive write-protection locking, and cryptographic hashing
         // Staged files are locked with FILE_SHARE_READ so that no concurrent process can modify, truncate, or overwrite them.
@@ -1552,20 +1606,20 @@ namespace mayasaba
             if ((!att.projectId.empty() && att.projectId != id) ||
                 (!att.submissionId.empty() && att.submissionId != submission))
             {
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict, "An attachment does not belong to this project and submission.");
             }
             if (att.fileSize == 0 || att.fileSize > 100ULL * 1024ULL * 1024ULL) // 100 MiB limit
             {
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict, "An attachment is empty or exceeds the 100 MiB per-file limit.");
             }
             if (att.sha256.size() != 64)
             {
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict, "An attachment is missing a complete SHA-256 integrity value.");
             }
             aggregateBytes += att.fileSize;
             if (aggregateBytes > 500ULL * 1024ULL * 1024ULL) // 500 MiB aggregate limit
             {
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict, "The attachments exceed the 500 MiB aggregate limit.");
             }
 
 #ifdef _WIN32
@@ -1576,7 +1630,8 @@ namespace mayasaba
             std::error_code ec;
             if (!std::filesystem::exists(stagedP, ec) || std::filesystem::is_directory(stagedP, ec))
             {
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict,
+                    "A staged attachment is missing or is not a regular file; nothing was saved.");
             }
 
             HANDLE h = CreateFileW(stagedW.c_str(),
@@ -1599,14 +1654,16 @@ namespace mayasaba
             }
             if (h == INVALID_HANDLE_VALUE)
             {
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict,
+                    "A staged attachment could not be opened for verified admission; nothing was saved.");
             }
 
             LARGE_INTEGER sizeLi{};
             if (!GetFileSizeEx(h, &sizeLi) || static_cast<uint64_t>(sizeLi.QuadPart) != att.fileSize)
             {
                 CloseHandle(h);
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict,
+                    "A staged attachment no longer matches its recorded size; nothing was saved.");
             }
 
             // Read directly through the protected handle to compute SHA-256
@@ -1615,7 +1672,8 @@ namespace mayasaba
             if (!BCRYPT_SUCCESS(bStatus))
             {
                 CloseHandle(h);
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict,
+                    "The SHA-256 provider is unavailable, so attachment integrity could not be verified; nothing was saved.");
             }
 
             DWORD hashObjSize = 0, dataLen = 0;
@@ -1624,7 +1682,8 @@ namespace mayasaba
             {
                 BCryptCloseAlgorithmProvider(hAlg, 0);
                 CloseHandle(h);
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict,
+                    "The SHA-256 provider could not report its state, so attachment integrity could not be verified; nothing was saved.");
             }
 
             std::vector<BYTE> hashObj(hashObjSize);
@@ -1634,7 +1693,8 @@ namespace mayasaba
             {
                 BCryptCloseAlgorithmProvider(hAlg, 0);
                 CloseHandle(h);
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict,
+                    "A SHA-256 operation could not be started, so attachment integrity could not be verified; nothing was saved.");
             }
 
             constexpr DWORD BUFFER_SIZE = 64 * 1024;
@@ -1647,9 +1707,15 @@ namespace mayasaba
             }
 
             BYTE hashBytes[32];
-            BCryptFinishHash(hHash, hashBytes, 32, 0);
+            bStatus = BCryptFinishHash(hHash, hashBytes, 32, 0);
             BCryptDestroyHash(hHash);
             BCryptCloseAlgorithmProvider(hAlg, 0);
+            if (!BCRYPT_SUCCESS(bStatus))
+            {
+                CloseHandle(h);
+                return reject(SaveDisposition::Conflict,
+                    "The SHA-256 digest of a staged attachment could not be finalized, so integrity is unverified; nothing was saved.");
+            }
 
             std::ostringstream ss;
             for (int i = 0; i < 32; ++i)
@@ -1660,7 +1726,8 @@ namespace mayasaba
             if (computedHash != att.sha256)
             {
                 CloseHandle(h);
-                return SaveDisposition::Conflict;
+                return reject(SaveDisposition::Conflict,
+                    "A staged attachment no longer matches its recorded SHA-256 digest; nothing was saved.");
             }
 
             auto lockPtr = std::make_unique<ProtectedFileLock>();
@@ -1676,6 +1743,55 @@ namespace mayasaba
         std::lock_guard lock(mutex_);
         bool began=false;
         bool duplicate=false;
+
+        // Rolls back and reports the PROVEN physical transaction state. A ROLLBACK that
+        // reports failure does not by itself prove a transaction is still open, so the
+        // connection's own autocommit state decides. Only a connection that is still inside
+        // a transaction is quarantined; that case can no longer be used safely and every
+        // later transaction attempt fails closed with an explicit reason.
+        auto rollbackAndReject = [&](SaveDisposition disposition, std::string reason) -> SaveDisposition {
+            detail.reasonEn = std::move(reason);
+            char* message = nullptr;
+            int rc = SQLITE_OK;
+            if (forceRollbackFailureForTesting_)
+            {
+                // Inject the observable failure mode: the rollback reports an error while the
+                // connection is still inside the transaction. SQLITE_ERROR is 1 and is not
+                // declared by every SDK shim, so the value is named locally.
+                constexpr int kInjectedRollbackError = 1;
+                forceRollbackFailureForTesting_ = false;
+                rc = kInjectedRollbackError;
+            }
+            else
+            {
+                rc = sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, &message);
+            }
+            if (rc != SQLITE_OK)
+            {
+                std::string failure = message ? message : sqlite3_errmsg(db_);
+                if (message) sqlite3_free(message);
+
+                if (sqlite3_get_autocommit(db_) != 0)
+                {
+                    // No transaction remains open; the rollback is effective even though
+                    // SQLite reported an error (for example "no transaction is active").
+                    detail.rollbackConfirmed = true;
+                    detail.connectionUsable = true;
+                }
+                else
+                {
+                    detail.rollbackConfirmed = false;
+                    detail.connectionUsable = false;
+                    poisoned_ = true;
+                    detail.reasonEn += " The transaction rollback could not be confirmed (" + failure +
+                        "); the physical outcome is UNKNOWN. The store is quarantined until it is "
+                        "reopened and the submission outcome is reconciled.";
+                    return SaveDisposition::Unknown;
+                }
+            }
+            return disposition;
+        };
+
         try
         {
             Exec("BEGIN IMMEDIATE;"); began=true;
@@ -1684,7 +1800,8 @@ namespace mayasaba
                 Bind(p.value,1,id);
                 if (sqlite3_step(p.value)!=SQLITE_ROW || sqlite3_column_int(p.value,0)!=0)
                 {
-                    Exec("ROLLBACK;");return SaveDisposition::RejectedClosed;
+                    return rollbackAndReject(SaveDisposition::RejectedClosed,
+                        "The project is closed; an explicit Reopen Project is required before saving.");
                 }
             }
 
@@ -1712,20 +1829,40 @@ namespace mayasaba
                     if(Text(pending.value,0)!=submission ||
                        ReadDraft(Text(pending.value,1))!=body ||
                        Text(pending.value,2)!=currentManifest)
-                    { Exec("ROLLBACK;"); return SaveDisposition::Conflict; }
+                    {
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "Another submission is pending for this project, or this submission's text or attachments changed. "
+                            "The pending submission was left untouched.");
+                    }
                 }
                 else
                 {
                     // Pending retired only by a successful commit; identical replay is allowed.
-                    if (!alreadyCommitted || storedProject!=id || storedBody!=body)
-                    { Exec("ROLLBACK;"); return SaveDisposition::Conflict; }
+                    if (!alreadyCommitted)
+                    {
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "This submission was never staged for this project and cannot be saved. Recreate the message and try again.");
+                    }
+                    if (storedProject != id)
+                    {
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "This submission identity already belongs to a different project; it was not reused.");
+                    }
+                    if (storedBody != body)
+                    {
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "This submission is already saved with different message text; it was not treated as a replay.");
+                    }
                 }
             }
 
             if (alreadyCommitted)
             {
                 if (storedProject!=id || storedBody!=body)
-                { Exec("ROLLBACK;");return SaveDisposition::Conflict; }
+                {
+                    return rollbackAndReject(SaveDisposition::Conflict,
+                        "This submission identity already belongs to a different project or message text; it was not overwritten.");
+                }
 
                 // Bind submission identity to the complete attachment set
                 Statement commAtt(db_, "SELECT attachment_id, file_size, sha256 FROM attachments WHERE submission_id=?1 ORDER BY attachment_id;");
@@ -1745,7 +1882,8 @@ namespace mayasaba
                 if (existingManifest != currentManifest)
                 {
                     // Reject changed payloads instead of reporting them as duplicates
-                    Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                    return rollbackAndReject(SaveDisposition::Conflict,
+                        "This submission is already saved with a different attachment set; it was not treated as a replay.");
                 }
                 duplicate=true;
             }
@@ -1756,7 +1894,8 @@ namespace mayasaba
                 Bind(readyCount.value, 1, id);
                 if (sqlite3_step(readyCount.value) != SQLITE_ROW || sqlite3_column_int(readyCount.value, 0) != static_cast<int>(attachments.size()))
                 {
-                    Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                    return rollbackAndReject(SaveDisposition::Conflict,
+                        "The draft attachment set changed before it could be saved; the message was not submitted.");
                 }
 
                 for (auto const& att : attachments)
@@ -1766,14 +1905,16 @@ namespace mayasaba
                     Bind(checkDraft.value, 2, att.id);
                     if (sqlite3_step(checkDraft.value) != SQLITE_ROW)
                     {
-                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "A submitted attachment is no longer a draft of this project; the message was not submitted.");
                     }
                     if (Text(checkDraft.value, 3) != "READY" ||
                         static_cast<uint64_t>(sqlite3_column_int64(checkDraft.value, 0)) != att.fileSize ||
                         Text(checkDraft.value, 1) != att.sha256 ||
                         Text(checkDraft.value, 2) != att.storagePath)
                     {
-                        Exec("ROLLBACK;"); return SaveDisposition::Conflict;
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "A submitted attachment is not ready or no longer matches its verified size, digest or staging path; the message was not submitted.");
                     }
                 }
 
@@ -1813,29 +1954,44 @@ namespace mayasaba
                     DWORD attr = GetFileAttributesW(lockPtr->path.c_str());
                     if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_READONLY))
                     {
-                        Exec("ROLLBACK;");
-                        return SaveDisposition::Conflict;
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "A verified attachment could not be sealed read-only before commit; the message was not submitted.");
                     }
                     lockPtr->sealed = true;
                 }
 #endif
             }
 
+            // Draft and draft-attachment cleanup belongs to the ORIGINAL submission only.
+            // On an identical replay the contribution is already committed and any newer
+            // draft or newer draft attachments written since that commit must survive
+            // unchanged; clearing them would silently destroy unsent user work.
+            if (!duplicate)
             {
-                Statement p(db_, "UPDATE projects SET draft='' WHERE id=?1;");
-                Bind(p.value,1,id);Check(sqlite3_step(p.value),db_);
+                {
+                    Statement p(db_, "UPDATE projects SET draft='' WHERE id=?1;");
+                    Bind(p.value,1,id);Check(sqlite3_step(p.value),db_);
+                }
+                {
+                    Statement clrDraft(db_, "DELETE FROM draft_attachments WHERE project_id=?1;");
+                    Bind(clrDraft.value,1,id);Check(sqlite3_step(clrDraft.value),db_);
+                }
             }
-            {
-                Statement clrDraft(db_, "DELETE FROM draft_attachments WHERE project_id=?1;");
-                Bind(clrDraft.value,1,id);Check(sqlite3_step(clrDraft.value),db_);
-            }
+            // The pending row is scoped to this exact submission, so retiring it is safe on
+            // both paths: an unrelated newer pending submission cannot be reached here
+            // (it is refused as a Conflict above), and this row has already been verified
+            // to belong to the submission being saved or replayed.
             {
                 Statement cleared(db_, "DELETE FROM pending_submissions WHERE project_id=?1 AND submission_id=?2;");
                 Bind(cleared.value,1,id);Bind(cleared.value,2,submission);Check(sqlite3_step(cleared.value),db_);
             }
             Exec("COMMIT;");
+            detail.rollbackConfirmed = true;
+            detail.connectionUsable = true;
+            detail.reasonEn = duplicate ? "This submission was already saved; its existing outcome is returned."
+                                        : "The contribution was committed.";
         }
-        catch (...)
+        catch (std::exception const& e)
         {
 #ifdef _WIN32
             for (auto& lockPtr : openLocks)
@@ -1846,7 +2002,48 @@ namespace mayasaba
                 }
             }
 #endif
-            if (began) sqlite3_exec(db_,"ROLLBACK;",nullptr,nullptr,nullptr);
+            // Preserve the reason instead of returning a bare Unknown, and establish the
+            // actual transaction state. A failure to roll back is NOT reported as a definite
+            // rollback: if a transaction is still open the connection is quarantined and the
+            // outcome stays UNKNOWN so the caller reconciles instead of retrying blindly.
+            std::string reason = e.what();
+            detail.reasonEn = reason;
+
+            bool const wasInTransaction = (sqlite3_get_autocommit(db_) == 0);
+            if (!began && !wasInTransaction)
+            {
+                // The failure happened before the transaction started; nothing was written.
+                detail.rollbackConfirmed = true;
+                detail.connectionUsable = !poisoned_;
+                detail.reasonEn = "The submission could not be prepared for saving: " + reason +
+                    ". Nothing was written.";
+                return SaveDisposition::Unknown;
+            }
+
+            char* message = nullptr;
+            int const rc = sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, &message);
+            if (rc != SQLITE_OK)
+            {
+                std::string rollbackFailure = message ? message : sqlite3_errmsg(db_);
+                if (message) sqlite3_free(message);
+                reason += " (rollback failed: " + rollbackFailure + ")";
+            }
+
+            bool const stillInTransaction = (sqlite3_get_autocommit(db_) == 0);
+            detail.rollbackConfirmed = !stillInTransaction;
+            detail.connectionUsable = !stillInTransaction;
+            if (stillInTransaction)
+            {
+                poisoned_ = true;
+                detail.reasonEn = "The submission outcome is UNKNOWN: " + reason +
+                    ". The transaction could not be rolled back, so the store is quarantined; "
+                    "the submission must be reconciled before it is retried.";
+            }
+            else
+            {
+                detail.reasonEn = "The submission was not saved: " + reason +
+                    ". The transaction was rolled back and the store is usable; the message can be retried safely.";
+            }
             return SaveDisposition::Unknown;
         }
 
@@ -2146,6 +2343,11 @@ namespace mayasaba
         return result;
     }
 
+    std::optional<std::string> Storage::ComputeSha256HexForTesting(std::string_view input)
+    {
+        return ComputeStringHashHex(input);
+    }
+
     std::string Storage::ComputeAttachmentManifest(std::vector<AttachmentRecord> const& attachments)
     {
         if (attachments.empty()) return {};
@@ -2261,7 +2463,20 @@ namespace mayasaba
                 }
             }
 
-            std::string const consistencySignature = ComputeStringHashHex(consistencyDigestInput);
+            std::optional<std::string> consistencySignature;
+            if (!forceHashFailureForTesting_)
+            {
+                consistencySignature = ComputeStringHashHex(consistencyDigestInput);
+            }
+            if (!consistencySignature.has_value())
+            {
+                // Fail the query closed rather than emit a token whose integrity signature
+                // could not be computed. No page is returned and no continuation token is
+                // issued, so a caller cannot resume from unverified snapshot state.
+                throw std::runtime_error(
+                    "Action Center snapshot signature unavailable: SHA-256 computation failed; "
+                    "no page or continuation token was issued. Recheck after storage is healthy.");
+            }
 
             size_t offset = 0;
             if (!query.continuationToken.empty())
@@ -2286,7 +2501,7 @@ namespace mayasaba
                 }
                 if (parts[1] == "v2")
                 {
-                    if (parts[3] != consistencySignature)
+                    if (parts[3] != *consistencySignature)
                     {
                         throw std::runtime_error("Continuation token expired: participating record set mutated between pages");
                     }
@@ -2383,7 +2598,7 @@ namespace mayasaba
                 result.items.pop_back();
                 result.isComplete = false;
                 result.continuationToken = "ac:v2:" + query.projectId + ":" +
-                    consistencySignature + ":" + std::to_string(offset + query.pageSize);
+                    *consistencySignature + ":" + std::to_string(offset + query.pageSize);
             }
             else
             {

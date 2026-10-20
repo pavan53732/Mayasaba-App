@@ -61,6 +61,11 @@ void sqlite3_free(void*);
 int sqlite3_busy_timeout(sqlite3*, int ms);
 int sqlite3_changes(sqlite3*);
 
+// Reports whether the connection is in autocommit mode: non-zero means no transaction is
+// open. Used to prove the physical transaction state after a failed rollback rather than
+// assuming the rollback succeeded.
+int sqlite3_get_autocommit(sqlite3*);
+
 int sqlite3_bind_int(sqlite3_stmt*, int, int);
 int sqlite3_bind_int64(sqlite3_stmt*, int, sqlite3_int64);
 int sqlite3_bind_text(sqlite3_stmt*, int, const char*, int,

@@ -6,6 +6,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
@@ -76,6 +77,21 @@ namespace mayasaba
         std::vector<AttachmentRecord> attachments{};
     };
     enum class SaveDisposition { Saved, Duplicate, Conflict, RejectedClosed, Unknown };
+
+    // Safe, structured diagnostic for a SaveContribution attempt. It never carries SQL,
+    // file bytes or credentials: reasonEn is a short English explanation that may be shown
+    // to the user and logged, and the two flags say whether the transaction was proven
+    // rolled back and whether the connection can still be used.
+    struct SaveContributionDetail
+    {
+        std::string reasonEn;
+        // True when no transaction was open, or when a rollback was issued and SQLite
+        // reported success. False means the physical transaction state is UNKNOWN.
+        bool rollbackConfirmed{true};
+        // False when the connection could not be returned to a usable state. Callers must
+        // not keep using the store for writes; the record needs reconciliation.
+        bool connectionUsable{true};
+    };
     struct PendingSubmission { std::string id; std::string body; std::string attachmentManifest{}; };
 
     enum class ProjectStatusFilter { All = 0, Open = 1, Closed = 2 };
@@ -268,6 +284,11 @@ namespace mayasaba
         bool SetClosure(std::string const& projectId, int expectedVersion, bool closed);
         SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body);
         SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body, std::vector<AttachmentRecord> const& attachments);
+        // Same operation, additionally reporting a safe diagnostic and the proven physical
+        // transaction state. Use this overload wherever a failure must be explained to the
+        // user or reconciled; the disposition alone cannot distinguish "definitely nothing
+        // was written" from "the outcome is unknown".
+        SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body, std::vector<AttachmentRecord> const& attachments, SaveContributionDetail& detail);
         std::vector<Contribution> Contributions(std::string const& projectId);
         MessageSearchResult SearchUserMessages(MessageSearchQuery const& query);
         std::optional<std::string> LastBoundProject();
@@ -296,6 +317,19 @@ namespace mayasaba
         void SetSaveDraftAttachmentsItemHookForTesting(std::function<void(size_t index, std::string const& id)> hook) { saveDraftAttachmentsItemHook_ = std::move(hook); }
         std::mutex& MutexForTesting() noexcept { return mutex_; }
 
+        // Exercises the exact production SHA-256 hex used for the Action Center
+        // continuation-token integrity signature. Returns std::nullopt when the hash
+        // cannot be computed. Test-only: no production path calls it.
+        static std::optional<std::string> ComputeSha256HexForTesting(std::string_view input);
+        // Forces the next integrity-signature computation to fail, so callers can prove
+        // that a failed hash fails the query closed rather than emitting a token.
+        void SetForceHashFailureForTesting(bool force) noexcept { forceHashFailureForTesting_ = force; }
+        // Injects a rollback failure so callers can prove that an unconfirmed rollback is
+        // reported as an UNKNOWN physical outcome and quarantines the store, instead of
+        // being claimed as a definite rollback. Test-only.
+        void SetForceRollbackFailureForTesting(bool force) noexcept { forceRollbackFailureForTesting_ = force; }
+        bool IsQuarantinedForTesting() const noexcept { return poisoned_; }
+
     private:
         sqlite3* db_{nullptr};
         std::filesystem::path file_;
@@ -305,6 +339,12 @@ namespace mayasaba
         std::function<void()> inspectionFileHashedHook_;
         std::function<void()> queryActionCenterSnapshotHook_;
         std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
+        bool forceHashFailureForTesting_{false};
+        bool forceRollbackFailureForTesting_{false};
+        // Set when a transaction could not be returned to a known state. While set, write
+        // operations fail closed with an explicit reason instead of issuing SQL on a
+        // connection whose transaction state is UNKNOWN. Only reopening the store clears it.
+        bool poisoned_{false};
 #ifdef _WIN32
         HANDLE instanceMutex_{nullptr};
         HANDLE identityHandle_{INVALID_HANDLE_VALUE};

@@ -6,12 +6,97 @@
 #include <atomic>
 #include <memory>
 #include <chrono>
+#include <unordered_set>
 
 namespace mayasaba
 {
     class AttachmentIngestionCoordinator
     {
     public:
+        // Why a prepared batch was or was not admitted to the draft list.
+        // Callers must distinguish these: only PersistenceFailed and the two result-shape
+        // outcomes leave durable records and staged copies to reconcile, and only
+        // StaleCompletion is expected during a project switch.
+        enum class BatchCommitOutcome
+        {
+            Committed,
+            StaleCompletion,
+            PersistenceFailed,
+            IncompletePreparation,
+            MalformedResult
+        };
+
+        struct PreparedBatchValidation
+        {
+            bool valid{true};
+            bool malformed{false};
+            std::string errorMessage;
+            size_t missingResults{0};
+        };
+
+        // Validates that a prepared result set can be trusted as the answer to this batch.
+        // A preparation that throws, is cancelled mid-batch, or returns fewer results than
+        // there were selected files leaves durable PREPARING intent records and staged
+        // copies behind. Fewer results is recoverable (the batch is completed with explicit
+        // per-file failures); a malformed set is not, because no trustworthy correspondence
+        // between placeholders and results exists.
+        static PreparedBatchValidation ValidatePreparedBatch(
+            std::vector<AttachmentCandidate> const& prepared,
+            std::vector<std::string> const& preparingIds)
+        {
+            PreparedBatchValidation v;
+            if (prepared.size() > preparingIds.size())
+            {
+                v.valid = false;
+                v.malformed = true;
+                v.errorMessage = "Attachment preparation returned " + std::to_string(prepared.size()) +
+                    " result(s) for " + std::to_string(preparingIds.size()) +
+                    " selected file(s); the result set cannot be matched to the selection.";
+                return v;
+            }
+
+            // Every placeholder identity must be distinct and non-empty, otherwise a result
+            // cannot be attributed to exactly one selected file.
+            std::unordered_set<std::string> seen;
+            seen.reserve(preparingIds.size());
+            for (auto const& id : preparingIds)
+            {
+                if (id.empty() || !seen.insert(id).second)
+                {
+                    v.valid = false;
+                    v.malformed = true;
+                    v.errorMessage = "Attachment placeholders contain a duplicate or empty identity; "
+                        "results cannot be attributed to selected files.";
+                    return v;
+                }
+            }
+
+            // A result without an identity cannot be persisted or inspected.
+            for (auto const& cand : prepared)
+            {
+                if (cand.id.empty())
+                {
+                    v.valid = false;
+                    v.malformed = true;
+                    v.errorMessage = "Attachment preparation produced a result without an identity.";
+                    return v;
+                }
+            }
+
+            if (prepared.size() < preparingIds.size())
+            {
+                v.valid = false;
+                v.missingResults = preparingIds.size() - prepared.size();
+                v.errorMessage = "Attachment preparation returned " + std::to_string(prepared.size()) +
+                    " result(s) for " + std::to_string(preparingIds.size()) +
+                    " selected file(s); " + std::to_string(v.missingResults) +
+                    " result(s) are missing. The selection is preserved; retry or remove the "
+                    "affected attachments.";
+                return v;
+            }
+            return v;
+        }
+
         struct DropContext
         {
             std::string boundProjectId;
@@ -88,24 +173,53 @@ namespace mayasaba
         // Production commit function: updates draft list with prepared candidates and invokes store save.
         // Guarantees atomic in-memory mutation: candidate draft list is prepared and passed to saveDrafts;
         // draftAttachments is only updated if saveDrafts succeeds without throwing an exception.
+        //
+        // Placeholders whose preparation produced no result are converted into explicit
+        // Rejected entries before persistence. They are never left as PREPARING: a stranded
+        // PREPARING row is indistinguishable from live work and would be reclaimed by
+        // staging reconciliation, silently discarding a selection the user still owns.
         template <typename SaveFn>
         static bool CommitDraftBatch(
             std::string const& activeProject,
             std::vector<AttachmentCandidate>& draftAttachments,
             std::vector<AttachmentCandidate> const& prepared,
             std::vector<std::string> const& preparingIds,
-            SaveFn&& saveDrafts)
+            SaveFn&& saveDrafts,
+            std::string const& missingResultReason = std::string{})
         {
             auto candidateDrafts = draftAttachments;
             size_t prepIdx = 0;
             for (auto& d : candidateDrafts)
             {
-                if (prepIdx < prepared.size() && d.id == preparingIds[prepIdx])
+                if (prepIdx < prepared.size() &&
+                    prepIdx < preparingIds.size() &&
+                    d.id == preparingIds[prepIdx])
                 {
                     d = prepared[prepIdx];
                     prepIdx++;
                 }
             }
+
+            // Any placeholder not answered by a result becomes an explicit failure that keeps
+            // its selection identity (id, source path, file name) so the user can retry or
+            // remove it, and so persistence cannot leave the durable PREPARING intent behind.
+            if (prepIdx < preparingIds.size())
+            {
+                std::unordered_set<std::string> unanswered(
+                    preparingIds.begin() + static_cast<std::ptrdiff_t>(prepIdx), preparingIds.end());
+                std::string const reason = missingResultReason.empty()
+                    ? std::string{ "Attachment preparation did not complete for this file. Retry or remove it." }
+                    : missingResultReason;
+                for (auto& d : candidateDrafts)
+                {
+                    if (d.status == AttachmentStatus::Preparing && unanswered.count(d.id) > 0)
+                    {
+                        d.status = AttachmentStatus::Rejected;
+                        d.errorMessage = reason;
+                    }
+                }
+            }
+
             saveDrafts(activeProject, candidateDrafts);
             draftAttachments = std::move(candidateDrafts);
             return true;
@@ -119,6 +233,9 @@ namespace mayasaba
         // 1. saveDrafts is NEVER invoked on stale completion.
         // 2. draftAttachments is NEVER mutated on stale completion or on save failure (no false saved state).
         // 3. Any exception thrown by saveDrafts is safely captured into outError if provided, preventing unhandled crash.
+        // 4. A result set that cannot be attributed to the selection is refused before any
+        //    mutation; a result set that is merely short is completed with explicit
+        //    per-file failures rather than committing stranded PREPARING placeholders.
         template <typename SaveFn>
         static bool ValidateAndCommitPreparedBatch(
             DropContext const& ctx,
@@ -129,23 +246,49 @@ namespace mayasaba
             std::vector<AttachmentCandidate> const& prepared,
             std::vector<std::string> const& preparingIds,
             SaveFn&& saveDrafts,
-            std::string* outError = nullptr)
+            std::string* outError = nullptr,
+            BatchCommitOutcome* outOutcome = nullptr)
         {
+            auto setOutcome = [outOutcome](BatchCommitOutcome o) {
+                if (outOutcome) *outOutcome = o;
+            };
+
             if (!ValidatePostPreparationBoundary(ctx, currentProjectId, currentGeneration, windowClosed))
             {
+                setOutcome(BatchCommitOutcome::StaleCompletion);
                 return false;
+            }
+
+            PreparedBatchValidation const validation = ValidatePreparedBatch(prepared, preparingIds);
+            if (!validation.valid && validation.malformed)
+            {
+                if (outError) *outError = validation.errorMessage;
+                setOutcome(BatchCommitOutcome::MalformedResult);
+                return false;
+            }
+            if (!validation.valid && outError)
+            {
+                // Reported to the user even though the recoverable portion still commits.
+                *outError = validation.errorMessage;
             }
 
             try
             {
-                return CommitDraftBatch(currentProjectId, draftAttachments, prepared, preparingIds, std::forward<SaveFn>(saveDrafts));
+                bool const committed = CommitDraftBatch(
+                    currentProjectId,
+                    draftAttachments,
+                    prepared,
+                    preparingIds,
+                    std::forward<SaveFn>(saveDrafts),
+                    validation.errorMessage);
+                setOutcome(validation.valid ? BatchCommitOutcome::Committed
+                                            : BatchCommitOutcome::IncompletePreparation);
+                return committed;
             }
             catch (std::exception const& ex)
             {
-                if (outError)
-                {
-                    *outError = ex.what();
-                }
+                if (outError) *outError = ex.what();
+                setOutcome(BatchCommitOutcome::PersistenceFailed);
                 return false;
             }
         }
