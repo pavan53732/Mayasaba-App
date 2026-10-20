@@ -1638,3 +1638,69 @@ Every item below is unverified, not merely unlisted:
 6. The native harness has not been executed against `ee0be9d`; its §15 result belongs to an older artifact.
 
 The CLI adapters, live agent sessions, Council execution, material work authorization and MSI packaging remain out of scope and unimplemented, so the C10 Gate I3 entry criteria are not met.
+
+---
+
+## 17. F1/F2 storage corrections: attachment identity ownership and universal write admission (2026-10-21)
+
+This section supersedes §16 as the current summary. §16 and everything above it remain as historical evidence tied to their own revisions and are **not** re-claimed here.
+
+### 17.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Source revision | working tree at `c3332d0` (HEAD) plus this change set (`Storage.h`, `Storage.cpp`, `winsqlite3_compat.h`, `storage_tests.cpp`); no source file changed between the final builds below and the commit that follows |
+| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-21 from the final working tree, SHA-256 `9FF21B8894AB3F87F9429C65CF4C7E2B4B291285B9E3C34B6D0EC86F2E3A3B51` |
+| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `50353CD298844F5CCA9C72AC094DD92B1E59F04C1497819C15E58C34335901BC` |
+| Test binaries | `storage_tests.exe` `6802022643AD31E127022831599A33B7CC34DB61993AAD4A0E74E1E6C7FC1AB8`; `verify_ac_ai.exe` `63CC10D3B80E7383C9710F8F04723759CCE4D3C9AB8A85B5D9990A9E2E4AADD4`; `perf_benchmarks.exe` `B29BD07F739671E606CF19030421A7C11714A3653E98B369F6E0DBA74E3CC0FA` |
+| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145` (MSVC 14.50.35717), Windows 11 build 26200, one display at 125% scaling |
+| Build hygiene | Application rebuild: 0 warnings, 0 errors. `storage_tests`, `verify_ac_ai` and `perf_benchmarks` were rebuilt from the same final source: 0 warnings, 0 errors in the captured logs. §16 recorded two pre-existing `C4100` unreferenced-parameter warnings from an earlier `perf_benchmarks` build; that observation is not re-claimed here, and no cause for its absence from this pass's captured log is asserted. MSVC links on this toolchain are not byte-reproducible, so relinking identical sources yields a new executable hash; the hashes above are those of the exact binaries whose runs are cited in §17.3, all executed after the final rebuild from the final source. |
+| Production store | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` — byte-identical before and after this pass; no test in this pass opened it (all stores are isolated temp paths). |
+
+`MainWindow.xbf` is **unchanged** from §16.1: this change set touches no XAML, so the compiled XAML identity is identical while the executable identity is not. Recording both is what makes that visible.
+
+**No live-window session was executed in this pass.** Every UI-level criterion that was `INCONCLUSIVE` in §16.6 remains `INCONCLUSIVE`; nothing below promotes one.
+
+### 17.2 The defects
+
+**F1 — an attachment identity could be written through another project.** `Storage::SaveDraftAttachment` (and the batch `SaveDraftAttachments`) upserted `draft_attachments` matching on `attachment_id` alone. The pending-manifest guards received the *supplied* project, so a write naming another project silently rewrote the owner's row — path, digest, error message, version — while the caller was told it succeeded. `SaveDraftAttachment` also ran with no transaction at all.
+
+The fix adds `RefuseForeignAttachmentIdentity_locked`, which checks both `draft_attachments` and committed `attachments` for existing ownership of the identity, and runs ownership check, pending-manifest check and upsert as **one** `BEGIN IMMEDIATE` transaction. A committed attachment owns its identity too: reusing it as a draft elsewhere would make inspection ambiguous about which record the identity names. A rejected batch therefore leaves no partial update, not even the innocent element that preceded the conflicting one.
+
+**F2 — quarantine admission was bypassed by any mutation that did not begin with `BEGIN IMMEDIATE`.** The poisoned-connection check lived inside `Exec`, only on the `BEGIN IMMEDIATE` branch, so a direct prepared write — `SaveDraftAttachment` is one — reached SQLite on a connection whose transaction outcome was unknown. The rollback-after-failure paths also *assumed* the rollback worked.
+
+The fix has three parts, in this order of reliance:
+
+| Property | How it is now guaranteed |
+| --- | --- |
+| Every mutation is admitted | `AdmitWrite_locked()` is the single admission point; every mutation entry point calls it and fails closed **before any statement is prepared**. It performs the quarantine check and the free-space check together, so a caller can no longer pass one by doing the other's work. |
+| Admission cannot be forgotten | A SQLite authorizer installed at open (`WriteAdmissionAuthorizer`) denies every write action at the SQLite layer while the connection is quarantined, so an entry point that forgets admission still fails closed. Reads stay permitted so the Action Center can describe the unresolved state the quarantine protects; a denied statement is translated from SQLite's bare "not authorized" into the quarantine reason. |
+| The rollback is proven, not assumed | `RollbackAfterFailure_locked()` issues the rollback and then checks `sqlite3_get_autocommit`; a connection still inside a transaction is quarantined rather than presented as usable. |
+
+**A second defect in this change set, found by its own verification.** The first expression of the authorizer backstop translated a denied statement's message only in `Storage::Check`, which covers `sqlite3_step`. The `Statement` constructor prepares with `sqlite3_prepare_v2` and threw SQLite's bare `sqlite3_errmsg` — which for a denial is `not authorized` — so an entry point that forgot admission and was stopped by the backstop would have surfaced an unexplained "not authorized" instead of the quarantine guidance. The controlled experiment in B-13 caught this: with admission stripped from one direct-write method, group 44 failed on the *message*, proving the denial fired but spoke wrongly. The repair is one translation point, `StatementFailureMessage`, now used by prepare (`Statement`), step (`Check`) and `sqlite3_exec` (`Exec`), so admission and backstop refusals are indistinguishable to a caller. Re-running the same experiment after the repair passes (B-13), which demonstrates both the defect and its repair. A denial on this connection can only come from this authorizer — no other authorizer is installed and `ATTACH`/`DETACH` are themselves denied while quarantined — so the translation is unambiguous.
+
+### 17.3 Criteria for this assignment
+
+| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
+| --- | --- | --- | --- | --- | --- |
+| B-01 | A single foreign write is refused and the owner's row, version, digest, path and error message are untouched; the foreign project sees nothing. | Unit test | `storage_tests.exe` group 43: `SaveDraftAttachment("proj-b", …)` over `proj-a`'s identity throws; `GetDraftAttachments("proj-a")` keeps path, error, digest and version; `GetDraftAttachments("proj-b")` empty. | PASS | Service/storage boundary; no UI path was exercised. |
+| B-02 | A rejected batch leaves no partial update. | Unit test | Group 43: batch `{innocent, foreign}` for `proj-b` throws; `proj-b`'s drafts remain empty and `proj-a`'s single row survives. | PASS | Two projects in one store; not a concurrency test. |
+| B-03 | A legitimate same-project update still applies and bumps the version. | Unit test | Group 43: `SaveDraftAttachment("proj-a", …)` updates the error message and `version == versionBefore + 1`. | PASS | — |
+| B-04 | With a locked pending submission, a foreign write leaves record, version, digest, staged path, staged bytes and the pending identity exactly as they were. | Unit test | Group 43: after `StageSubmission`, a foreign write throws; `Pending("proj-c")->id` unchanged; staged file still exists. | PASS | — |
+| B-05 | Every mutation is refused on a quarantined connection, and the refusal reason names the quarantine (proving admission, not an incidental "transaction within a transaction"). | Unit test | Group 44: after the forced-rollback injection yields `SaveDisposition::Unknown` and `IsQuarantinedForTesting()`, the refusal reasons for `SaveDraftAttachment`, `SaveDraftAttachments`, `SaveDraft`, `StageSubmission` and `BindProject` all contain "quarantined"; `SetClosure`, `RemoveDraftAttachment`, `ClearDraftAttachments`, `TouchProjectOpened` and `RelocateProject` all throw. Nothing changed (draft row, pending id, closure flag, canonical path all verified after the refusals). | PASS | Exercised through production methods; no synthetic entry point was added to test the authorizer backstop directly. |
+| B-06 | Reads remain available under quarantine. | Unit test | Group 44: `GetDraftAttachments`, `Pending` and `Project` all succeed while quarantined. | PASS | — |
+| B-07 | Reopening clears the quarantine and writes resume. | Unit test | Group 44: a fresh `Storage` on the same file is not quarantined, and `SaveDraft` succeeds. | PASS | The unknown transaction died with the connection; this is the documented recovery, not a repair. |
+| B-08 | Existing S1–S3 protections continue to pass. | Unit test / Registry | `storage_tests.exe` `PASS: 43 of 43 executed native regression groups` (`sweep-tests-run.log`); `verify_ac_ai.exe` 12/12 `PASS Test` (`sweep-verify-run.log`); `validate_contract_registry.py` `PASS: 124 contract-registry and Screen 2 slice schema checks` (`sweep-registry-run.log`). | PASS | Counts are what executed; none were skipped. |
+| B-09 | The new group detects the F1 defect (controlled mutation). | Controlled mutation | Both `RefuseForeignAttachmentIdentity_locked` call sites were removed, rebuilt (`mut-f1b-build.log`, exit 0) and run: `FAIL: Assertion failed: singleRefused at storage_tests.cpp:3869`, `FAIL 43. …` (`mut-f1b-run.log`), exit 1. Restored byte-identically (SHA-256 `0A2711B9…`) and rebuilt. | PASS | Demonstrates detection for the assertions that ran in group 43; not a proof for every assertion in the group. |
+| B-10 | The new group detects the F2 defect (controlled mutation). | Controlled mutation | Pre-fix quarantine behaviour restored three ways — authorizer not installed, poison checked only on the `BEGIN IMMEDIATE` branch of `Exec`, `AdmitWrite_locked` reduced to the capacity check — rebuilt (`mut-f2-final-build.log`, exit 0) and run: `FAIL: Assertion failed: draftText.find("quarantined") != std::string::npos at storage_tests.cpp:4013`, `FAIL 44. …` (`mut-f2-final-run.log`), exit 1. Restored byte-identically (SHA-256 `0A2711B9…`) and rebuilt. | PASS | The mutated failure lands on `SaveDraft`, the direct prepared write, which is exactly the hole F2 closed. The run aborts at the first failed assertion, so detection for the remaining group-44 assertions is not individually demonstrated. |
+| B-13 | The authorizer backstop fires and speaks correctly when an entry point forgets admission. | Controlled mutation | Admission was stripped from `SaveDraft` alone (authorizer retained, everything else fixed), rebuilt (`mut-f2b2-build.log`, exit 0) and run: `PASS: 43 of 43` (`mut-f2b2-run.log`), exit 0 — the UPDATE was denied at prepare and the caller received the quarantine message. The identical mutation with the translation repair reverted failed at the same assertion (`mut-f2b-prerepair-run.log`, `FAIL 44`, exit 1), which is the evidence for the defect and its repair described in §17.2. Restored byte-identically (SHA-256 `0A2711B9…`) and rebuilt. | PASS | Proves the backstop on the direct-write path it protects. A deliberately admission-forgetting transaction-based entry point would still fail with SQLite's nested-transaction error rather than the quarantine message; no such entry point exists or was added. |
+| B-11 | Each result can be tied to the exact executables. | Source inspection / Compilation | §17.1 records SHA-256 of `Mayasaba.exe`, `MainWindow.xbf` and all three test binaries; the app, test and benchmark builds were separate rebuilds from the same final working tree. | PASS | — |
+| B-12 | UI performance measured on this build. | — | `perf_benchmarks.exe` completes (`sweep-perf-run.log`, exit 0), 100 samples per row: substring match `service_alpha` median 1.64 ms (max 3.05 ms); substring `algorithm` ~10% hits median 12.01 ms (max 17.06 ms); worst-case full scan (0 hits) median 4.53 ms (max 7.08 ms). | INCONCLUSIVE as UI evidence | These are storage benchmarks. Input latency, frame pacing and UI-thread stall were **not** measured on this build. |
+
+### 17.4 What this record does not claim
+
+1. No live-window, drag-and-drop, Narrator, DPI, high-contrast, theme-switch or reduced-motion observation was made in this pass; those criteria remain as §16.6 left them.
+2. The authorizer backstop was exercised directly by B-13 on the direct-write path it protects. It was **not** exercised for a transaction-based entry point that forgot admission; such an entry point fails with SQLite's nested-transaction error rather than the quarantine message, which is disclosed rather than fixed because adding a hypothetical entry point to prove it would itself be the defect.
+3. The controlled mutations demonstrate that groups 43 and 44 detect the defects they were written for. They do not demonstrate detection for every assertion in those groups, and they are not a general test-quality proof.
+4. Storage correctness here is proved at the storage/service boundary with isolated temp stores. No concurrency, fault-injection or multi-process evidence was produced in this pass beyond the pre-existing groups.
+
