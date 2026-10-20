@@ -24,13 +24,28 @@ namespace mayasaba
 {
     namespace
     {
+        // One translation for every path that can fail because a statement was denied.
+        // SQLite reports an authorizer denial as SQLITE_AUTH with the bare message
+        // "not authorized"; admission and the authorizer backstop must be
+        // indistinguishable to a caller, so prepare, step and exec all surface the
+        // same quarantine explanation.
+        inline std::string StatementFailureMessage(sqlite3* db, int rc, char const* sqliteExecMessage = nullptr)
+        {
+            if (rc == SQLITE_AUTH)
+            {
+                return "The store is quarantined after an unconfirmed transaction rollback, so this change was "
+                       "refused. Reopen the project store and reconcile the unresolved submission before retrying.";
+            }
+            return sqliteExecMessage ? sqliteExecMessage : sqlite3_errmsg(db);
+        }
         struct Statement
         {
             sqlite3_stmt* value{};
             Statement(sqlite3* db, char const* sql)
             {
-                if (sqlite3_prepare_v2(db, sql, -1, &value, nullptr) != SQLITE_OK)
-                    throw std::runtime_error(sqlite3_errmsg(db));
+                auto const rc = sqlite3_prepare_v2(db, sql, -1, &value, nullptr);
+                if (rc != SQLITE_OK)
+                    throw std::runtime_error(StatementFailureMessage(db, rc));
             }
             ~Statement() { if (value) sqlite3_finalize(value); }
             Statement(Statement const&) = delete;
@@ -880,29 +895,126 @@ namespace mayasaba
     void Storage::Check(int rc, sqlite3* db)
     {
         if (rc != SQLITE_OK && rc != SQLITE_DONE && rc != SQLITE_ROW)
-            throw std::runtime_error(sqlite3_errmsg(db));
+        {
+            throw std::runtime_error(StatementFailureMessage(db, rc));
+        }
     }
     void Storage::Exec(char const* sql)
     {
         if(std::string_view(sql).starts_with("BEGIN IMMEDIATE"))
         {
-            if (poisoned_)
-            {
-                throw std::runtime_error(
-                    "The store is quarantined after an unconfirmed transaction rollback. "
-                    "Reopen the project store and reconcile the unresolved submission before retrying.");
-            }
-            CheckWriteCapacity();
+            AdmitWrite_locked();
         }
         char* error = nullptr;
         auto const rc = sqlite3_exec(db_, sql, nullptr, nullptr, &error);
         if (rc != SQLITE_OK)
         {
-            std::string message = error ? error : sqlite3_errmsg(db_);
+            std::string message = StatementFailureMessage(db_, rc, error);
             if (error) sqlite3_free(error);
             throw std::runtime_error(message);
         }
     }
+    // Single admission point for every mutation.
+    //
+    // Quarantine used to be checked only where a statement happened to begin with
+    // "BEGIN IMMEDIATE", so a direct prepared write - SaveDraftAttachment is one - reached
+    // SQLite on a connection whose transaction outcome was unknown. Admission is now a
+    // separate step that every mutation calls, and it fails closed before any statement is
+    // prepared. The authorizer installed at open is the backstop for any future entry point
+    // that forgets to call this: it denies writes on a quarantined connection at the SQLite
+    // layer, where no call path can bypass it.
+    void Storage::AdmitWrite_locked()
+    {
+        if (poisoned_)
+        {
+            throw std::runtime_error(
+                "The store is quarantined after an unconfirmed transaction rollback, so no change can be "
+                "recorded. Reopen the project store and reconcile the unresolved submission before retrying.");
+        }
+        CheckWriteCapacity();
+    }
+
+    int Storage::WriteAdmissionAuthorizer(void* userData, int action, char const*, char const*,
+                                          char const*, char const*)
+    {
+        auto* self = static_cast<Storage*>(userData);
+        if (!self || !self->poisoned_) return SQLITE_OK;
+
+        switch (action)
+        {
+        case SQLITE_INSERT:
+        case SQLITE_UPDATE:
+        case SQLITE_DELETE:
+        case SQLITE_CREATE_TABLE:
+        case SQLITE_CREATE_TEMP_TABLE:
+        case SQLITE_CREATE_INDEX:
+        case SQLITE_CREATE_TRIGGER:
+        case SQLITE_CREATE_VIEW:
+        case SQLITE_DROP_TABLE:
+        case SQLITE_DROP_TEMP_TABLE:
+        case SQLITE_DROP_INDEX:
+        case SQLITE_DROP_TRIGGER:
+        case SQLITE_DROP_VIEW:
+        case SQLITE_ALTER_TABLE:
+        case SQLITE_REINDEX:
+        case SQLITE_ANALYZE:
+        case SQLITE_ATTACH:
+        case SQLITE_DETACH:
+            // Reads stay available: the Action Center and inspection must still be able to
+            // describe the unresolved state that the quarantine exists to protect.
+            return SQLITE_DENY;
+        default:
+            return SQLITE_OK;
+        }
+    }
+
+    // Establishes the physical transaction state after a failed mutation instead of
+    // assuming the rollback worked. A connection still inside a transaction cannot be
+    // trusted, so it is quarantined rather than presented as usable.
+    void Storage::RollbackAfterFailure_locked() noexcept
+    {
+        sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+        if (sqlite3_get_autocommit(db_) == 0)
+        {
+            poisoned_ = true;
+        }
+    }
+
+    // An attachment identity is owned by the project that first recorded it. Without this
+    // check an upsert naming another project would silently rewrite the owner's row: the
+    // ON CONFLICT clause matched on attachment_id alone, and the pending-manifest guards
+    // used the SUPPLIED project, so they never looked at the row actually being updated.
+    void Storage::RefuseForeignAttachmentIdentity_locked(std::string const& projectId, std::string const& attachmentId)
+    {
+        {
+            Statement q(db_, "SELECT project_id FROM draft_attachments WHERE attachment_id=?1;");
+            Bind(q.value, 1, attachmentId);
+            if (sqlite3_step(q.value) == SQLITE_ROW)
+            {
+                std::string const owner = Text(q.value, 0);
+                if (owner != projectId)
+                {
+                    throw std::runtime_error(
+                        "That attachment identity belongs to a different project, so it cannot be written "
+                        "through this project. Nothing was changed.");
+                }
+                return;
+            }
+        }
+        {
+            // A committed attachment owns its identity too; reusing it as a draft elsewhere
+            // would make inspection ambiguous about which record the identity names.
+            Statement q(db_, "SELECT project_id FROM attachments WHERE attachment_id=?1;");
+            Bind(q.value, 1, attachmentId);
+            if (sqlite3_step(q.value) == SQLITE_ROW && Text(q.value, 0) != projectId)
+            {
+                throw std::runtime_error(
+                    "That attachment identity belongs to a committed attachment of a different project, so "
+                    "it cannot be written through this project. Nothing was changed.");
+            }
+        }
+    }
+
     void Storage::CheckWriteCapacity()
     {
         auto space=std::filesystem::space(file_.parent_path());
@@ -996,6 +1108,10 @@ namespace mayasaba
             int status = sqlite3_open(file.string().c_str(), &db_);
 #endif
             if (status != SQLITE_OK) throw std::runtime_error(db_ ? sqlite3_errmsg(db_) : "SQLite open failed");
+            // Backstop for quarantine: once the connection is quarantined this denies every
+            // write at the SQLite layer, so a mutation entry point that forgets to call
+            // AdmitWrite_locked still fails closed instead of recording a change.
+            sqlite3_set_authorizer(db_, &Storage::WriteAdmissionAuthorizer, this);
             sqlite3_busy_timeout(db_, 5000);
             int schemaVersion{};
             {
@@ -1269,7 +1385,7 @@ namespace mayasaba
         }
         catch (...)
         {
-            sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+            RollbackAfterFailure_locked();
             throw;
         }
     }
@@ -1534,14 +1650,14 @@ namespace mayasaba
         }
         catch (...)
         {
-            sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+            RollbackAfterFailure_locked();
             throw;
         }
     }
     void Storage::RelocateProject(std::string const& id, std::string const& newCanonicalPath, std::string const& newDisplayName)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         Statement q(db_, "UPDATE projects SET canonical_path=?2, display_name=?3 WHERE id=?1;");
         Bind(q.value, 1, id);
         Bind(q.value, 2, newCanonicalPath);
@@ -1555,7 +1671,7 @@ namespace mayasaba
     bool Storage::SavePrebindDraft(std::string const& body, uint64_t revision)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         if (revision != requestedDraftRevision_.load()) return false;
         Statement q(db_, "INSERT INTO ui_state(singleton, last_project, prebinding_draft) VALUES(1, '', ?1) "
                          "ON CONFLICT(singleton) DO UPDATE SET prebinding_draft=excluded.prebinding_draft;");
@@ -1653,7 +1769,7 @@ namespace mayasaba
         }
         catch (...)
         {
-            sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+            RollbackAfterFailure_locked();
             throw;
         }
     }
@@ -1661,7 +1777,7 @@ namespace mayasaba
     void Storage::RecordDirectoryIntent(std::string const& opId, std::string const& parentPath, std::string const& folderName, std::string const& targetPath)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         Statement q(db_, "INSERT INTO directory_operations(operation_id, parent_path, folder_name, target_path, state) "
                          "VALUES(?1, ?2, ?3, ?4, 'INTENDED');");
         Bind(q.value, 1, opId);
@@ -1674,7 +1790,7 @@ namespace mayasaba
     void Storage::RecordDirectoryCreated(std::string const& opId, std::string const& observedIdentity)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         Statement q(db_, "UPDATE directory_operations SET state='CREATED', observed_identity=?2, "
                          "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE operation_id=?1;");
         Bind(q.value, 1, opId);
@@ -1685,7 +1801,7 @@ namespace mayasaba
     void Storage::RecordDirectoryBound(std::string const& opId)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         Statement q(db_, "UPDATE directory_operations SET state='BOUND', "
                          "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE operation_id=?1;");
         Bind(q.value, 1, opId);
@@ -1695,7 +1811,7 @@ namespace mayasaba
     void Storage::RecordDirectoryFailed(std::string const& opId, std::string const& errorMessage)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         Statement q(db_, "UPDATE directory_operations SET state='FAILED', error_message=?2, "
                          "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE operation_id=?1;");
         Bind(q.value, 1, opId);
@@ -1737,7 +1853,7 @@ namespace mayasaba
     void Storage::RecordDirectoryUncertain(std::string const& opId, std::string const& errorMessage)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         Statement q(db_, "UPDATE directory_operations SET error_message=?2, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE operation_id=?1 AND state NOT IN ('BOUND','FAILED');");
         Bind(q.value, 1, opId); Bind(q.value, 2, errorMessage);
         Check(sqlite3_step(q.value), db_);
@@ -1762,7 +1878,7 @@ namespace mayasaba
     void Storage::SaveDraft(std::string const& id, std::string const& body)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         Statement q(db_, "UPDATE projects SET draft=?2 WHERE id=?1;");
         Bind(q.value,1,id); Bind(q.value,2,ProtectDraft(body));
         Check(sqlite3_step(q.value),db_);
@@ -1878,7 +1994,7 @@ namespace mayasaba
     bool Storage::SetClosure(std::string const& id, int version, bool closed)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         Statement q(db_, "UPDATE projects SET closed=?3,version=version+1 WHERE id=?1 AND version=?2;");
         Bind(q.value,1,id);
         Check(sqlite3_bind_int(q.value,2,version),db_);
@@ -2662,22 +2778,38 @@ namespace mayasaba
     void Storage::SaveDraftAttachment(std::string const& projectId, AttachmentRecord const& att)
     {
         std::lock_guard lock(mutex_);
-        CheckWriteCapacity();
-        RefusePendingManifestMutation_locked(projectId, att.id, att.status, att.sha256, att.fileSize, att.storagePath);
-        Statement q(db_, "INSERT INTO draft_attachments(attachment_id,project_id,file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,version) "
-                         "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1) "
-                         "ON CONFLICT(attachment_id) DO UPDATE SET file_size=excluded.file_size,sha256=excluded.sha256,staged_path=excluded.staged_path,status=excluded.status,error_message=excluded.error_message,version=draft_attachments.version+1;");
-        Bind(q.value,1,att.id);
-        Bind(q.value,2,projectId);
-        Bind(q.value,3,att.fileName);
-        sqlite3_bind_int64(q.value,4,static_cast<sqlite3_int64>(att.fileSize));
-        Bind(q.value,5,att.sha256);
-        Bind(q.value,6,att.detectedType);
-        Bind(q.value,7,att.storagePath);
-        Bind(q.value,8,att.sourcePath);
-        Bind(q.value,9,att.status);
-        Bind(q.value,10,att.errorMessage);
-        Check(sqlite3_step(q.value),db_);
+        AdmitWrite_locked();
+
+        // The ownership check, the pending-manifest check and the upsert are one
+        // transactional operation. Previously this path wrote with no transaction at all,
+        // and the upsert matched on attachment_id alone, so a record naming another project
+        // silently rewrote that project's row while the caller was told it succeeded.
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            RefuseForeignAttachmentIdentity_locked(projectId, att.id);
+            RefusePendingManifestMutation_locked(projectId, att.id, att.status, att.sha256, att.fileSize, att.storagePath);
+            Statement q(db_, "INSERT INTO draft_attachments(attachment_id,project_id,file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,version) "
+                             "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1) "
+                             "ON CONFLICT(attachment_id) DO UPDATE SET file_size=excluded.file_size,sha256=excluded.sha256,staged_path=excluded.staged_path,status=excluded.status,error_message=excluded.error_message,version=draft_attachments.version+1;");
+            Bind(q.value,1,att.id);
+            Bind(q.value,2,projectId);
+            Bind(q.value,3,att.fileName);
+            sqlite3_bind_int64(q.value,4,static_cast<sqlite3_int64>(att.fileSize));
+            Bind(q.value,5,att.sha256);
+            Bind(q.value,6,att.detectedType);
+            Bind(q.value,7,att.storagePath);
+            Bind(q.value,8,att.sourcePath);
+            Bind(q.value,9,att.status);
+            Bind(q.value,10,att.errorMessage);
+            Check(sqlite3_step(q.value),db_);
+            Exec("COMMIT;");
+        }
+        catch (...)
+        {
+            RollbackAfterFailure_locked();
+            throw;
+        }
     }
 
     void Storage::SaveDraftAttachments(std::string const& projectId, std::vector<AttachmentRecord> const& atts)
@@ -2692,7 +2824,7 @@ namespace mayasaba
         // SQLite's own busy timeout. Blocking here, off the interface thread, is the honest
         // behaviour: the caller is told the truth by completing or by a real error.
         std::lock_guard<std::mutex> lock(mutex_);
-        CheckWriteCapacity();
+        AdmitWrite_locked();
         Exec("BEGIN IMMEDIATE;");
         try
         {
@@ -2700,7 +2832,10 @@ namespace mayasaba
             for (auto const& att : atts)
             {
                 // Every write in the batch is checked against the locked manifest inside
-                // this transaction, so a partially-applied widening is impossible.
+                // this transaction, so a partially-applied widening is impossible. The same
+                // transaction also refuses an identity another project owns, so a rejected
+                // batch leaves no partial update behind.
+                RefuseForeignAttachmentIdentity_locked(projectId, att.id);
                 RefusePendingManifestMutation_locked(projectId, att.id, att.status, att.sha256, att.fileSize, att.storagePath);
                 if (saveDraftAttachmentsItemHook_)
                 {
@@ -2726,7 +2861,10 @@ namespace mayasaba
         }
         catch (...)
         {
-            try { Exec("ROLLBACK;"); } catch (...) {}
+            // A rollback that was assumed rather than proven is how a connection ends up
+            // presented as usable while still inside a transaction. The state is
+            // established here, and an unresolved one quarantines the store.
+            RollbackAfterFailure_locked();
             throw;
         }
     }
@@ -2767,7 +2905,7 @@ namespace mayasaba
         }
         catch (...)
         {
-            sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+            RollbackAfterFailure_locked();
             throw;
         }
     }
@@ -2819,7 +2957,7 @@ namespace mayasaba
         }
         catch (...)
         {
-            sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+            RollbackAfterFailure_locked();
             throw;
         }
     }

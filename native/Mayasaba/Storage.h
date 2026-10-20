@@ -373,6 +373,19 @@ namespace mayasaba
 #endif
         void Exec(char const* sql);
         void CheckWriteCapacity();
+
+        // Mandatory admission for every mutation: a quarantined connection records nothing.
+        void AdmitWrite_locked();
+        // Refuses an attachment identity that another project already owns, checked inside
+        // the same transaction as the write it guards.
+        void RefuseForeignAttachmentIdentity_locked(std::string const& projectId, std::string const& attachmentId);
+        // Establishes the transaction state after a failed mutation; quarantines the store
+        // when the rollback cannot be proven.
+        void RollbackAfterFailure_locked() noexcept;
+        // Backstop: denies writes on a quarantined connection at the SQLite layer, so no
+        // call path can bypass admission.
+        static int WriteAdmissionAuthorizer(void* userData, int action, char const* arg1, char const* arg2,
+                                            char const* databaseName, char const* triggerName);
         // Refuses a draft-attachment write that would change the attachment manifest a
         // locked pending submission was admitted with. The pending row is the authority
         // here, not the interface's projection of it: a caller that never went through the

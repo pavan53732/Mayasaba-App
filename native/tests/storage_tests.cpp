@@ -3831,6 +3831,216 @@ int main()
             CASES_END();
         }
 
+        // 43. F1: an attachment identity is owned by the project that recorded it. The
+        // upsert matched on attachment_id alone, and the pending-manifest guards used the
+        // SUPPLIED project, so a write naming another project silently rewrote the owner's
+        // row while reporting success.
+        {
+            CASES_BEGIN("43. An attachment identity cannot be written through another project");
+            mayasaba::Storage store(folder / "ownership.db");
+            store.BindProject("proj-a", "A", "C:/A");
+            store.BindProject("proj-b", "B", "C:/B");
+
+            mayasaba::AttachmentRecord owned;
+            owned.id = "att-shared";
+            owned.projectId = "proj-a";
+            owned.fileName = "a.txt";
+            owned.fileSize = 5;
+            owned.sha256 = "sha-a";
+            owned.detectedType = "text/plain";
+            owned.storagePath = "C:/stage/a.txt";
+            owned.sourcePath = "C:/source/a.txt";
+            owned.status = "REJECTED";
+            owned.errorMessage = "original error";
+            store.SaveDraftAttachment("proj-a", owned);
+
+            auto const beforeRows = store.GetDraftAttachments("proj-a");
+            EXPECT(beforeRows.size() == 1);
+            uint64_t const versionBefore = beforeRows[0].version;
+
+            // The reproduction from the review: same identity, another project, new path.
+            mayasaba::AttachmentRecord foreign = owned;
+            foreign.projectId = "proj-b";
+            foreign.storagePath = "C:/stage/b-replacement.txt";
+            foreign.errorMessage = "overwritten from B";
+            bool singleRefused = false;
+            try { store.SaveDraftAttachment("proj-b", foreign); }
+            catch (std::exception const&) { singleRefused = true; }
+            EXPECT(singleRefused);
+
+            auto const afterRows = store.GetDraftAttachments("proj-a");
+            EXPECT(afterRows.size() == 1);
+            EXPECT(afterRows[0].storagePath == "C:/stage/a.txt");
+            EXPECT(afterRows[0].errorMessage == "original error");
+            EXPECT(afterRows[0].sha256 == "sha-a");
+            EXPECT(afterRows[0].version == versionBefore);
+            EXPECT(store.GetDraftAttachments("proj-b").empty());
+
+            // Batch: a rejected batch must leave no partial update, so the innocent first
+            // element must not be inserted before the conflicting one is refused.
+            mayasaba::AttachmentRecord innocent;
+            innocent.id = "att-innocent";
+            innocent.projectId = "proj-b";
+            innocent.fileName = "b.txt";
+            innocent.fileSize = 7;
+            innocent.sha256 = "sha-b";
+            innocent.detectedType = "text/plain";
+            innocent.storagePath = "C:/stage/b.txt";
+            innocent.status = "READY";
+            bool batchRefused = false;
+            try { store.SaveDraftAttachments("proj-b", { innocent, foreign }); }
+            catch (std::exception const&) { batchRefused = true; }
+            EXPECT(batchRefused);
+            EXPECT(store.GetDraftAttachments("proj-b").empty());
+            EXPECT(store.GetDraftAttachments("proj-a").size() == 1);
+
+            // A legitimate same-project update still works and bumps the version.
+            mayasaba::AttachmentRecord sameProject = owned;
+            sameProject.errorMessage = "updated in A";
+            store.SaveDraftAttachment("proj-a", sameProject);
+            auto const updated = store.GetDraftAttachments("proj-a");
+            EXPECT(updated.size() == 1);
+            EXPECT(updated[0].errorMessage == "updated in A");
+            EXPECT(updated[0].version == versionBefore + 1);
+
+            // With a locked pending submission in the owning project, a foreign write must
+            // leave the record, its version, digest, staged path, bytes and the pending
+            // identity exactly as they were.
+            store.BindProject("proj-c", "C", "C:/C");
+            auto stagedDir = folder / "ownership-staging" / "proj-c";
+            fs::create_directories(stagedDir);
+            auto stagedFile = stagedDir / "locked.txt";
+            {
+                std::ofstream of(stagedFile, std::ios::binary);
+                of.write("locked bytes", 12);
+            }
+            mayasaba::AttachmentRecord locked;
+            locked.id = "att-locked";
+            locked.projectId = "proj-c";
+            locked.fileName = "locked.txt";
+            locked.fileSize = 12;
+            locked.sha256 = ComputeSha256ForTestFile(WideToUtf8(stagedFile.wstring()));
+            locked.detectedType = "text/plain";
+            locked.storagePath = WideToUtf8(stagedFile.wstring());
+            locked.sourcePath = "C:/source/locked.txt";
+            locked.status = "READY";
+            store.SaveDraftAttachment("proj-c", locked);
+            EXPECT(store.StageSubmission("proj-c", "sub-locked", "body") == "sub-locked");
+
+            auto const lockedBefore = store.GetDraftAttachments("proj-c");
+            EXPECT(lockedBefore.size() == 1);
+
+            mayasaba::AttachmentRecord foreignLocked = locked;
+            foreignLocked.projectId = "proj-d";
+            foreignLocked.sha256 = "different-digest";
+            foreignLocked.storagePath = "C:/stage/elsewhere.txt";
+            bool lockedRefused = false;
+            try { store.SaveDraftAttachment("proj-d", foreignLocked); }
+            catch (std::exception const&) { lockedRefused = true; }
+            EXPECT(lockedRefused);
+
+            auto const lockedAfter = store.GetDraftAttachments("proj-c");
+            EXPECT(lockedAfter.size() == 1);
+            EXPECT(lockedAfter[0].id == lockedBefore[0].id);
+            EXPECT(lockedAfter[0].version == lockedBefore[0].version);
+            EXPECT(lockedAfter[0].sha256 == lockedBefore[0].sha256);
+            EXPECT(lockedAfter[0].storagePath == lockedBefore[0].storagePath);
+            EXPECT(store.Pending("proj-c")->id == "sub-locked");
+            EXPECT(fs::exists(stagedFile));
+            EXPECT(store.GetDraftAttachments("proj-d").empty());
+            CASES_END();
+        }
+
+        // 44. F2: quarantine must refuse every mutation, not only those that happen to
+        // begin with BEGIN IMMEDIATE. A direct prepared write used to reach SQLite on a
+        // connection whose transaction outcome was unknown.
+        {
+            CASES_BEGIN("44. Every storage mutation is refused on a quarantined connection");
+            {
+                mayasaba::Storage store(folder / "quarantine-all.db");
+                store.BindProject("proj-q", "Q", "C:/Q");
+
+                mayasaba::AttachmentRecord att;
+                att.id = "att-q";
+                att.projectId = "proj-q";
+                att.fileName = "q.txt";
+                att.fileSize = 3;
+                att.sha256 = "sha-q";
+                att.detectedType = "text/plain";
+                att.storagePath = "C:/stage/q.txt";
+                // READY, because a submission may only be staged over a complete draft.
+                att.status = "READY";
+                store.SaveDraftAttachment("proj-q", att);
+                EXPECT(store.StageSubmission("proj-q", "sub-q", "pending body") == "sub-q");
+
+                store.SetForceRollbackFailureForTesting(true);
+                mayasaba::SaveContributionDetail detail;
+                auto const disposition = store.SaveContribution("proj-q", "sub-q", "different body", {}, detail);
+                EXPECT(disposition == SaveDisposition::Unknown);
+                EXPECT(store.IsQuarantinedForTesting());
+
+                // Reads must still work: the Action Center and inspection have to describe
+                // the very state the quarantine protects.
+                auto const draftsBefore = store.GetDraftAttachments("proj-q");
+                EXPECT(draftsBefore.size() == 1);
+                EXPECT(store.Pending("proj-q").has_value());
+                EXPECT(store.Project("proj-q").has_value());
+
+                auto refused = [](auto&& operation)
+                {
+                    try { operation(); }
+                    catch (std::exception const&) { return true; }
+                    return false;
+                };
+
+                // Refusal alone is not enough. The injected failure leaves a transaction open,
+                // so a write can fail incidentally with "cannot start a transaction within a
+                // transaction" even when nothing checks quarantine. The reason must name the
+                // quarantine, which proves the refusal came from write admission.
+                auto refusalReason = [](auto&& operation) -> std::string
+                {
+                    try { operation(); }
+                    catch (std::exception const& ex) { return ex.what(); }
+                    return std::string{};
+                };
+
+                std::string const singleWrite = refusalReason([&] { store.SaveDraftAttachment("proj-q", att); });
+                EXPECT(!singleWrite.empty());
+                EXPECT(singleWrite.find("quarantined") != std::string::npos);
+                std::string const batchWrite = refusalReason([&] { store.SaveDraftAttachments("proj-q", { att }); });
+                EXPECT(batchWrite.find("quarantined") != std::string::npos);
+                std::string const draftText = refusalReason([&] { store.SaveDraft("proj-q", "draft text"); });
+                EXPECT(draftText.find("quarantined") != std::string::npos);
+                std::string const stage = refusalReason([&] { store.StageSubmission("proj-q", "sub-q2", "second"); });
+                EXPECT(stage.find("quarantined") != std::string::npos);
+                std::string const bind = refusalReason([&] { store.BindProject("proj-q2", "Q2", "C:/Q2"); });
+                EXPECT(bind.find("quarantined") != std::string::npos);
+
+                // Every mutation entry point, exercised through the production methods.
+                EXPECT(refused([&] { store.SetClosure("proj-q", 0, true); }));
+                EXPECT(refused([&] { store.RemoveDraftAttachment("proj-q", "att-q"); }));
+                EXPECT(refused([&] { store.ClearDraftAttachments("proj-q"); }));
+                EXPECT(refused([&] { store.TouchProjectOpened("proj-q"); }));
+                EXPECT(refused([&] { store.RelocateProject("proj-q", "C:/Q-moved", "Q"); }));
+
+                // Nothing changed.
+                EXPECT(store.GetDraftAttachments("proj-q").size() == 1);
+                EXPECT(store.GetDraftAttachments("proj-q")[0].status == "READY");
+                EXPECT(store.Pending("proj-q")->id == "sub-q");
+                EXPECT(!store.Project("proj-q")->closed);
+                EXPECT(store.Project("proj-q")->canonicalPath == "C:/Q");
+                EXPECT(!store.Project("proj-q2").has_value());
+            }
+
+            // The authorized recovery path: reopening the store clears the quarantine
+            // because the unknown transaction died with the connection.
+            mayasaba::Storage reopened(folder / "quarantine-all.db");
+            EXPECT(!reopened.IsQuarantinedForTesting());
+            reopened.SaveDraft("proj-q", "after reopen");
+            EXPECT(reopened.Project("proj-q")->draft == "after reopen");
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // The summary is derived from the groups that actually ran. It is not a fixed
         // claim: the count and the names come from execution, and any group that threw

@@ -81,6 +81,99 @@ sqlite3_backup* sqlite3_backup_init(sqlite3* pDest, const char* zDestDb, sqlite3
 int sqlite3_backup_step(sqlite3_backup* p, int nPage);
 int sqlite3_backup_finish(sqlite3_backup* p);
 
+// Authorizer hook, used as the quarantine backstop: once the connection is quarantined
+// this denies writes at the SQLite layer, so a mutation entry point that forgets to call
+// the C++ admission check still fails closed. Values are the published, ABI-stable SQLite
+// action and result codes.
+#ifndef SQLITE_AUTH
+#define SQLITE_AUTH 23
+#endif
+#ifndef SQLITE_DENY
+#define SQLITE_DENY 1
+#endif
+#ifndef SQLITE_CREATE_INDEX
+#define SQLITE_CREATE_INDEX 1
+#endif
+#ifndef SQLITE_CREATE_TABLE
+#define SQLITE_CREATE_TABLE 2
+#endif
+#ifndef SQLITE_CREATE_TEMP_INDEX
+#define SQLITE_CREATE_TEMP_INDEX 3
+#endif
+#ifndef SQLITE_CREATE_TEMP_TABLE
+#define SQLITE_CREATE_TEMP_TABLE 4
+#endif
+#ifndef SQLITE_CREATE_TEMP_TRIGGER
+#define SQLITE_CREATE_TEMP_TRIGGER 5
+#endif
+#ifndef SQLITE_CREATE_TEMP_VIEW
+#define SQLITE_CREATE_TEMP_VIEW 6
+#endif
+#ifndef SQLITE_CREATE_TRIGGER
+#define SQLITE_CREATE_TRIGGER 7
+#endif
+#ifndef SQLITE_CREATE_VIEW
+#define SQLITE_CREATE_VIEW 8
+#endif
+#ifndef SQLITE_DELETE
+#define SQLITE_DELETE 9
+#endif
+#ifndef SQLITE_DROP_INDEX
+#define SQLITE_DROP_INDEX 10
+#endif
+#ifndef SQLITE_DROP_TABLE
+#define SQLITE_DROP_TABLE 11
+#endif
+#ifndef SQLITE_DROP_TEMP_INDEX
+#define SQLITE_DROP_TEMP_INDEX 12
+#endif
+#ifndef SQLITE_DROP_TEMP_TABLE
+#define SQLITE_DROP_TEMP_TABLE 13
+#endif
+#ifndef SQLITE_DROP_TEMP_TRIGGER
+#define SQLITE_DROP_TEMP_TRIGGER 14
+#endif
+#ifndef SQLITE_DROP_TEMP_VIEW
+#define SQLITE_DROP_TEMP_VIEW 15
+#endif
+#ifndef SQLITE_DROP_TRIGGER
+#define SQLITE_DROP_TRIGGER 16
+#endif
+#ifndef SQLITE_DROP_VIEW
+#define SQLITE_DROP_VIEW 17
+#endif
+#ifndef SQLITE_INSERT
+#define SQLITE_INSERT 18
+#endif
+#ifndef SQLITE_UPDATE
+#define SQLITE_UPDATE 23
+#endif
+#ifndef SQLITE_ATTACH
+#define SQLITE_ATTACH 24
+#endif
+#ifndef SQLITE_DETACH
+#define SQLITE_DETACH 25
+#endif
+#ifndef SQLITE_ALTER_TABLE
+#define SQLITE_ALTER_TABLE 26
+#endif
+#ifndef SQLITE_REINDEX
+#define SQLITE_REINDEX 27
+#endif
+#ifndef SQLITE_ANALYZE
+#define SQLITE_ANALYZE 28
+#endif
+#ifndef SQLITE_CREATE_VTABLE
+#define SQLITE_CREATE_VTABLE 29
+#endif
+#ifndef SQLITE_DROP_VTABLE
+#define SQLITE_DROP_VTABLE 30
+#endif
+
+typedef int (*sqlite3_authorizer_callback)(void* userData, int action, const char* arg1,
+    const char* arg2, const char* databaseName, const char* triggerName);
+int sqlite3_set_authorizer(sqlite3*, sqlite3_authorizer_callback, void* userData);
+
 #ifdef __cplusplus
 }
 #endif
