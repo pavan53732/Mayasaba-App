@@ -65,6 +65,8 @@ namespace winrt::Mayasaba::implementation
         void OnCloseActionCenter(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnShowActionCenterDetails(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnCloseActionCenterDetails(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        // Shared close path for the Close button and Escape.
+        void CloseActionCenterDetails();
         // Builds the source-linked detail rows for the currently listed items from the
         // existing Action Center projection. Presentation only: it issues no query.
         void RenderActionCenterDetails();

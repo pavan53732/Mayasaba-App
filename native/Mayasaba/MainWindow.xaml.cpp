@@ -1057,6 +1057,38 @@ namespace winrt::Mayasaba::implementation
     {
         double const bodyWidth = ChatBody().ActualWidth();
         double const bodyHeight = ChatBody().ActualHeight();
+
+        // The Action Center card sits in the auto-sized Chat header. An unbounded card makes
+        // the header taller than the window, which starves the conversation row and pushes
+        // the composer below the Notice bar — the composer is in a star row, so it overflows
+        // rather than shrinking.
+        //
+        // Bound the card, not the header or the list. The card's own grid keeps its title,
+        // status and action rows Auto and only the item list in a star row, so a card bound
+        // shrinks the list and can never clip the actions. The available height is the Chat
+        // area minus the rest of the header and the composer. Both are independent of the
+        // card's height, so this converges instead of chasing its own output.
+        double const chatHeight = ChatScreen().ActualHeight();
+        double const headerHeight = ChatHeaderGrid().ActualHeight();
+        if (chatHeight > 0 && headerHeight > 0)
+        {
+            double const cardHeight = ActionCenterPanel().Visibility() == Visibility::Visible
+                ? ActionCenterPanel().ActualHeight() : 0.0;
+            double const nonCardHeader = headerHeight - cardHeight;
+            double const composerReserve = ComposerHost().ActualHeight();
+            double const available = chatHeight - nonCardHeader - composerReserve - 24.0;
+            // Floor keeps the card's Auto rows (title, status and actions) plus at least one
+            // list row intact; ceiling stops a tall window from handing the card the
+            // conversation. On a very short window the list is reduced to roughly one row —
+            // that is the real limit of the space, and Show details opens the full-height
+            // sheet for reading the whole set, so no item becomes unreachable.
+            double const cardCap = std::clamp(available, 150.0, 300.0);
+            if (ActionCenterPanel().MaxHeight() != cardCap)
+            {
+                ActionCenterPanel().MaxHeight(cardCap);
+            }
+        }
+
         if (bodyWidth <= 0 || bodyHeight <= 0) return;
 
         double const column = std::clamp(bodyWidth - 56.0, 260.0, 900.0);
@@ -3108,6 +3140,14 @@ namespace winrt::Mayasaba::implementation
         }
         if (e.Key() == Windows::System::VirtualKey::Escape)
         {
+            // The Action Center detail is the topmost dismissible surface when open, so it
+            // is closed first, exactly like the attachment preview.
+            if (actionCenterDetailsOpen_)
+            {
+                e.Handled(true);
+                CloseActionCenterDetails();
+                return;
+            }
             if (AttachmentPreviewPanel() && AttachmentPreviewPanel().Visibility() == Visibility::Visible)
             {
                 e.Handled(true);
@@ -3637,12 +3677,21 @@ namespace winrt::Mayasaba::implementation
         actionCenterDetailsOpen_ = true;
         RenderActionCenterDetails();
         ActionCenterDetailsPanel().Visibility(Visibility::Visible);
-        // Move focus into the detail without moving the reading position of the item list:
-        // the panel is inside the same scroller and grows below the button that opened it.
+        // The sheet is laid out in a star row of the content area, so it takes exactly the
+        // height that is available and can never cover the NoticeBar or be clipped. Nothing
+        // here has to measure or guess at a height.
+        // Focus moves into the sheet; the item list behind it is untouched, so its reading
+        // position and controls survive.
         CloseActionCenterDetailsButton().Focus(FocusState::Programmatic);
     }
 
     void MainWindow::OnCloseActionCenterDetails(IInspectable const&, RoutedEventArgs const&)
+    {
+        CloseActionCenterDetails();
+    }
+
+    // Parameterless close so Escape and the Close button share one path and cannot diverge.
+    void MainWindow::CloseActionCenterDetails()
     {
         actionCenterDetailsOpen_ = false;
         ActionCenterDetailsPanel().Visibility(Visibility::Collapsed);
@@ -4124,6 +4173,10 @@ namespace winrt::Mayasaba::implementation
             }
             ActionCenterPanel().Visibility(Visibility::Visible);
             ShowActionCenterDetailsButton().Visibility(Visibility::Visible);
+            // The card's height bound is derived from how much of the Chat area it may use,
+            // so it has to be recomputed once the card is actually visible; a bound applied
+            // while the card was collapsed would have measured zero.
+            ApplyResponsiveLayout();
             // A reader who expanded the detail keeps it expanded across a controller
             // refresh, but the rows are rebuilt from the list that is now current so the
             // detail can never describe a superseded record.

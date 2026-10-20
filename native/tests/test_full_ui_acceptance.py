@@ -57,6 +57,16 @@ def get_item_status(element):
     except Exception:
         return ""
 
+def has_focus(element):
+    # A container reports focus through whichever descendant actually holds it, so the
+    # direct check alone would produce false failures for composite controls.
+    try:
+        if element.has_keyboard_focus():
+            return True
+        return any(d.has_keyboard_focus() for d in element.descendants())
+    except Exception:
+        return False
+
 def send_key_to_window(win_handle, vk_code):
     input_hwnds = []
     def enum_cb(h, _):
@@ -625,7 +635,26 @@ def main():
 
         log("Invoking 'View saved message in conversation' button...")
         view_btn.iface_invoke.Invoke()
-        time.sleep(1.0)
+
+        # The navigation highlight is applied immediately but cleared by a 1.5 s timer.
+        # Sampling it after the descendant walk below could therefore read the already
+        # reset state and report a false failure. The status lives on the realized group
+        # itself, so it is read directly and promptly here; the assertion that it is the
+        # *intended* card is still made once that card is identified.
+        highlighted_card = None
+        scroller = None
+        deadline = time.time() + 1.2
+        while time.time() < deadline:
+            scroller = find_by_aid(win, "HistoryScroller")
+            if scroller:
+                for c in scroller.children():
+                    if c.element_info.control_type == "Group" and get_item_status(c) == "highlighted_14dp":
+                        highlighted_card = c
+                        break
+            if highlighted_card:
+                break
+            time.sleep(0.05)
+        log(f"Highlight observed on a realized card within the reset window: {highlighted_card is not None}")
 
         search_box_after = find_by_aid(win, "MessageSearchBox")
         is_search_closed = (search_box_after is None) or (search_box_after.rectangle().width() == 0)
@@ -634,7 +663,8 @@ def main():
             log("FAIL: Search panel did not close after message navigation")
             return 1
 
-        scroller = find_by_aid(win, "HistoryScroller")
+        if not scroller:
+            scroller = find_by_aid(win, "HistoryScroller")
         if not scroller:
             log("FAIL: HistoryScroller not found")
             return 1
@@ -662,18 +692,28 @@ def main():
         log("PASS: Intended message card 'Seeded contribution 5.' confirmed in realized timeline.")
 
         # Assert keyboard focus independently on the intended target card
-        has_focus = target_card.has_keyboard_focus() or any(d.has_keyboard_focus() for d in target_card.descendants())
-        log(f"Target message card has keyboard focus: {has_focus}")
-        if not has_focus:
+        card_has_focus = has_focus(target_card)
+        log(f"Target message card has keyboard focus: {card_has_focus}")
+        if not card_has_focus:
             log("FAIL: Target message card did not receive keyboard focus")
             return 1
         log("PASS: Target message card explicitly verified with keyboard focus.")
 
-        # Assert item_status highlight independently
-        initial_status = get_item_status(target_card)
-        log(f"Target card status immediately after navigation: '{initial_status}'")
-        if initial_status != "highlighted_14dp":
-            log(f"FAIL: Expected initial item_status 'highlighted_14dp', got '{initial_status}'")
+        # Assert item_status highlight independently, using the sample taken inside the
+        # reset window. The card that carried the highlight must be the intended target,
+        # so the identity check below still fails the run if some other card was lit.
+        if highlighted_card is None:
+            log("FAIL: No realized card carried item_status 'highlighted_14dp' within the 1.5s reset window")
+            return 1
+        # pywinauto hands back a fresh wrapper for the same UI element on every lookup,
+        # so the wrappers are compared by runtime identity rather than object identity.
+        def runtime_id(el):
+            try:
+                return tuple(el.element_info.element.GetRuntimeId())
+            except Exception:
+                return None
+        if runtime_id(highlighted_card) != runtime_id(target_card):
+            log("FAIL: The highlighted card is not the intended target message card")
             return 1
         log("PASS: Target card verified with item_status='highlighted_14dp' (14.0 dp elevation).")
 
@@ -725,11 +765,20 @@ def main():
                 send_keys("%(FS)")
         else:
             send_keys("%(FS)")
-        time.sleep(2.0)
-
-        folder_heading = find_by_aid(win, "FolderHeading")
+        # Switching persists the current draft on the background lane before it shows
+        # Screen 2, so a fixed sleep can sample before the screen has actually changed.
+        # Poll the real postcondition instead, with a bound that still fails a genuine
+        # hang rather than waiting forever.
+        folder_heading = None
+        switch_deadline = time.time() + 10.0
+        while time.time() < switch_deadline:
+            candidate = find_by_aid(win, "FolderHeading")
+            if candidate is not None and candidate.is_visible():
+                folder_heading = candidate
+                break
+            time.sleep(0.1)
         log(f"Folder heading after switch request: {folder_heading.window_text() if folder_heading else 'None'}")
-        if not folder_heading or not folder_heading.is_visible():
+        if not folder_heading:
             log("FAIL: Screen 2 Project Selector not reached on Switch Project")
             return 1
 
@@ -1050,17 +1099,130 @@ def main():
         if not show_details_btn or not show_details_btn.is_visible():
             log("FAIL: ShowActionCenterDetailsButton not visible when items need attention")
             return 1
+        # The required behaviour is a source-linked detail for every listed item, not a
+        # NoticeBar sentence: commit 96373fd replaced the generic notice with the detail so
+        # each item shows its owning record, identity, version and reference. Asserting the
+        # removed notice string would have passed only against the defect.
+        #
+        # The detail is a temporary dismissible sheet rather than an in-place expansion of
+        # the card. The card sits in the auto-sized Chat header; on a short window the
+        # header had no room for both the item list and the detail, so the in-place
+        # expansion was arranged to zero height and "Show details" appeared to do nothing.
+        status_before_details = status_label.window_text() if status_label else ""
         log("Clicking ShowActionCenterDetailsButton...")
         show_details_btn.iface_invoke.Invoke()
-        time.sleep(1.0)
 
-        notice_bar = find_by_aid(win, "Notice")
-        notice_desc = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
-        log(f"Notice text after Show Details: {notice_desc}")
-        if not any("Action Center items are read-only projections" in t for t in notice_desc):
-            log("FAIL: Show Details notice was not displayed in NoticeBar")
+        details_panel = None
+        details_deadline = time.time() + 5.0
+        while time.time() < details_deadline:
+            candidate = find_by_aid(win, "ActionCenterDetailsPanel")
+            if candidate is not None and candidate.is_visible():
+                details_panel = candidate
+                break
+            time.sleep(0.1)
+        if details_panel is None:
+            log("FAIL: ShowActionCenterDetailsButton did not reveal the Action Center source detail sheet")
             return 1
-        log("PASS: Show Details notice displayed truthfully in NoticeBar.")
+
+        # A collapsed Border leaves the UIA tree entirely, so presence already proves it
+        # opened. What the defect did NOT do was leave the tree: it opened at zero size, so
+        # "present" alone is not enough. Assert a usable rendered height as well, otherwise
+        # this check would pass again against the same defect.
+        panel_rect = details_panel.rectangle()
+        log(f"Source detail sheet: W={panel_rect.width()} H={panel_rect.height()}")
+        if panel_rect.width() <= 0 or panel_rect.height() < 120:
+            log(f"FAIL: Source detail sheet opened without usable size "
+                f"({panel_rect.width()}x{panel_rect.height()})")
+            return 1
+        log("PASS: Show details opened a usable dismissible source detail sheet (no navigation).")
+
+        summary = find_by_aid(win, "ActionCenterDetailsSummaryText")
+        summary_text = summary.window_text() if summary else ""
+        log(f"Details summary: '{summary_text}'")
+        if "read-only projection of the owning record" not in summary_text:
+            log(f"FAIL: Details summary did not state the read-only projection contract, got '{summary_text}'")
+            return 1
+
+        # Every detail row must carry the source fields the owner record supplies. The
+        # gamma project seeds 51 rejected attachments plus one closed-project obligation,
+        # so the first described item is a SQLITE_STORAGE attachment record. Rows are
+        # identified by the announced name rather than by control type, which the XAML
+        # container does not fix across WinUI versions.
+        detail_rows = [d for d in details_panel.descendants()
+                       if (d.element_info.name or "").startswith("Item ")
+                       and "Owning record" in (d.element_info.name or "")]
+        log(f"Realized source detail rows: {len(detail_rows)}")
+        if len(detail_rows) == 0:
+            log("FAIL: Details panel rendered no source-linked rows")
+            return 1
+        detail_text = " | ".join(d.element_info.name for d in detail_rows)
+        if "Owning record SQLITE_STORAGE" not in detail_text:
+            log(f"FAIL: First detail row did not name its owning record; got '{detail_text[:200]}'")
+            return 1
+        log("PASS: Source detail rows name the owning record for each listed item.")
+
+        # Field-level content is asserted from the row text so a row that only carried a
+        # title would not pass. The attachment explanation and its source reference are
+        # both derived from the draft_attachments record, never re-authored by the UI.
+        row_fields = [d.window_text() for d in details_panel.descendants() if d.window_text()]
+        joined_fields = " | ".join(row_fields)
+        for required in ("Record identity:", "Record version:", "Source reference:", "Projection state:"):
+            if required not in joined_fields:
+                log(f"FAIL: Source detail omitted required field '{required}'")
+                return 1
+        if "draft_attachments." not in joined_fields:
+            log("FAIL: Source detail did not include a draft_attachments source reference")
+            return 1
+        log("PASS: Source detail exposes record identity, version, state and source reference.")
+
+        # Inspection must not execute the recovery action it describes.
+        status_after_details = status_label.window_text() if status_label else ""
+        if status_after_details != status_before_details:
+            log(f"FAIL: Expanding details mutated the projection: '{status_before_details}' -> '{status_after_details}'")
+            return 1
+        log("PASS: Expanding details was inspection-only; the listed projection was unchanged.")
+
+        # Focus moves into the detail and returns to the invoking control on close, so
+        # keyboard position is preserved across the expansion.
+        close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
+        if not close_details_btn:
+            log("FAIL: CloseActionCenterDetailsButton not found inside the details panel")
+            return 1
+        if not has_focus(close_details_btn):
+            log("FAIL: Opening details did not move focus into the detail sheet")
+            return 1
+        close_details_btn.iface_invoke.Invoke()
+        time.sleep(0.6)
+        collapsed_panel = find_by_aid(win, "ActionCenterDetailsPanel")
+        if collapsed_panel is not None and collapsed_panel.is_visible():
+            log("FAIL: Closing the details panel left it visible")
+            return 1
+        show_details_again = find_by_aid(win, "ShowActionCenterDetailsButton")
+        if show_details_again is None or not has_focus(show_details_again):
+            log("FAIL: Closing details did not return focus to ShowActionCenterDetailsButton")
+            return 1
+        log("PASS: Details sheet is focus-safe: opens into the sheet and restores the invoking control.")
+
+        # The item list must still be usable after the sheet closes. Bounding the card for a
+        # short window is what previously clipped its own actions, so assert the list and
+        # Show details have rendered size. Load more items is checked only when it is meant
+        # to be shown: once the continuation token is consumed the control is legitimately
+        # collapsed, and demanding size for a collapsed control would assert the wrong thing.
+        ac_list = find_by_aid(win, "ActionCenterList")
+        if ac_list is None or ac_list.rectangle().height() < 20:
+            log("FAIL: Action Center item list has no usable height after closing details")
+            return 1
+        show_again_btn = find_by_aid(win, "ShowActionCenterDetailsButton")
+        if (show_again_btn is None or show_again_btn.rectangle().width() <= 0
+                or show_again_btn.rectangle().height() <= 0):
+            log("FAIL: ShowActionCenterDetailsButton is not reachable in the card layout")
+            return 1
+        more_now = find_by_aid(win, "MoreActionCenterItemsButton")
+        if more_now is not None and more_now.is_visible():
+            if more_now.rectangle().width() <= 0 or more_now.rectangle().height() <= 0:
+                log("FAIL: MoreActionCenterItemsButton is visible but has no rendered size")
+                return 1
+        log("PASS: Action Center list and its actions remain reachable at this window size.")
 
         # 9.5 Test Stale Item Handling & Expected-Version Verification at Invocation
         log("\nSimulating concurrent mutation: altering version of first item in SQLite store before clicking...")
