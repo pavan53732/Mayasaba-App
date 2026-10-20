@@ -1785,14 +1785,27 @@ namespace mayasaba
         Exec("BEGIN IMMEDIATE;");
         try
         {
-            // Query ready draft attachments to bind manifest
+            // Query EVERY draft attachment of the project, not only the READY ones.
+            // Counting only READY rows let a lower-level caller stage a submission whose
+            // manifest silently omitted a rejected, timed-out or source-changed sibling:
+            // the ready count matched the supplied count and the omission was invisible.
+            // A draft is one payload; if any part of it is unresolved, none of it may be
+            // admitted as if it were complete.
             std::vector<AttachmentRecord> drafts;
+            std::string unresolvedStatus;
+            std::string unresolvedId;
             {
-                Statement qDrafts(db_, "SELECT attachment_id, file_size, sha256 FROM draft_attachments WHERE project_id=?1 AND status='READY' ORDER BY attachment_id;");
+                Statement qDrafts(db_, "SELECT attachment_id, file_size, sha256, status FROM draft_attachments WHERE project_id=?1 ORDER BY attachment_id;");
                 Bind(qDrafts.value, 1, id);
                 int rc{};
                 while ((rc = sqlite3_step(qDrafts.value)) == SQLITE_ROW)
                 {
+                    std::string const status = Text(qDrafts.value, 3);
+                    if (status != "READY" && unresolvedStatus.empty())
+                    {
+                        unresolvedStatus = status;
+                        unresolvedId = Text(qDrafts.value, 0);
+                    }
                     AttachmentRecord r;
                     r.id = Text(qDrafts.value, 0);
                     r.fileSize = static_cast<uint64_t>(sqlite3_column_int64(qDrafts.value, 1));
@@ -1800,6 +1813,14 @@ namespace mayasaba
                     drafts.push_back(std::move(r));
                 }
                 Check(rc, db_);
+            }
+
+            if (!unresolvedStatus.empty())
+            {
+                throw std::runtime_error(
+                    "An attachment in this draft is not ready (" + unresolvedStatus + "). The submission was "
+                    "refused so the incomplete set is not silently omitted; remove or re-attach the affected "
+                    "attachment and try again.");
             }
 
             if (drafts.size() > 50)
@@ -2200,13 +2221,33 @@ namespace mayasaba
             }
             else
             {
-                // Validate exact staging identity, ownership, draft status, and manifest completeness
-                Statement readyCount(db_, "SELECT count(*) FROM draft_attachments WHERE project_id=?1 AND status='READY';");
-                Bind(readyCount.value, 1, id);
-                if (sqlite3_step(readyCount.value) != SQLITE_ROW || sqlite3_column_int(readyCount.value, 0) != static_cast<int>(attachments.size()))
+                // Validate exact staging identity, ownership, draft status, and manifest completeness.
+                // The completeness test counts EVERY draft row, not only the READY ones. A
+                // READY-only count is satisfied by supplying the ready subset while a
+                // rejected sibling is quietly left behind, which would commit a payload the
+                // reader never approved.
                 {
-                    return rollbackAndReject(SaveDisposition::Conflict,
-                        "The draft attachment set changed before it could be saved; the message was not submitted.");
+                    Statement draftTotals(db_, "SELECT coalesce(count(*),0), coalesce(sum(CASE WHEN status='READY' THEN 1 ELSE 0 END),0) FROM draft_attachments WHERE project_id=?1;");
+                    Bind(draftTotals.value, 1, id);
+                    if (sqlite3_step(draftTotals.value) != SQLITE_ROW)
+                    {
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "The draft attachment set could not be read; the message was not submitted.");
+                    }
+                    int const totalDrafts = sqlite3_column_int(draftTotals.value, 0);
+                    int const readyDrafts = sqlite3_column_int(draftTotals.value, 1);
+                    if (totalDrafts != readyDrafts)
+                    {
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "One or more draft attachments are not ready, so the draft is incomplete. "
+                            "The message was not submitted and the original draft is preserved; remove or "
+                            "re-attach the affected attachment and try again.");
+                    }
+                    if (readyDrafts != static_cast<int>(attachments.size()))
+                    {
+                        return rollbackAndReject(SaveDisposition::Conflict,
+                            "The draft attachment set changed before it could be saved; the message was not submitted.");
+                    }
                 }
 
                 for (auto const& att : attachments)
@@ -2473,10 +2514,77 @@ namespace mayasaba
         return result;
     }
 
+    void Storage::RefusePendingManifestMutation_locked(
+        std::string const& projectId,
+        std::string const& attachmentId,
+        std::string const& newStatus,
+        std::string const& newSha256,
+        std::uint64_t newSize,
+        std::string const& newPath)
+    {
+        Statement pending(db_, "SELECT submission_id FROM pending_submissions WHERE project_id=?1;");
+        Bind(pending.value, 1, projectId);
+        if (sqlite3_step(pending.value) != SQLITE_ROW) return; // nothing is locked
+
+        Statement current(db_, "SELECT status, sha256, file_size, staged_path FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
+        Bind(current.value, 1, projectId);
+        Bind(current.value, 2, attachmentId);
+        if (sqlite3_step(current.value) != SQLITE_ROW)
+        {
+            // A brand-new row. A non-READY row is not part of the locked manifest, so
+            // recording a failed attachment is still allowed while a submission is
+            // pending - the Action Center is expected to show both obligation kinds.
+            // A READY row would widen the payload the reader is being asked to reconcile,
+            // and is refused.
+            if (newStatus != "READY") return;
+            throw std::runtime_error(
+                "An unresolved submission is locked for this project, so a new attachment cannot be added to "
+                "its draft. Reconcile the pending submission first; nothing was changed.");
+        }
+
+        std::string const oldStatus = Text(current.value, 0);
+        std::string const oldSha = Text(current.value, 1);
+        auto const oldSize = static_cast<std::uint64_t>(sqlite3_column_int64(current.value, 2));
+        std::string const oldPath = Text(current.value, 3);
+
+        // Rows outside the locked manifest are not constrained by it.
+        if (oldStatus != "READY") return;
+
+        bool const identityUnchanged = (newSha256 == oldSha) && (newSize == oldSize) && (newPath == oldPath);
+        // A no-op rewrite, or a truthful degradation of a READY row, is permitted: the
+        // manifest keeps meaning what it meant, and the pending submission is still
+        // refused at commit time because the row is no longer READY.
+        if (identityUnchanged) return;
+
+        throw std::runtime_error(
+            "An unresolved submission is locked for this project; this attachment is part of the payload it "
+            "was admitted with, so its identity cannot be replaced (" + oldStatus + " -> " + newStatus +
+            "). Nothing was changed.");
+    }
+
+    void Storage::RefusePendingManifestDeletion_locked(std::string const& projectId, std::string const& attachmentId)
+    {
+        Statement pending(db_, "SELECT submission_id FROM pending_submissions WHERE project_id=?1;");
+        Bind(pending.value, 1, projectId);
+        if (sqlite3_step(pending.value) != SQLITE_ROW) return;
+
+        Statement current(db_, "SELECT status FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
+        Bind(current.value, 1, projectId);
+        Bind(current.value, 2, attachmentId);
+        if (sqlite3_step(current.value) != SQLITE_ROW) return;
+
+        if (Text(current.value, 0) != "READY") return;
+
+        throw std::runtime_error(
+            "An unresolved submission is locked for this project and this attachment is part of its payload, "
+            "so it cannot be removed. Reconcile the pending submission first; nothing was changed.");
+    }
+
     void Storage::SaveDraftAttachment(std::string const& projectId, AttachmentRecord const& att)
     {
         std::lock_guard lock(mutex_);
         CheckWriteCapacity();
+        RefusePendingManifestMutation_locked(projectId, att.id, att.status, att.sha256, att.fileSize, att.storagePath);
         Statement q(db_, "INSERT INTO draft_attachments(attachment_id,project_id,file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,version) "
                          "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1) "
                          "ON CONFLICT(attachment_id) DO UPDATE SET file_size=excluded.file_size,sha256=excluded.sha256,staged_path=excluded.staged_path,status=excluded.status,error_message=excluded.error_message,version=draft_attachments.version+1;");
@@ -2512,6 +2620,9 @@ namespace mayasaba
             size_t idx = 0;
             for (auto const& att : atts)
             {
+                // Every write in the batch is checked against the locked manifest inside
+                // this transaction, so a partially-applied widening is impossible.
+                RefusePendingManifestMutation_locked(projectId, att.id, att.status, att.sha256, att.fileSize, att.storagePath);
                 if (saveDraftAttachmentsItemHook_)
                 {
                     saveDraftAttachmentsItemHook_(idx, att.id);
@@ -2544,6 +2655,7 @@ namespace mayasaba
     void Storage::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
     {
         std::lock_guard lock(mutex_);
+        RefusePendingManifestDeletion_locked(projectId, attachmentId);
         Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
         Bind(q.value,1,projectId);
         Bind(q.value,2,attachmentId);
@@ -2553,6 +2665,23 @@ namespace mayasaba
     void Storage::ClearDraftAttachments(std::string const& projectId)
     {
         std::lock_guard lock(mutex_);
+        {
+            // Clearing the set would delete rows a locked submission's manifest covers.
+            Statement pending(db_, "SELECT count(*) FROM pending_submissions WHERE project_id=?1;");
+            Bind(pending.value, 1, projectId);
+            if (sqlite3_step(pending.value) == SQLITE_ROW && sqlite3_column_int(pending.value, 0) > 0)
+            {
+                Statement ready(db_, "SELECT count(*) FROM draft_attachments WHERE project_id=?1 AND status='READY';");
+                Bind(ready.value, 1, projectId);
+                if (sqlite3_step(ready.value) == SQLITE_ROW && sqlite3_column_int(ready.value, 0) > 0)
+                {
+                    throw std::runtime_error(
+                        "An unresolved submission is locked for this project and its attachments are part of its "
+                        "payload, so the draft set cannot be cleared. Reconcile the pending submission first; "
+                        "nothing was changed.");
+                }
+            }
+        }
         Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1;");
         Bind(q.value,1,projectId);
         Check(sqlite3_step(q.value),db_);

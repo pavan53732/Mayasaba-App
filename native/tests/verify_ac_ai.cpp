@@ -1655,17 +1655,27 @@ int main()
             EXPECT(resMut3.errorMessage.find("participating record set mutated") != std::string::npos);
         }
 
-        // Fresh Page 1 query to get new token
-        auto fresh3 = store.QueryActionCenter(q1);
-        std::string freshToken3 = fresh3.continuationToken;
-
-        // 8D. Mutation between pages: PENDING SUBMISSION ADDED
+        // 8D. PENDING SUBMISSION ADDED. A pending row can only be created while the draft
+        // is complete: Storage refuses a manifest that would silently omit a failed
+        // attachment. The state this case previously built - a pending row inserted over a
+        // draft of failed attachments - is therefore no longer reachable through the
+        // production API, and the projection must stay exactly as it was.
+        // Token invalidation for insertion, removal and status change is covered by
+        // 8A/8B/8C; this case now asserts the admission boundary that replaced it.
         {
-            store.StageSubmission("proj-pages", "sub-between-pages", "unresolved send");
+            bool stagedOverFailedDraft = false;
+            try { store.StageSubmission("proj-pages", "sub-between-pages", "unresolved send"); }
+            catch (std::exception const&) { stagedOverFailedDraft = true; }
+            EXPECT(stagedOverFailedDraft);
+            EXPECT(!store.Pending("proj-pages").has_value());
 
-            auto resMut4 = store.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-pages", 2, freshToken3 });
-            EXPECT(!resMut4.isComplete);
-            EXPECT(resMut4.errorMessage.find("participating record set mutated") != std::string::npos);
+            auto afterRefusal = store.QueryActionCenter(mayasaba::ActionCenterQuery{ "proj-pages", 50 });
+            bool hasPendingItem = false;
+            for (auto const& item : afterRefusal.items)
+            {
+                if (item.kind == mayasaba::ActionCenterKind::UnresolvedSubmission) hasPendingItem = true;
+            }
+            EXPECT(!hasPendingItem);
         }
         CASES_END();
     }

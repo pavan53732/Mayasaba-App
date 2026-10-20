@@ -5,6 +5,7 @@
 #include "ProjectService.h"
 #include "AttachmentService.h"
 #include "AttachmentIngestionCoordinator.h"
+#include "AttachmentAdmission.h"
 #include "ProjectRoot.h"
 #include "Motion.h"
 #include "Timeline.h"
@@ -172,7 +173,9 @@ namespace winrt::Mayasaba::implementation
 
         std::unique_ptr<mayasaba::AttachmentService> attachmentService_;
         std::vector<mayasaba::AttachmentCandidate> draftAttachments_;
-        bool attachmentsPreparing_{false};
+        // Atomic because a coroutine guard may release the reservation while the
+        // window is already closing, when no interface thread is left to own it.
+        std::atomic<bool> attachmentsPreparing_{false};
         // True while the durable draft attachment set is being re-derived off the UI thread.
         // Send is disabled during this window: the in-memory list is not yet the whole set,
         // and submitting from a partial set would silently omit an attachment the user
@@ -188,6 +191,49 @@ namespace winrt::Mayasaba::implementation
         // Persists the removal and deletes the staged copy on the controlled background
         // path. Both touch SQLite and the filesystem, so neither may run on the UI thread.
         winrt::fire_and_forget RemoveDraftAttachmentAsync(std::string projectId, std::string id);
+
+        // ------------------------------------------------------------------
+        // Attachment and submission admission.
+        //
+        // The interface is not the authority: disabling a button is presentation.
+        // These helpers exist so every entry point - picker, desktop drop, direct
+        // service call, Enter key and the Send button - asks ONE question, and so the
+        // reservation is taken synchronously before the first suspension point.
+        // Storage enforces the durable rules independently; see
+        // Storage::RefusePendingManifestMutation_locked.
+        // ------------------------------------------------------------------
+        mayasaba::AttachmentAdmissionState CurrentAdmissionState() const;
+        mayasaba::AttachmentAdmissionResult CanBeginAttachmentIngestion() const;
+        mayasaba::AttachmentAdmissionResult CanSendNow() const;
+        void ShowAdmissionRefusal(mayasaba::AttachmentAdmissionFailure failure, wchar_t const* attemptedAction);
+
+        // Releases the ingestion reservation on every exit, including a coroutine that
+        // is destroyed while closing. A token that no longer owns the slot cannot
+        // release it, so a stale completion never frees a newer operation's reservation.
+        struct IngestionGuard
+        {
+            IngestionGuard() = default;
+            IngestionGuard(MainWindow* owner, std::uint64_t acquired) : self(owner), token(acquired) {}
+            IngestionGuard(IngestionGuard const&) = delete;
+            IngestionGuard& operator=(IngestionGuard const&) = delete;
+            ~IngestionGuard();
+            void Release();
+
+            MainWindow* self{nullptr};
+            std::uint64_t token{0};
+        };
+
+        // The typed reconciliation command. Reconcile Send and the Action Center both
+        // route through this; neither is allowed to be an ordinary Send in disguise.
+        void ReconcileSubmission();
+        // True while this attachment's durable removal has not settled. The chip stays
+        // visible until then: a disappearing chip is a UI projection, never a receipt.
+        bool IsRemovalPending(std::string const& id) const;
+
+        mayasaba::AttachmentOperationSlot attachmentIngestionSlot_;
+        int attachmentRemovalsInFlight_{0};
+        std::vector<std::string> removalPendingIds_;
+
         // Re-derives the draft attachment set from durable records plus staged bytes.
         // Reading records, hashing staged copies and writing the reverified set are all
         // storage or filesystem work, so they run on the background lane; the resulting
@@ -256,7 +302,10 @@ namespace winrt::Mayasaba::implementation
         bool actionCenterDetailsOpen_{false};
 
         // Drop handling guard and production ingestion coordinator
-        bool dropProcessing_{false};
+        // Guards retrieval only (GetStorageItemsAsync). The ingestion reservation that
+        // covers validation and preparation lives in attachmentIngestionSlot_, because
+        // a drop hands off to ProcessCandidatePathsAsync before either of those begins.
+        std::atomic<bool> dropProcessing_{false};
         mayasaba::AttachmentIngestionCoordinator ingestionCoordinator_;
 
         // Attachment inspection & preview state

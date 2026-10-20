@@ -1,6 +1,7 @@
 #pragma once
 #include <filesystem>
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -352,6 +353,25 @@ namespace mayasaba
 #endif
         void Exec(char const* sql);
         void CheckWriteCapacity();
+        // Refuses a draft-attachment write that would change the attachment manifest a
+        // locked pending submission was admitted with. The pending row is the authority
+        // here, not the interface's projection of it: a caller that never went through the
+        // Chat composer is stopped at the same boundary.
+        //
+        // Allowed while a submission is pending: status degradation of a READY row (a
+        // truthful invalidation, which is what recovery and reconciliation produce),
+        // error-message updates, writes to rows that are already not READY, and no-op
+        // rewrites. Refused: new attachment identities, READY-ward transitions, and any
+        // change to the size, digest or staged path of a READY row.
+        void RefusePendingManifestMutation_locked(
+            std::string const& projectId,
+            std::string const& attachmentId,
+            std::string const& newStatus,
+            std::string const& newSha256,
+            std::uint64_t newSize,
+            std::string const& newPath);
+        // Refuses deleting a draft row that a locked pending submission's manifest covers.
+        void RefusePendingManifestDeletion_locked(std::string const& projectId, std::string const& attachmentId);
         static void Bind(sqlite3_stmt* statement, int index, std::string const& value);
         static std::string Text(sqlite3_stmt* statement, int column);
         static void Check(int status, sqlite3* database);

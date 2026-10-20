@@ -3,6 +3,7 @@
 #include "../Mayasaba/ProjectRoot.h"
 #include "../Mayasaba/ProjectService.h"
 #include "../Mayasaba/AttachmentService.h"
+#include "../Mayasaba/AttachmentAdmission.h"
 #include "../Mayasaba/SerialQueue.h"
 #include "../Mayasaba/TimelineEntry.h"
 #include <fstream>
@@ -3045,6 +3046,294 @@ int main()
             EXPECT(draftsAfter[0].id == "att-cont-1");
             EXPECT(draftsAfter[0].status == "READY");
             EXPECT(store.Project("proj-cont")->draft == "draft that must survive contention");
+            CASES_END();
+        }
+
+        // ------------------------------------------------------------------
+        // S1 admission correctness. Each group below states the unsafe behaviour
+        // that existed before its guard and asserts the guard, so removing the
+        // guard makes the group fail rather than silently pass.
+        // ------------------------------------------------------------------
+
+        // 32. F03: a draft is ONE payload. Counting only READY rows let a caller
+        // stage and commit a submission whose manifest silently omitted a rejected,
+        // timed-out or source-changed sibling. Both the text-only and the
+        // ready-subset forms are exercised, because the audit's rule explicitly
+        // does not weaken for attachment-only or text-only messages.
+        {
+            CASES_BEGIN("32. Complete-draft admission: a non-READY sibling blocks the submission");
+            mayasaba::Storage store(folder / "admission.db");
+            store.BindProject("proj-complete", "Complete", "C:/Projects/Complete");
+
+            auto makeRecord = [](std::string const& id, std::string const& status, std::string const& name)
+            {
+                mayasaba::AttachmentRecord r;
+                r.id = id;
+                r.projectId = "proj-complete";
+                r.fileName = name;
+                r.fileSize = 12;
+                r.sha256 = "sha-" + id;
+                r.detectedType = "text/plain";
+                r.storagePath = "C:/stage/" + name;
+                r.sourcePath = "C:/source/" + name;
+                r.status = status;
+                return r;
+            };
+
+            store.SaveDraftAttachments("proj-complete",
+                { makeRecord("att-ready", "READY", "a.txt"),
+                  makeRecord("att-rejected", "REJECTED", "b.txt") });
+
+            // Text-only send while a rejected sibling exists: the rejected attachment
+            // would be omitted without a word.
+            bool textOnlyRefused = false;
+            try { store.StageSubmission("proj-complete", "sub-text-only", "hello"); }
+            catch (std::exception const&) { textOnlyRefused = true; }
+            EXPECT(textOnlyRefused);
+            EXPECT(!store.Pending("proj-complete").has_value());
+            EXPECT(store.Contributions("proj-complete").empty());
+            EXPECT(store.GetDraftAttachments("proj-complete").size() == 2);
+
+            // Ready-subset send: supplying only the ready attachment must be refused too.
+            bool subsetRefused = false;
+            try { store.StageSubmission("proj-complete", "sub-subset", "hello"); }
+            catch (std::exception const&) { subsetRefused = true; }
+            EXPECT(subsetRefused);
+            EXPECT(store.Contributions("proj-complete").empty());
+
+            // No false saved state: the draft text and both records survive intact.
+            auto const retained = store.GetDraftAttachments("proj-complete");
+            EXPECT(retained.size() == 2);
+            EXPECT(retained[0].status == "READY");
+            EXPECT(retained[1].status == "REJECTED");
+
+            // Every non-READY status is refused, not just REJECTED.
+            for (std::string const status : { "PREPARING", "SOURCE_CHANGED", "TIMED_OUT" })
+            {
+                mayasaba::Storage each(folder / ("admission-" + status + ".db"));
+                each.BindProject("proj-" + status, status, "C:/Projects/" + status);
+                auto rec = makeRecord("att-x", status, "x.txt");
+                rec.projectId = "proj-" + status;
+                each.SaveDraftAttachments(rec.projectId, { rec });
+                bool refused = false;
+                try { each.StageSubmission(rec.projectId, "sub-x", "text"); }
+                catch (std::exception const&) { refused = true; }
+                EXPECT(refused);
+                EXPECT(each.Contributions(rec.projectId).empty());
+            }
+            CASES_END();
+        }
+
+        // 33. F06: a durable pending row is the authority, not the interface's
+        // projection of it. Draft writes must not widen the locked manifest, while
+        // truthful degradation must still be permitted so recovery can work.
+        {
+            CASES_BEGIN("33. A locked pending submission cannot be widened by draft writes");
+            mayasaba::Storage store(folder / "pending-lock.db");
+            store.BindProject("proj-lock", "Lock", "C:/Projects/Lock");
+
+            mayasaba::AttachmentRecord a;
+            a.id = "att-a"; a.projectId = "proj-lock"; a.fileName = "a.txt";
+            a.fileSize = 5; a.sha256 = "sha-a"; a.detectedType = "text/plain";
+            a.storagePath = "C:/stage/a.txt"; a.sourcePath = "C:/source/a.txt"; a.status = "READY";
+            store.SaveDraftAttachments("proj-lock", { a });
+
+            EXPECT(store.StageSubmission("proj-lock", "sub-lock", "body") == "sub-lock");
+            EXPECT(store.Pending("proj-lock").has_value());
+
+            // A brand-new attachment while a submission is locked.
+            mayasaba::AttachmentRecord c = a;
+            c.id = "att-c"; c.fileName = "c.txt"; c.sha256 = "sha-c"; c.storagePath = "C:/stage/c.txt";
+            bool singleRefused = false;
+            try { store.SaveDraftAttachment("proj-lock", c); }
+            catch (std::exception const&) { singleRefused = true; }
+            EXPECT(singleRefused);
+
+            bool batchRefused = false;
+            try { store.SaveDraftAttachments("proj-lock", { a, c }); }
+            catch (std::exception const&) { batchRefused = true; }
+            EXPECT(batchRefused);
+
+            // Replacing the identity of an attachment the locked payload covers.
+            mayasaba::AttachmentRecord replaced = a;
+            replaced.sha256 = "sha-different";
+            bool identityRefused = false;
+            try { store.SaveDraftAttachment("proj-lock", replaced); }
+            catch (std::exception const&) { identityRefused = true; }
+            EXPECT(identityRefused);
+
+            // Deleting or clearing the covered set.
+            bool removeRefused = false;
+            try { store.RemoveDraftAttachment("proj-lock", "att-a"); }
+            catch (std::exception const&) { removeRefused = true; }
+            EXPECT(removeRefused);
+
+            bool clearRefused = false;
+            try { store.ClearDraftAttachments("proj-lock"); }
+            catch (std::exception const&) { clearRefused = true; }
+            EXPECT(clearRefused);
+
+            // None of the refusals changed anything.
+            auto const stillThere = store.GetDraftAttachments("proj-lock");
+            EXPECT(stillThere.size() == 1);
+            EXPECT(stillThere[0].id == "att-a");
+            EXPECT(stillThere[0].status == "READY");
+            EXPECT(stillThere[0].sha256 == "sha-a");
+            EXPECT(store.Pending("proj-lock")->id == "sub-lock");
+
+            // The boundary is the READY manifest, not the row count: a FAILED attachment is
+            // not part of the locked payload, so recording one while a submission is pending
+            // is allowed. The Action Center must be able to show both obligation kinds.
+            mayasaba::AttachmentRecord failed = a;
+            failed.id = "att-failed"; failed.fileName = "f.txt";
+            failed.sha256 = ""; failed.storagePath = "";
+            failed.status = "REJECTED"; failed.errorMessage = "validation failed";
+            bool failedRowAllowed = true;
+            try { store.SaveDraftAttachment("proj-lock", failed); }
+            catch (std::exception const&) { failedRowAllowed = false; }
+            EXPECT(failedRowAllowed);
+            EXPECT(store.GetDraftAttachments("proj-lock").size() == 2);
+
+            // Truthful degradation is still allowed: recovery must be able to record
+            // that an attachment stopped being ready.
+            mayasaba::AttachmentRecord degraded = a;
+            degraded.status = "SOURCE_CHANGED";
+            degraded.errorMessage = "source changed after staging";
+            bool degradationAllowed = true;
+            try { store.SaveDraftAttachment("proj-lock", degraded); }
+            catch (std::exception const&) { degradationAllowed = false; }
+            EXPECT(degradationAllowed);
+            EXPECT(store.GetDraftAttachments("proj-lock")[0].status == "SOURCE_CHANGED");
+
+            // ... and the submission it was locked for can no longer commit.
+            EXPECT(store.SaveContribution("proj-lock", "sub-lock", "body", { a }) == SaveDisposition::Conflict);
+            EXPECT(store.Contributions("proj-lock").empty());
+            CASES_END();
+        }
+
+        // 34. F01/F04: one policy for every entry point. The picker, the drop target,
+        // Enter and the Send button previously each carried a different subset of
+        // checks, so a keyboard command could reach SendCurrent() while the button
+        // was correctly disabled.
+        {
+            CASES_BEGIN("34. One admission policy for picker, drop, Enter and Send");
+            using mayasaba::AttachmentAdmissionFailure;
+            using mayasaba::AttachmentAdmissionState;
+
+            AttachmentAdmissionState base;
+            base.storageAvailable = true;
+            base.hasProject = true;
+            base.maxDraftCount = 50;
+            EXPECT(mayasaba::EvaluateAttachmentAdmission(base).allowed);
+            EXPECT(mayasaba::EvaluateSendAdmission(base).allowed);
+
+            auto refusedWith = [](AttachmentAdmissionState const& s, AttachmentAdmissionFailure expected)
+            {
+                return !mayasaba::EvaluateAttachmentAdmission(s).allowed &&
+                       mayasaba::EvaluateAttachmentAdmission(s).reason == expected;
+            };
+
+            { auto s = base; s.windowClosed = true; EXPECT(refusedWith(s, AttachmentAdmissionFailure::WindowClosing)); }
+            { auto s = base; s.storageAvailable = false; EXPECT(refusedWith(s, AttachmentAdmissionFailure::StorageUnavailable)); }
+            { auto s = base; s.hasProject = false; EXPECT(refusedWith(s, AttachmentAdmissionFailure::NoProject)); }
+            { auto s = base; s.projectClosed = true; EXPECT(refusedWith(s, AttachmentAdmissionFailure::ClosedProject)); }
+            { auto s = base; s.pendingSubmission = true; EXPECT(refusedWith(s, AttachmentAdmissionFailure::PendingSubmission)); }
+            { auto s = base; s.busy = true; EXPECT(refusedWith(s, AttachmentAdmissionFailure::SubmissionInProgress)); }
+            { auto s = base; s.navigationBusy = true; EXPECT(refusedWith(s, AttachmentAdmissionFailure::ProjectNavigation)); }
+            { auto s = base; s.selectionBusy = true; EXPECT(refusedWith(s, AttachmentAdmissionFailure::ProjectNavigation)); }
+            { auto s = base; s.pickerOpen = true; EXPECT(refusedWith(s, AttachmentAdmissionFailure::PickerOpen)); }
+            { auto s = base; s.draftsLoading = true; EXPECT(refusedWith(s, AttachmentAdmissionFailure::DraftsLoading)); }
+            { auto s = base; s.removalsInFlight = 1; EXPECT(refusedWith(s, AttachmentAdmissionFailure::RemovalInProgress)); }
+            { auto s = base; s.ingestionInProgress = true; EXPECT(refusedWith(s, AttachmentAdmissionFailure::IngestionInProgress)); }
+            { auto s = base; s.draftCount = 50; EXPECT(refusedWith(s, AttachmentAdmissionFailure::CapacityExceeded)); }
+
+            // The blocked state is exactly the one a direct Enter keypress reached
+            // before the fix: Send must refuse while drafts are loading.
+            {
+                auto s = base;
+                s.draftsLoading = true;
+                auto const send = mayasaba::EvaluateSendAdmission(s);
+                EXPECT(!send.allowed);
+                EXPECT(send.reason == AttachmentAdmissionFailure::DraftsLoading);
+            }
+            // ... and while a durable removal is still in flight.
+            {
+                auto s = base;
+                s.removalsInFlight = 1;
+                auto const send = mayasaba::EvaluateSendAdmission(s);
+                EXPECT(!send.allowed);
+                EXPECT(send.reason == AttachmentAdmissionFailure::RemovalInProgress);
+            }
+
+            // Send is a different command: an open picker and a full draft set do not
+            // block sending what is already in the composer.
+            {
+                auto s = base;
+                s.pickerOpen = true;
+                s.draftCount = 50;
+                EXPECT(mayasaba::EvaluateSendAdmission(s).allowed);
+            }
+
+            // A full draft must still allow removal: capacity applies to adding, not to
+            // taking something out. Using the ingestion policy here would have refused
+            // the one action that resolves a full draft.
+            {
+                auto s = base;
+                s.draftCount = 50;
+                EXPECT(!mayasaba::EvaluateAttachmentAdmission(s).allowed);
+                EXPECT(mayasaba::EvaluateRemovalAdmission(s).allowed);
+                s.pendingSubmission = true;
+                EXPECT(!mayasaba::EvaluateRemovalAdmission(s).allowed);
+            }
+
+            // Reconciling is admitted while a submission is pending - that is its whole
+            // purpose - and refused while another submission is being saved.
+            {
+                auto s = base;
+                s.pendingSubmission = true;
+                EXPECT(mayasaba::EvaluateReconcileAdmission(s).allowed);
+                s.busy = true;
+                EXPECT(!mayasaba::EvaluateReconcileAdmission(s).allowed);
+                EXPECT(mayasaba::EvaluateReconcileAdmission(s).reason ==
+                       AttachmentAdmissionFailure::SubmissionInProgress);
+            }
+            CASES_END();
+        }
+
+        // 35. F02/F05: the reservation must exist before the operation suspends, and a
+        // stale completion must never release a newer operation's reservation.
+        {
+            CASES_BEGIN("35. Single-flight reservation rejects overlap and stale release");
+            mayasaba::AttachmentOperationSlot slot;
+            EXPECT(!slot.Held());
+
+            auto const first = slot.TryAcquire();
+            EXPECT(first != 0);
+            EXPECT(slot.Held());
+
+            // A second operation observing the same draft set is refused, not queued.
+            EXPECT(slot.TryAcquire() == 0);
+            EXPECT(slot.Held());
+            EXPECT(slot.Owner() == first);
+
+            // A completion that does not own the slot cannot release it.
+            EXPECT(!slot.Release(first + 1));
+            EXPECT(!slot.Release(0));
+            EXPECT(slot.Held());
+
+            EXPECT(slot.Release(first));
+            EXPECT(!slot.Held());
+
+            // A late completion belonging to the FIRST operation must not release the
+            // SECOND operation's reservation.
+            auto const second = slot.TryAcquire();
+            EXPECT(second != 0);
+            EXPECT(second != first);
+            EXPECT(!slot.Release(first));
+            EXPECT(slot.Held());
+            EXPECT(slot.Owner() == second);
+            EXPECT(slot.Release(second));
+            EXPECT(!slot.Held());
             CASES_END();
         }
 

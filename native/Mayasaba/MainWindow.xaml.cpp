@@ -1507,26 +1507,88 @@ namespace winrt::Mayasaba::implementation
 
 
 
+    mayasaba::AttachmentAdmissionState MainWindow::CurrentAdmissionState() const
+    {
+        mayasaba::AttachmentAdmissionState state;
+        state.windowClosed = windowClosed_.load();
+        state.storageAvailable = storage_ != nullptr;
+        state.hasProject = !activeProject_.empty();
+        state.projectClosed = projectClosed_;
+        state.pendingSubmission = !pendingAttemptId_.empty();
+        state.busy = busy_;
+        state.navigationBusy = navigationBusy_;
+        state.selectionBusy = selectionBusy_;
+        state.pickerOpen = pickerOpen_;
+        state.draftsLoading = draftAttachmentsLoading_;
+        state.ingestionInProgress = attachmentsPreparing_.load() || attachmentIngestionSlot_.Held();
+        state.removalsInFlight = attachmentRemovalsInFlight_;
+        state.draftCount = draftAttachments_.size();
+        state.maxDraftCount = mayasaba::MAX_ATTACHMENT_COUNT;
+        return state;
+    }
+
+    mayasaba::AttachmentAdmissionResult MainWindow::CanBeginAttachmentIngestion() const
+    {
+        return mayasaba::EvaluateAttachmentAdmission(CurrentAdmissionState());
+    }
+
+    mayasaba::AttachmentAdmissionResult MainWindow::CanSendNow() const
+    {
+        return mayasaba::EvaluateSendAdmission(CurrentAdmissionState());
+    }
+
+    void MainWindow::ShowAdmissionRefusal(mayasaba::AttachmentAdmissionFailure failure, wchar_t const* attemptedAction)
+    {
+        std::wstring message = L"Cannot ";
+        message += attemptedAction ? attemptedAction : L"continue";
+        message += L": ";
+        message += Utf16(mayasaba::AttachmentAdmissionFailureText(failure));
+        message += L".";
+        ShowNotice(winrt::hstring{ message }, true);
+    }
+
+    void MainWindow::IngestionGuard::Release()
+    {
+        if (!self) return;
+        // Only the current owner may release. A completion belonging to an older
+        // operation must not free the reservation a newer one now holds.
+        if (self->attachmentIngestionSlot_.Release(token))
+        {
+            self->attachmentsPreparing_ = false;
+        }
+        self = nullptr;
+    }
+
+    MainWindow::IngestionGuard::~IngestionGuard() { Release(); }
+
+    bool MainWindow::IsRemovalPending(std::string const& id) const
+    {
+        return std::find(removalPendingIds_.begin(), removalPendingIds_.end(), id) != removalPendingIds_.end();
+    }
+
     void MainWindow::UpdateComposerState()
     {
         if (windowClosed_) return;
         bool const open = storage_ && !activeProject_.empty() && !projectClosed_;
         bool const hasPending = !pendingAttemptId_.empty();
+        // An attachment removal is a durable mutation that has not settled yet. Send is
+        // refused until it has, because the in-memory list is not yet the durable set.
+        bool const removalInFlight = attachmentRemovalsInFlight_ > 0;
 
         if (hasPending)
         {
             SendButton().Content(winrt::box_value(hstring{L"Reconcile Send"}));
-            SendButton().IsEnabled(open && !busy_);
+            SendButton().IsEnabled(open && !busy_ && !removalInFlight && !attachmentsPreparing_ && !draftAttachmentsLoading_);
             AttachButton().IsEnabled(false);
             return;
         }
 
         SendButton().Content(winrt::box_value(hstring{L"Send →"}));
 
-        bool const canAttach = open && !busy_ && !attachmentsPreparing_ && !draftAttachmentsLoading_ && (draftAttachments_.size() < mayasaba::MAX_ATTACHMENT_COUNT);
+        bool const canAttach = open && !busy_ && !attachmentsPreparing_ && !draftAttachmentsLoading_ && !removalInFlight && (draftAttachments_.size() < mayasaba::MAX_ATTACHMENT_COUNT);
         AttachButton().IsEnabled(canAttach);
 
-        if (!open || busy_ || attachmentsPreparing_ || draftAttachmentsLoading_)
+        if (!open || busy_ || attachmentsPreparing_ || draftAttachmentsLoading_ || removalInFlight)
         {
             SendButton().IsEnabled(false);
             return;
@@ -1567,6 +1629,10 @@ namespace winrt::Mayasaba::implementation
 
         for (auto const& att : draftAttachments_)
         {
+            // A pending removal is shown, not hidden: the chip only disappears once the
+            // durable delete is confirmed. Until then it is marked and its actions are off.
+            bool const removing = IsRemovalPending(att.id);
+
             Border chip{};
             chip.CornerRadius(CornerRadius{8});
             chip.Padding(Thickness{8, 4, 6, 4});
@@ -1583,7 +1649,12 @@ namespace winrt::Mayasaba::implementation
             statusDot.FontSize(11);
             statusDot.VerticalAlignment(VerticalAlignment::Center);
 
-            if (att.status == mayasaba::AttachmentStatus::Preparing)
+            if (removing)
+            {
+                statusDot.Text(L"◌");
+                statusDot.Foreground(Token(L"MayasabaAmberBrush"));
+            }
+            else if (att.status == mayasaba::AttachmentStatus::Preparing)
             {
                 statusDot.Text(L"◌");
                 statusDot.Foreground(Token(L"MayasabaAmberBrush"));
@@ -1616,7 +1687,12 @@ namespace winrt::Mayasaba::implementation
             content.Children().Append(nameText);
 
             TextBlock sizeText{};
-            if (att.status == mayasaba::AttachmentStatus::Preparing)
+            if (removing)
+            {
+                sizeText.Text(L"removing…");
+                sizeText.Foreground(Token(L"MayasabaAmberBrush"));
+            }
+            else if (att.status == mayasaba::AttachmentStatus::Preparing)
             {
                 sizeText.Text(L"preparing…");
                 sizeText.Foreground(Token(L"MayasabaAmberBrush"));
@@ -1685,7 +1761,8 @@ namespace winrt::Mayasaba::implementation
             removeBtn.VerticalAlignment(VerticalAlignment::Center);
             Automation::AutomationProperties::SetName(removeBtn, L"Remove " + Utf16(att.fileName));
 
-            bool canRemove = !busy_ && pendingAttemptId_.empty() && !attachmentsPreparing_;
+            bool canRemove = !busy_ && pendingAttemptId_.empty() && !attachmentsPreparing_ &&
+                             !draftAttachmentsLoading_ && !removing && attachmentRemovalsInFlight_ == 0;
             removeBtn.IsEnabled(canRemove);
 
             removeBtn.Click([weak, attId](auto const&, auto const&)
@@ -1704,27 +1781,30 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::RemoveDraftAttachment(std::string const& id)
     {
-        if (busy_ || navigationBusy_ || activeProject_.empty() || projectClosed_) return;
-        if (!pendingAttemptId_.empty())
+        // Removal uses its own policy: a full draft is exactly when removing must work.
+        auto const admission = mayasaba::EvaluateRemovalAdmission(CurrentAdmissionState());
+        if (!admission)
         {
-            ShowNotice(L"Cannot modify attachments while an unresolved submission is locked for reconciliation.", true);
+            ShowAdmissionRefusal(admission.reason, L"remove this attachment");
             return;
         }
+        if (!attachmentService_ || IsRemovalPending(id)) return;
 
-        // The chip is removed from the visible set immediately so the control responds to
-        // the click, but that is a UI projection, not a persistence receipt: the durable
-        // record and the staged copy are removed on the background lane, and a failure is
-        // reported instead of being treated as success.
-        auto it = std::remove_if(draftAttachments_.begin(), draftAttachments_.end(),
+        auto const found = std::find_if(draftAttachments_.begin(), draftAttachments_.end(),
             [&](auto const& a) { return a.id == id; });
-        draftAttachments_.erase(it, draftAttachments_.end());
+        if (found == draftAttachments_.end()) return;
+
+        // A removal is a material draft mutation, not a view edit. The chip stays in the
+        // composer marked as removing, Send and new ingestion are refused, and the chip is
+        // retired only after the durable delete is confirmed. The previous code erased the
+        // chip first and deleted afterwards, so a Send in that window submitted a set that
+        // no longer matched what the reader could see.
+        ++attachmentRemovalsInFlight_;
+        removalPendingIds_.push_back(id);
         RenderAttachmentChips();
         UpdateComposerState();
 
-        if (attachmentService_)
-        {
-            RemoveDraftAttachmentAsync(activeProject_, id);
-        }
+        RemoveDraftAttachmentAsync(activeProject_, id);
     }
 
     winrt::fire_and_forget MainWindow::RemoveDraftAttachmentAsync(std::string projectId, std::string id)
@@ -1742,13 +1822,37 @@ namespace winrt::Mayasaba::implementation
         catch (std::exception const& e) { error = e.what(); }
 
         if (!co_await resume_foreground(ui)) co_return;
-        if (windowClosed_ || activeProject_ != projectId) co_return;
-        if (!error.empty())
+        if (windowClosed_) co_return;
+
+        // Settle the reservation on the interface thread, whatever the outcome.
+        if (attachmentRemovalsInFlight_ > 0) --attachmentRemovalsInFlight_;
+        removalPendingIds_.erase(
+            std::remove(removalPendingIds_.begin(), removalPendingIds_.end(), id),
+            removalPendingIds_.end());
+
+        if (activeProject_ != projectId)
         {
-            // The chip is already gone from the view, so the reader is told the removal was
-            // not durable and the set is re-derived rather than left to disagree with disk.
-            ShowNotice(L"The attachment was removed from the composer but its stored record could not be "
-                L"removed: " + Utf16(error) + L" Rechecking draft attachments.", true);
+            // Another project is open; this removal is not part of its view.
+            UpdateComposerState();
+            co_return;
+        }
+
+        if (error.empty())
+        {
+            auto it = std::remove_if(draftAttachments_.begin(), draftAttachments_.end(),
+                [&](auto const& a) { return a.id == id; });
+            draftAttachments_.erase(it, draftAttachments_.end());
+            RenderAttachmentChips();
+            UpdateComposerState();
+        }
+        else
+        {
+            // The deletion is not confirmed, so the chip stays. The authoritative set is
+            // re-derived rather than left to disagree with disk.
+            ShowNotice(L"The attachment could not be removed from storage: " + Utf16(error) +
+                L" The attachment is still in the composer; rechecking the stored draft set.", true);
+            RenderAttachmentChips();
+            UpdateComposerState();
             LoadDraftAttachmentsAsync(projectId, selectorGeneration_.load());
         }
     }
@@ -1760,16 +1864,21 @@ namespace winrt::Mayasaba::implementation
 
     winrt::fire_and_forget MainWindow::AttachFilesAsync()
     {
-        if (windowClosed_ || busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_)
+        // Same policy as the drop target and the keyboard command, evaluated before the
+        // dialog opens. A locked pending submission, a loading draft set or a running
+        // ingestion is refused here exactly as it is elsewhere.
+        auto const admission = CanBeginAttachmentIngestion();
+        if (!admission)
         {
+            ShowAdmissionRefusal(admission.reason, L"attach files");
             co_return;
         }
-        if (attachmentsPreparing_) co_return;
-        if (draftAttachments_.size() >= mayasaba::MAX_ATTACHMENT_COUNT)
-        {
-            ShowNotice(L"Attachment limit reached: maximum 50 files allowed per contribution.", true);
-            co_return;
-        }
+
+        // The picker is an asynchronous boundary: the project the files will belong to is
+        // captured before it opens and re-checked after it returns, so a dialog that
+        // outlives a project switch cannot deposit its files into a different project.
+        std::string const pickerProject = activeProject_;
+        uint64_t const pickerGeneration = selectorGeneration_.load();
 
         FileOpenPicker picker;
         picker.FileTypeFilter().Append(L"*");
@@ -1796,6 +1905,14 @@ namespace winrt::Mayasaba::implementation
             co_return;
         }
         pickerOpen_ = false;
+
+        if (windowClosed_ || activeProject_ != pickerProject ||
+            selectorGeneration_.load() != pickerGeneration)
+        {
+            ShowNotice(L"The project changed while the file picker was open. Nothing was attached.", false);
+            co_return;
+        }
+
         if (!files || files.Size() == 0)
         {
             co_return;
@@ -1813,11 +1930,34 @@ namespace winrt::Mayasaba::implementation
 
     winrt::fire_and_forget MainWindow::ProcessCandidatePathsAsync(std::vector<std::wstring> candidatePaths)
     {
-        if (windowClosed_ || busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_)
+        // Admission is decided AND the single-flight reservation is taken synchronously,
+        // before the first suspension point in this coroutine. That ordering is the fix
+        // for the overlap: the previous code tested attachmentsPreparing_ here but only
+        // set it after the validation await, so two calls could both snapshot the same
+        // draft set and both proceed.
+        auto const admission = CanBeginAttachmentIngestion();
+        if (!admission)
+        {
+            ShowAdmissionRefusal(admission.reason, L"attach files");
+            co_return;
+        }
+
+        auto const token = attachmentIngestionSlot_.TryAcquire();
+        if (token == 0)
+        {
+            ShowAdmissionRefusal(mayasaba::AttachmentAdmissionFailure::IngestionInProgress, L"attach files");
+            co_return;
+        }
+        // Every exit below - including a discarded coroutine - releases this reservation,
+        // and only this token can release it.
+        IngestionGuard guard{ this, token };
+        attachmentsPreparing_ = true;
+        UpdateComposerState();
+
+        if (candidatePaths.empty())
         {
             co_return;
         }
-        if (attachmentsPreparing_) co_return;
 
         if (!attachmentService_)
         {
@@ -1855,9 +1995,8 @@ namespace winrt::Mayasaba::implementation
             co_return;
         }
 
-        attachmentsPreparing_ = true;
-        UpdateComposerState();
-
+        // The reservation was taken before validation, so the composer already reflects
+        // "preparing" and no second operation could have reached this point.
         std::vector<std::string> preparingIds;
         preparingIds.reserve(validationResult.validatedFiles.size());
         for (auto const& meta : validationResult.validatedFiles)
@@ -2135,37 +2274,35 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::OnComposerDragOver(IInspectable const&, DragEventArgs const& e)
     {
-        if (windowClosed_ || busy_ || navigationBusy_ || activeProject_.empty() || projectClosed_)
+        // Presentation only: this decides the cursor, never admission. It reads the same
+        // policy the drop itself will enforce, so the reader is not shown a copy cursor
+        // for a drop that will be refused.
+        auto const admission = CanBeginAttachmentIngestion();
+        if (!admission ||
+            !e.DataView().Contains(Windows::ApplicationModel::DataTransfer::StandardDataFormats::StorageItems()))
         {
             e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::None);
             return;
         }
-        if (e.DataView().Contains(Windows::ApplicationModel::DataTransfer::StandardDataFormats::StorageItems()))
-        {
-            e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);
-        }
-        else
-        {
-            e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::None);
-        }
+        e.AcceptedOperation(Windows::ApplicationModel::DataTransfer::DataPackageOperation::Copy);
     }
 
     winrt::fire_and_forget MainWindow::OnComposerDrop(IInspectable const&, DragEventArgs const& e)
     {
         e.Handled(true);
 
-        if (windowClosed_ || busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_)
+        // The drop target previously checked the window, the project and a preparation
+        // flag - but never the pending submission lock, so a drop could add to a draft
+        // whose manifest was already locked for reconciliation.
+        auto const admission = CanBeginAttachmentIngestion();
+        if (!admission)
         {
+            ShowAdmissionRefusal(admission.reason, L"attach files");
             co_return;
         }
         if (dropProcessing_)
         {
             ShowNotice(L"A drop operation is already being processed.", false);
-            co_return;
-        }
-        if (attachmentsPreparing_)
-        {
-            ShowNotice(L"Cannot attach files while previous attachments are being prepared.", true);
             co_return;
         }
         if (!e.DataView().Contains(Windows::ApplicationModel::DataTransfer::StandardDataFormats::StorageItems()))
@@ -2415,8 +2552,26 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::SendCurrent()
     {
-        if (busy_ || navigationBusy_ || !storage_ || activeProject_.empty() || projectClosed_) return;
-        if (attachmentsPreparing_) return;
+        if (!pendingAttemptId_.empty())
+        {
+            // A locked submission is reconciled by its own typed command using the
+            // original immutable identity. It is never an ordinary Send that happens to
+            // reuse the text: the previous code reached SubmitAsync from here with no
+            // admission at all, so Enter could start a second submission while the draft
+            // attachment set was still loading.
+            ReconcileSubmission();
+            return;
+        }
+
+        // The same policy the Send button is disabled by. The button state alone is not a
+        // guard: a keypress never consults IsEnabled.
+        auto const admission = CanSendNow();
+        if (!admission)
+        {
+            ShowAdmissionRefusal(admission.reason, L"send");
+            return;
+        }
+
         uint64_t totalBytes = 0;
         for (auto const& att : draftAttachments_)
         {
@@ -2436,6 +2591,38 @@ namespace winrt::Mayasaba::implementation
         if (text.empty() && draftAttachments_.empty()) return;
         busy_ = true; draftTimer_.Stop(); ComposerBox().IsReadOnly(true); SendButton().IsEnabled(false); AttachButton().IsEnabled(false);
         SubmitAsync(activeProject_, pendingAttemptId_.empty() ? SubmissionId() : pendingAttemptId_, text);
+    }
+
+    void MainWindow::ReconcileSubmission()
+    {
+        // Reconciling is admitted WHILE a submission is pending - that is its purpose -
+        // and refused while another material operation is running. It reuses the original
+        // project, submission identity and body; nothing here creates a new attempt.
+        auto const admission = mayasaba::EvaluateReconcileAdmission(CurrentAdmissionState());
+        if (!admission)
+        {
+            ShowAdmissionRefusal(admission.reason, L"reconcile the pending submission");
+            return;
+        }
+
+        std::string const project = pendingAttemptProject_.empty() ? activeProject_ : pendingAttemptProject_;
+        if (project != activeProject_)
+        {
+            ShowNotice(L"The unresolved submission belongs to a different project. Switch back to that project to reconcile it.", true);
+            return;
+        }
+        if (pendingAttemptId_.empty())
+        {
+            ShowNotice(L"There is no unresolved submission to reconcile.", false);
+            return;
+        }
+
+        std::string const body = !pendingAttemptBody_.empty()
+            ? pendingAttemptBody_
+            : Utf8(ComposerBox().Text().c_str());
+
+        busy_ = true; draftTimer_.Stop(); ComposerBox().IsReadOnly(true); SendButton().IsEnabled(false); AttachButton().IsEnabled(false);
+        SubmitAsync(project, pendingAttemptId_, body);
     }
 
     winrt::fire_and_forget MainWindow::SubmitAsync(std::string id, std::string submission, std::string text)
