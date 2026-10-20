@@ -114,6 +114,7 @@
     <ClInclude Include="Motion.h" />
     <ClInclude Include="RichText.h" />
     <ClInclude Include="Timeline.h" />
+    <ClInclude Include="TimelineEntry.h" />
     <ClInclude Include="Fixtures.h" />
     <ClInclude Include="SearchController.h" />
   </ItemGroup>

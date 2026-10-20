@@ -739,21 +739,19 @@ namespace winrt::Mayasaba::implementation
     // Timeline projection.
     // ---------------------------------------------------------------------------
 
+    mayasaba::ui::TimelineEntry MainWindow::ContributionEntry(mayasaba::Contribution const& item)
+    {
+        return mayasaba::ui::ProjectContribution(
+            item, item.createdAt.empty() ? std::string{} : LocalStamp(item.createdAt));
+    }
+
     std::vector<mayasaba::ui::TimelineEntry> MainWindow::ProjectHistoryEntries() const
     {
         std::vector<mayasaba::ui::TimelineEntry> entries;
         entries.reserve(historyCache_.size());
         for (auto const& item : historyCache_)
         {
-            mayasaba::ui::TimelineEntry entry{};
-            entry.kind = mayasaba::ui::EntryKind::UserContribution;
-            entry.state = mayasaba::ui::EntryState::Saved;
-            entry.identity = item.submissionId;
-            entry.author = "You";
-            entry.timestamp = item.createdAt.empty() ? std::string{"saved"} : LocalStamp(item.createdAt);
-            entry.body = item.body;
-            entry.attachments = item.attachments;
-            entries.push_back(std::move(entry));
+            entries.push_back(ContributionEntry(item));
         }
         return entries;
     }
@@ -872,15 +870,10 @@ namespace winrt::Mayasaba::implementation
             if (renderedConditionKind_ >= 0) timeline_->RemoveLast();
             for (std::size_t index = renderedCount_; index < historyCache_.size(); ++index)
             {
-                auto const& item = historyCache_[index];
-                mayasaba::ui::TimelineEntry entry{};
-                entry.kind = mayasaba::ui::EntryKind::UserContribution;
-                entry.state = mayasaba::ui::EntryState::Saved;
-                entry.identity = item.submissionId;
-                entry.author = "You";
-                entry.timestamp = item.createdAt.empty() ? std::string{"saved"} : LocalStamp(item.createdAt);
-                entry.body = item.body;
-                timeline_->Append(std::move(entry));
+                // Same projection as restored history: a message appended after a
+                // confirmed Send must show its attachment chips immediately, and
+                // identically after restoration.
+                timeline_->Append(ContributionEntry(historyCache_[index]));
                 if (!following_) ++unseen_;
             }
             auto card = ConditionCard();

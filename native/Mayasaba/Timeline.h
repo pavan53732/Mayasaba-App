@@ -10,7 +10,7 @@
 // shows a precise unavailable state instead of inventing a record.
 
 #include "Motion.h"
-#include "Storage.h"
+#include "TimelineEntry.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,68 +24,8 @@
 
 namespace mayasaba::ui
 {
-    // What the entry is. Visual anatomy and authority differ per kind.
-    enum class EntryKind
-    {
-        UserContribution, // the reader's own saved message
-        AgentReply,       // one consolidated, reviewed reply
-        ControllerCard,   // controller status or outcome
-        TurnProgress,     // three-agent turn progress
-        WorkCard,         // running / paused / stopped operation
-        BlockedCard,      // blocked or physically unknown, with recovery
-        ValidationCard,   // criterion-linked result
-        DeliveryCard,     // publication / certification
-        FixtureBanner     // test-fixture identification; never a real record
-    };
-
-    // The semantic state. Text always states the same thing, so colour is never
-    // the only carrier of meaning.
-    enum class EntryState
-    {
-        Informational,
-        Saved,
-        Provisional,
-        Waiting,
-        Running,
-        Paused,
-        Stopped,
-        Blocked,
-        Unknown,
-        Failed,
-        Recovered,
-        Certified
-    };
-
-    struct TimelineEntry
-    {
-        EntryKind kind{EntryKind::ControllerCard};
-        EntryState state{EntryState::Informational};
-        // Stable owner reference: contribution / turn / operation identity.
-        std::string identity;
-        std::string author;
-        std::string timestamp;
-        std::string title;
-        std::string body;
-        // One-sentence consequence, affected operation and the permitted next action.
-        std::string consequence;
-        std::string operation;
-        std::string nextAction;
-        // Unobtrusive attribution, e.g. the recorded writer and both reviewers.
-        std::string attribution;
-        // Show details body. Rendered as safe rich text; never a route.
-        std::string details;
-        bool detailsAvailable{false};
-        // Renders the detail already expanded. Persisted by the caller so a card
-        // rebuilt to stay last in the timeline does not close what the reader opened.
-        bool detailsOpen{false};
-        // True only for entries produced by the explicitly identified fixture
-        // harness. Production startup can never set this.
-        bool fixture{false};
-        // A silent insert is a refreshed condition card, not new conversation. It
-        // must not replay an insertion transition on every refresh.
-        bool silentInsert{false};
-        std::vector<AttachmentRecord> attachments{};
-    };
+    // EntryKind, EntryState and TimelineEntry live in TimelineEntry.h so the
+    // projection is exercisable without WinUI. This header adds the renderer.
 
     // Renders the timeline. Owns an observable item source of stable indices so
     // the WinUI repeater can virtualize realization without a custom runtime class.

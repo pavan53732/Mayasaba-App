@@ -4,6 +4,7 @@
 #include "../Mayasaba/ProjectService.h"
 #include "../Mayasaba/AttachmentService.h"
 #include "../Mayasaba/SerialQueue.h"
+#include "../Mayasaba/TimelineEntry.h"
 #include <fstream>
 #include <future>
 #include <atomic>
@@ -2603,8 +2604,101 @@ int main()
             EXPECT(quarantineReason.find("quarantined") != std::string::npos);
         }
 
+        // 30. Both timeline realization paths project an attachment-bearing contribution
+        // identically. The append path used to build its own entry and omit attachments,
+        // so a message with files rendered chips only after the project was reopened.
+        // This exercises the shared production projection over a real persisted record.
+        {
+            mayasaba::Storage timelineStore(folder / "timeline_projection.db");
+            timelineStore.BindProject("proj-tl", "Timeline", "C:/Timeline");
+
+            // A real staged attachment is required, so the save path validates it.
+            auto const staged = folder / "timeline_attachment.txt";
+            {
+                std::ofstream out(staged, std::ios::binary);
+                out << "attachment bytes";
+            }
+            std::string const digest = ComputeSha256ForTestFile(staged.string());
+            EXPECT(digest.size() == 64);
+
+            // Draft attachments are registered before staging, because staging binds the
+            // manifest of the READY set. That is the production order.
+            mayasaba::AttachmentRecord att;
+            att.id = "att-tl-1";
+            att.projectId = "proj-tl";
+            att.submissionId = "sub-tl-1";
+            att.fileName = "timeline_attachment.txt";
+            att.fileSize = 16;
+            att.sha256 = digest;
+            att.detectedType = "text/plain";
+            att.storagePath = staged.string();
+            att.sourcePath = staged.string();
+            att.status = "READY";
+            timelineStore.SaveDraftAttachments("proj-tl", { att });
+
+            EXPECT(timelineStore.StageSubmission("proj-tl", "sub-tl-1", "message with a file") == "sub-tl-1");
+
+            mayasaba::SaveContributionDetail detail;
+            EXPECT(timelineStore.SaveContribution("proj-tl", "sub-tl-1", "message with a file", { att }, detail) == SaveDisposition::Saved);
+
+            auto const history = timelineStore.Contributions("proj-tl");
+            EXPECT(history.size() == 1);
+            EXPECT(history[0].attachments.size() == 1);
+            EXPECT(history[0].attachments[0].id == "att-tl-1");
+
+            // Restored-history path.
+            std::vector<mayasaba::ui::TimelineEntry> restored;
+            for (auto const& item : history)
+            {
+                restored.push_back(mayasaba::ui::ProjectContribution(item, "2026-10-20 09:00"));
+            }
+
+            // Append path, driven exactly as RenderHistory does it: only the entries
+            // beyond the already-rendered count are appended.
+            std::size_t const alreadyRendered = 0;
+            std::vector<mayasaba::ui::TimelineEntry> appended;
+            for (std::size_t index = alreadyRendered; index < history.size(); ++index)
+            {
+                appended.push_back(mayasaba::ui::ProjectContribution(
+                    history[index], history[index].createdAt.empty() ? std::string{} : "2026-10-20 09:00"));
+            }
+
+            EXPECT(restored.size() == 1);
+            EXPECT(appended.size() == 1);
+            for (auto const* path : { &restored, &appended })
+            {
+                auto const& entry = (*path)[0];
+                EXPECT(entry.kind == mayasaba::ui::EntryKind::UserContribution);
+                EXPECT(entry.state == mayasaba::ui::EntryState::Saved);
+                EXPECT(entry.identity == "sub-tl-1");
+                EXPECT(entry.body == "message with a file");
+                // The defect: this was empty on the append path.
+                EXPECT(entry.attachments.size() == 1);
+                EXPECT(entry.attachments[0].fileName == "timeline_attachment.txt");
+                EXPECT(entry.attachments[0].sha256 == digest);
+            }
+
+            // The two paths must agree field-for-field, not merely both be non-empty.
+            EXPECT(restored[0].identity == appended[0].identity);
+            EXPECT(restored[0].timestamp == appended[0].timestamp);
+            EXPECT(restored[0].attachments.size() == appended[0].attachments.size());
+            EXPECT(restored[0].attachments[0].id == appended[0].attachments[0].id);
+
+            // A contribution with no attachments projects no chips on either path, and an
+            // absent local label is normalized identically rather than left blank.
+            mayasaba::Contribution bare;
+            bare.submissionId = "sub-tl-bare";
+            bare.body = "no files";
+            auto const bareRestored = mayasaba::ui::ProjectContribution(bare, "2026-10-20 09:00");
+            auto const bareAppended = mayasaba::ui::ProjectContribution(bare, std::string{});
+            EXPECT(bareRestored.attachments.empty());
+            EXPECT(bareAppended.attachments.empty());
+            EXPECT(bareRestored.timestamp == "2026-10-20 09:00");
+            EXPECT(bareAppended.timestamp == "saved");
+        }
+
         fs::remove_all(folder);
-        std::cout << "PASS: 22 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search, action center, attachment inspection)\\n";
+        std::cout << "PASS: 23 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search, action center, attachment inspection, timeline projection)\\n";
         return 0;
     }
     catch (std::exception const& e)

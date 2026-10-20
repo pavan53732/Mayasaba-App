@@ -273,6 +273,11 @@ namespace winrt::Mayasaba::implementation
         // target a stale maximum and leave the newest entry just below the fold.
         void TryScrollToEnd();
         void CopyToClipboard(winrt::hstring const& text);
+        // The single projection from a durable Contribution to a timeline entry.
+        // Restored history and newly appended history both use it, so an
+        // attachment-bearing message cannot render differently depending on which
+        // path realized it.
+        static mayasaba::ui::TimelineEntry ContributionEntry(mayasaba::Contribution const& item);
         std::vector<mayasaba::ui::TimelineEntry> ProjectHistoryEntries() const;
         mayasaba::ui::TimelineEntry ConditionCard() const;
         // Identifies which controller condition the rendered card shows, so an
