@@ -5,15 +5,87 @@ import json
 import sqlite3
 import subprocess
 import ctypes
+import hashlib
 from ctypes import wintypes
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
 
+# Defaults are preserved for an interactive run, but every path can be supplied explicitly
+# so a verification run never depends on a machine-specific directory. Results are only
+# meaningful when they are tied to the exact binaries that produced them, so the harness
+# records the identity of the executable and the compiled XAML it drove.
 STORE_PATH = r"C:\Users\pavan\PROJECTS\_ui-verify\multi_test\store.db"
 PERF_LOG_PATH = r"C:\Users\pavan\PROJECTS\_ui-verify\multi_test\perf.json"
 BIN_DIR = r"C:\Users\pavan\PROJECTS\Mayasaba-App\native\Mayasaba\bin\x64\Release"
 EXE_PATH = os.path.join(BIN_DIR, "Mayasaba.exe")
+EVIDENCE_DIR = ""
+# The window takes roughly 10-25 s to appear on a cold binary here; a fixed short sleep
+# reports "no window" against a build that is merely still starting.
+WINDOW_WAIT_SECONDS = 40
 OLE_DROP_EXE = r"C:\Users\pavan\PROJECTS\Mayasaba-App\native\tests\bin\ole_drop.exe"
+
+
+def apply_cli_overrides(argv):
+    """Accepts --exe/--store/--perf-log/--evidence-dir without disturbing the defaults."""
+    global EXE_PATH, STORE_PATH, PERF_LOG_PATH, BIN_DIR, EVIDENCE_DIR
+    for i, arg in enumerate(argv):
+        if i + 1 >= len(argv):
+            break
+        value = argv[i + 1]
+        if arg == "--exe":
+            EXE_PATH = os.path.abspath(value)
+            BIN_DIR = os.path.dirname(EXE_PATH)
+        elif arg == "--store":
+            STORE_PATH = os.path.abspath(value)
+        elif arg == "--perf-log":
+            PERF_LOG_PATH = os.path.abspath(value)
+        elif arg == "--evidence-dir":
+            EVIDENCE_DIR = os.path.abspath(value)
+
+
+def sha256_of(path):
+    try:
+        with open(path, "rb") as handle:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError as exc:
+        return f"UNAVAILABLE ({exc})"
+
+
+def record_artifact_identity():
+    """Ties every result in this run to the exact binaries that produced it."""
+    identity = {
+        "executable": EXE_PATH,
+        "executable_sha256": sha256_of(EXE_PATH),
+        "compiled_xaml": os.path.join(BIN_DIR, "MainWindow.xbf"),
+        "compiled_xaml_sha256": sha256_of(os.path.join(BIN_DIR, "MainWindow.xbf")),
+        "source_commit": source_commit(),
+        "store": STORE_PATH,
+        "perf_log": PERF_LOG_PATH,
+        "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    log(f"Executable SHA-256:    {identity['executable_sha256']}")
+    log(f"MainWindow.xbf SHA-256: {identity['compiled_xaml_sha256']}")
+    log(f"Source commit:         {identity['source_commit']}")
+    if EVIDENCE_DIR:
+        os.makedirs(EVIDENCE_DIR, exist_ok=True)
+        target = os.path.join(EVIDENCE_DIR, "artifact-identity.json")
+        with open(target, "w", encoding="utf-8") as handle:
+            json.dump(identity, handle, indent=2)
+        log(f"Artifact identity written: {target}")
+    return identity
+
+
+def source_commit():
+    try:
+        repo = os.path.abspath(os.path.join(BIN_DIR, "..", "..", "..", "..", ".."))
+        out = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"],
+                             capture_output=True, text=True, timeout=10)
+        return out.stdout.strip() or "UNAVAILABLE"
+    except Exception as exc:
+        return f"UNAVAILABLE ({exc})"
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -282,12 +354,14 @@ def wait_for_notice_text(win, expected_substring, timeout=3.5):
 
 
 def main():
+    apply_cli_overrides(sys.argv[1:])
     log("=================================================================")
     log("STARTING STRENGTHENED NATIVE UI ACCEPTANCE AND PERF VERIFICATION")
     log("=================================================================")
     log(f"Executable: {EXE_PATH}")
     log(f"Store:      {STORE_PATH}")
     log(f"Perf log:   {PERF_LOG_PATH}")
+    record_artifact_identity()
 
     # Run unit tests of drop verdict classification logic
     test_drop_verdict_classification()
@@ -318,11 +392,19 @@ def main():
     log(f"Launched Mayasaba.exe (PID {proc.pid})")
 
     try:
-        time.sleep(3.5)
+        # Bounded wait rather than a fixed sleep: the window appears after roughly
+        # 10-25 s on a cold binary, and a short fixed wait reports a false "no window".
         d = Desktop(backend="uia")
-        wins = [w for w in d.windows(process=proc.pid) if "Engineering Control Room" in w.window_text() or "Mayasaba" in w.window_text()]
+        deadline = time.time() + WINDOW_WAIT_SECONDS
+        wins = []
+        while time.time() < deadline:
+            wins = [w for w in d.windows(process=proc.pid)
+                    if "Engineering Control Room" in w.window_text() or "Mayasaba" in w.window_text()]
+            if wins:
+                break
+            time.sleep(0.5)
         if not wins:
-            log("FAIL: Could not locate main window")
+            log(f"FAIL: Could not locate main window within {WINDOW_WAIT_SECONDS}s")
             return 1
 
         win = wins[0]

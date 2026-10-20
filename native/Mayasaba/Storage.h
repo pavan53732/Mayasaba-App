@@ -299,8 +299,20 @@ namespace mayasaba
         // Attachment draft and committed persistence
         void SaveDraftAttachment(std::string const& projectId, AttachmentRecord const& att);
         void SaveDraftAttachments(std::string const& projectId, std::vector<AttachmentRecord> const& attachments);
-        void RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
-        void ClearDraftAttachments(std::string const& projectId);
+        // Removes one draft attachment record and returns the staged path that record
+        // owned, so the caller deletes exactly the bytes whose record it removed - never a
+        // path it read earlier, which another operation may since have replaced.
+        //
+        // Returns nullopt when no such record existed. Throws, changing nothing, when the
+        // removal is refused because a locked pending submission covers this record.
+        //
+        // The authorization decision and the removal happen inside ONE serialized section,
+        // so no pending submission can appear between "allowed" and "gone". That is what
+        // lets a caller treat a successful return as permission to delete the bytes.
+        std::optional<std::string> RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
+        // Removes every draft attachment record of the project and returns the staged paths
+        // they owned, under the same authorization rule and the same serialization.
+        std::vector<std::string> ClearDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);
         std::vector<AttachmentRecord> GetCommittedAttachmentsForProject(std::string const& projectId);

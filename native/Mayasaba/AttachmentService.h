@@ -113,8 +113,23 @@ namespace mayasaba
         // Staging and Draft persistence
         void SaveDraftAttachments(std::string const& projectId, std::vector<AttachmentCandidate> const& attachments);
         std::vector<AttachmentCandidate> LoadDraftAttachments(std::string const& projectId);
-        void RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
-        void ClearDraftAttachments(std::string const& projectId);
+        // Outcome of a draft removal. The record is removed first, under Storage's
+        // authorization, and its bytes only afterwards. Either step can fail independently,
+        // so a caller must not report a clean removal unless both actually happened.
+        struct DraftRemovalOutcome
+        {
+            bool recordRemoved{false};
+            bool bytesRemoved{false};
+            // Empty when the removal was clean; otherwise the concrete unresolved reason.
+            std::string unresolvedReason;
+        };
+
+        // Removes one draft attachment. THROWS when the removal is refused - a locked
+        // pending submission covers the record - and in that case neither the record nor
+        // any byte is touched.
+        DraftRemovalOutcome RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
+        // Removes every draft attachment of the project, under the same rule.
+        DraftRemovalOutcome ClearDraftAttachments(std::string const& projectId);
 
         // Reconciles orphaned files in the project's staging directory and clears incomplete
         // preparation intents. When preparationActive is true, live PREPARING records and

@@ -1814,10 +1814,11 @@ namespace winrt::Mayasaba::implementation
         auto alive = get_strong();
         auto ui = DispatcherQueue();
         std::string error;
+        mayasaba::AttachmentService::DraftRemovalOutcome outcome{};
         try
         {
             co_await selectorQueue_.Background();
-            attachmentService_->RemoveDraftAttachment(projectId, id);
+            outcome = attachmentService_->RemoveDraftAttachment(projectId, id);
         }
         catch (std::exception const& e) { error = e.what(); }
 
@@ -1844,6 +1845,14 @@ namespace winrt::Mayasaba::implementation
             draftAttachments_.erase(it, draftAttachments_.end());
             RenderAttachmentChips();
             UpdateComposerState();
+
+            if (!outcome.unresolvedReason.empty())
+            {
+                // The record is gone, so the chip must go with it, but the bytes were not
+                // reclaimed. That is reported rather than left as an implied clean removal.
+                ShowNotice(L"The attachment was removed from this draft, but " +
+                    Utf16(outcome.unresolvedReason) + L".", true);
+            }
         }
         else
         {

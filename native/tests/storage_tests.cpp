@@ -3688,6 +3688,149 @@ int main()
             CASES_END();
         }
 
+        // ------------------------------------------------------------------
+        // S1 integrity correction: authorization must precede physical deletion.
+        // ------------------------------------------------------------------
+
+        // 41. A draft removal that the authoritative layer refuses must not have touched the
+        // bytes. The previous order deleted the staged copy first and asked Storage second,
+        // so a pending submission's protected bytes were already gone when the refusal
+        // arrived.
+        {
+            CASES_BEGIN("41. A refused draft removal preserves both the record and the staged bytes");
+            mayasaba::Storage store(folder / "removal-guard.db");
+            auto staging = folder / "removal-guard-stage";
+            mayasaba::AttachmentService service(store, staging);
+
+            auto seed = [&](std::string const& projectId, std::string const& id)
+            {
+                store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+                auto dir = staging / "staging" / projectId;
+                fs::create_directories(dir);
+                auto path = dir / (id + ".txt");
+                {
+                    std::ofstream of(path, std::ios::binary);
+                    of.write("protected bytes", 15);
+                }
+                mayasaba::AttachmentCandidate c;
+                c.id = id;
+                c.fileName = id + ".txt";
+                c.fileSize = 15;
+                c.detectedType = "text/plain";
+                c.originalPath = L"C:/source/" + std::wstring(id.begin(), id.end()) + L".txt";
+                c.stagedPath = path.wstring();
+                c.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+                c.status = mayasaba::AttachmentStatus::Ready;
+                service.SaveDraftAttachments(projectId, { c });
+                return path;
+            };
+
+            auto guardedFile = seed("rem-guard", "att-guarded");
+            EXPECT(store.StageSubmission("rem-guard", "sub-guard", "body") == "sub-guard");
+
+            // Single removal, refused. The record and the bytes must both survive.
+            bool removeRefused = false;
+            try { service.RemoveDraftAttachment("rem-guard", "att-guarded"); }
+            catch (std::exception const&) { removeRefused = true; }
+            EXPECT(removeRefused);
+            EXPECT(fs::exists(guardedFile));
+            EXPECT(store.GetDraftAttachments("rem-guard").size() == 1);
+            EXPECT(store.GetDraftAttachments("rem-guard")[0].status == "READY");
+            EXPECT(store.Pending("rem-guard").has_value());
+
+            // Clear, refused. Same requirement for the whole set.
+            bool clearRefused = false;
+            try { service.ClearDraftAttachments("rem-guard"); }
+            catch (std::exception const&) { clearRefused = true; }
+            EXPECT(clearRefused);
+            EXPECT(fs::exists(guardedFile));
+            EXPECT(store.GetDraftAttachments("rem-guard").size() == 1);
+            EXPECT(store.Pending("rem-guard").has_value());
+
+            // Project isolation: a lock in one project must not block, or endanger, another.
+            auto otherFile = seed("rem-other", "att-other");
+            auto const otherOutcome = service.RemoveDraftAttachment("rem-other", "att-other");
+            EXPECT(otherOutcome.recordRemoved);
+            EXPECT(otherOutcome.bytesRemoved);
+            EXPECT(!fs::exists(otherFile));
+            EXPECT(store.GetDraftAttachments("rem-other").empty());
+            // ... and the guarded project is untouched by that operation.
+            EXPECT(fs::exists(guardedFile));
+            EXPECT(store.GetDraftAttachments("rem-guard").size() == 1);
+            CASES_END();
+        }
+
+        // 42. Authorized removal still works, and a cleanup failure is reported as an
+        // unresolved obligation that reconciliation later reclaims.
+        {
+            CASES_BEGIN("42. Authorized removal succeeds and a cleanup failure stays recoverable");
+            mayasaba::Storage store(folder / "removal-ok.db");
+            auto staging = folder / "removal-ok-stage";
+            mayasaba::AttachmentService service(store, staging);
+
+            auto seed = [&](std::string const& projectId, std::string const& id)
+            {
+                store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+                auto dir = staging / "staging" / projectId;
+                fs::create_directories(dir);
+                auto path = dir / (id + ".txt");
+                {
+                    std::ofstream of(path, std::ios::binary);
+                    of.write("ordinary bytes", 14);
+                }
+                mayasaba::AttachmentCandidate c;
+                c.id = id;
+                c.fileName = id + ".txt";
+                c.fileSize = 14;
+                c.detectedType = "text/plain";
+                c.originalPath = L"C:/source/" + std::wstring(id.begin(), id.end()) + L".txt";
+                c.stagedPath = path.wstring();
+                c.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+                c.status = mayasaba::AttachmentStatus::Ready;
+                service.SaveDraftAttachments(projectId, { c });
+                return path;
+            };
+
+            // Normal path, no pending submission: record and bytes both go.
+            auto first = seed("rem-ok", "att-one");
+            auto second = seed("rem-ok", "att-two");
+            auto const single = service.RemoveDraftAttachment("rem-ok", "att-one");
+            EXPECT(single.recordRemoved);
+            EXPECT(single.bytesRemoved);
+            EXPECT(single.unresolvedReason.empty());
+            EXPECT(!fs::exists(first));
+            EXPECT(fs::exists(second));
+            EXPECT(store.GetDraftAttachments("rem-ok").size() == 1);
+
+            auto const cleared = service.ClearDraftAttachments("rem-ok");
+            EXPECT(cleared.recordRemoved);
+            EXPECT(cleared.bytesRemoved);
+            EXPECT(!fs::exists(second));
+            EXPECT(store.GetDraftAttachments("rem-ok").empty());
+
+            // Partial cleanup failure: the file is held open without delete sharing, so the
+            // record can be removed but the bytes cannot. That must be reported, not hidden,
+            // and must remain reclaimable.
+            auto stuck = seed("rem-stuck", "att-stuck");
+            HANDLE hold = CreateFileW(stuck.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ,
+                nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+            EXPECT(hold != INVALID_HANDLE_VALUE);
+
+            auto const partial = service.RemoveDraftAttachment("rem-stuck", "att-stuck");
+            CloseHandle(hold);
+
+            EXPECT(partial.recordRemoved);
+            EXPECT(!partial.bytesRemoved);
+            EXPECT(!partial.unresolvedReason.empty());
+            EXPECT(fs::exists(stuck));
+            EXPECT(store.GetDraftAttachments("rem-stuck").empty());
+
+            // The record is gone, so the file is untracked; reconciliation reclaims it.
+            service.ReclaimInterruptedPreparation("rem-stuck");
+            EXPECT(!fs::exists(stuck));
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // The summary is derived from the groups that actually ran. It is not a fixed
         // claim: the count and the names come from execution, and any group that threw

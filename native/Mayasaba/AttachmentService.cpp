@@ -740,37 +740,86 @@ namespace mayasaba
         return true;
     }
 
-    void AttachmentService::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
+    AttachmentService::DraftRemovalOutcome AttachmentService::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
     {
-        auto draft = LoadDraftAttachments(projectId);
-        for (auto const& c : draft)
+        DraftRemovalOutcome outcome;
+
+        // AUTHORIZATION FIRST, and the record removal is the authorization.
+        //
+        // The previous order was delete-bytes-then-ask-Storage: the staged copy was removed
+        // before the authoritative layer was consulted, so a refusal arrived after the
+        // damage and a pending submission's protected bytes were already gone. Storage now
+        // decides and removes the row in one serialized step, returning the exact staged
+        // path it authorized. If it refuses, this throws and no byte has been touched.
+        std::optional<std::string> const authorizedPath =
+            storage_.RemoveDraftAttachment(projectId, attachmentId);
+
+        if (!authorizedPath)
         {
-            if (c.id == attachmentId)
-            {
-                // The record's staged path is metadata. It is deleted only when it is
-                // proven to name a file inside this project's managed staging directory;
-                // an unprovable path is left in place rather than trusted.
-                if (!c.stagedPath.empty())
-                {
-                    std::string reason;
-                    RemoveContainedStagedFile(projectId, Utf16ToUtf8(c.stagedPath), &reason);
-                }
-                break;
-            }
+            // No such record existed, so this operation owned no bytes.
+            return outcome;
         }
-        storage_.RemoveDraftAttachment(projectId, attachmentId);
+
+        outcome.recordRemoved = true;
+
+        if (authorizedPath->empty())
+        {
+            // A record that owned no staged copy has nothing left to clean up.
+            outcome.bytesRemoved = true;
+            return outcome;
+        }
+
+        std::string reason;
+        if (RemoveContainedStagedFile(projectId, *authorizedPath, &reason))
+        {
+            outcome.bytesRemoved = true;
+        }
+        else
+        {
+            // The record is gone, so these bytes are now untracked inside the managed
+            // staging directory. Reconciliation reclaims untracked files there, so the
+            // cleanup is recoverable rather than lost - but it is reported, never presented
+            // as a clean removal.
+            outcome.unresolvedReason =
+                "the attachment record was removed but its staged copy could not be deleted: " + reason;
+        }
+        return outcome;
     }
 
-    void AttachmentService::ClearDraftAttachments(std::string const& projectId)
+    AttachmentService::DraftRemovalOutcome AttachmentService::ClearDraftAttachments(std::string const& projectId)
     {
-        auto draft = LoadDraftAttachments(projectId);
-        for (auto const& c : draft)
+        DraftRemovalOutcome outcome;
+
+        // Same rule: Storage authorizes and removes in one step, and only the paths it
+        // actually removed are candidates for deletion.
+        std::vector<std::string> const authorizedPaths = storage_.ClearDraftAttachments(projectId);
+        outcome.recordRemoved = true;
+
+        if (authorizedPaths.empty())
         {
-            if (c.stagedPath.empty()) continue;
-            std::string reason;
-            RemoveContainedStagedFile(projectId, Utf16ToUtf8(c.stagedPath), &reason);
+            outcome.bytesRemoved = true;
+            return outcome;
         }
-        storage_.ClearDraftAttachments(projectId);
+
+        size_t failed = 0;
+        std::string firstReason;
+        for (auto const& path : authorizedPaths)
+        {
+            std::string reason;
+            if (!RemoveContainedStagedFile(projectId, path, &reason))
+            {
+                ++failed;
+                if (firstReason.empty()) firstReason = reason;
+            }
+        }
+
+        outcome.bytesRemoved = (failed == 0);
+        if (failed != 0)
+        {
+            outcome.unresolvedReason = std::to_string(failed) + " staged copy(ies) could not be deleted (" +
+                firstReason + "); reconciliation reclaims them on a later pass";
+        }
+        return outcome;
     }
 
     void AttachmentService::ReconcileStagedFiles(std::string const& projectId, bool preparationActive)

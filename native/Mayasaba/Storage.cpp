@@ -2731,39 +2731,97 @@ namespace mayasaba
         }
     }
 
-    void Storage::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
+    std::optional<std::string> Storage::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
     {
         std::lock_guard lock(mutex_);
-        RefusePendingManifestDeletion_locked(projectId, attachmentId);
-        Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
-        Bind(q.value,1,projectId);
-        Bind(q.value,2,attachmentId);
-        Check(sqlite3_step(q.value),db_);
+
+        // Authorization and removal are one step. The previous shape let a caller read the
+        // record, delete its bytes, and only then ask Storage whether that was allowed - so
+        // a refusal arrived after the damage. Here the decision and the DELETE share a
+        // serialized section, and the caller receives the path only if the row is gone.
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            RefusePendingManifestDeletion_locked(projectId, attachmentId);
+
+            std::optional<std::string> staged;
+            {
+                Statement q(db_, "SELECT staged_path FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
+                Bind(q.value, 1, projectId);
+                Bind(q.value, 2, attachmentId);
+                int const rc = sqlite3_step(q.value);
+                if (rc == SQLITE_ROW) staged = Text(q.value, 0);
+                else Check(rc, db_);
+            }
+
+            if (staged)
+            {
+                Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
+                Bind(q.value, 1, projectId);
+                Bind(q.value, 2, attachmentId);
+                Check(sqlite3_step(q.value), db_);
+            }
+
+            Exec("COMMIT;");
+            return staged;
+        }
+        catch (...)
+        {
+            sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+            throw;
+        }
     }
 
-    void Storage::ClearDraftAttachments(std::string const& projectId)
+    std::vector<std::string> Storage::ClearDraftAttachments(std::string const& projectId)
     {
         std::lock_guard lock(mutex_);
+
+        Exec("BEGIN IMMEDIATE;");
+        try
         {
-            // Clearing the set would delete rows a locked submission's manifest covers.
-            Statement pending(db_, "SELECT count(*) FROM pending_submissions WHERE project_id=?1;");
-            Bind(pending.value, 1, projectId);
-            if (sqlite3_step(pending.value) == SQLITE_ROW && sqlite3_column_int(pending.value, 0) > 0)
             {
-                Statement ready(db_, "SELECT count(*) FROM draft_attachments WHERE project_id=?1 AND status='READY';");
-                Bind(ready.value, 1, projectId);
-                if (sqlite3_step(ready.value) == SQLITE_ROW && sqlite3_column_int(ready.value, 0) > 0)
+                // Clearing the set would delete rows a locked submission's manifest covers.
+                Statement pending(db_, "SELECT count(*) FROM pending_submissions WHERE project_id=?1;");
+                Bind(pending.value, 1, projectId);
+                if (sqlite3_step(pending.value) == SQLITE_ROW && sqlite3_column_int(pending.value, 0) > 0)
                 {
-                    throw std::runtime_error(
-                        "An unresolved submission is locked for this project and its attachments are part of its "
-                        "payload, so the draft set cannot be cleared. Reconcile the pending submission first; "
-                        "nothing was changed.");
+                    Statement ready(db_, "SELECT count(*) FROM draft_attachments WHERE project_id=?1 AND status='READY';");
+                    Bind(ready.value, 1, projectId);
+                    if (sqlite3_step(ready.value) == SQLITE_ROW && sqlite3_column_int(ready.value, 0) > 0)
+                    {
+                        throw std::runtime_error(
+                            "An unresolved submission is locked for this project and its attachments are part of its "
+                            "payload, so the draft set cannot be cleared. Reconcile the pending submission first; "
+                            "nothing was changed.");
+                    }
                 }
             }
+
+            std::vector<std::string> staged;
+            {
+                Statement q(db_, "SELECT staged_path FROM draft_attachments WHERE project_id=?1;");
+                Bind(q.value, 1, projectId);
+                int rc = SQLITE_OK;
+                while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+                {
+                    std::string path = Text(q.value, 0);
+                    if (!path.empty()) staged.push_back(std::move(path));
+                }
+                Check(rc, db_);
+            }
+
+            Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1;");
+            Bind(q.value, 1, projectId);
+            Check(sqlite3_step(q.value), db_);
+
+            Exec("COMMIT;");
+            return staged;
         }
-        Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1;");
-        Bind(q.value,1,projectId);
-        Check(sqlite3_step(q.value),db_);
+        catch (...)
+        {
+            sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+            throw;
+        }
     }
 
     std::vector<AttachmentRecord> Storage::GetDraftAttachments(std::string const& projectId)
