@@ -620,6 +620,7 @@ namespace winrt::Mayasaba::implementation
         ActionCenterPanel().Visibility(Visibility::Collapsed);
         ActionCenterStatusText().Text(L"");
         ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+        CollapseActionCenterDetails();
 
         RefreshRecentProjects();
         motion_.Enter(FolderStack(), 10, 0);
@@ -672,6 +673,7 @@ namespace winrt::Mayasaba::implementation
         ActionCenterPanel().Visibility(Visibility::Collapsed);
         ActionCenterStatusText().Text(L"");
         ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+        CollapseActionCenterDetails();
         historyCache_ = std::move(history);
         draftTimer_.Stop();
         motion_.CancelAll();
@@ -702,12 +704,13 @@ namespace winrt::Mayasaba::implementation
         ComposerBox().Text(Utf16(pending ? pending->body : project->draft));
         suppressDraft_ = false;
         ComposerBox().IsReadOnly(project->closed || pending.has_value());
+        // The draft attachment set is reverified off the UI thread: it reads durable
+        // records, hashes every staged copy and writes the reverified set back.
         if (attachmentService_)
         {
-            // Reconciliation must never overlap active preparation: a live batch owns its
-            // PREPARING records and staged copies and will persist its own outcome.
-            draftAttachments_ = attachmentService_->ReverifyDraftAttachments(activeProject_, attachmentsPreparing_);
+            draftAttachments_.clear();
             RenderAttachmentChips();
+            LoadDraftAttachmentsAsync(activeProject_, selectorGeneration_.load());
         }
         else
         {
@@ -733,6 +736,66 @@ namespace winrt::Mayasaba::implementation
             motion_.DepthReveal(EmptyHeroMark());
         }
         ComposerBox().Focus(FocusState::Programmatic);
+    }
+
+    winrt::fire_and_forget MainWindow::LoadDraftAttachmentsAsync(std::string projectId, uint64_t gen)
+    {
+        if (!attachmentService_ || projectId.empty()) co_return;
+
+        // Capture only plain values before the hop. activeProject_ is never read from the
+        // worker, and no mutex is held across the await.
+        bool const preparing = attachmentsPreparing_;
+        auto alive = get_strong();
+        auto ui = DispatcherQueue();
+
+        // Send and Attach stay disabled until the durable set is known, so a submission
+        // cannot be built from a partial attachment list.
+        uint64_t const loadSeq = ++draftAttachmentsLoadSeq_;
+        draftAttachmentsLoading_ = true;
+        UpdateComposerState();
+
+        std::vector<mayasaba::AttachmentCandidate> candidates;
+        std::string error;
+        try
+        {
+            co_await selectorQueue_.Background();
+            // Reconciliation must never overlap active preparation: a live batch owns its
+            // PREPARING records and staged copies and will persist its own outcome.
+            candidates = attachmentService_->ReverifyDraftAttachments(projectId, preparing);
+        }
+        catch (std::exception const& e) { error = e.what(); }
+
+        if (!co_await resume_foreground(ui)) co_return;
+        if (windowClosed_) co_return;
+        // Only the latest load owns the flag. A superseded completion must not re-enable
+        // Send while a newer load is still running.
+        bool const latest = (loadSeq == draftAttachmentsLoadSeq_);
+        if (latest)
+        {
+            draftAttachmentsLoading_ = false;
+        }
+        if (activeProject_ != projectId || selectorGeneration_.load() != gen)
+        {
+            UpdateComposerState();
+            co_return;
+        }
+        if (!latest)
+        {
+            // A newer load supersedes this result; applying it would show a stale set.
+            co_return;
+        }
+        if (!error.empty())
+        {
+            // Nothing is claimed: the previous chips are left exactly as they were and the
+            // failure is stated with its cause.
+            ShowNotice(L"Draft attachments could not be verified: " + Utf16(error) +
+                L" Existing chips are unchanged; reopen the project or retry.", true);
+            UpdateComposerState();
+            co_return;
+        }
+        draftAttachments_ = std::move(candidates);
+        RenderAttachmentChips();
+        UpdateComposerState();
     }
 
     // ---------------------------------------------------------------------------
@@ -1377,10 +1440,10 @@ namespace winrt::Mayasaba::implementation
 
         SendButton().Content(winrt::box_value(hstring{L"Send →"}));
 
-        bool const canAttach = open && !busy_ && !attachmentsPreparing_ && (draftAttachments_.size() < mayasaba::MAX_ATTACHMENT_COUNT);
+        bool const canAttach = open && !busy_ && !attachmentsPreparing_ && !draftAttachmentsLoading_ && (draftAttachments_.size() < mayasaba::MAX_ATTACHMENT_COUNT);
         AttachButton().IsEnabled(canAttach);
 
-        if (!open || busy_ || attachmentsPreparing_)
+        if (!open || busy_ || attachmentsPreparing_ || draftAttachmentsLoading_)
         {
             SendButton().IsEnabled(false);
             return;
@@ -1565,17 +1628,46 @@ namespace winrt::Mayasaba::implementation
             return;
         }
 
+        // The chip is removed from the visible set immediately so the control responds to
+        // the click, but that is a UI projection, not a persistence receipt: the durable
+        // record and the staged copy are removed on the background lane, and a failure is
+        // reported instead of being treated as success.
         auto it = std::remove_if(draftAttachments_.begin(), draftAttachments_.end(),
             [&](auto const& a) { return a.id == id; });
         draftAttachments_.erase(it, draftAttachments_.end());
+        RenderAttachmentChips();
+        UpdateComposerState();
 
         if (attachmentService_)
         {
-            attachmentService_->RemoveDraftAttachment(activeProject_, id);
+            RemoveDraftAttachmentAsync(activeProject_, id);
         }
+    }
 
-        RenderAttachmentChips();
-        UpdateComposerState();
+    winrt::fire_and_forget MainWindow::RemoveDraftAttachmentAsync(std::string projectId, std::string id)
+    {
+        if (!attachmentService_ || projectId.empty() || id.empty()) co_return;
+
+        auto alive = get_strong();
+        auto ui = DispatcherQueue();
+        std::string error;
+        try
+        {
+            co_await selectorQueue_.Background();
+            attachmentService_->RemoveDraftAttachment(projectId, id);
+        }
+        catch (std::exception const& e) { error = e.what(); }
+
+        if (!co_await resume_foreground(ui)) co_return;
+        if (windowClosed_ || activeProject_ != projectId) co_return;
+        if (!error.empty())
+        {
+            // The chip is already gone from the view, so the reader is told the removal was
+            // not durable and the set is re-derived rather than left to disagree with disk.
+            ShowNotice(L"The attachment was removed from the composer but its stored record could not be "
+                L"removed: " + Utf16(error) + L" Rechecking draft attachments.", true);
+            LoadDraftAttachmentsAsync(projectId, selectorGeneration_.load());
+        }
     }
 
     void MainWindow::OnAttachFiles(IInspectable const&, RoutedEventArgs const&)
@@ -1650,7 +1742,30 @@ namespace winrt::Mayasaba::implementation
             co_return;
         }
 
-        auto validationResult = attachmentService_->ValidateCandidateBatch(candidatePaths, draftAttachments_);
+        // Validation stats and opens every candidate file, so it runs on the background lane
+        // rather than on the interface thread.
+        auto validationAlive = get_strong();
+        auto validationUi = DispatcherQueue();
+        std::string const validationProject = activeProject_;
+        uint64_t const validationGen = selectorGeneration_.load();
+        std::vector<mayasaba::AttachmentCandidate> const existingDrafts = draftAttachments_;
+        mayasaba::BatchValidationResult validationResult{};
+        std::string validationError;
+        try
+        {
+            co_await selectorQueue_.Background();
+            validationResult = attachmentService_->ValidateCandidateBatch(candidatePaths, existingDrafts);
+        }
+        catch (std::exception const& e) { validationError = e.what(); }
+
+        if (!co_await resume_foreground(validationUi)) co_return;
+        if (windowClosed_ || activeProject_ != validationProject || selectorGeneration_.load() != validationGen) co_return;
+
+        if (!validationError.empty())
+        {
+            ShowNotice(L"Attachment validation failed: " + Utf16(validationError), true);
+            co_return;
+        }
         if (!validationResult.accepted)
         {
             ShowNotice(Utf16(validationResult.errorMessage), true);
@@ -1705,35 +1820,66 @@ namespace winrt::Mayasaba::implementation
 
         if (!co_await resume_foreground(ui)) co_return;
 
-        // Atomically validate post-preparation boundary on UI thread and conditionally commit.
-        // The outcome distinguishes a stale completion, a persistence failure, and a
-        // preparation that produced no trustworthy result for part of the selection; each
-        // needs different recovery and none may be reported as a successful attach.
+        // Atomically validate post-preparation boundary on UI thread, then persist the
+        // already-decided draft list on the background lane. The decision and the SQLite
+        // write are split so the write never runs on the interface thread, and the list is
+        // adopted only after the write succeeded.
         std::string saveError;
         bool committed = false;
-        mayasaba::AttachmentIngestionCoordinator::BatchCommitOutcome outcome =
-            mayasaba::AttachmentIngestionCoordinator::BatchCommitOutcome::StaleCompletion;
-        try
+        using Coordinator = mayasaba::AttachmentIngestionCoordinator;
+        Coordinator::BatchCommitPlan plan = Coordinator::PlanBatchCommit(
+            dropCtx,
+            activeProject_,
+            selectorGeneration_.load(),
+            windowClosed_.load(),
+            draftAttachments_,
+            prepared,
+            preparingIds);
+        auto outcome = plan.outcome;
+
+        if (plan.persist)
         {
-            committed = ingestionCoordinator_.ValidateAndCommitPreparedBatch(
-                dropCtx,
-                activeProject_,
-                selectorGeneration_.load(),
-                windowClosed_.load(),
-                draftAttachments_,
-                prepared,
-                preparingIds,
-                [this](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
-                    attachmentService_->SaveDraftAttachments(proj, drafts);
-                },
-                &saveError,
-                &outcome);
+            // Capture plain values before the hop. No mutex is held across the await and no
+            // UI member is read from the worker.
+            std::string const persistProject = activeProject_;
+            std::vector<mayasaba::AttachmentCandidate> const toPersist = plan.drafts;
+            bool saveFailed = false;
+            try
+            {
+                co_await selectorQueue_.Background();
+                attachmentService_->SaveDraftAttachments(persistProject, toPersist);
+            }
+            catch (std::exception const& ex)
+            {
+                saveError = ex.what();
+                saveFailed = true;
+            }
+
+            if (!co_await resume_foreground(ui)) co_return;
+
+            if (saveFailed)
+            {
+                committed = false;
+                outcome = Coordinator::BatchCommitOutcome::PersistenceFailed;
+            }
+            else if (windowClosed_ || activeProject_ != dropCtx.boundProjectId ||
+                     selectorGeneration_.load() != dropCtx.boundGeneration)
+            {
+                // The persisted rows belong to a project or generation that stopped being
+                // current during the write. They are real durable records, so they are not
+                // adopted into this view, and the discard is reported rather than hidden.
+                committed = false;
+                outcome = Coordinator::BatchCommitOutcome::StaleCompletion;
+            }
+            else
+            {
+                Coordinator::AdoptPersistedPlan(draftAttachments_, plan);
+                committed = true;
+            }
         }
-        catch (std::exception const& ex)
+        else if (!plan.errorMessage.empty())
         {
-            saveError = ex.what();
-            committed = false;
-            outcome = mayasaba::AttachmentIngestionCoordinator::BatchCommitOutcome::PersistenceFailed;
+            saveError = plan.errorMessage;
         }
 
         attachmentsPreparing_ = false;
@@ -1814,11 +1960,32 @@ namespace winrt::Mayasaba::implementation
 
             // Make the explicit failure state durable so reconciliation cannot later mistake
             // these records for abandoned preparation. A failure here is reported, not
-            // hidden: the chips remain visible in memory and remain removable.
+            // hidden: the chips remain visible in memory and remain removable. The write
+            // runs on the background lane; the chips are already correct in memory, so the
+            // UI is not rebuilt from the result.
             if (attachmentService_ && !activeProject_.empty())
             {
-                try { attachmentService_->SaveDraftAttachments(activeProject_, draftAttachments_); }
-                catch (std::exception const&) { /* reported below; chips stay visible */ }
+                std::string const failureProject = activeProject_;
+                std::vector<mayasaba::AttachmentCandidate> const failureState = draftAttachments_;
+                std::string persistError;
+                try
+                {
+                    co_await selectorQueue_.Background();
+                    attachmentService_->SaveDraftAttachments(failureProject, failureState);
+                }
+                catch (std::exception const& ex) { persistError = ex.what(); }
+
+                if (!co_await resume_foreground(ui)) co_return;
+                if (windowClosed_ || activeProject_ != failureProject) co_return;
+                if (!persistError.empty())
+                {
+                    // Not silent: the visible chips and the durable record now disagree, so
+                    // the reader is told and the set is re-derived from disk.
+                    ShowNotice(L"The rejected attachment state could not be saved: " + Utf16(persistError) +
+                        L" The chips remain visible and removable. Rechecking draft attachments.", true);
+                    LoadDraftAttachmentsAsync(failureProject, selectorGeneration_.load());
+                    co_return;
+                }
             }
 
             if (!prepError.empty())
@@ -3402,12 +3569,118 @@ namespace winrt::Mayasaba::implementation
         ActionCenterPanel().Visibility(Visibility::Collapsed);
         ActionCenterStatusText().Text(L"");
         ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+        CollapseActionCenterDetails();
         MoreActionCenterItemsButton().Visibility(Visibility::Collapsed);
     }
 
     void MainWindow::OnShowActionCenterDetails(IInspectable const&, RoutedEventArgs const&)
     {
-        ShowNotice(L"Action Center items are read-only projections of owner records. Select an item for its available action.", false);
+        // Inspection only. Expanding this never executes a recovery action: routing an
+        // item to its owner still requires an explicit click on that item.
+        if (actionCenterItems_.empty())
+        {
+            ShowNotice(L"Action Center has no listed item to describe.", false);
+            return;
+        }
+
+        actionCenterDetailsOpen_ = true;
+        RenderActionCenterDetails();
+        ActionCenterDetailsPanel().Visibility(Visibility::Visible);
+        // Move focus into the detail without moving the reading position of the item list:
+        // the panel is inside the same scroller and grows below the button that opened it.
+        CloseActionCenterDetailsButton().Focus(FocusState::Programmatic);
+    }
+
+    void MainWindow::OnCloseActionCenterDetails(IInspectable const&, RoutedEventArgs const&)
+    {
+        actionCenterDetailsOpen_ = false;
+        ActionCenterDetailsPanel().Visibility(Visibility::Collapsed);
+        // Focus returns to the control that owns the expansion so keyboard position is not
+        // lost when the panel collapses.
+        ShowActionCenterDetailsButton().Focus(FocusState::Programmatic);
+    }
+
+    void MainWindow::CollapseActionCenterDetails()
+    {
+        actionCenterDetailsOpen_ = false;
+        ActionCenterDetailsPanel().Visibility(Visibility::Collapsed);
+        ActionCenterDetailsList().Children().Clear();
+        ActionCenterDetailsSummaryText().Text(L"");
+    }
+
+    // Builds the source-linked detail for every currently listed item from the existing
+    // Action Center projection. No new query, owner, state machine or route is created:
+    // each row is exactly the record the list row was projected from.
+    void MainWindow::RenderActionCenterDetails()
+    {
+        ActionCenterDetailsList().Children().Clear();
+        if (actionCenterItems_.empty())
+        {
+            ActionCenterDetailsSummaryText().Text(L"");
+            return;
+        }
+
+        auto const& vs = actionCenterPresenter_.ViewState();
+        ActionCenterDetailsSummaryText().Text(
+            Utf16(std::to_string(actionCenterItems_.size())) +
+            (vs.continuationToken.empty()
+                ? L" item(s) described. Every field below is a read-only projection of the owning record."
+                : L" item(s) described. More items remain unlisted; use Load more items to page them in."));
+
+        int index = 0;
+        for (auto const& item : actionCenterItems_)
+        {
+            ++index;
+
+            auto row = StackPanel();
+            row.Spacing(4);
+
+            auto heading = TextBlock();
+            heading.Style(Application::Current().Resources().Lookup(winrt::box_value(L"MayasabaBodyText")).as<Style>());
+            heading.TextWrapping(TextWrapping::Wrap);
+            heading.Text(Utf16(std::to_string(index) + ". " + item.titleEn));
+            row.Children().Append(heading);
+
+            auto addField = [&row](winrt::hstring const& label, winrt::hstring const& value)
+            {
+                auto line = TextBlock();
+                line.Style(Application::Current().Resources().Lookup(winrt::box_value(L"MayasabaMicroText")).as<Style>());
+                line.TextWrapping(TextWrapping::Wrap);
+                line.Text(label + L": " + value);
+                row.Children().Append(line);
+            };
+
+            addField(L"Explanation", Utf16(item.explanationEn));
+            addField(L"Owning record", Utf16(item.sourceOwner));
+            addField(L"Record identity", Utf16(item.sourceRecordId));
+            addField(L"Record version",
+                item.sourceRecordVersion.empty() ? L"not reported" : Utf16(item.sourceRecordVersion));
+            addField(L"Source reference",
+                item.sourceReference.empty() ? L"not reported" : Utf16(item.sourceReference));
+            addField(L"Projection state", Utf16(item.state));
+            addField(L"Permitted action",
+                item.availableAction.empty()
+                    ? L"none. This item is informational; no recovery is offered."
+                    : Utf16(item.availableAction) + L" (select the item above to invoke it)");
+            if (!item.unavailableInfo.empty())
+            {
+                addField(L"Unavailable", Utf16(item.unavailableInfo));
+            }
+
+            auto separator = Border();
+            separator.Height(1);
+            separator.Margin(Thickness{ 0, 6, 0, 0 });
+            separator.Background(Application::Current().Resources().Lookup(winrt::box_value(L"MayasabaLineBrush")).as<Brush>());
+            row.Children().Append(separator);
+
+            // Announce the row as one unit so a screen reader reads the record, not eight
+            // unrelated fragments.
+            Automation::AutomationProperties::SetName(row,
+                L"Item " + Utf16(std::to_string(index)) + L": " + Utf16(item.titleEn) +
+                L". Owning record " + Utf16(item.sourceOwner) + L".");
+
+            ActionCenterDetailsList().Children().Append(row);
+        }
     }
 
     void MainWindow::OnMoreActionCenterItems(IInspectable const&, RoutedEventArgs const&)
@@ -3547,79 +3820,131 @@ namespace winrt::Mayasaba::implementation
             return;
         }
 
-        // Route through existing services only after revalidating underlying source records
-        switch (clicked.kind)
+        // Revalidating the item reads SQLite and hashing state, so it runs on the background
+        // lane; the accepted route is then taken on the UI thread.
+        ActivateActionCenterItemAsync(std::move(clicked), activeProject_, selectorGeneration_.load());
+    }
+
+    winrt::fire_and_forget MainWindow::ActivateActionCenterItemAsync(
+        mayasaba::ActionCenterItem clicked, std::string projectId, uint64_t gen)
+    {
+        if (!storage_ || projectId.empty()) co_return;
+
+        auto alive = get_strong();
+        auto ui = DispatcherQueue();
+
+        // What the revalidation established, decided on the worker and applied on the UI.
+        enum class Route { Stale, UnresolvedSubmission, FailedAttachment, ClosedProjectRestriction, StorageOutcome, None };
+        Route route = Route::None;
+        std::string staleReason;
+        std::string pendingBody;
+        std::string pendingId;
+
+        try
         {
-        case mayasaba::ActionCenterKind::UnresolvedSubmission:
-        {
-            // Revalidate against pending_submissions table
-            auto pending = storage_->Pending(activeProject_);
-            if (!pending || pending->id != clicked.sourceRecordId)
+            co_await selectorQueue_.Background();
+            switch (clicked.kind)
             {
-                ShowNotice(L"Action Center item is stale: pending submission has already been resolved or changed.", false);
-                RefreshActionCenterAsync(selectorGeneration_.load());
-                return;
+            case mayasaba::ActionCenterKind::UnresolvedSubmission:
+            {
+                auto pending = storage_->Pending(projectId);
+                if (!pending || pending->id != clicked.sourceRecordId)
+                {
+                    route = Route::Stale;
+                    staleReason = "pending submission has already been resolved or changed";
+                }
+                else
+                {
+                    route = Route::UnresolvedSubmission;
+                    pendingId = pending->id;
+                    pendingBody = pending->body;
+                }
+                break;
             }
-            // Execute existing reconciliation flow via SubmitAsync
-            ShowNotice(L"Reconciling pending submission " + Utf16(pending->id) + L"...", false);
-            SubmitAsync(activeProject_, pending->id, pending->body);
-            break;
+            case mayasaba::ActionCenterKind::FailedAttachment:
+            {
+                auto drafts = storage_->GetDraftAttachments(projectId);
+                auto it = std::find_if(drafts.begin(), drafts.end(), [&](auto const& d) {
+                    return d.id == clicked.sourceRecordId;
+                });
+                if (it == drafts.end() ||
+                    (it->status != "REJECTED" && it->status != "SOURCE_CHANGED" && it->status != "TIMED_OUT"))
+                {
+                    route = Route::Stale;
+                    staleReason = "attachment is no longer in a failed state";
+                }
+                else if (!clicked.sourceRecordVersion.empty() && std::to_string(it->version) != clicked.sourceRecordVersion)
+                {
+                    route = Route::Stale;
+                    staleReason = "attachment record version has changed";
+                }
+                else
+                {
+                    route = Route::FailedAttachment;
+                }
+                break;
+            }
+            case mayasaba::ActionCenterKind::ClosedProjectRestriction:
+            {
+                auto proj = storage_->Project(projectId);
+                if (!proj || !proj->closed)
+                {
+                    route = Route::Stale;
+                    staleReason = "project is already open";
+                }
+                else if (!clicked.sourceRecordVersion.empty() && std::to_string(proj->version) != clicked.sourceRecordVersion)
+                {
+                    route = Route::Stale;
+                    staleReason = "project record version has changed";
+                }
+                else
+                {
+                    route = Route::ClosedProjectRestriction;
+                }
+                break;
+            }
+            case mayasaba::ActionCenterKind::StorageFailure:
+            case mayasaba::ActionCenterKind::UnknownOutcome:
+                route = Route::StorageOutcome;
+                break;
+            default:
+                route = Route::None;
+                break;
+            }
         }
-        case mayasaba::ActionCenterKind::FailedAttachment:
+        catch (std::exception const& e)
         {
-            // Revalidate against draft_attachments table and compare expected version
-            auto drafts = storage_->GetDraftAttachments(activeProject_);
-            auto it = std::find_if(drafts.begin(), drafts.end(), [&](auto const& d) {
-                return d.id == clicked.sourceRecordId;
-            });
-            if (it == drafts.end() ||
-                (it->status != "REJECTED" && it->status != "SOURCE_CHANGED" && it->status != "TIMED_OUT"))
-            {
-                ShowNotice(L"Action Center item is stale: attachment is no longer in a failed state.", false);
-                RefreshActionCenterAsync(selectorGeneration_.load());
-                return;
-            }
-            if (!clicked.sourceRecordVersion.empty() && std::to_string(it->version) != clicked.sourceRecordVersion)
-            {
-                ShowNotice(L"Action Center item is stale: attachment record version has changed.", false);
-                RefreshActionCenterAsync(selectorGeneration_.load());
-                return;
-            }
-            // Navigate to attachment: make scroller visible, inspect the attachment, and notify
+            route = Route::Stale;
+            staleReason = std::string("its owning record could not be revalidated: ") + e.what();
+        }
+
+        if (!co_await resume_foreground(ui)) co_return;
+        if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != gen) co_return;
+
+        switch (route)
+        {
+        case Route::Stale:
+            ShowNotice(L"Action Center item is stale: " + Utf16(staleReason) + L".", false);
+            RefreshActionCenterAsync(selectorGeneration_.load());
+            break;
+        case Route::UnresolvedSubmission:
+            ShowNotice(L"Reconciling pending submission " + Utf16(pendingId) + L"...", false);
+            SubmitAsync(projectId, pendingId, pendingBody);
+            break;
+        case Route::FailedAttachment:
             AttachmentChipsScroller().Visibility(Visibility::Visible);
             InspectAttachment(clicked.sourceRecordId);
             ShowNotice(L"Navigated to failed attachment '" + Utf16(clicked.titleEn) +
                        L"'. Remove or re-attach to proceed.", true);
             break;
-        }
-        case mayasaba::ActionCenterKind::ClosedProjectRestriction:
-        {
-            // Revalidate project closure record and compare expected version
-            auto proj = storage_->Project(activeProject_);
-            if (!proj || !proj->closed)
-            {
-                ShowNotice(L"Action Center item is stale: project is already open.", false);
-                RefreshActionCenterAsync(selectorGeneration_.load());
-                return;
-            }
-            if (!clicked.sourceRecordVersion.empty() && std::to_string(proj->version) != clicked.sourceRecordVersion)
-            {
-                ShowNotice(L"Action Center item is stale: project record version has changed.", false);
-                RefreshActionCenterAsync(selectorGeneration_.load());
-                return;
-            }
-            // Invoke existing authorized reopening flow
+        case Route::ClosedProjectRestriction:
             ChangeClosureAsync(false);
             break;
-        }
-        case mayasaba::ActionCenterKind::StorageFailure:
-        case mayasaba::ActionCenterKind::UnknownOutcome:
-        {
+        case Route::StorageOutcome:
             ShowNotice(L"Storage outcome unresolved: " + Utf16(clicked.sourceRecordId) +
                        L". Rechecking Action Center records...", false);
             RefreshActionCenterAsync(selectorGeneration_.load());
             break;
-        }
         default:
             ShowNotice(L"No action available for this item.", false);
             break;
@@ -3691,6 +4016,7 @@ namespace winrt::Mayasaba::implementation
                     ActionCenterPanel().Visibility(Visibility::Collapsed);
                     ActionCenterStatusText().Text(L"");
                     ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+                    CollapseActionCenterDetails();
                     MoreActionCenterItemsButton().Visibility(Visibility::Collapsed);
                 }
                 break;
@@ -3717,6 +4043,7 @@ namespace winrt::Mayasaba::implementation
             {
                 ActionCenterPanel().Visibility(Visibility::Visible);
                 ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+                CollapseActionCenterDetails();
                 MoreActionCenterItemsButton().Visibility(Visibility::Collapsed);
                 break;
             }
@@ -3725,6 +4052,7 @@ namespace winrt::Mayasaba::implementation
             {
                 ActionCenterPanel().Visibility(Visibility::Visible);
                 ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
+                CollapseActionCenterDetails();
                 MoreActionCenterItemsButton().Visibility(Visibility::Collapsed);
                 break;
             }
@@ -3745,6 +4073,14 @@ namespace winrt::Mayasaba::implementation
             }
             ActionCenterPanel().Visibility(Visibility::Visible);
             ShowActionCenterDetailsButton().Visibility(Visibility::Visible);
+            // A reader who expanded the detail keeps it expanded across a controller
+            // refresh, but the rows are rebuilt from the list that is now current so the
+            // detail can never describe a superseded record.
+            if (actionCenterDetailsOpen_)
+            {
+                RenderActionCenterDetails();
+                ActionCenterDetailsPanel().Visibility(Visibility::Visible);
+            }
             break;
         }
 

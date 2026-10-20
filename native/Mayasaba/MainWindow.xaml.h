@@ -64,8 +64,20 @@ namespace winrt::Mayasaba::implementation
         void OnCloseSearch(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnCloseActionCenter(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnShowActionCenterDetails(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        void OnCloseActionCenterDetails(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
+        // Builds the source-linked detail rows for the currently listed items from the
+        // existing Action Center projection. Presentation only: it issues no query.
+        void RenderActionCenterDetails();
+        // Collapses and forgets the detail. Used wherever the list itself is cleared or
+        // superseded, so the detail can never describe records that are no longer listed.
+        void CollapseActionCenterDetails();
         void OnMoreActionCenterItems(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnActionCenterItemClick(IInspectable const&, Microsoft::UI::Xaml::Controls::ItemClickEventArgs const&);
+        // Revalidates the selected item against its owning record before routing it, then
+        // routes on the UI thread. The revalidation reads SQLite, so it must not run on the
+        // UI thread; the routing itself must, because it drives existing UI entry points.
+        winrt::fire_and_forget ActivateActionCenterItemAsync(
+            mayasaba::ActionCenterItem clicked, std::string projectId, uint64_t gen);
         void OnCloseAttachmentPreview(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         winrt::fire_and_forget RefreshActionCenterAsync(uint64_t gen);
         void OnSearchBoxKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
@@ -159,9 +171,26 @@ namespace winrt::Mayasaba::implementation
         std::unique_ptr<mayasaba::AttachmentService> attachmentService_;
         std::vector<mayasaba::AttachmentCandidate> draftAttachments_;
         bool attachmentsPreparing_{false};
+        // True while the durable draft attachment set is being re-derived off the UI thread.
+        // Send is disabled during this window: the in-memory list is not yet the whole set,
+        // and submitting from a partial set would silently omit an attachment the user
+        // already attached.
+        bool draftAttachmentsLoading_{false};
+        // Identifies the most recently started draft-attachment load. A completion only
+        // clears draftAttachmentsLoading_ if it is still the latest, so two overlapping
+        // loads cannot re-enable Send while one of them is still running.
+        uint64_t draftAttachmentsLoadSeq_{0};
         winrt::fire_and_forget AttachFilesAsync();
         void RenderAttachmentChips();
         void RemoveDraftAttachment(std::string const& id);
+        // Persists the removal and deletes the staged copy on the controlled background
+        // path. Both touch SQLite and the filesystem, so neither may run on the UI thread.
+        winrt::fire_and_forget RemoveDraftAttachmentAsync(std::string projectId, std::string id);
+        // Re-derives the draft attachment set from durable records plus staged bytes.
+        // Reading records, hashing staged copies and writing the reverified set are all
+        // storage or filesystem work, so they run on the background lane; the resulting
+        // chips are applied on the UI thread.
+        winrt::fire_and_forget LoadDraftAttachmentsAsync(std::string projectId, uint64_t gen);
         void UpdateComposerState();
 
         // ------------------------------------------------------------------
@@ -220,6 +249,9 @@ namespace winrt::Mayasaba::implementation
 
         std::string actionCenterContinuationToken_;
         std::vector<mayasaba::ActionCenterItem> actionCenterItems_;
+        // True while the source-linked detail is expanded. It survives a refresh so a
+        // controller refresh does not close what the reader opened.
+        bool actionCenterDetailsOpen_{false};
 
         // Drop handling guard and production ingestion coordinator
         bool dropProcessing_{false};

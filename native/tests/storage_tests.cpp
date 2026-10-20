@@ -2697,8 +2697,119 @@ int main()
             EXPECT(bareAppended.timestamp == "saved");
         }
 
+        // 31. Real SQLite write contention from an INDEPENDENT connection.
+        // The existing FIFO/mutex coverage proves the C++ lock discipline. It does not
+        // prove anything about SQLite's own lock, which is what a second process or a
+        // second connection actually contends on. Here a raw connection on the same file
+        // holds BEGIN IMMEDIATE while Storage attempts SaveDraftAttachments.
+        //
+        // The required property is bounded, truthful failure with preserved drafts - not a
+        // short timeout. A shorter busy timeout would not prove responsiveness, so this
+        // asserts what the caller can rely on: the call either completes or throws with a
+        // cause, the connection is not left inside a transaction, and the draft and its
+        // attachments are unchanged.
+        {
+            auto const contended = folder / "sqlite_contention.db";
+            mayasaba::Storage store(contended);
+            store.BindProject("proj-cont", "Contention", "C:/Contention");
+            store.SaveDraft("proj-cont", "draft that must survive contention");
+
+            mayasaba::AttachmentRecord att;
+            att.id = "att-cont-1";
+            att.projectId = "proj-cont";
+            att.fileName = "contended.txt";
+            att.fileSize = 8;
+            att.sha256 = std::string(64, 'b');
+            att.detectedType = "text/plain";
+            att.storagePath = (folder / "contended.txt").string();
+            att.sourcePath = att.storagePath;
+            att.status = "READY";
+
+            // An independent connection holds a write transaction on the same file.
+            sqlite3* other = nullptr;
+            EXPECT(sqlite3_open(contended.string().c_str(), &other) == SQLITE_OK);
+            EXPECT(other != nullptr);
+            EXPECT(sqlite3_exec(other, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr) == SQLITE_OK);
+
+            bool threw = false;
+            std::string reason;
+            std::chrono::steady_clock::time_point began;
+            std::chrono::steady_clock::time_point ended;
+            try
+            {
+                began = std::chrono::steady_clock::now();
+                store.SaveDraftAttachments("proj-cont", { att });
+                ended = std::chrono::steady_clock::now();
+            }
+            catch (std::exception const& e)
+            {
+                ended = std::chrono::steady_clock::now();
+                threw = true;
+                reason = e.what();
+            }
+
+            // The call is bounded by SQLite's own busy timeout rather than hanging. The
+            // bound asserted here is generous (the configured timeout is 5 s) because the
+            // point is that it terminates, not that it terminates quickly.
+            auto const elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(ended - began).count();
+            EXPECT(elapsedMs < 30000);
+
+            // The independent connection really did hold the write lock: SQLite refuses a
+            // concurrent BEGIN IMMEDIATE on the second connection. Asserting this here is
+            // what keeps the case from passing vacuously if the contention setup ever stops
+            // contending (for example if the journal mode changed and stopped blocking).
+            {
+                sqlite3* probe = nullptr;
+                EXPECT(sqlite3_open(contended.string().c_str(), &probe) == SQLITE_OK);
+                EXPECT(sqlite3_busy_timeout(probe, 50) == SQLITE_OK);
+                int const probeRc = sqlite3_exec(probe, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
+                EXPECT(probeRc != SQLITE_OK);
+                sqlite3_close(probe);
+            }
+
+            // The operation must have been refused, not silently reported as saved while the
+            // other connection still held the lock.
+            EXPECT(threw);
+            if (threw)
+            {
+                // A failure must be truthful: it names the cause SQLite actually reported,
+                // not a generic message. Since the store no longer polls its own mutex, this
+                // is SQLite's busy/locked error rather than a C++ lock timeout.
+                EXPECT(!reason.empty());
+                EXPECT(reason.find("busy") != std::string::npos ||
+                       reason.find("locked") != std::string::npos ||
+                       reason.find("LOCKED") != std::string::npos);
+            }
+
+            // Nothing was written while the write lock was held elsewhere.
+            EXPECT(store.GetDraftAttachments("proj-cont").empty());
+
+            // Release the independent write transaction and let the store recover.
+            EXPECT(sqlite3_exec(other, "ROLLBACK;", nullptr, nullptr, nullptr) == SQLITE_OK);
+            EXPECT(sqlite3_close(other) == SQLITE_OK);
+
+            // The draft text was never a candidate for loss: contention on an attachment
+            // write must not discard the message the reader typed.
+            auto const projectAfter = store.Project("proj-cont");
+            EXPECT(projectAfter.has_value());
+            EXPECT(projectAfter->draft == "draft that must survive contention");
+
+            // After the independent connection releases, the same operation succeeds and is
+            // durably visible. This proves the earlier failure was contention, not a
+            // permanently broken store.
+            bool retryOk = true;
+            try { store.SaveDraftAttachments("proj-cont", { att }); }
+            catch (std::exception const&) { retryOk = false; }
+            EXPECT(retryOk);
+            auto const draftsAfter = store.GetDraftAttachments("proj-cont");
+            EXPECT(draftsAfter.size() == 1);
+            EXPECT(draftsAfter[0].id == "att-cont-1");
+            EXPECT(draftsAfter[0].status == "READY");
+            EXPECT(store.Project("proj-cont")->draft == "draft that must survive contention");
+        }
+
         fs::remove_all(folder);
-        std::cout << "PASS: 23 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search, action center, attachment inspection, timeline projection)\\n";
+        std::cout << "PASS: 24 isolated native regression groups (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation, recent filtering, saved message search, action center, attachment inspection, timeline projection, sqlite write contention)\\n";
         return 0;
     }
     catch (std::exception const& e)

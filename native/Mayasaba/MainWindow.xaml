@@ -677,8 +677,43 @@
                                                                         <Button x:Name="ShowActionCenterDetailsButton" Content="Show details" Visibility="Collapsed"
                                                                                 Click="OnShowActionCenterDetails" Padding="14,7"
                                                                                 HorizontalAlignment="Left" CornerRadius="{StaticResource MayasabaRadiusControl}"
-                                                                                AutomationProperties.Name="Show Action Center details"/>
+                                                                                AutomationProperties.Name="Show Action Center details"
+                                                                                AutomationProperties.HelpText="Expands the source-linked detail of every listed item in place"/>
                                                                     </StackPanel>
+                                                                    <!-- Source-linked detail. Expands in place: it is not a page, a route
+                                                                         or a second projection of the records. -->
+                                                                    <Border x:Name="ActionCenterDetailsPanel" Visibility="Collapsed"
+                                                                            Background="{ThemeResource MayasabaSecondaryBrush}"
+                                                                            BorderBrush="{ThemeResource MayasabaBorderBrush}" BorderThickness="1"
+                                                                            CornerRadius="{StaticResource MayasabaRadiusControl}" Padding="12"
+                                                                            AutomationProperties.AutomationId="ActionCenterDetailsPanel"
+                                                                            AutomationProperties.Name="Action Center source detail">
+                                                                        <StackPanel Spacing="8">
+                                                                            <Grid ColumnSpacing="12">
+                                                                                <Grid.ColumnDefinitions>
+                                                                                    <ColumnDefinition Width="*"/>
+                                                                                    <ColumnDefinition Width="Auto"/>
+                                                                                </Grid.ColumnDefinitions>
+                                                                                <TextBlock Text="Source detail" Style="{StaticResource MayasabaSectionText}"
+                                                                                           AutomationProperties.HeadingLevel="Level4" VerticalAlignment="Center"/>
+                                                                                <Button x:Name="CloseActionCenterDetailsButton" Grid.Column="1"
+                                                                                        Click="OnCloseActionCenterDetails" Padding="8,6"
+                                                                                        CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                                                                        AutomationProperties.Name="Close Action Center source detail">
+                                                                                    <FontIcon Glyph="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
+                                                                                </Button>
+                                                                            </Grid>
+                                                                            <TextBlock x:Name="ActionCenterDetailsSummaryText" TextWrapping="Wrap"
+                                                                                       Style="{StaticResource MayasabaMicroText}"
+                                                                                       Foreground="{ThemeResource MayasabaMutedBrush}"/>
+                                                                            <ScrollViewer x:Name="ActionCenterDetailsScroller" MaxHeight="280"
+                                                                                          VerticalScrollBarVisibility="Auto"
+                                                                                          HorizontalScrollBarVisibility="Disabled"
+                                                                                          AutomationProperties.Name="Action Center source detail entries">
+                                                                                <StackPanel x:Name="ActionCenterDetailsList" Spacing="10"/>
+                                                                            </ScrollViewer>
+                                                                        </StackPanel>
+                                                                    </Border>
                                                                 </StackPanel>
                                                             </Border>
                                                             <StackPanel x:Name="ChatReadinessPanel" Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="15"

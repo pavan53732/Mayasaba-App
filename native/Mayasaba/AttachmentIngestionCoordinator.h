@@ -170,21 +170,14 @@ namespace mayasaba
             return ValidateBoundary(ctx, currentProjectId, currentGeneration, windowClosed, false);
         }
 
-        // Production commit function: updates draft list with prepared candidates and invokes store save.
-        // Guarantees atomic in-memory mutation: candidate draft list is prepared and passed to saveDrafts;
-        // draftAttachments is only updated if saveDrafts succeeds without throwing an exception.
-        //
-        // Placeholders whose preparation produced no result are converted into explicit
-        // Rejected entries before persistence. They are never left as PREPARING: a stranded
-        // PREPARING row is indistinguishable from live work and would be reclaimed by
-        // staging reconciliation, silently discarding a selection the user still owns.
-        template <typename SaveFn>
-        static bool CommitDraftBatch(
-            std::string const& activeProject,
-            std::vector<AttachmentCandidate>& draftAttachments,
+        // Computes the draft list that a prepared batch would produce, WITHOUT persisting
+        // anything and WITHOUT mutating the caller's list. Pure: it performs no IO, which is
+        // what lets a caller persist the result on a background lane and only then adopt it
+        // on the UI thread.
+        static std::vector<AttachmentCandidate> ComputeDraftBatch(
+            std::vector<AttachmentCandidate> const& draftAttachments,
             std::vector<AttachmentCandidate> const& prepared,
             std::vector<std::string> const& preparingIds,
-            SaveFn&& saveDrafts,
             std::string const& missingResultReason = std::string{})
         {
             auto candidateDrafts = draftAttachments;
@@ -219,7 +212,31 @@ namespace mayasaba
                     }
                 }
             }
+            return candidateDrafts;
+        }
 
+        // Production commit function: updates draft list with prepared candidates and invokes store save.
+        // Guarantees atomic in-memory mutation: candidate draft list is prepared and passed to saveDrafts;
+        // draftAttachments is only updated if saveDrafts succeeds without throwing an exception.
+        //
+        // Placeholders whose preparation produced no result are converted into explicit
+        // Rejected entries before persistence. They are never left as PREPARING: a stranded
+        // PREPARING row is indistinguishable from live work and would be reclaimed by
+        // staging reconciliation, silently discarding a selection the user still owns.
+        //
+        // This synchronous form is correct only when the caller may block on persistence. A
+        // UI caller must use ComputeDraftBatch plus a background save instead, so the
+        // SQLite write does not run on the interface thread.
+        template <typename SaveFn>
+        static bool CommitDraftBatch(
+            std::string const& activeProject,
+            std::vector<AttachmentCandidate>& draftAttachments,
+            std::vector<AttachmentCandidate> const& prepared,
+            std::vector<std::string> const& preparingIds,
+            SaveFn&& saveDrafts,
+            std::string const& missingResultReason = std::string{})
+        {
+            auto candidateDrafts = ComputeDraftBatch(draftAttachments, prepared, preparingIds, missingResultReason);
             saveDrafts(activeProject, candidateDrafts);
             draftAttachments = std::move(candidateDrafts);
             return true;
@@ -236,6 +253,67 @@ namespace mayasaba
         // 4. A result set that cannot be attributed to the selection is refused before any
         //    mutation; a result set that is merely short is completed with explicit
         //    per-file failures rather than committing stranded PREPARING placeholders.
+        // The decision a prepared batch needs before anything is persisted. Splitting this
+        // out lets a UI caller run the boundary check and the result-set validation on the
+        // interface thread, then persist the already-decided draft list on the background
+        // lane, without duplicating either rule.
+        struct BatchCommitPlan
+        {
+            BatchCommitOutcome outcome{BatchCommitOutcome::Committed};
+            std::string errorMessage;
+            // False means the batch must not be persisted at all (stale or malformed).
+            bool persist{false};
+            // The exact list to persist and then adopt. Populated only when persist is true.
+            std::vector<AttachmentCandidate> drafts;
+        };
+
+        static BatchCommitPlan PlanBatchCommit(
+            DropContext const& ctx,
+            std::string const& currentProjectId,
+            uint64_t currentGeneration,
+            bool windowClosed,
+            std::vector<AttachmentCandidate> const& draftAttachments,
+            std::vector<AttachmentCandidate> const& prepared,
+            std::vector<std::string> const& preparingIds)
+        {
+            BatchCommitPlan plan;
+            if (!ValidatePostPreparationBoundary(ctx, currentProjectId, currentGeneration, windowClosed))
+            {
+                plan.outcome = BatchCommitOutcome::StaleCompletion;
+                return plan;
+            }
+
+            PreparedBatchValidation const validation = ValidatePreparedBatch(prepared, preparingIds);
+            if (!validation.valid && validation.malformed)
+            {
+                plan.outcome = BatchCommitOutcome::MalformedResult;
+                plan.errorMessage = validation.errorMessage;
+                return plan;
+            }
+
+            // A recoverable short result set is reported AND persisted: the unanswered
+            // placeholders become explicit per-file failures rather than stranded PREPARING
+            // records.
+            plan.outcome = validation.valid ? BatchCommitOutcome::Committed
+                                            : BatchCommitOutcome::IncompletePreparation;
+            plan.errorMessage = validation.errorMessage;
+            plan.persist = true;
+            plan.drafts = ComputeDraftBatch(draftAttachments, prepared, preparingIds, validation.errorMessage);
+            return plan;
+        }
+
+        // Applies an already-persisted plan. Call this on the UI thread only after the
+        // persistence it describes has succeeded.
+        static void AdoptPersistedPlan(
+            std::vector<AttachmentCandidate>& draftAttachments,
+            BatchCommitPlan const& plan)
+        {
+            if (plan.persist)
+            {
+                draftAttachments = plan.drafts;
+            }
+        }
+
         template <typename SaveFn>
         static bool ValidateAndCommitPreparedBatch(
             DropContext const& ctx,

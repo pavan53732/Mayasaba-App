@@ -1212,7 +1212,19 @@ int main()
             store.RemoveDraftAttachment("proj-A", candId2);
             EXPECT(attService.LoadDraftAttachments("proj-A").size() == 1);
 
-            // Case 2: SQLite contention handling (bounded non-blocking timeout on mutex)
+            // Case 2: C++ mutex contention.
+            // This used to assert that SaveDraftAttachments gave up after a fixed ~100 ms of
+            // try_lock polling. That behaviour was removed: it did not bound SQLite
+            // contention (the real wait happens inside BEGIN IMMEDIATE under SQLite's busy
+            // timeout), and it turned a transient lock into a spurious failure. Every caller
+            // now runs on the controlled background lane, so the operation waits for the
+            // store mutex instead of polling it.
+            //
+            // The property asserted here is the replacement contract: while another thread
+            // holds the store mutex the save does not return early and does not lose the
+            // draft, and once the lock is released it completes and the draft is applied.
+            // SQLite-level contention is covered separately in storage_tests.cpp against an
+            // independent connection, which is the contention a second process actually hits.
             {
                 // Prepare drafts before acquiring contention lock to avoid blocking on LoadDraftAttachments
                 std::vector<mayasaba::AttachmentCandidate> contentionDrafts = attService.LoadDraftAttachments("proj-A");
@@ -1232,54 +1244,44 @@ int main()
 
                 EXPECT(waitBounded(blockerLocked, 2000) == true);
 
-                // UI thread attempts ValidateAndCommitPreparedBatch under contention:
+                // The save is issued on another thread and must not complete while the store
+                // mutex is held elsewhere.
+                std::atomic<bool> saveFinished{false};
+                std::atomic<bool> saveSucceeded{false};
                 std::string contentionError;
-                auto const tStart = std::chrono::steady_clock::now();
-                bool const contentionResult = coordinator.ValidateAndCommitPreparedBatch(
-                    failCtx,
-                    activeProject,
-                    selectorGeneration.load(),
-                    windowClosed.load(),
-                    contentionDrafts,
-                    { preparedBatch[0] },
-                    { slot1.id },
-                    [&](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
-                        attService.SaveDraftAttachments(proj, drafts);
-                    },
-                    &contentionError);
-                auto const tElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - tStart).count();
+                std::thread saver([&]() {
+                    try
+                    {
+                        attService.SaveDraftAttachments(activeProject, contentionDrafts);
+                        saveSucceeded = true;
+                    }
+                    catch (std::exception const& e) { contentionError = e.what(); }
+                    saveFinished = true;
+                });
 
-                // UI thread did not block indefinitely: bounded contention timeout (~100ms)
-                EXPECT(tElapsed < 1500);
-                EXPECT(contentionResult == false);
-                EXPECT(!contentionError.empty());
-                EXPECT(contentionError.find("contention") != std::string::npos);
+                // It waits rather than failing fast: a spurious early failure would be the
+                // old, wrong behaviour. This is an observation of the wait, not a timing
+                // guarantee about any UI thread.
+                EXPECT(waitBounded(saveFinished, 250) == false);
 
-                // Release blocker thread
+                // Release the blocker; the waiting save must now complete successfully.
                 releaseBlocker = true;
                 contentionBlocker.join();
+                EXPECT(waitBounded(saveFinished, 10000) == true);
+                saver.join();
 
-                // Contention failure preserved existing drafts
-                EXPECT(contentionDrafts.size() == 2);
-                EXPECT(contentionDrafts[1].status == mayasaba::AttachmentStatus::Preparing); // no false saved state
+                EXPECT(saveSucceeded == true);
+                EXPECT(contentionError.empty());
 
-                // Retry after contention resolved succeeds cleanly
-                contentionError.clear();
-                bool const contentionRetryResult = coordinator.ValidateAndCommitPreparedBatch(
-                    failCtx,
-                    activeProject,
-                    selectorGeneration.load(),
-                    windowClosed.load(),
-                    contentionDrafts,
-                    { preparedBatch[0] },
-                    { slot1.id },
-                    [&](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
-                        attService.SaveDraftAttachments(proj, drafts);
-                    },
-                    &contentionError);
+                // No false saved state and no lost draft: the write really landed.
+                auto const persisted = attService.LoadDraftAttachments(activeProject);
+                bool found = false;
+                for (auto const& d : persisted)
+                {
+                    if (d.id == slot1.id) found = true;
+                }
+                EXPECT(found);
 
-                EXPECT(contentionRetryResult == true);
-                EXPECT(contentionDrafts[1].status == mayasaba::AttachmentStatus::Ready);
                 attService.RemoveDraftAttachment("proj-A", preparedBatch[0].id);
                 EXPECT(attService.LoadDraftAttachments("proj-A").size() == 1);
             }

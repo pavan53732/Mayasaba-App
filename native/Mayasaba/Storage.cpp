@@ -2186,23 +2186,14 @@ namespace mayasaba
     {
         if (atts.empty()) return;
 
-        // Avoid blocking UI thread on prolonged contention:
-        // Attempt lock with bounded polling (up to 100ms total)
-        bool acquired = false;
-        for (int attempt = 0; attempt < 5; ++attempt)
-        {
-            if (mutex_.try_lock())
-            {
-                acquired = true;
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        if (!acquired)
-        {
-            throw std::runtime_error("Storage mutex contention: could not acquire lock within bounded timeout");
-        }
-        std::lock_guard<std::mutex> lock(mutex_, std::adopt_lock);
+        // Every caller of this operation runs on the controlled background lane, so this
+        // waits on the store mutex instead of polling it for a fixed 100 ms budget. The
+        // previous bounded polling did not bound SQLite contention: it could fail early
+        // under a transient C++ lock and, worse, let a caller proceed to BEGIN IMMEDIATE
+        // while another connection held the write lock, where the real wait happens under
+        // SQLite's own busy timeout. Blocking here, off the interface thread, is the honest
+        // behaviour: the caller is told the truth by completing or by a real error.
+        std::lock_guard<std::mutex> lock(mutex_);
         CheckWriteCapacity();
         Exec("BEGIN IMMEDIATE;");
         try
