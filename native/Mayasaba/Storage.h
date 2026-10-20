@@ -276,6 +276,7 @@ namespace mayasaba
 
         // Attachment draft and committed persistence
         void SaveDraftAttachment(std::string const& projectId, AttachmentRecord const& att);
+        void SaveDraftAttachments(std::string const& projectId, std::vector<AttachmentRecord> const& attachments);
         void RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
         void ClearDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetDraftAttachments(std::string const& projectId);
@@ -292,6 +293,8 @@ namespace mayasaba
         // Testing hooks for race and concurrency verification
         void SetInspectionFileHashedHookForTesting(std::function<void()> hook) { inspectionFileHashedHook_ = std::move(hook); }
         void SetQueryActionCenterSnapshotHookForTesting(std::function<void()> hook) { queryActionCenterSnapshotHook_ = std::move(hook); }
+        void SetSaveDraftAttachmentsItemHookForTesting(std::function<void(size_t index, std::string const& id)> hook) { saveDraftAttachmentsItemHook_ = std::move(hook); }
+        std::mutex& MutexForTesting() noexcept { return mutex_; }
 
     private:
         sqlite3* db_{nullptr};
@@ -301,6 +304,7 @@ namespace mayasaba
         uint64_t savedDraftRevision_{0};
         std::function<void()> inspectionFileHashedHook_;
         std::function<void()> queryActionCenterSnapshotHook_;
+        std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
 #ifdef _WIN32
         HANDLE instanceMutex_{nullptr};
         HANDLE identityHandle_{INVALID_HANDLE_VALUE};

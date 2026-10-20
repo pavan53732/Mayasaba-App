@@ -47,7 +47,7 @@ Runtime acceptance uses only `PASS`, `FAIL`, `INCONCLUSIVE`, `BLOCKED`, `NOT_APP
 | UXE-06 | Task Dependency View | P1 | PROPOSED | Task/DAG Engine records |
 | UXE-07 | Evidence Timeline | P1 | PROPOSED | Event/Evidence/owner records |
 | UXE-08 | Source-linked Research Viewer | P1 | PROPOSED | Authorized research records |
-| UXE-09 | Artifact Review | P1 | PROPOSED | Managed attachment/artifact records |
+| UXE-09 | Artifact Review | P1 | IMPLEMENTED (managed draft attachment ingestion, boundary validation, inspection, and preview subset; generated artifact review PROPOSED) | Managed attachment/artifact records |
 | UXE-10 | Recovery Inspector | P1 | PROPOSED | Recovery/evidence records |
 | UXE-11 | Command Palette | P2 | PROPOSED | Typed application commands |
 | UXE-12 | Project Evidence Export | P2 | PROPOSED | Evidence + authorization |
@@ -253,6 +253,8 @@ Status values above reflect documentation; runtime capability is `BLOCKED` until
 ### UXE-09 — Artifact Review (P1)
 
 **Objective.** Expand native attachment inspection into safe generated-artifact review.
+
+**Status & Implemented Scope (2026-10-20):** `IMPLEMENTED (managed draft attachment ingestion, inspection, and preview subset; generated artifact review PROPOSED)`. The native WinUI 3 interface provides draft attachment chip realization, independent drop validation, cryptographic SHA-256 verification on disk, non-English preview withholding, atomic boundary commit, transactional draft batch persistence, and SQLite contention mitigation. Generated artifact review across agent tasks remains `PROPOSED` for M4/M5.
 
 **User experience.** Display supported artifacts (text, code, images, generated documents) via safe read-only viewers when supported. Show name/type, size, content digest, originating contribution/task, current managed-file identity, available preview, verification/publication status, applicable validation evidence.
 

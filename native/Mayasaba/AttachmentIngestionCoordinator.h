@@ -85,7 +85,9 @@ namespace mayasaba
             return ValidateBoundary(ctx, currentProjectId, currentGeneration, windowClosed, false);
         }
 
-        // Production commit function: updates draft list with prepared candidates and invokes store save
+        // Production commit function: updates draft list with prepared candidates and invokes store save.
+        // Guarantees atomic in-memory mutation: candidate draft list is prepared and passed to saveDrafts;
+        // draftAttachments is only updated if saveDrafts succeeds without throwing an exception.
         template <typename SaveFn>
         static bool CommitDraftBatch(
             std::string const& activeProject,
@@ -94,8 +96,9 @@ namespace mayasaba
             std::vector<std::string> const& preparingIds,
             SaveFn&& saveDrafts)
         {
+            auto candidateDrafts = draftAttachments;
             size_t prepIdx = 0;
-            for (auto& d : draftAttachments)
+            for (auto& d : candidateDrafts)
             {
                 if (prepIdx < prepared.size() && d.id == preparingIds[prepIdx])
                 {
@@ -103,14 +106,19 @@ namespace mayasaba
                     prepIdx++;
                 }
             }
-            saveDrafts(activeProject, draftAttachments);
+            saveDrafts(activeProject, candidateDrafts);
+            draftAttachments = std::move(candidateDrafts);
             return true;
         }
 
         // Production operation: atomically validates post-preparation boundary on UI thread
         // and conditionally commits prepared candidates into the project drafts.
         // Returns true if valid and committed; returns false if boundary check failed (stale/cancelled),
-        // guaranteeing that saveDrafts is NEVER invoked and drafts are NOT mutated on stale completion.
+        // or if saveDrafts threw (persistence failure).
+        // Guarantees:
+        // 1. saveDrafts is NEVER invoked on stale completion.
+        // 2. draftAttachments is NEVER mutated on stale completion or on save failure (no false saved state).
+        // 3. Any exception thrown by saveDrafts is safely captured into outError if provided, preventing unhandled crash.
         template <typename SaveFn>
         static bool ValidateAndCommitPreparedBatch(
             DropContext const& ctx,
@@ -120,15 +128,26 @@ namespace mayasaba
             std::vector<AttachmentCandidate>& draftAttachments,
             std::vector<AttachmentCandidate> const& prepared,
             std::vector<std::string> const& preparingIds,
-            SaveFn&& saveDrafts)
+            SaveFn&& saveDrafts,
+            std::string* outError = nullptr)
         {
             if (!ValidatePostPreparationBoundary(ctx, currentProjectId, currentGeneration, windowClosed))
             {
                 return false;
             }
 
-            CommitDraftBatch(currentProjectId, draftAttachments, prepared, preparingIds, std::forward<SaveFn>(saveDrafts));
-            return true;
+            try
+            {
+                return CommitDraftBatch(currentProjectId, draftAttachments, prepared, preparingIds, std::forward<SaveFn>(saveDrafts));
+            }
+            catch (std::exception const& ex)
+            {
+                if (outError)
+                {
+                    *outError = ex.what();
+                }
+                return false;
+            }
         }
 
         // Test hooks for boundary inspection

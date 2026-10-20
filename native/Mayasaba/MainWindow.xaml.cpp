@@ -15,6 +15,7 @@
 #include <cwctype>
 #include <fstream>
 #include <limits>
+#include <unordered_set>
 #include <winrt/Microsoft.UI.Windowing.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.Peers.h>
@@ -1710,22 +1711,49 @@ namespace winrt::Mayasaba::implementation
         if (!co_await resume_foreground(ui)) co_return;
 
         // Atomically validate post-preparation boundary on UI thread and conditionally commit
-        bool const committed = ingestionCoordinator_.ValidateAndCommitPreparedBatch(
-            dropCtx,
-            activeProject_,
-            selectorGeneration_.load(),
-            windowClosed_.load(),
-            draftAttachments_,
-            prepared,
-            preparingIds,
-            [this](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
-                attachmentService_->SaveDraftAttachments(proj, drafts);
-            });
+        std::string saveError;
+        bool committed = false;
+        try
+        {
+            committed = ingestionCoordinator_.ValidateAndCommitPreparedBatch(
+                dropCtx,
+                activeProject_,
+                selectorGeneration_.load(),
+                windowClosed_.load(),
+                draftAttachments_,
+                prepared,
+                preparingIds,
+                [this](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
+                    attachmentService_->SaveDraftAttachments(proj, drafts);
+                },
+                &saveError);
+        }
+        catch (std::exception const& ex)
+        {
+            saveError = ex.what();
+            committed = false;
+        }
 
         attachmentsPreparing_ = false;
 
         if (!committed)
         {
+            // Clean up uncommitted preparing placeholders to preserve existing drafts
+            // and prevent broken preparing state in composer chips
+            if (!preparingIds.empty())
+            {
+                std::unordered_set<std::string> prepSet(preparingIds.begin(), preparingIds.end());
+                auto it = std::remove_if(draftAttachments_.begin(), draftAttachments_.end(),
+                    [&](mayasaba::AttachmentCandidate const& c) { return prepSet.count(c.id) > 0; });
+                draftAttachments_.erase(it, draftAttachments_.end());
+            }
+            RenderAttachmentChips();
+            UpdateComposerState();
+
+            if (!saveError.empty())
+            {
+                ShowNotice(L"Attachment draft persistence failed: " + Utf16(saveError) + L". Existing drafts preserved; please retry.", true);
+            }
             co_return;
         }
 

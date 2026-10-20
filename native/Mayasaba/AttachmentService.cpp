@@ -597,6 +597,8 @@ namespace mayasaba
 
     void AttachmentService::SaveDraftAttachments(std::string const& projectId, std::vector<AttachmentCandidate> const& attachments)
     {
+        std::vector<AttachmentRecord> records;
+        records.reserve(attachments.size());
         for (auto const& att : attachments)
         {
             AttachmentRecord rec;
@@ -619,8 +621,9 @@ namespace mayasaba
                 case AttachmentStatus::Committed: rec.status = "COMMITTED"; break;
             }
             rec.errorMessage = att.errorMessage;
-            storage_.SaveDraftAttachment(projectId, rec);
+            records.push_back(std::move(rec));
         }
+        storage_.SaveDraftAttachments(projectId, records);
     }
 
     std::vector<AttachmentCandidate> AttachmentService::LoadDraftAttachments(std::string const& projectId)

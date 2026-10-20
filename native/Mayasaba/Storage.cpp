@@ -1985,6 +1985,63 @@ namespace mayasaba
         Check(sqlite3_step(q.value),db_);
     }
 
+    void Storage::SaveDraftAttachments(std::string const& projectId, std::vector<AttachmentRecord> const& atts)
+    {
+        if (atts.empty()) return;
+
+        // Avoid blocking UI thread on prolonged contention:
+        // Attempt lock with bounded polling (up to 100ms total)
+        bool acquired = false;
+        for (int attempt = 0; attempt < 5; ++attempt)
+        {
+            if (mutex_.try_lock())
+            {
+                acquired = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (!acquired)
+        {
+            throw std::runtime_error("Storage mutex contention: could not acquire lock within bounded timeout");
+        }
+        std::lock_guard<std::mutex> lock(mutex_, std::adopt_lock);
+        CheckWriteCapacity();
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            size_t idx = 0;
+            for (auto const& att : atts)
+            {
+                if (saveDraftAttachmentsItemHook_)
+                {
+                    saveDraftAttachmentsItemHook_(idx, att.id);
+                }
+                Statement q(db_, "INSERT INTO draft_attachments(attachment_id,project_id,file_name,file_size,sha256,detected_type,staged_path,source_path,status,error_message,version) "
+                                 "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1) "
+                                 "ON CONFLICT(attachment_id) DO UPDATE SET file_size=excluded.file_size,sha256=excluded.sha256,staged_path=excluded.staged_path,status=excluded.status,error_message=excluded.error_message,version=draft_attachments.version+1;");
+                Bind(q.value,1,att.id);
+                Bind(q.value,2,projectId);
+                Bind(q.value,3,att.fileName);
+                sqlite3_bind_int64(q.value,4,static_cast<sqlite3_int64>(att.fileSize));
+                Bind(q.value,5,att.sha256);
+                Bind(q.value,6,att.detectedType);
+                Bind(q.value,7,att.storagePath);
+                Bind(q.value,8,att.sourcePath);
+                Bind(q.value,9,att.status);
+                Bind(q.value,10,att.errorMessage);
+                Check(sqlite3_step(q.value),db_);
+                idx++;
+            }
+            Exec("COMMIT;");
+        }
+        catch (...)
+        {
+            try { Exec("ROLLBACK;"); } catch (...) {}
+            throw;
+        }
+    }
+
     void Storage::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
     {
         std::lock_guard lock(mutex_);

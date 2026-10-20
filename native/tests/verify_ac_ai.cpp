@@ -9,6 +9,7 @@
 #include <iostream>
 #include <filesystem>
 #include <set>
+#include <unordered_set>
 #include <sstream>
 #include <iomanip>
 #include <windows.h>
@@ -1049,6 +1050,239 @@ int main()
             auto draftsA_4d = attService.LoadDraftAttachments("proj-A");
             EXPECT(draftsA_4d.size() == 1);
             EXPECT(draftsA_4d[0].id == "draft-a-existing");
+        }
+
+        // 4e. Final attachment persistence failure handling and contention verification
+        {
+            // Case 1: Failure after some batch work has already occurred
+            // Seed a multi-item batch: cand1 and cand2
+            auto batchFile1 = folder / "batch_fail_1.txt";
+            auto batchFile2 = folder / "batch_fail_2.txt";
+            {
+                std::ofstream f1(batchFile1); f1 << "batch candidate 1 content";
+                std::ofstream f2(batchFile2); f2 << "batch candidate 2 content";
+            }
+
+            activeProject = "proj-A";
+            selectorGeneration = 40;
+            auto failCtx = coordinator.CreateContext(activeProject, selectorGeneration.load(), &windowClosed, &selectorGeneration);
+            // In-memory composer draft has existing draft before new batch
+            std::vector<mayasaba::AttachmentCandidate> uiDraftsA_4e = attService.LoadDraftAttachments("proj-A");
+            EXPECT(uiDraftsA_4e.size() == 1);
+            EXPECT(uiDraftsA_4e[0].id == "draft-a-existing");
+
+            // Give the candidate batch explicit test IDs
+            std::string const candId1 = "cand-batch-fail-1";
+            std::string const candId2 = "cand-batch-fail-2";
+
+            mayasaba::AttachmentCandidate cand1, cand2;
+            cand1.id = candId1; cand1.fileName = "batch_fail_1.txt"; cand1.fileSize = 100; cand1.sha256 = "hash1"; cand1.status = mayasaba::AttachmentStatus::Ready;
+            cand2.id = candId2; cand2.fileName = "batch_fail_2.txt"; cand2.fileSize = 100; cand2.sha256 = "hash2"; cand2.status = mayasaba::AttachmentStatus::Ready;
+            std::vector<mayasaba::AttachmentCandidate> preparedBatch = { cand1, cand2 };
+
+            // In SQLite, write uncommitted PREPARING records (simulating active preparation intent)
+            mayasaba::AttachmentRecord intent1, intent2;
+            intent1.id = candId1; intent1.projectId = "proj-A"; intent1.fileName = "batch_fail_1.txt"; intent1.fileSize = 100; intent1.status = "PREPARING";
+            intent2.id = candId2; intent2.projectId = "proj-A"; intent2.fileName = "batch_fail_2.txt"; intent2.fileSize = 100; intent2.status = "PREPARING";
+            store.SaveDraftAttachment("proj-A", intent1);
+            store.SaveDraftAttachment("proj-A", intent2);
+
+            // In-memory composer draft has existing draft + preparing placeholders matching batch
+            std::vector<std::string> preparingIds = { candId1, candId2 };
+            mayasaba::AttachmentCandidate slot1 = preparedBatch[0];
+            slot1.id = candId1;
+            slot1.status = mayasaba::AttachmentStatus::Preparing;
+            mayasaba::AttachmentCandidate slot2 = preparedBatch[1];
+            slot2.id = candId2;
+            slot2.status = mayasaba::AttachmentStatus::Preparing;
+            uiDraftsA_4e.push_back(slot1);
+            uiDraftsA_4e.push_back(slot2);
+
+            // Inject simulated failure after some batch work has already occurred:
+            // Item 0 (draft-a-existing) and Item 1 (candId1) update in statement step;
+            // Item 2 (candId2) throws write failure midway through the batch.
+            store.SetSaveDraftAttachmentsItemHookForTesting([&](size_t index, std::string const& /*id*/) {
+                if (index == 2)
+                {
+                    throw std::runtime_error("Simulated SQLite write error midway through batch");
+                }
+            });
+
+            std::string capturedError;
+            bool const failCommitted = coordinator.ValidateAndCommitPreparedBatch(
+                failCtx,
+                activeProject,
+                selectorGeneration.load(),
+                windowClosed.load(),
+                uiDraftsA_4e,
+                preparedBatch,
+                preparingIds,
+                [&](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
+                    attService.SaveDraftAttachments(proj, drafts);
+                },
+                &capturedError);
+
+            // 1. No unhandled exception: safely caught, returns false
+            EXPECT(failCommitted == false);
+            EXPECT(!capturedError.empty());
+            EXPECT(capturedError.find("Simulated SQLite write error midway through batch") != std::string::npos);
+
+            // 2. No false saved state in memory:
+            // uiDraftsA_4e candidate changes are discarded; placeholders remain uncommitted
+            EXPECT(uiDraftsA_4e.size() == 3);
+            EXPECT(uiDraftsA_4e[0].id == "draft-a-existing");
+            EXPECT(uiDraftsA_4e[1].status == mayasaba::AttachmentStatus::Preparing);
+            EXPECT(uiDraftsA_4e[2].status == mayasaba::AttachmentStatus::Preparing);
+
+            // In production MainWindow, on !committed, uncommitted preparing placeholders are removed:
+            {
+                std::unordered_set<std::string> prepSet(preparingIds.begin(), preparingIds.end());
+                auto it = std::remove_if(uiDraftsA_4e.begin(), uiDraftsA_4e.end(),
+                    [&](mayasaba::AttachmentCandidate const& c) { return prepSet.count(c.id) > 0; });
+                uiDraftsA_4e.erase(it, uiDraftsA_4e.end());
+            }
+            EXPECT(uiDraftsA_4e.size() == 1);
+            EXPECT(uiDraftsA_4e[0].id == "draft-a-existing");
+
+            // 3. No false saved state in SQLite storage:
+            // Transaction rolled back; candId1's partial update to READY was undone back to PREPARING!
+            auto dbDraftsAfterFail = attService.LoadDraftAttachments("proj-A");
+            EXPECT(dbDraftsAfterFail[0].id == "draft-a-existing");
+            EXPECT(dbDraftsAfterFail[0].fileName == "existing_a.txt");
+            EXPECT(dbDraftsAfterFail[0].status == mayasaba::AttachmentStatus::Ready);
+            for (auto const& d : dbDraftsAfterFail)
+            {
+                if (d.id == candId1 || d.id == candId2)
+                {
+                    EXPECT(d.status != mayasaba::AttachmentStatus::Ready);
+                }
+            }
+
+            // 4. Preserved existing drafts in both memory and storage
+            EXPECT(uiDraftsA_4e[0].fileName == "existing_a.txt");
+            EXPECT(dbDraftsAfterFail[0].fileName == "existing_a.txt");
+
+            // 5. No automatic submission
+            EXPECT(store.Contributions("proj-A").empty());
+            EXPECT(!store.Pending("proj-A").has_value());
+
+            // 6. Successful controlled recovery without duplicates on retry
+            store.SetSaveDraftAttachmentsItemHookForTesting(nullptr);
+
+            // Prepare UI state for retry:
+            uiDraftsA_4e.push_back(slot1);
+            uiDraftsA_4e.push_back(slot2);
+            capturedError.clear();
+
+            bool const retryCommitted_4e = coordinator.ValidateAndCommitPreparedBatch(
+                failCtx,
+                activeProject,
+                selectorGeneration.load(),
+                windowClosed.load(),
+                uiDraftsA_4e,
+                preparedBatch,
+                preparingIds,
+                [&](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
+                    attService.SaveDraftAttachments(proj, drafts);
+                },
+                &capturedError);
+
+            EXPECT(retryCommitted_4e == true);
+            EXPECT(capturedError.empty());
+
+            // Both items committed cleanly to memory as Ready
+            EXPECT(uiDraftsA_4e.size() == 3);
+            EXPECT(uiDraftsA_4e[0].id == "draft-a-existing");
+            EXPECT(uiDraftsA_4e[1].status == mayasaba::AttachmentStatus::Ready);
+            EXPECT(uiDraftsA_4e[2].status == mayasaba::AttachmentStatus::Ready);
+
+            // Both items committed cleanly to SQLite storage without duplicates
+            auto dbDraftsAfterRetry = attService.LoadDraftAttachments("proj-A");
+            EXPECT(dbDraftsAfterRetry.size() == 3);
+            EXPECT(dbDraftsAfterRetry[0].id == "draft-a-existing");
+
+            std::unordered_set<std::string> uniqueIds;
+            for (auto const& d : dbDraftsAfterRetry) uniqueIds.insert(d.id);
+            EXPECT(uniqueIds.size() == 3);
+            EXPECT(uniqueIds.count(candId1) == 1);
+            EXPECT(uniqueIds.count(candId2) == 1);
+
+            // Clean up retry drafts, restoring single existing draft baseline
+            store.RemoveDraftAttachment("proj-A", candId1);
+            store.RemoveDraftAttachment("proj-A", candId2);
+            EXPECT(attService.LoadDraftAttachments("proj-A").size() == 1);
+
+            // Case 2: SQLite contention handling (bounded non-blocking timeout on mutex)
+            {
+                // Prepare drafts before acquiring contention lock to avoid blocking on LoadDraftAttachments
+                std::vector<mayasaba::AttachmentCandidate> contentionDrafts = attService.LoadDraftAttachments("proj-A");
+                EXPECT(contentionDrafts.size() == 1);
+                contentionDrafts.push_back(slot1);
+
+                std::atomic<bool> blockerLocked{false};
+                std::atomic<bool> releaseBlocker{false};
+                std::thread contentionBlocker([&]() {
+                    std::unique_lock<std::mutex> lock(store.MutexForTesting());
+                    blockerLocked = true;
+                    while (!releaseBlocker.load())
+                    {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    }
+                });
+
+                EXPECT(waitBounded(blockerLocked, 2000) == true);
+
+                // UI thread attempts ValidateAndCommitPreparedBatch under contention:
+                std::string contentionError;
+                auto const tStart = std::chrono::steady_clock::now();
+                bool const contentionResult = coordinator.ValidateAndCommitPreparedBatch(
+                    failCtx,
+                    activeProject,
+                    selectorGeneration.load(),
+                    windowClosed.load(),
+                    contentionDrafts,
+                    { preparedBatch[0] },
+                    { slot1.id },
+                    [&](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
+                        attService.SaveDraftAttachments(proj, drafts);
+                    },
+                    &contentionError);
+                auto const tElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - tStart).count();
+
+                // UI thread did not block indefinitely: bounded contention timeout (~100ms)
+                EXPECT(tElapsed < 1500);
+                EXPECT(contentionResult == false);
+                EXPECT(!contentionError.empty());
+                EXPECT(contentionError.find("contention") != std::string::npos);
+
+                // Release blocker thread
+                releaseBlocker = true;
+                contentionBlocker.join();
+
+                // Contention failure preserved existing drafts
+                EXPECT(contentionDrafts.size() == 2);
+                EXPECT(contentionDrafts[1].status == mayasaba::AttachmentStatus::Preparing); // no false saved state
+
+                // Retry after contention resolved succeeds cleanly
+                contentionError.clear();
+                bool const contentionRetryResult = coordinator.ValidateAndCommitPreparedBatch(
+                    failCtx,
+                    activeProject,
+                    selectorGeneration.load(),
+                    windowClosed.load(),
+                    contentionDrafts,
+                    { preparedBatch[0] },
+                    { slot1.id },
+                    [&](std::string const& proj, std::vector<mayasaba::AttachmentCandidate> const& drafts) {
+                        attService.SaveDraftAttachments(proj, drafts);
+                    },
+                    &contentionError);
+
+                EXPECT(contentionRetryResult == true);
+                EXPECT(contentionDrafts[1].status == mayasaba::AttachmentStatus::Ready);
+                attService.RemoveDraftAttachment("proj-A", preparedBatch[0].id);
+                EXPECT(attService.LoadDraftAttachments("proj-A").size() == 1);
+            }
         }
 
         // 5. Overlapping drop guard

@@ -1348,9 +1348,9 @@ This section documents the specific corrections and empirical evidence resolving
 
 ---
 
-## 14. Resolution of Review Findings: Thread-Safe Worker Cancellation and Production Ingestion Coordination Verification
+## 14. Resolution of Review Findings: Thread-Safe Cancellation, Coordination Verification, and Persistence Failure Handling
 
-### 14.1 Item 1: Elimination of Unsynchronized Background Reads (Data Race Fix)
+### 14.1 Item 1: Elimination of Unsynchronized Background Reads (Data Race Fix) [Revision `684e44a`]
 
 - **Review finding:** In `native/Mayasaba/MainWindow.xaml.cpp:1692–1696`, the cancellation callback running during background preparation read `activeProject_` and `windowClosed_`. `activeProject_` was an ordinary `std::string` assigned on the UI thread at line 666, and `windowClosed_` was an ordinary `bool`. Concurrent background reading and UI thread mutation constituted a C++ data race.
 - **Actual correction:**
@@ -1364,12 +1364,12 @@ This section documents the specific corrections and empirical evidence resolving
     - Post-preparation boundary validation on UI thread after `resume_foreground`: `ValidatePostPreparationBoundary(dropCtx, activeProject_, selectorGeneration_.load(), windowClosed_.load())`.
   - Audited window-close cancellation in the exact same path: closing the window sets atomic `windowClosed_ = true`, which immediately signals the worker cancellation predicate.
 
-### 14.2 Item 2: Unified Production Validation & Commit Operation with Guard Removal Demonstration
+### 14.2 Item 2: Unified Production Validation & Commit Operation with Guard Removal Demonstration [Revision `abe596a`]
 
 - **Review finding:** In `MainWindow.xaml.cpp`, `ValidatePostPreparationBoundary()` and `CommitDraftBatch()` were called separately, while tests called those helpers independently and `CoordinateDrop()` remained test-only. Removing MainWindow's boundary guard would therefore leave tests passing. Furthermore, the previous test asserted that deliberate contamination occurs when committing manually, rather than demonstrating that the regression test detects removal of the production guard.
 - **Actual correction:**
   - **Single Shared Production Operation:**
-    - Defined `AttachmentIngestionCoordinator::ValidateAndCommitPreparedBatch(ctx, currentProjectId, currentGeneration, windowClosed, draftAttachments, prepared, preparingIds, saveDrafts)`.
+    - Defined `AttachmentIngestionCoordinator::ValidateAndCommitPreparedBatch(ctx, currentProjectId, currentGeneration, windowClosed, draftAttachments, prepared, preparingIds, saveDrafts, outError)`.
     - Atomically performs the UI-thread post-preparation boundary check before any mutation.
     - If validation fails (stale project, generation mismatch, or window closed), it returns `false` immediately without invoking `saveDrafts` and without mutating the draft vector.
     - Only if validation succeeds does it apply prepared candidates to the draft vector and invoke `saveDrafts`.
@@ -1382,20 +1382,20 @@ This section documents the specific corrections and empirical evidence resolving
     - **Case 4b: Stale completion rejection via `ValidateAndCommitPreparedBatch`:**
       - Seeded existing drafts: `draft-a-existing` in `proj-A` and `draft-b-existing` in `proj-B`.
       - Hooked preparation chunk loop; verified intermediate `PREPARING` record was present in SQLite while in flight.
-      - Switched project to `proj-B` on the UI thread (`activeProject = "proj-B"`, `++selectorGeneration`), released hook, and joined worker.
+      - Switched project to `proj-B` on the UI thread (`activeProject = "proj-B"`, `++selectorGeneration` advancing to generation 11), released hook, and joined worker.
       - Executed `coordinator.ValidateAndCommitPreparedBatch` against target project B's drafts in memory.
       - Verified `committed == false`.
       - Verified `persistenceInvoked == false`: persistence was **never** invoked.
-      - Verified draft in memory was **not** mutated (`uiDraftsB.size() == 1`, `draft-b-existing`).
+      - Verified draft in memory was **not** mutated: target project B's draft count remained exactly 1 item (`uiDraftsB.size() == 1`, `draft-b-existing`), with exactly 0 stale drafts admitted from project A.
       - Verified **no stale attachment admission** to either project (`postDraftsA` and `postDraftsB` contain 0 stale items).
       - Verified **existing drafts remain intact** in SQLite (`existing_a.txt` in A, `existing_b.txt` in B).
       - Verified **no automatic submission** (`store.Contributions` empty, `!store.Pending.has_value()`).
     - **Valid completion on retry via `ValidateAndCommitPreparedBatch`:**
-      - Switched back to `proj-A` (`activeProject = "proj-A"`, `++selectorGeneration`).
+      - Switched back to project A (`activeProject = "proj-A"`, `++selectorGeneration` advancing to generation 12).
       - Prepared valid candidate; called `ValidateAndCommitPreparedBatch`.
       - Verified `retryCommitted == true` and `persistenceInvoked == true`.
       - Verified drafts in memory and in SQLite updated cleanly to `Ready` (2 items total).
-      - Cleaned up retry draft, restoring baseline.
+      - Cleaned up retry draft, restoring single existing draft baseline.
     - **Deliberate Guard Removal Demonstration:**
       - Temporarily commented out the boundary guard inside `ValidateAndCommitPreparedBatch`:
         `// if (!ValidatePostPreparationBoundary(...)) return false;`
@@ -1412,18 +1412,55 @@ This section documents the specific corrections and empirical evidence resolving
     - **Bounded Waits:**
       - All test wait loops are bounded to 3000ms using `waitBounded`, guaranteeing that regressions fail immediately instead of hanging.
 
-### 14.3 Accepted Verdicts & Retained Inconclusive Matrix
+### 14.3 Item 3: Final Persistence Failure Handling, Transactional Batch Rollback, and SQLite Contention Mitigation [Current Revision]
 
-- Preserved the accepted independent drop violation classification and corrected `Notice` automation ID lookup.
-- Synthetic desktop OLE drag-drop execution, real OS display scaling (150%/200%), and Narrator speech acceptance remain explicitly marked `INCONCLUSIVE`/`INCOMPLETE` per contract rules.
+- **Review finding:** MainWindow invoked `ValidateAndCommitPreparedBatch` outside the preparation exception handler; its save callback could throw after the in-memory draft had changed, leading to false saved states or unhandled coroutine termination. In-memory drafts were mutated before persistence succeeded. Furthermore, synchronous SQLite writes on the UI thread risked blocking up to 5000ms on database contention.
+- **Actual correction:**
+  - **Atomic In-Memory Mutation in `CommitDraftBatch`:**
+    - Updated `AttachmentIngestionCoordinator::CommitDraftBatch` to prepare candidate drafts in a local copy first.
+    - Invokes `saveDrafts(activeProject, candidateDrafts)` *before* modifying `draftAttachments`.
+    - Only updates `draftAttachments = std::move(candidateDrafts)` once `saveDrafts` succeeds without throwing. If `saveDrafts` throws or fails, `draftAttachments` remains strictly unmutated.
+  - **Exception-Safe Production Coordination in `ValidateAndCommitPreparedBatch`:**
+    - Wrapped commit execution in try/catch capturing `std::exception const& ex` into `outError` and returning `false`.
+    - Guarantees no unhandled exception escapes from the shared coordination operation.
+  - **Transactional Batch Persistence & Bounded Contention Lock in `Storage`:**
+    - Added `Storage::SaveDraftAttachments(projectId, records)` executing the entire batch in a single atomic SQLite transaction (`BEGIN IMMEDIATE;` ... `COMMIT;`).
+    - Any failure or hook exception during the batch triggers immediate `ROLLBACK;`, undoing all partial writes and restoring previous state.
+    - Added bounded polling on `mutex_.try_lock()` (up to 100ms total, 5 attempts x 20ms) before entering the transaction. If contention persists beyond 100ms, throws `std::runtime_error("Storage mutex contention: could not acquire lock within bounded timeout")` rather than blocking the WinUI UI thread for up to 5000ms.
+  - **MainWindow Integration & Error Notification:**
+    - In `MainWindow.xaml.cpp`, wrapped `ValidateAndCommitPreparedBatch` invocation in try/catch.
+    - Guaranteed reliable reset: `attachmentsPreparing_ = false;` and `UpdateComposerState();` run in all paths.
+    - On commit failure (`!committed`): removes uncommitted preparing placeholders (`preparingIds`) from `draftAttachments_` so existing drafts are preserved and no broken chips remain.
+    - Exposes accurate English notice: `ShowNotice(L"Attachment draft persistence failed: " + Utf16(saveError) + L". Existing drafts preserved; please retry.", true);`.
+  - **Targeted Unit Tests in `verify_ac_ai.cpp` Test 5 Case 4e:**
+    - *Mid-batch write failure:* Seeded 2 candidate items with durable `PREPARING` records; injected write failure at item index 2 via `SetSaveDraftAttachmentsItemHookForTesting`. Verified `failCommitted == false`, `capturedError` captured without unhandled crash, in-memory drafts retained `Preparing` status (no false saved state), MainWindow placeholder cleanup preserved existing `existing_a.txt`, SQLite rolled back to `PREPARING` (zero partial `READY` updates), zero automatic submissions, and clean retry without duplicate IDs.
+    - *SQLite mutex contention:* Held `store.MutexForTesting()` from a background thread; verified `ValidateAndCommitPreparedBatch` aborted within bounded timeout (<1500ms, observed ~100ms) with `"contention"` error, preserved drafts without hang, and succeeded cleanly on retry once the blocker released.
+
+### 14.4 Acceptance Summary Reconciliation & Retained Inconclusive Matrix [Milestone Closure]
+
+- Historical UI evidence from prior revisions (`dimensional-20261018`, `3ffd482`, `5be6833`, `684e44a`, `abe596a`) is preserved with revision labels.
+- Fresh native runtime execution evidence is recorded below from the rebuilt binary:
 
 | Verification Suite | Result | Details |
 | --- | --- | --- |
 | Drop Verdict Classification Unit Tests | PASS (6/6) | All 6 violation classification test cases pass. |
-| Standalone AC + AI Suites (`verify_ac_ai.exe`) | PASS (10/10) | Tests 1–10 pass, including active preparation hook (4b), retrieval hook (4c), retry recovery, guard removal failure demonstration, and shared `CoordinateDrop` (4d). |
+| Standalone AC + AI Suites (`verify_ac_ai.exe`) | PASS (10/10) | Tests 1–10 pass, including active preparation hook (4b), retrieval hook (4c), shared `CoordinateDrop` (4d), mid-batch write rollback & contention mitigation (4e). |
 | Core Native Regressions (`storage_tests.exe`) | PASS (22/22) | 22 isolated native regression groups pass cleanly. |
 | Contract Registry (`validate_contract_registry.py`) | PASS (124/124) | 124 schema and slice contract checks pass. |
-| Live UI Acceptance (`test_full_ui_acceptance.py`) | 13 PASS, 2 INCONCLUSIVE, 0 FAIL | Inconclusive synthetic desktop OLE drag-drop execution retained truthfully. All other 13 criteria PASS. |
-| Native WinUI 3 App Compilation (`Mayasaba.exe`) | PASS | MSBuild Release x64 v145 built clean with 0 warnings, 0 errors. |
+| Fresh Live UI Acceptance (`test_full_ui_acceptance.py`) | 13 PASS, 2 INCONCLUSIVE, 0 FAIL | Re-executed on running `Mayasaba.exe` (PID 28268, CompositionTarget 31,766 callbacks, avg 7.15ms). 13 criteria PASS; 2 desktop-drop criteria truthfully retained as INCONCLUSIVE. |
+| Native WinUI 3 App Compilation (`Mayasaba.exe`) | PASS | MSBuild Release x64 Toolset v145 built clean with 0 warnings, 0 errors (`native/Mayasaba/bin/x64/Release/Mayasaba.exe`). |
 | Production Database Checksum | UNTOUCHED | SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
-| Real Multi-DPI & Narrator Speech | INCOMPLETE | Retained as separately incomplete per project acceptance rules. |
+
+#### Delineation of Retained Inconclusive Criteria & Precise Missing Observations
+
+1. **Criterion 11: `Native OLE Desktop Drag-and-Drop Execution` [INCONCLUSIVE]**
+   - *Missing observation:* Cross-process synthetic OLE drag-drop execution via `ole_drop.exe` timed out in its watchdog loop (exit code 4) due to OS-level UIPI / modal loop session constraints in the desktop automation environment. Genuinely insufficient delivery evidence (0 records admitted, exit code 4). Production ingestion, digest calculation, and boundary validation independently proven in unit tests.
+2. **Criterion 12: `Mixed-Batch Folder Rejection on Drop` [INCONCLUSIVE]**
+   - *Missing observation:* Because synthetic desktop drop delivery did not complete under the automation session, the mixed-batch folder rejection notice was not observed in the live NoticeBar. Folder rejection logic independently verified in `verify_ac_ai.exe` Test 5 Case 2.
+3. **Display DPI Scaling (150%/200%) [INCONCLUSIVE / INCOMPLETE]**
+   - *Missing observation:* WinUI 3 display DPI simulation passed in automated acceptance, but real OS display setting changes require a Windows display reconfiguration and user session sign-out; retained as incomplete.
+4. **Narrator Speech Verification [INCONCLUSIVE / INCOMPLETE]**
+   - *Missing observation:* Programmatic UI Automation names, roles, and focus restoration verified; real spoken audio delivery via Windows Narrator requires an active audio endpoint and human listening verification.
+
+> [!NOTE]
+> **Milestone Boundary:** The current native UX milestone is closed with verified unit, storage, contract registry, and UI automation evidence. Live CLI discovery/execution (M3), agent orchestration/replies (M4), advanced inspectors (M5), and MSI packaging (M7) remain separate future implementation milestones.
