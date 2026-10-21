@@ -1877,12 +1877,21 @@ namespace mayasaba
     }
     void Storage::SaveDraft(std::string const& id, std::string const& body)
     {
+        if (!TrySaveDraft(id, body)) throw std::runtime_error("Draft project not found");
+    }
+    bool Storage::TrySaveDraft(std::string const& id, std::string const& body)
+    {
         std::lock_guard lock(mutex_);
         AdmitWrite_locked();
         Statement q(db_, "UPDATE projects SET draft=?2 WHERE id=?1;");
         Bind(q.value,1,id); Bind(q.value,2,ProtectDraft(body));
         Check(sqlite3_step(q.value),db_);
-        if (sqlite3_changes(db_)!=1) throw std::runtime_error("Draft project not found");
+        // Zero changed rows means the id matches no project. That is a fact about
+        // the binding, not about the attempt, so it is reported rather than thrown:
+        // a caller that can unbind and continue needs to distinguish it from a store
+        // refusal it should simply retry. Every other failure still throws through
+        // Check/AdmitWrite_locked, so a refusal can never look like a save.
+        return sqlite3_changes(db_)==1;
     }
     std::optional<PendingSubmission> Storage::Pending(std::string const& id)
     {

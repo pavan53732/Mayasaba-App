@@ -262,6 +262,13 @@ namespace mayasaba
         void TouchProjectOpened(std::string const& projectId);
         void RelocateProject(std::string const& id, std::string const& newCanonicalPath, std::string const& newDisplayName);
         void SaveDraft(std::string const& projectId, std::string const& body);
+        // Same write as SaveDraft, but reports whether the project record exists
+        // instead of throwing for that one cause. A caller that can recover from a
+        // missing binding (navigation) must be able to tell it apart from a store
+        // that refused the write, because only the former is unretryable. Every
+        // other failure still throws, so no caller can mistake a real refusal for
+        // a successful save.
+        bool TrySaveDraft(std::string const& projectId, std::string const& body);
         void SavePrebindDraft(std::string const& body);
         uint64_t ReservePrebindRevision() noexcept { return ++requestedDraftRevision_; }
         bool SavePrebindDraft(std::string const& body, uint64_t revision);

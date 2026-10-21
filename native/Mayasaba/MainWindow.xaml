@@ -849,8 +849,16 @@
 
                     <!-- Empty-state hero. Its decorative art is removed before the composer can be
                          pushed off a short window; the invitation text always remains. -->
+                    <!-- The name is not decoration: a XAML panel creates no AutomationPeer, so
+                         without one the resting orientation published on this element by
+                         `PublishHeroOrientation` is unreadable in both the Control and Raw UIA
+                         views. It is published on this container rather than on the art below,
+                         because the art is removed in a compact body while the container exists
+                         whenever the empty state does, so the carrier has to outlive the layout
+                         mode the observation is taken in. -->
                     <StackPanel x:Name="EmptyChatHero" Grid.Row="1" HorizontalAlignment="Center"
-                                Spacing="12" Margin="24,0,24,20">
+                                Spacing="12" Margin="24,0,24,20"
+                                AutomationProperties.Name="Mayasaba hero">
                         <Grid x:Name="EmptyHeroArt" Width="176" Height="146" HorizontalAlignment="Center">
                             <Grid.Transform3D>
                                 <PerspectiveTransform3D Depth="900"/>

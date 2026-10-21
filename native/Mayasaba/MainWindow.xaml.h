@@ -130,8 +130,13 @@ namespace winrt::Mayasaba::implementation
         // and "revealing" while the entrance transition is running.
         void PublishSearchOverlayPresentation(std::wstring const& state);
         // Publishes the hero's declared resting orientation for the hero art, so the
-        // hero's perspective stays observable independently of the overlay.
-        void PublishHeroOrientation(Microsoft::UI::Xaml::FrameworkElement const& element,
+        // hero's perspective stays observable independently of the overlay. The
+        // orientation is read from `source` (the element carrying the transform) and
+        // published on `target`, which must be an element that has an AutomationPeer:
+        // a plain <Grid> with no AutomationProperties.Name creates none, and
+        // SetItemStatus on one is unreadable in both the Control and Raw UIA views.
+        void PublishHeroOrientation(Microsoft::UI::Xaml::FrameworkElement const& source,
+                                    Microsoft::UI::Xaml::FrameworkElement const& target,
                                     std::wstring const& label);
         // The overlay's published state and the layout numbers behind its height
         // bound. They travel with the surface's own status so a reader can tell a

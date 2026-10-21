@@ -25,11 +25,11 @@ One WinUI 3 desktop application, `native/Mayasaba/`, 34 source files, 15,774 lin
 | Three screens and their navigation | Welcome, project selection, Chat. First-run introduction, later-launch selector, `File → Switch Project`, Escape/Back/Skip semantics, composer placement rules, empty-vs-docked composer transition. | `MainWindow.xaml`, `MainWindow.xaml.cpp` |
 | Project identity and binding | Canonical root validation, `FILE_ID_INFO` stable identity, reparse/ancestor checks, recent-project filtering and paging, project closure and reopen records, safe-switch refusal when isolation is unproven. | `ProjectRoot.cpp`, `ProjectService.h`, `Storage.cpp` |
 | Storage | The whole SQLite layer: schema and migrations, write admission, quarantine backstop via `sqlite3_set_authorizer`, single-writer mutex, WAL, drafts, contributions, attachments, selection events and receipts. | `Storage.cpp` (the largest file in the slice) |
-| Chat contributions and drafts | Immutable `UserContribution` persistence with a submission identity, draft preservation across navigation, recovery notices for failed or uncertain saves. | `Storage.cpp`, `MainWindow.xaml.cpp` |
+| Chat contributions and drafts | Immutable `UserContribution` persistence with a submission identity, draft preservation across navigation, recovery notices for failed or uncertain saves, and a classified failure path: a missing project record unbinds and continues instead of wedging navigation and the window close, while a store refusal keeps the binding and refuses only that attempt (§25.2–25.4). | `Storage.cpp`, `NavigationRecovery.h`, `MainWindow.xaml.cpp` |
 | Attachment pipeline | Admission limits, active-time accounting, digest verification, protected-draft handling, recovery policy, non-English preview withholding with metadata inspection preserved. | `AttachmentService.cpp`, `AttachmentAdmission.h`, `AttachmentIngestionCoordinator.h`, `AttachmentRecoveryPolicy.h`, `ProtectedDraft.h` |
 | Search | Saved-message search, pagination and continuation tokens, project-switch safety while a search is open, overlay geometry and paging reachability. | `SearchController.h`, `MainWindow.xaml.cpp` |
 | Action Center | A read-only owner-obligation projection with paging, stale-item revalidation and dismissal that survives background refresh. | `ActionCenterPresenter.h` |
-| Presentation | The motion and depth system, theme brushes, light/dark/high-contrast handling, reduced-motion alternatives, DPI and responsive layout, the timeline renderer. | `Motion.cpp`, `ThemeBrushes.cpp`, `Timeline.cpp`, `RichText.cpp` |
+| Presentation | The motion and depth system, theme brushes, light/dark/high-contrast handling, reduced-motion alternatives, DPI and responsive layout, the timeline renderer, and the heroes' declared resting orientation published on a named container so it is readable by a UIA client (§25.5). | `Motion.cpp`, `ThemeBrushes.cpp`, `Timeline.cpp`, `RichText.cpp`, `MainWindow.xaml` |
 | Deterministic core independence | Storage, project identity and the presentation helpers are separable from the window; the unit-test runner exercises them without creating one. | `native/tests/storage_tests.cpp` |
 
 The executable is a real, running application. A person can launch it, pick a folder, type a message, and have that message durably saved and restored. That much is observed, repeatedly, by the harness.
@@ -68,9 +68,41 @@ The executable is a real, running application. A person can launch it, pick a fo
 
 The harness reports 20 criteria. Those 20 criteria cover: recent-project filtering, search pagination, older-message navigation, search-mode switch safety, the narrow responsive layout, hover-sweep stability, DPI simulation, three Action Center behaviors, two OLE drag behaviors, attachment chip realization, non-English preview withholding, a composition-performance profile, and four overlay/hero motion behaviors. They are observations of the slice in the table above.
 
-They do not cover, and cannot cover, anything in the "not built" list. A run of `17 PASS, 3 INCONCLUSIVE, 0 FAIL` is evidence that the harness's assertions held against a specific executable and XBF on this machine. It is not evidence that Mayasaba works. The three INCONCLUSIVE criteria are also not defects: two are an environment limit on injecting OLE drag (see §23) and one is a UIA reachability limit on the hero mark (§24).
+They do not cover, and cannot cover, anything in the "not built" list. A run of `18 PASS, 2 INCONCLUSIVE, 0 FAIL` is evidence that the harness's assertions held against a specific executable and XBF on this machine. It is not evidence that Mayasaba works. The two INCONCLUSIVE criteria are also not defects: both are an environment limit on injecting OLE drag (see §23 and §24.4).
 
 The honest summary is: **a well-tested UI shell over a durable local store, with no intelligence, no execution, no orchestration and no installer behind it.**
+
+---
+
+## Current milestone and its gates (2026-10-22)
+
+This section records the milestone decision so the next session does not re-derive the survey above or re-argue the ordering. It is a *plan of record*, not a result: nothing in it is claimed as built. The gates named here are the C10 implementation-entry gates; the tier names are this project's own grouping.
+
+### Where the work stands
+
+The slice described under "What is built and what is not" is a UI shell over a durable local store. Eleven of the thirteen layers are absent, no CLI is ever launched, and none of `AGENTS.md` §14's three required prototypes is satisfied. Tier 1 is therefore **not** the next thing to do; the next thing is the smallest sequence that turns one hardcoded user-visible statement into a measured one.
+
+### The order of work
+
+| Order | Item | Why here |
+| --- | --- | --- |
+| 1 | **B-slice** — outbox/inbox tables, `mayasaba-jcs-1` canonical bytes with the registered vectors, transactional receipts (C10 gate **I1**) | Invisible to the user, cheap now and expensive later, and it is the C10 order (I1 before I3), so doing it first removes the ordering objection entirely |
+| 2 | **A + C paired** — Local Execution Kernel (layer 9, prototype 2) with Agent Gateway detection (layer 4) | A alone satisfies §14 prototype 2 and changes nothing user-visible; C converts the hardcoded `UNSUPPORTED` readiness line into a measured one and needs A. Paired, the milestone ends with a user-visible statement that is true *and* measured |
+| — | **D (MSI) deferred** | Nothing to install yet |
+| — | **Containment** | **Explicitly not claimed in either item.** See below |
+
+### The three gates that must not be confused
+
+1. **A passing launch is not a passing I3.** A successful `CreateProcess` + `CreateJobObject` + teardown proves *ownership and cleanup of a process tree*. It proves nothing about confinement of that tree's file or network effects. `AGENTS.md` §9 requires pre-effect mediation or a tested effective operating-system access boundary for every prohibited read, write, network effect and stale write; a Job Object is neither. A launch milestone must be reported as prototype 2 only, and must not be summarized as making the architecture deployable.
+2. **The `UNSUPPORTED` line is Agent Gateway work, not Kernel work.** The Kernel alone does not make the readiness projection true. The readiness entry is layer 4's observation, and the probe needs a launch path — which is why C is paired with A rather than sequenced after it.
+3. **`INCONCLUSIVE` is a verdict, not a to-do.** Criteria 11 and 12 stay INCONCLUSIVE as a permanent evidenced environment limit (§24.4). Criterion 19 left that class only because the application changed (§25.5), not because the harness was re-tuned.
+
+### What each item must produce before it is called done
+
+- Its own `AcceptanceEvidenceMatrix` rows, each ending in exactly one verdict (`AGENTS.md` §13), with `PASS` earned by a discriminating oracle and a controlling mutation where the defect is a regression.
+- Artifact identity per run: SHA-256 of both `Mayasaba.exe` and `MainWindow.xbf`, in a fresh evidence directory. A XAML-only change relinks neither, so the executable hash alone does not identify the UI that was tested.
+- A "what is built and what is not" update, and a numbered record in this file, before the commit.
+- No claim of containment, no claim of a passing I3, and no claim that a passing launch makes the architecture deployable.
 
 ---
 
@@ -2604,6 +2636,8 @@ Measured, in both candidate states:
 
 **Verdict: INCONCLUSIVE**, with the measured reachability limit as its stated reason. This is not a product defect and no application source was changed for it. It is a statement that the harness cannot observe the property the criterion names, and the honest response is to say so rather than to pass a criterion on an unread value.
 
+> **Superseded on its disposition by §25.5 (2026-10-22).** The measurements in this subsection stand unchanged and are cited there: the marks have no peer, and `ItemStatus` set on one is unreadable in both views. What was wrong was the conclusion drawn from them. The limit was in the application's *choice of carrier*, not in UIA, and the correction is small: a `<Grid>` or `<StackPanel>` gains a peer when it declares `AutomationProperties.Name`, so publishing the status on a named container makes the same observation readable. Criterion 19 is now **PASS** on a later artifact (§25.5, §25.7). This subsection is left as written rather than rewritten, because the reasoning that produced the wrong disposition is the part worth keeping.
+
 ### 24.4 Criteria 11 and 12: a permanent, evidenced environment limit
 
 §23 established that four different drag strategies, one of which pressed no button at all, produced `QueryContinueDrag calls: 0` against both Mayasaba **and** a plain text editor, and that `SetForegroundWindow` is silently refused in every child process the harness spawns. A zero count against a known-good control target is a statement about the stimulus, not about the application.
@@ -2630,7 +2664,7 @@ Suite result after the addition: **30 tests, 0 failures** (`PASS: 0 failure(s)`)
 | Y-01 | The inherited diff is reviewed, exercised and committed with truthful provenance. | Source review + full run | Read in full; run `hero3` executed against it; committed stating it was unattributed on arrival. | **PASS** |
 | Y-02 | The harness change alters no criterion's verdict. | Native run, two artifacts compared | Same executable and XBF; 20-row verdict table byte-identical; instrumentation demonstrably active. | **PASS** |
 | Y-03 | Criterion 19 reaches a genuinely empty conversation without deleting another project's rows. | Native run | Own folder + own seeded row; `empty conversation realized: 'What would you like to work on?'`; row and folder removed afterwards. | **PASS** |
-| Y-04 | The hero's resting orientation is observed and its verdict recorded as measured. | Native run, both UIA views | No hero node in either view in either state; zero non-empty `ItemStatus`; declared values 15 / -22 / -9 never published to a reader. | **INCONCLUSIVE** (measured reachability limit) |
+| Y-04 | The hero's resting orientation is observed and its verdict recorded as measured. | Native run, both UIA views | No hero node in either view in either state; zero non-empty `ItemStatus`; declared values 15 / -22 / -9 never published to a reader. | **INCONCLUSIVE** (measured reachability limit — **superseded by Z-06/Z-07 in §25.6**, which make it observable and record PASS) |
 | Y-05 | Criteria 11 and 12 are recorded as a permanent evidenced limit. | §23 evidence | Zero `QueryContinueDrag` calls against a known-good text editor too; `SetForegroundWindow` refused in every child. | **PASS** (as a limit record) |
 | Y-06 | Stale legacy test binary removed; ignore rules added; evidence-commit decision recorded. | Source inspection | `storage_tests.exe` gone; `/native/tests/__pycache__/` and `/native/tests/evidence/` ignored with the reason stated in `.gitignore`. | **PASS** |
 | Y-07 | The pump probe and the walk-vs-pump distinction have oracles with controlling mutations. | Unit test | 30 tests, 0 failures; mutation makes the reading exceed 200 ms while the correct probe stays under 50 ms. | **PASS** |
@@ -2642,9 +2676,134 @@ Y-04 is the one criterion that is not PASS, and it is not a failure of the harne
 ### 24.7 What this record does not claim
 
 1. **It does not claim the inherited diff was authored by the agent that committed it.** Its authorship is unknown. It was reviewed, exercised and committed, which is what `AGENTS.md` §12 asks for; it was not written here.
-2. **It does not claim criterion 19 passes.** The hero's orientation is unreadable, not flat and not correct.
+2. **It does not claim criterion 19 passes.** The hero's orientation is unreadable, not flat and not correct. *(Superseded by §25.5: on a later artifact it is readable and criterion 19 is PASS.)*
 3. **It does not claim the application's drop target works or is broken.** No drag reached it, and no drag reaches a plain text editor either.
 4. **It does not claim the harness is finished.** It claims the harness is no longer the milestone's subject.
-5. **It does not claim the product advanced.** The binary is unchanged for the fourth consecutive record. The product work that this record unblocks is the subject of a separate decision, not of this commit.
+5. **It does not claim the product advanced.** The binary is unchanged for the fourth consecutive record. The product work that this record unblocks is the subject of a separate decision, not of this commit. *(The product did advance in §25: the navigation wedge was fixed and the hero orientation made observable.)*
+
+---
+
+## 25. Navigation wedge fixed, hero orientation made observable, criterion 19 PASS (2026-10-22)
+
+### 25.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Executable SHA-256 | `4bbf7216ed4613afe1b5fdcedf873c05af972278de5e29f7d621c60de7e8c1cf` |
+| `MainWindow.xbf` SHA-256 | `84cd621c1875ca638332a5b05e7421e2be9b311fb4016cc3e2c4b9812da01ba9` |
+| Evidence directory | `native/tests/evidence/ui-acceptance-final2-20261022-0455/` |
+| Source commit at run time | `1cb2593cd41c3674c3afcb8acaccaac8e5325449` (the run drove a working-tree build; this record's own commit is the one that lands it) |
+| Toolchain | MSBuild from Visual Studio 18 Enterprise, toolset `v145` (MSVC 14.50.35717), Windows SDK 10.0.26100.0, Windows App SDK 2.5.1 |
+| Machine | Windows 11 Pro build 26200.9457, x64, one display |
+| Interpreter | `C:\Python314\python.exe` (`pywinauto` is installed for the base interpreter, not the managed venv) |
+
+The executable and XBF hashes above are the pair recorded in that run's own `artifact-identity.json`. **They are not comparable to §21–§24**, whose binary differed; this record starts a new artifact lineage and no observation from the earlier records is carried forward onto it.
+
+### 25.2 The navigation wedge: a product defect, not a harness defect
+
+**The defect.** `MainWindow::NavigateAsync` preserved the bound project's draft before leaving it, and treated every failure of that save identically:
+
+```
+MainWindow.xaml.cpp (before this change)
+3443    bool saveProject = !id.empty() && !projectClosed_;
+3456    try { ... if (saveProject && !storage_->Pending(id)) storage_->SaveDraft(id, draft); }
+3457    catch (...) { error = e.what(); }
+3462    if (!error.empty()) { ShowNotice(L"Draft preservation failed; navigation was stopped: " ..., true); co_return; }
+3464    else ShowFolder(SelectorContext::Switching);
+```
+
+`Storage::SaveDraft` is `UPDATE projects SET draft=?2 WHERE id=?1` followed by a check that exactly one row changed. When the bound project's record no longer exists — a retired project, an interrupted cleanup, an external write — it matches no row and throws **on every attempt**. The `co_return` at `:3462` is therefore taken every time and `ShowFolder(...)` at `:3464` is never reached.
+
+**The observed consequence, which is broader than navigation.** The application could not navigate to any project again from that state until it was restarted. It also could not be closed: `AppWindow().Closing` (`MainWindow.xaml.cpp:191-195`) cancels the close and calls `NavigateAsync(true)` when `!allowClose_`, and the in-app Exit routes through the same coroutine. Both reached the same `co_return`. The only recovery was to kill the process.
+
+**How it was found, and why it is recorded here.** The acceptance harness created exactly this state: it deleted the hero-probe project's row while the application was still bound to it, in a `finally` block, before switching away. The subsequent failures presented as unrelated — a failed switch back to alpha, a failed Phase 9 gamma switch, eight criteria reported `NOT_RUN` — because the symptom did not name its cause. §24.3 and the harness's own comment record the ordering fix: move the application off a temporary project first, then delete the row.
+
+**The harness now avoids the condition, which is precisely why it must be written down.** A run will not reproduce the wedge any more, so a green suite is silent about it. The fix is in the application, and the regression test below does not depend on the harness reproducing anything.
+
+### 25.3 The correction
+
+Failing closed is required and was kept: an unsaved draft is never reported as saved, and the failure is surfaced truthfully. What changed is that the failure is no longer **terminal**.
+
+The classification is extracted into `native/Mayasaba/NavigationRecovery.h`, a pure function over a value with no IO, no lock and no window state, so it is natively testable without creating a window (`AGENTS.md` §3). It adds no service owner, record or state machine.
+
+| Failure | Disposition | Why |
+| --- | --- | --- |
+| `None` | `Proceed` | Nothing to preserve |
+| `ProjectRecordMissing` | `UnbindAndProceed` | Retrying the same write cannot succeed, so the *binding* is invalid, not the attempt. Clear `activeProject_`, treat the project as unbound, and continue to the selector (or to exit) |
+| `StoreRefused` | `StopAndNotify` | May not recur. Keep the binding and the text; refuse only this attempt |
+| `Other` | `StopAndNotify` | The binding is not proven invalid, so it is not silently discarded |
+
+`Storage` gained `bool TrySaveDraft(...)`, which reports the missing-record case instead of throwing for it. `SaveDraft` now delegates to it and still throws `"Draft project not found"`, so **every direct caller's contract is unchanged** and a refusal can never look like a save. `AdmitWrite_locked` still runs first, so admission covers both the quarantine check and the free-space reserve on this path too.
+
+In the `UnbindAndProceed` branch the notice states exactly what failed and that the text was **not** saved and is still in the composer, so the reader can recover it by hand. The composer is not left read-only: `navigationBusy_=false; ComposerBox().IsReadOnly(wasReadOnly);` already ran before the error branch and was kept there.
+
+### 25.4 The regression test, and its controlling mutations
+
+`native/tests/verify_ac_ai.cpp` Test 15, *"A missing project record unbinds and continues navigation"*. It calls the same `DecideNavigationAfterDraftFailure` the coroutine calls rather than duplicating the decision, reproduces the precondition by deleting the row from outside the store, and asserts that navigation is not refused afterwards.
+
+| Mutation | Restored? | Result |
+| --- | --- | --- |
+| `ProjectRecordMissing` → `StopAndNotify` (the original wedging behaviour) | Yes, hash-verified | **FAIL** at `verify_ac_ai.cpp:2313`, the assertion encoding the defect |
+| `TrySaveDraft` returns `true` for a missing record | Yes, hash-verified | **FAIL** at `verify_ac_ai.cpp:2339` (`!nav.TrySaveDraft(...)`) |
+
+Both files were restored byte-identically and verified by SHA-256 (`NavigationRecovery.h` `79b6947…1c33e`, `Storage.cpp` `adad8e2…64be`). **The mutation proves the assertions discriminate these failures. It does not reproduce the original race** — the defect was deterministic here (the row was genuinely gone), so there was no race to reproduce.
+
+Suite result: **15 of 15 cases pass**, up from 14.
+
+### 25.5 Criterion 19: the orientation is now published where a client can read it
+
+§24.3 recorded the hero's resting orientation as unreadable by any UIA client and left criterion 19 INCONCLUSIVE. **That finding was correct as a measurement and wrong as a disposition.** The limit was not in UIA; it was in the application's choice of carrier.
+
+The mechanism, measured rather than assumed: a XAML `<Grid>` or `<StackPanel>` creates **no** `AutomationPeer` *unless* it declares `AutomationProperties.Name`, and then it appears with control type `50026` (Pane). `WelcomeHeroStage` was already reachable for exactly that reason; `WelcomeHeroMark`, `EmptyHeroMark` and `EmptyHeroArt` were not.
+
+`PublishHeroOrientation` now takes `(source, target, label)`: it reads the orientation from the mark — the element that actually carries the `CompositeTransform3D`, so the status reports what the hero really has — and publishes it onto a named container that has a peer. `EmptyChatHero` gained `AutomationProperties.Name="Mayasaba hero"` for this purpose.
+
+**The container, not the art.** `UpdateCompactChatBody` collapses `EmptyHeroArt` when the body drops below 430 logical pixels (`MainWindow.xaml.cpp:1189`). Publishing on the art would make the observation depend on the window height it happened to be taken at. Measured: at 1100×520 the art is absent from the Raw view entirely (0 occurrences) while `EmptyChatHero` still reports `empty-chat-hero;resting_rotation=15,-22,-9`.
+
+Measured on the artifact in §25.1, from the harness's own log:
+
+```
+hero elements in the UIA Control view: ['EmptyChatHero']
+hero elements in the UIA Raw view:     ['EmptyChatHero']
+elements publishing a non-empty ItemStatus: 1 [('EmptyChatHero', 'empty-chat-hero;resting_rotation=15,-22,-9')]
+empty-chat hero orientation: EmptyChatHero -> 'empty-chat-hero;resting_rotation=15,-22,-9'
+PASS: The empty-chat hero keeps its declared 15/-22/-9 resting perspective.
+```
+
+**Controlling mutation for this oracle.** Publishing the status back onto the peerless mark (`EmptyHeroMark`) and rebuilding produced `elements publishing a non-empty ItemStatus: 0` and criterion 19 **INCONCLUSIVE** — the same harness, same machine. That is the evidence that the leg discriminates an unreadable carrier from a readable one, and that its PASS is earned rather than defaulted. The mutation was reverted and the source restored byte-identically (hash-verified); the binary was rebuilt and the **final** run in §25.1 was taken against that restored build.
+
+**One thing this record corrects in itself, twice.** Restoring the mutation byte-identically and rebuilding produced a *different* executable hash (`fe43f1bd…`) than the pre-mutation build (`8f73b204…`) although the source was byte-identical, with the XBF unchanged (`84cd621c…`) because only the `.cpp` changed. A further source edit — removing a stray trailing space from the unbind notice, where `error` is empty because the missing record is reported rather than thrown — produced a third hash (`4bbf7216…`). Each rebuild therefore invalidated the evidence taken against the build before it, and §25.1's directory is the run against the binary that actually exists now. This is the artifact-identity rule in `AGENTS.md` §13 applied to a rebuild rather than to a concurrent edit; the three hashes are recorded here rather than quietly replaced, because the succession is the evidence that the rule was applied.
+
+### 25.6 Criteria for this assignment
+
+| ID | Criterion | Evidence type | Observation | Verdict |
+| --- | --- | --- | --- | --- |
+| Z-01 | The navigation wedge is recorded as an open product finding with its code reference, consequence, discovery route and the fact that the harness now avoids it. | Documentation | §25.2 | **PASS** |
+| Z-02 | A missing project record unbinds and continues instead of wedging navigation, and the failure is still surfaced truthfully. | Native test + source review | `NavigationRecovery.h`; `TrySaveDraft`; `UnbindAndProceed` branch keeps the notice and clears the binding | **PASS** |
+| Z-03 | A store refusal still keeps the binding and refuses only the attempt. | Native test | Test 15.2: `StoreRefused` and `Other` → `StopAndNotify` | **PASS** |
+| Z-04 | `SaveDraft`'s contract for every direct caller is unchanged. | Native test | Test 15.4: `SaveDraft` on a missing record still throws | **PASS** |
+| Z-05 | The regression test fails at the assertion encoding the defect when the fix is reverted. | Controlling mutation ×2 | FAIL at `:2313` and `:2339`; both restored hash-verified | **PASS** |
+| Z-06 | The published hero orientation is readable by a UIA client in both views. | Native run | Control view and Raw view both expose `EmptyChatHero` carrying the status | **PASS** |
+| Z-07 | Criterion 19 reaches a real verdict on the rebuilt artifact. | Native run | `19. Empty-Chat Hero Perspective Preserved [PASS]` | **PASS** |
+| Z-08 | The criterion-19 leg discriminates an unreadable carrier. | Controlling mutation | Publishing on the peerless mark → `ItemStatus: 0` → INCONCLUSIVE | **PASS** |
+| Z-09 | The harness change is retained but is not the only defence. | Source review | Harness ordering fix kept (§24.3); application fix and test added independently | **PASS** |
+| Z-10 | Every new observation is tied to the artifact that produced it, in a fresh evidence directory. | Artifact identity | `artifact-identity.json` in the run directory; hashes in §25.1; no earlier observation reused | **PASS** |
+
+### 25.7 Full run on the new artifact
+
+20 criteria, **18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN**, in `native/tests/evidence/ui-acceptance-final2-20261022-0455/`. Compared with §24's table, criterion 19 moved from INCONCLUSIVE to PASS and **nothing else moved**. Criteria 11 and 12 remain INCONCLUSIVE for the reason §24.4 records: a permanent, evidenced environment limit on synthetic OLE drag injection, not to be re-litigated.
+
+### 25.8 What this record does not claim
+
+1. **It does not claim the wedge is unreachable.** It claims the application now recovers from it, and that the recovery has a test which does not depend on the harness reproducing it.
+2. **It does not claim the harness was at fault.** The harness's ordering was a real hygiene defect and is fixed, but the application defect was the wedge and it was the application's.
+3. **It does not claim criterion 19 tests the whole hero.** It reads the declared resting orientation published on a container. A hero that were flattened would read `0,0,0` and FAIL; the leg does not verify the rendered pixels.
+4. **It does not claim any Tier-2 layer exists.** No layer was started. The thirteen-layer table in "What is built and what is not" is unchanged except as noted in §25.9.
+5. **It does not claim containment, a passing I3, or a deployable architecture.** No process is launched by this build.
+6. **It does not re-open** the layout cycle, the scroll oracle, the criterion-15 correction, the probe reclassification, the storage counter, or the UI-thread-stall hypothesis. §24.3's reachability *finding* is superseded by §25.5 on the user's explicit instruction; its measurements stand and are cited above unchanged.
+
+### 25.9 What "what is built" now says differently
+
+Two rows of the survey at the head of this file are affected and are corrected there: Chat contribution/draft preservation now names the classified failure path, and presentation now names the observable hero orientation. Nothing was added to the "not built" list, and nothing was removed from it.
 
 ---

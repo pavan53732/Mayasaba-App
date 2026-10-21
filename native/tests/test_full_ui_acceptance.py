@@ -1577,7 +1577,7 @@ def main():
         cur = conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contributions_test_broken';")
         if cur.fetchone():
-            mark_store_write("DDL: ALTER TABLE contributions -> contributions_test_broken (the deliberate fault injection)")
+            mark_store_write("DDL: ALTER TABLE contributions_test_broken -> contributions (restore of a schema left broken by an earlier run)")
             conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
             conn.commit()
         conn.close()
@@ -2707,43 +2707,39 @@ def main():
         # 5B.8 The empty-Chat hero keeps its perspective.
         #
         # WHAT IS BEING OBSERVED. `ApplyHeroPerspective` publishes each hero's own
-        # resting orientation as an automation ItemStatus
-        # (MainWindow.xaml.cpp:597-607): it reads the element's CompositeTransform3D
-        # and writes "welcome-hero;resting_rotation=15,-22,-9" onto it. The
-        # observation this leg wants is that string.
+        # resting orientation as an automation ItemStatus: it reads the mark's
+        # CompositeTransform3D and writes "empty-chat-hero;resting_rotation=15,-22,-9"
+        # onto `EmptyChatHero`, the container. The observation this leg wants is
+        # that string.
         #
-        # WHY IT CANNOT BE READ, AND WHY THAT IS THE PRODUCT RATHER THAN THE
-        # HARNESS. The two heroes -- `WelcomeHeroMark` and `EmptyHeroMark` -- are
-        # plain `<Grid>` elements (MainWindow.xaml:128, :869). A XAML Grid creates
-        # no AutomationPeer, so its x:Name is not an AutomationId and the
-        # ItemStatus set on it is not reachable by any UIA client. That was
-        # measured, not assumed, and in BOTH views:
+        # WHY IT IS PUBLISHED ON THE CONTAINER AND NOT ON THE MARK. The marks --
+        # `WelcomeHeroMark` and `EmptyHeroMark` -- are plain `<Grid>` elements
+        # (MainWindow.xaml:128, :869). A XAML Grid creates no AutomationPeer unless
+        # it declares AutomationProperties.Name, so the mark's x:Name is not an
+        # AutomationId and an ItemStatus set on it is unreadable in BOTH views.
+        # That was measured, not assumed: a Raw-view walk of the Welcome window
+        # contained `WelcomeHeroStage` -- named, therefore a Pane -- and no
+        # descendant of it at all, and an empty conversation's walk contained no
+        # hero node though its `EmptyChatHeading` sibling was present. Zero
+        # elements in either state reported a non-empty ItemStatus.
         #
-        #   * a full Raw-view walk of the Welcome window (41 elements) contains
-        #     `WelcomeHeroStage` -- the parent Grid, which does have a peer because
-        #     it declares AutomationProperties.Name -- and no descendant of it at
-        #     all. The mark is not in the Raw view, so this is not a Control-view
-        #     filtering effect.
-        #   * the same walk in an empty conversation (57 elements) contains no
-        #     `EmptyHeroMark`, `EmptyHeroArt` or `EmptyChatHero` node, though the
-        #     `EmptyChatHeading` and `EmptyChatHint` siblings inside the same
-        #     StackPanel are present and named. So the empty state really was
-        #     realized and the hero really was not reachable.
-        #   * zero elements in either state report a non-empty ItemStatus, so the
-        #     published string exists nowhere a UIA client can read it.
+        # The earlier version of this leg recorded that as a permanent environment
+        # limit and left criterion 19 INCONCLUSIVE. That was the wrong disposition:
+        # the limit was in the application's choice of carrier, not in UIA, and the
+        # correction is small. `PublishHeroOrientation` now reads the orientation
+        # from the mark (the element that actually carries the transform, so the
+        # status reports what the hero really has) and publishes it onto a named
+        # container that has a peer.
         #
-        # The measurement therefore establishes the environment limit rather than
-        # a product defect: the hero carries its perspective, and the window tries
-        # to say so, but the carrier it chose cannot be read. Recording that
-        # truthfully is the honest verdict. Changing the application to add an
-        # AutomationPeer is a product change and is out of scope for a harness
-        # milestone; it is recorded as an open finding against
-        # `PublishHeroOrientation` instead of being made here.
+        # The container and not the art inside it, because `UpdateCompactChatBody`
+        # collapses the art when the body drops below 430px (MainWindow.xaml.cpp:1189).
+        # Publishing on the art would make the observation depend on the window
+        # height it happened to be taken at; `EmptyChatHero` exists whenever the
+        # empty state does.
         #
-        # The leg still verifies the part it CAN verify, so the run states what it
-        # saw rather than only what it could not: the empty state is really
-        # entered, and the hero's sibling content is present. The probe project is
-        # the harness's own and nothing another project owns is touched.
+        # This leg therefore reads a real verdict rather than concluding from the
+        # walk. The probe project is the harness's own and nothing another project
+        # owns is touched.
         log("\nObserving the empty-Chat hero perspective in a project of the harness's own...")
         probe_id = "00000000-0000-4000-8000-00000000c119"
         probe_name = "zz-hero-probe"
@@ -2813,12 +2809,14 @@ def main():
                             log(f"  elements publishing a non-empty ItemStatus: {len(statuses)}"
                                 + ("" if not statuses else f" {statuses}"))
                             if raw_view or control_view or statuses:
-                                # Something the hero carries IS readable, so the
-                                # declared orientation can be read from it and the
-                                # criterion is decidable. Read it rather than
-                                # concluding from the walk.
+                                # The status is published on `EmptyChatHero`, the
+                                # container, which is the element that has a peer and
+                                # that survives the compact layout. Read it there
+                                # rather than from the mark, which carries the
+                                # transform but nothing readable, or from the art,
+                                # which is collapsed on a short window.
                                 observed = None
-                                for aid in ("EmptyHeroMark", "EmptyChatHero", "EmptyHeroArt"):
+                                for aid in ("EmptyChatHero", "EmptyHeroArt", "EmptyHeroMark"):
                                     if aid in raw_view or aid in control_view:
                                         element = find_by_aid(win, aid)
                                         if element is not None:
@@ -2832,7 +2830,7 @@ def main():
                                 if observed:
                                     log(f"  empty-chat hero orientation: "
                                         f"{observed[0]} -> '{observed[1]}'")
-                                    if "resting_rotation=15,-22,-9" in observed[1]:
+                                    if "empty-chat-hero;resting_rotation=15,-22,-9" in observed[1]:
                                         log("PASS: The empty-chat hero keeps its declared "
                                             "15/-22/-9 resting perspective.")
                                         criterion_hero_perspective = "PASS"
@@ -2844,14 +2842,17 @@ def main():
                                     hero_verdict_reason = ("a hero element is present in a UIA "
                                                            "view but published no resting_rotation")
                             else:
-                                # Measured: the hero carries no peer in either view, so
-                                # the status it is given cannot be read by any UIA
-                                # client. This is the environment limit, evidenced above.
+                                # The empty state was realized but no hero element is
+                                # readable in either view. Since `EmptyChatHero` now
+                                # carries an AutomationProperties.Name, this means the
+                                # carrier that is supposed to be observable is not,
+                                # which is a regression in the application rather than
+                                # the environment limit this leg used to record.
                                 hero_verdict_reason = (
-                                    "the hero marks are plain XAML Grids with no AutomationPeer, so "
-                                    "the resting_rotation ItemStatus that PublishHeroOrientation "
-                                    "sets on them is not reachable in the Control view or the Raw "
-                                    "view; the empty state itself was realized and verified")
+                                    "the empty state was realized but neither `EmptyChatHero` nor "
+                                    "any other hero element is reachable in the Control view or "
+                                    "the Raw view, so the resting_rotation ItemStatus that "
+                                    "PublishHeroOrientation publishes on it could not be read")
                     else:
                         hero_verdict_reason = ("the probe project did not appear in the recent "
                                                "list, so the empty state was never reached")

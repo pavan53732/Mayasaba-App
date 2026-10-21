@@ -2,6 +2,7 @@
 #include "MainWindow.xaml.h"
 #include "Fixtures.h"
 #include "ThemeBrushes.h"
+#include "NavigationRecovery.h"
 #if __has_include("MainWindow.g.cpp")
 #include "MainWindow.g.cpp"
 #endif
@@ -587,20 +588,44 @@ namespace winrt::Mayasaba::implementation
         // so. The overlay fix removed the hero rotation from the surfaces the motion
         // layer creates; this is the observation that the hero itself still has its
         // perspective.
-        PublishHeroOrientation(WelcomeHeroMark(), L"welcome-hero");
-        PublishHeroOrientation(EmptyHeroMark(), L"empty-chat-hero");
+        //
+        // The orientation is READ from the element that carries the transform and
+        // PUBLISHED onto an element that has an AutomationPeer. Those are not the
+        // same element, and that is deliberate: `WelcomeHeroMark` and `EmptyHeroMark`
+        // are plain XAML <Grid>s with no AutomationProperties.Name, so they create no
+        // peer and `SetItemStatus` on one writes nothing any UIA client can read --
+        // in the Control view or the Raw view, because the Raw view walks the peer
+        // tree and there is no peer to walk to. Measured: an empty conversation
+        // exposes 57 raw-view elements and not one of them is a hero node.
+        //
+        // The stage and hero containers do have peers because they carry an
+        // AutomationProperties.Name. Publishing there makes the same truthful
+        // observation readable without inventing a second source of truth: the
+        // rotation is still read from the mark's own transform, so the status reports
+        // what the hero actually carries rather than what it is supposed to carry.
+        //
+        // The empty-chat target is `EmptyChatHero`, the container, and NOT
+        // `EmptyHeroArt` inside it. Naming the art would work at a full-height window
+        // and stop working on a short one, because `UpdateCompactChatBody` collapses
+        // the art when the body drops below 430px -- the observation would then
+        // depend on the window size it happened to be taken at. The container exists
+        // whenever the empty state does, so it is the carrier that survives both.
+        PublishHeroOrientation(WelcomeHeroMark(), WelcomeHeroStage(), L"welcome-hero");
+        PublishHeroOrientation(EmptyHeroMark(), EmptyChatHero(), L"empty-chat-hero");
     }
 
-    // Publishes the hero's declared resting orientation as a read-only automation
-    // status. It is read from the hero's own transform, so it reports what the hero
-    // actually carries rather than what it is supposed to carry.
-    void MainWindow::PublishHeroOrientation(FrameworkElement const& element, std::wstring const& label)
+    // Reads the declared resting orientation from `source` and publishes it as a
+    // read-only automation status on `target`. `target` must be an element with an
+    // AutomationPeer; see the call site for why that is not optional.
+    void MainWindow::PublishHeroOrientation(FrameworkElement const& source,
+                                            FrameworkElement const& target,
+                                            std::wstring const& label)
     {
-        if (!element) return;
+        if (!source || !target) return;
         double rotationX = 0.0;
         double rotationY = 0.0;
         double rotationZ = 0.0;
-        if (auto const transform = element.Transform3D().try_as<Microsoft::UI::Xaml::Media::Media3D::CompositeTransform3D>())
+        if (auto const transform = source.Transform3D().try_as<Microsoft::UI::Xaml::Media::Media3D::CompositeTransform3D>())
         {
             rotationX = transform.RotationX();
             rotationY = transform.RotationY();
@@ -608,7 +633,7 @@ namespace winrt::Mayasaba::implementation
         }
         std::wstring status = label + L";resting_rotation=";
         status += to_hstring(rotationX) + L"," + to_hstring(rotationY) + L"," + to_hstring(rotationZ);
-        Automation::AutomationProperties::SetItemStatus(element, status);
+        Automation::AutomationProperties::SetItemStatus(target, status);
     }
 
     void MainWindow::CopyToClipboard(hstring const& text)
@@ -3453,13 +3478,55 @@ namespace winrt::Mayasaba::implementation
         }
         catch (...) {}
         std::string error;
+        // The bound project's record can disappear underneath the application: a
+        // retired project, an interrupted cleanup, or an external write. When it
+        // does, SaveDraft matches no row and fails on EVERY attempt, so treating
+        // that failure like any other abandoned the navigation permanently --
+        // and, because AppWindow().Closing and the in-app Exit both route through
+        // this coroutine, it also made the window impossible to close. The
+        // failure is classified here so a missing record unbinds and continues
+        // while a store refusal keeps the binding and refuses only this attempt.
+        mayasaba::DraftSaveFailure draftFailure = mayasaba::DraftSaveFailure::None;
         try{co_await selectorQueue_.Background();
-            if(saveProject && !storage_->Pending(id))storage_->SaveDraft(id,draft);}
-        catch(std::exception const& e){error=e.what();}
+            if(saveProject && !storage_->Pending(id))
+            {
+                if(!storage_->TrySaveDraft(id,draft))
+                    draftFailure = mayasaba::DraftSaveFailure::ProjectRecordMissing;
+            }}
+        catch(std::exception const& e)
+        {
+            error=e.what();
+            draftFailure = mayasaba::DraftSaveFailure::Other;
+        }
         if(!co_await resume_foreground(ui))co_return;
         if(windowClosed_)co_return;
         navigationBusy_=false;ComposerBox().IsReadOnly(wasReadOnly);
-        if(!error.empty()){ShowNotice(L"Draft preservation failed; navigation was stopped: "+Utf16(error),true);co_return;}
+        auto const disposition = mayasaba::DecideNavigationAfterDraftFailure(draftFailure);
+        if(disposition == mayasaba::NavigationDisposition::UnbindAndProceed)
+        {
+            // The binding is not valid any more, so continuing under it would show
+            // a project that no longer exists. Clear it and continue to the
+            // selector (or to exit) instead of wedging here. The draft is NOT
+            // reported as saved: the notice says exactly what failed, and the text
+            // stays in the composer so the reader can recover it by hand.
+            activeProject_.clear();
+            projectClosed_=false;
+            searchController_.SetActiveProject("");
+            pendingAttemptId_.clear();pendingAttemptProject_.clear();pendingAttemptBody_.clear();
+            std::wstring notice =
+                L"Draft preservation failed because the project record no longer exists. "
+                L"The project has been unbound and the selector is open; the unsent text is "
+                L"still in the composer and was not saved.";
+            // `error` is empty on this path -- the missing record is reported, not
+            // thrown -- so it is appended only when there is something to say.
+            if(!error.empty()) notice += L" " + Utf16(error);
+            ShowNotice(hstring(notice), true);
+        }
+        else if(disposition == mayasaba::NavigationDisposition::StopAndNotify)
+        {
+            ShowNotice(L"Draft preservation failed; navigation was stopped: "+Utf16(error),true);
+            co_return;
+        }
         if(exit){++selectorGeneration_;allowClose_=true;Close();}
         else ShowFolder(SelectorContext::Switching);
     }

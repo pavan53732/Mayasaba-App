@@ -2,6 +2,7 @@
 #include "../Mayasaba/AttachmentService.h"
 #include "../Mayasaba/AttachmentIngestionCoordinator.h"
 #include "../Mayasaba/ActionCenterPresenter.h"
+#include "../Mayasaba/NavigationRecovery.h"
 #include <chrono>
 #include <thread>
 #include <mutex>
@@ -2273,6 +2274,102 @@ int main()
         // that into a persistence failure rather than a stale completion.
         EXPECT(mayasaba::AttachmentIngestionCoordinator::ClassifyStaleCompletion(true, false) ==
             Report::NothingPersisted);
+
+        CASES_END();
+    }
+
+
+    // -------------------------------------------------------------------------
+    // Test 15: A missing project record must not wedge navigation
+    //
+    // `MainWindow::NavigateAsync` used to treat every draft-save failure
+    // identically: it showed the error and `co_return`ed before reaching
+    // `ShowFolder(...)`. When the bound project's record no longer exists,
+    // `SaveDraft` matches on `id`, changes zero rows and throws on EVERY attempt,
+    // so navigation could never be completed again -- and because
+    // `AppWindow().Closing` and the in-app Exit both route through that same
+    // coroutine, the window could not be closed either. The only recovery was to
+    // kill the process. The acceptance harness used to create exactly that state
+    // by deleting a row the application was still bound to; it now avoids the
+    // condition, which is precisely why the behaviour needs a test that does not
+    // depend on the harness reproducing it.
+    //
+    // What this test covers: the classification the coroutine performs, the store
+    // fact that classification rests on, and the claim that a later navigation
+    // still succeeds. What it does not cover: the coroutine's own control flow,
+    // which needs a window. The decision is not duplicated here -- the test calls
+    // the same `DecideNavigationAfterDraftFailure` the coroutine calls.
+    // -------------------------------------------------------------------------
+    {
+        CASES_BEGIN("Test 15: A missing project record unbinds and continues navigation");
+        using mayasaba::DraftSaveFailure;
+        using mayasaba::NavigationDisposition;
+
+        // 15.1 A missing record is the one failure that cannot be retried into
+        // success, so it continues instead of abandoning the navigation.
+        EXPECT(mayasaba::DecideNavigationAfterDraftFailure(DraftSaveFailure::None) ==
+            NavigationDisposition::Proceed);
+        EXPECT(mayasaba::DecideNavigationAfterDraftFailure(DraftSaveFailure::ProjectRecordMissing) ==
+            NavigationDisposition::UnbindAndProceed);
+
+        // 15.2 A store refusal keeps the binding. That attempt stops, but nothing
+        // about it prevents a later attempt from succeeding, so it is not a wedge.
+        EXPECT(mayasaba::DecideNavigationAfterDraftFailure(DraftSaveFailure::StoreRefused) ==
+            NavigationDisposition::StopAndNotify);
+        EXPECT(mayasaba::DecideNavigationAfterDraftFailure(DraftSaveFailure::Other) ==
+            NavigationDisposition::StopAndNotify);
+
+        // 15.3 A write naming a project that does not exist reports the missing
+        // record instead of throwing, so a caller can tell it apart from a refusal
+        // it should simply retry.
+        mayasaba::Storage nav(folder / "navigation_recovery.db");
+        nav.BindProject("proj-nav", "Navigation Project", "C:/Nav");
+        nav.BindProject("proj-other", "Other Project", "C:/Other");
+        EXPECT(nav.TrySaveDraft("proj-nav", "first draft"));
+        EXPECT(nav.TrySaveDraft("proj-other", "other draft"));
+
+        // Reproduce the precondition the way the harness created it: the bound
+        // project's row disappears underneath the application.
+        {
+            sqlite3* outside{};
+            EXPECT(sqlite3_open16((folder / "navigation_recovery.db").wstring().c_str(), &outside) == SQLITE_OK);
+            EXPECT(sqlite3_exec(outside, "DELETE FROM projects WHERE id='proj-nav';", nullptr, nullptr, nullptr) == SQLITE_OK);
+            sqlite3_close(outside);
+        }
+        EXPECT(!nav.TrySaveDraft("proj-nav", "second draft"));
+
+        // 15.4 SaveDraft's contract is unchanged for every direct caller: a missing
+        // record still fails loudly rather than silently discarding the text.
+        bool threw = false;
+        try { nav.SaveDraft("proj-nav", "second draft"); }
+        catch (std::exception const&) { threw = true; }
+        EXPECT(threw);
+
+        // 15.5 The point of the test: navigation is not refused afterwards. The
+        // classification turns the failure into UnbindAndProceed, the store stays
+        // writable for other projects, and the same project is writable again once
+        // its record exists -- nothing about the failed attempt poisons a later one.
+        auto navigationContinues = [](mayasaba::Storage& store, std::string const& id, std::string const& body)
+        {
+            DraftSaveFailure failure = DraftSaveFailure::None;
+            try
+            {
+                if (!store.TrySaveDraft(id, body)) failure = DraftSaveFailure::ProjectRecordMissing;
+            }
+            catch (std::exception const&)
+            {
+                failure = DraftSaveFailure::Other;
+            }
+            return mayasaba::DecideNavigationAfterDraftFailure(failure) != NavigationDisposition::StopAndNotify;
+        };
+        EXPECT(navigationContinues(nav, "proj-nav", "third draft"));
+        EXPECT(nav.TrySaveDraft("proj-other", "still writable"));
+        nav.BindProject("proj-nav", "Navigation Project", "C:/Nav");
+        EXPECT(navigationContinues(nav, "proj-nav", "recovered draft"));
+        bool foundRecovered = false;
+        for (auto const& record : nav.RecentProjects())
+            if (record.id == "proj-nav" && record.draft == "recovered draft") foundRecovered = true;
+        EXPECT(foundRecovered);
 
         CASES_END();
     }
