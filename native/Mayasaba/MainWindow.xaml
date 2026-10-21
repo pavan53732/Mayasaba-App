@@ -571,6 +571,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <Grid x:Name="ChatHeaderIdentityPanel" ColumnSpacing="12" VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
@@ -709,6 +710,109 @@
                                                         </Grid>
                         </Border>
 
+                <!-- Saved-message search overlay. A flat temporary surface: it carries no
+                     3D transform and no hero rotation. It is declared on the Chat SCREEN,
+                     not inside the conversation grid: a conversation grid that has no height
+                     left measures a spanning child against that height and collapses it, so
+                     a surface that has to stay reachable cannot be a child of it. Its height
+                     is bounded by the space the screen really has, and it sits under the Chat
+                     header when there is room for both and over the header when there is not.
+                     The results list is the only flexible row, so a short window shrinks and
+                     scrolls the list instead of pushing the paging action out of the window. -->
+                <Border x:Name="MessageSearchPanel" Grid.Row="0" Grid.RowSpan="2"
+                        VerticalAlignment="Top" HorizontalAlignment="Center"
+                        MaxWidth="760" Margin="18,10,18,0"
+                        Visibility="Collapsed" Canvas.ZIndex="20"
+                        Style="{StaticResource MayasabaCardSurface}"
+                        Padding="16"
+                        BorderBrush="{ThemeResource MayasabaBrandBrush}" BorderThickness="1.5"
+                        AutomationProperties.AutomationId="MessageSearchPanel"
+                        AutomationProperties.Name="Search saved user messages overlay">
+                        <Grid x:Name="MessageSearchLayout" RowSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <!-- The surface owns the width. Without an explicit column the
+                                     grid's single implicit column is sized by its content, the
+                                     results were laid out wider than the surface and overflowed
+                                     it, and a result that is measured outside the surface has
+                                     no height inside it. -->
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Search header row -->
+                            <Grid x:Name="SearchHeaderRow" Grid.Row="0" ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                    <FontIcon Glyph="&#xE721;" FontFamily="Segoe Fluent Icons" FontSize="15"
+                                              Foreground="{ThemeResource MayasabaBrandBrush}"/>
+                                    <TextBlock Text="Search saved user messages" Style="{StaticResource MayasabaSectionText}"
+                                               TextTrimming="CharacterEllipsis"
+                                               AutomationProperties.HeadingLevel="Level2"/>
+                                </StackPanel>
+                                <Button x:Name="CloseSearchButton" Grid.Column="1" Click="OnCloseSearch"
+                                        Padding="10,6" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                        AutomationProperties.Name="Close search overlay (Escape)">
+                                    <FontIcon Glyph="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
+                                </Button>
+                            </Grid>
+
+                            <!-- Query input row -->
+                            <Grid x:Name="SearchQueryRow" Grid.Row="1" ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox x:Name="MessageSearchBox"
+                                         PlaceholderText="Search saved user messages in this project..."
+                                         TextChanged="OnSearchQueryChanged"
+                                         PreviewKeyDown="OnSearchBoxKeyDown"
+                                         AutomationProperties.Name="Search query input"/>
+                                <Button x:Name="ClearSearchButton" Grid.Column="1" Click="OnClearSearchQuery"
+                                        Content="Clear" Visibility="Collapsed" Padding="12,6"
+                                        CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                        AutomationProperties.Name="Clear search query"/>
+                            </Grid>
+
+                            <!-- Search status label -->
+                            <TextBlock x:Name="SearchStatusText" Grid.Row="2" Text="Type a query to search confirmed saved user messages."
+                                       Style="{StaticResource MayasabaMicroText}"
+                                       Foreground="{ThemeResource MayasabaMutedBrush}"
+                                       TextWrapping="Wrap"
+                                       AutomationProperties.LiveSetting="Polite"/>
+
+                            <!-- Search results list. The one flexible row: it takes the space
+                                 the chrome leaves, scrolls internally, and never pushes the
+                                 paging action below the fold of the window. It STRETCHES into
+                                 that space: a list that is aligned to the top takes the height
+                                 of its whole content instead, overflows the surface and has
+                                 nothing left to scroll. -->
+                            <ListView x:Name="SearchResultsList" Grid.Row="3"
+                                      VerticalAlignment="Stretch"
+                                      SelectionMode="None" IsItemClickEnabled="True"
+                                      ItemClick="OnSearchResultItemClick"
+                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                      ScrollViewer.VerticalScrollMode="Auto"
+                                      ScrollViewer.HorizontalScrollMode="Disabled"
+                                      HorizontalContentAlignment="Stretch"
+                                      AutomationProperties.Name="Search results"/>
+
+                            <!-- Load more button -->
+                            <Button x:Name="SearchLoadMoreButton" Grid.Row="4" Click="OnSearchLoadMore"
+                                    Content="Load more results" Visibility="Collapsed"
+                                    HorizontalAlignment="Center" Padding="14,6"
+                                    CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                    AutomationProperties.Name="Load more matching messages"/>
+                        </Grid>
+                    </Border>
                 <!-- The conversation area and the ONE composer.
                      Four auto/star rows replace the previous independent 190/135 fixed offsets:
                        empty state  -> [*] [hero] [composer] [*]   (hero + composer are one centred group)
@@ -721,130 +825,6 @@
                         <RowDefinition x:Name="ChatComposerRow" Height="Auto"/>
                         <RowDefinition x:Name="ChatBottomSpacer" Height="*"/>
                     </Grid.RowDefinitions>
-
-                    <!-- Temporary Search Messages Panel (animated reveal) -->
-                    <Border x:Name="MessageSearchPanel" Grid.Row="0" Grid.RowSpan="4"
-                            VerticalAlignment="Top" HorizontalAlignment="Center"
-                            MaxWidth="760" Margin="18,10,18,0"
-                            Visibility="Collapsed" Canvas.ZIndex="20"
-                            Style="{StaticResource MayasabaCardSurface}"
-                            Padding="16"
-                            BorderBrush="{ThemeResource MayasabaBrandBrush}" BorderThickness="1.5">
-                        <StackPanel Spacing="10">
-                            <!-- Search header row -->
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <FontIcon Glyph="&#xE721;" FontFamily="Segoe Fluent Icons" FontSize="15"
-                                              Foreground="{ThemeResource MayasabaBrandBrush}"/>
-                                    <TextBlock Text="Search saved user messages" Style="{StaticResource MayasabaSectionText}"
-                                               AutomationProperties.HeadingLevel="Level2"/>
-                                </StackPanel>
-                                <Button x:Name="CloseSearchButton" Grid.Column="1" Click="OnCloseSearch"
-                                        Padding="10,6" CornerRadius="{StaticResource MayasabaRadiusControl}"
-                                        AutomationProperties.Name="Close search overlay (Escape)">
-                                    <FontIcon Glyph="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
-                                </Button>
-                            </Grid>
-
-                            <!-- Query input row -->
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBox x:Name="MessageSearchBox"
-                                         PlaceholderText="Search saved user messages in this project..."
-                                         TextChanged="OnSearchQueryChanged"
-                                         PreviewKeyDown="OnSearchBoxKeyDown"
-                                         AutomationProperties.Name="Search query input"/>
-                                <Button x:Name="ClearSearchButton" Grid.Column="1" Click="OnClearSearchQuery"
-                                         Content="Clear" Visibility="Collapsed" Padding="12,6"
-                                         CornerRadius="{StaticResource MayasabaRadiusControl}"
-                                         AutomationProperties.Name="Clear search query"/>
-                            </Grid>
-
-                            <!-- Search status label -->
-                            <TextBlock x:Name="SearchStatusText" Text="Type a query to search confirmed saved user messages."
-                                       Style="{StaticResource MayasabaMicroText}"
-                                       Foreground="{ThemeResource MayasabaMutedBrush}"
-                                       AutomationProperties.LiveSetting="Polite"/>
-
-                            <!-- Search results list -->
-                            <ListView x:Name="SearchResultsList" MaxHeight="280"
-                                      SelectionMode="None" IsItemClickEnabled="True"
-                                      ItemClick="OnSearchResultItemClick"
-                                      ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                      HorizontalContentAlignment="Stretch"
-                                      AutomationProperties.Name="Search results"/>
-
-                            <!-- Load more button -->
-                            <Button x:Name="SearchLoadMoreButton" Click="OnSearchLoadMore"
-                                    Content="Load more results" Visibility="Collapsed"
-                                    HorizontalAlignment="Center" Padding="14,6"
-                                    CornerRadius="{StaticResource MayasabaRadiusControl}"
-                                    AutomationProperties.Name="Load more matching messages"/>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Dismissible Attachment Preview & Metadata Inspection Panel -->
-                    <Border x:Name="AttachmentPreviewPanel" Grid.Row="0" Grid.RowSpan="4"
-                            VerticalAlignment="Top" HorizontalAlignment="Center"
-                            MaxWidth="760" Margin="18,10,18,0"
-                            Visibility="Collapsed" Canvas.ZIndex="21"
-                            Style="{StaticResource MayasabaCardSurface}"
-                            Padding="16"
-                            BorderBrush="{ThemeResource MayasabaBrandBrush}" BorderThickness="1.5"
-                            AutomationProperties.AutomationId="AttachmentPreviewPanel"
-                            AutomationProperties.Name="Attachment preview panel">
-                        <StackPanel Spacing="10">
-                            <!-- Preview header row -->
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                                    <FontIcon Glyph="&#xE8A5;" FontFamily="Segoe Fluent Icons" FontSize="15"
-                                              Foreground="{ThemeResource MayasabaBrandBrush}"/>
-                                    <TextBlock x:Name="AttachmentPreviewTitle" Text="Attachment preview" Style="{StaticResource MayasabaSectionText}"
-                                               AutomationProperties.HeadingLevel="Level2"/>
-                                </StackPanel>
-                                <Button x:Name="ClosePreviewButton" Grid.Column="1" Click="OnCloseAttachmentPreview"
-                                        Padding="10,6" CornerRadius="{StaticResource MayasabaRadiusControl}"
-                                        AutomationProperties.Name="Close attachment preview (Escape)">
-                                    <FontIcon Glyph="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
-                                </Button>
-                            </Grid>
-
-                            <!-- Attachment metadata string -->
-                            <TextBlock x:Name="AttachmentPreviewMeta"
-                                       Style="{StaticResource MayasabaMicroText}"
-                                       Foreground="{ThemeResource MayasabaMutedBrush}"
-                                       TextWrapping="Wrap"
-                                       AutomationProperties.Name="Attachment metadata"/>
-
-                            <!-- Content preview text box (bounded to text files <= 10 MiB, English-safe UTF-8) -->
-                            <ScrollViewer x:Name="AttachmentPreviewContentScroller" MaxHeight="320"
-                                          HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
-                                          Visibility="Collapsed">
-                                <TextBox x:Name="AttachmentPreviewContentBox" IsReadOnly="True"
-                                         AcceptsReturn="True" TextWrapping="Wrap"
-                                         FontFamily="Consolas" FontSize="12"
-                                         AutomationProperties.Name="Attachment text content"/>
-                            </ScrollViewer>
-
-                            <!-- Notice when content preview is unavailable or bounded -->
-                            <TextBlock x:Name="AttachmentPreviewUnavailableNotice"
-                                       Style="{StaticResource MayasabaMicroText}"
-                                       Foreground="{ThemeResource MayasabaAmberBrush}"
-                                       TextWrapping="Wrap" Visibility="Collapsed"
-                                       AutomationProperties.Name="Attachment preview status"/>
-                        </StackPanel>
-                    </Border>
 
                     <ScrollViewer x:Name="HistoryScroller" Grid.Row="0" Visibility="Collapsed"
                                   HorizontalScrollBarVisibility="Disabled"
@@ -984,6 +964,72 @@
                         </Grid>
                     </StackPanel>
                 </Grid>
+
+            <!-- Dismissible Attachment Preview & Metadata Inspection Panel.
+                 It is a child of ChatScreen, not of ChatBody, because ChatBody's rows are
+                 sized by their content: a content-height child spanning them is given only
+                 the height they leave over, which is nothing, so the panel would collapse
+                 and take its own controls out of reach. Declared here it occupies
+                 ChatScreen's star row, which has a height before its child is measured.
+                 This is a structural correction only: the attachment-inspect fail-fast
+                 (E_LAYOUTCYCLE, see native/LOCAL-VALIDATION.md section 19) reproduces
+                 identically with the panel in either position, so moving it did not fix
+                 that defect and must not be read as having done so. -->
+            <Border x:Name="AttachmentPreviewPanel" Grid.Row="1"
+                    VerticalAlignment="Top" HorizontalAlignment="Center"
+                    MaxWidth="760" Margin="18,10,18,0"
+                    Visibility="Collapsed" Canvas.ZIndex="21"
+                    Style="{StaticResource MayasabaCardSurface}"
+                    Padding="16"
+                    BorderBrush="{ThemeResource MayasabaBrandBrush}" BorderThickness="1.5"
+                    AutomationProperties.AutomationId="AttachmentPreviewPanel"
+                    AutomationProperties.Name="Attachment preview panel">
+                <StackPanel Spacing="10">
+                    <!-- Preview header row -->
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <FontIcon Glyph="&#xE8A5;" FontFamily="Segoe Fluent Icons" FontSize="15"
+                                      Foreground="{ThemeResource MayasabaBrandBrush}"/>
+                            <TextBlock x:Name="AttachmentPreviewTitle" Text="Attachment preview" Style="{StaticResource MayasabaSectionText}"
+                                       AutomationProperties.HeadingLevel="Level2"/>
+                        </StackPanel>
+                        <Button x:Name="ClosePreviewButton" Grid.Column="1" Click="OnCloseAttachmentPreview"
+                                Padding="10,6" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                AutomationProperties.Name="Close attachment preview (Escape)">
+                            <FontIcon Glyph="&#xE711;" FontFamily="Segoe Fluent Icons" FontSize="12"/>
+                        </Button>
+                    </Grid>
+
+                    <!-- Attachment metadata string -->
+                    <TextBlock x:Name="AttachmentPreviewMeta"
+                               Style="{StaticResource MayasabaMicroText}"
+                               Foreground="{ThemeResource MayasabaMutedBrush}"
+                               TextWrapping="Wrap"
+                               AutomationProperties.Name="Attachment metadata"/>
+
+                    <!-- Content preview text box (bounded to text files <= 10 MiB, English-safe UTF-8) -->
+                    <ScrollViewer x:Name="AttachmentPreviewContentScroller" MaxHeight="320"
+                                  HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                                  Visibility="Collapsed">
+                        <TextBox x:Name="AttachmentPreviewContentBox" IsReadOnly="True"
+                                 AcceptsReturn="True" TextWrapping="Wrap"
+                                 FontFamily="Consolas" FontSize="12"
+                                 AutomationProperties.Name="Attachment text content"/>
+                    </ScrollViewer>
+
+                    <!-- Notice when content preview is unavailable or bounded -->
+                    <TextBlock x:Name="AttachmentPreviewUnavailableNotice"
+                               Style="{StaticResource MayasabaMicroText}"
+                               Foreground="{ThemeResource MayasabaAmberBrush}"
+                               TextWrapping="Wrap" Visibility="Collapsed"
+                               AutomationProperties.Name="Attachment preview status"/>
+                </StackPanel>
+            </Border>
+
             <!-- Source-linked Action Center detail. It is a temporary dismissible
                  sheet rather than an in-place expansion of the card: the card lives
                  in the auto-sized Chat header, and on a short window the header has

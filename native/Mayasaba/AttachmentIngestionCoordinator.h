@@ -314,6 +314,50 @@ namespace mayasaba
             }
         }
 
+        // What a batch that outlived the view that requested it must be reported as.
+        // A write that completed leaves durable records under the project that was
+        // current when the batch ran, so those files exist even though nothing was
+        // added to the current draft. A write that was never attempted genuinely
+        // added nothing. Callers must distinguish the two: reporting a persisted
+        // batch as "nothing was added" denies records that exist, and reporting a
+        // cancelled one as persisted invents them.
+        enum class StaleCompletionReport
+        {
+            NothingPersisted,
+            PersistedUnderPreviousProject
+        };
+
+        // Classified from the two facts the caller owns: whether this batch's own
+        // write was attempted (the commit plan allowed persistence) and whether it
+        // completed. A failed write is a PersistenceFailed, never a stale completion,
+        // so for this classification it persisted nothing durable.
+        static StaleCompletionReport ClassifyStaleCompletion(bool saveAttempted, bool saveSucceeded)
+        {
+            if (saveAttempted && saveSucceeded)
+            {
+                return StaleCompletionReport::PersistedUnderPreviousProject;
+            }
+            return StaleCompletionReport::NothingPersisted;
+        }
+
+        // Which draft set survives a recovery that could not complete cleanly. A
+        // reload that succeeded is the durable truth and is kept even when
+        // reclamation of abandoned preparation failed: the cleanup failure is
+        // reported, not paid for with the user's attachments. A reload that failed
+        // falls back to the snapshot taken before the batch, because an unreadable
+        // store must not be allowed to hide the chips the draft already had.
+        static std::vector<AttachmentCandidate> ResolveRecoveryDrafts(
+            std::vector<AttachmentCandidate> reloadedDrafts,
+            bool reloadSucceeded,
+            bool reclaimSucceeded,
+            std::vector<AttachmentCandidate> const& previousSnapshot)
+        {
+            // A cleanup failure changes which staged files were reclaimed; it does not
+            // change what the draft list is. Only the reload's outcome selects the set.
+            (void)reclaimSucceeded;
+            return reloadSucceeded ? reloadedDrafts : previousSnapshot;
+        }
+
         template <typename SaveFn>
         static bool ValidateAndCommitPreparedBatch(
             DropContext const& ctx,

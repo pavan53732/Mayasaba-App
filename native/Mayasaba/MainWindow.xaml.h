@@ -118,6 +118,34 @@ namespace winrt::Mayasaba::implementation
         Microsoft::UI::Xaml::Controls::Control searchReturnFocus_{nullptr};
         void OpenSearch();
         void CloseSearch();
+        // The overlay is a flat surface. These two keep it that way: the first
+        // restores the resting presentation (opaque, untranslated, unrotated) and
+        // publishes it, the second bounds its height to the space that is really
+        // free above the composer.
+        // `publish` is false while the entrance transition is about to start: the
+        // panel must not report "resting" for the instant before it reveals.
+        void ResetSearchOverlayPresentation(bool publish = true);
+        void UpdateSearchOverlayLayout();
+        // `state` is "resting" when the panel has settled at its resting presentation
+        // and "revealing" while the entrance transition is running.
+        void PublishSearchOverlayPresentation(std::wstring const& state);
+        // Publishes the hero's declared resting orientation for the hero art, so the
+        // hero's perspective stays observable independently of the overlay.
+        void PublishHeroOrientation(Microsoft::UI::Xaml::FrameworkElement const& element,
+                                    std::wstring const& label);
+        // The overlay's published state and the layout numbers behind its height
+        // bound. They travel with the surface's own status so a reader can tell a
+        // deliberately bounded panel from a collapsed one.
+        std::wstring searchOverlayState_{L"resting"};
+        std::wstring searchOverlayLayoutMetrics_{};
+        // The Chat screen's own layout measurements, published with the overlay so
+        // a reader can see which row took the space.
+        std::wstring PublishChatLayoutMetrics();
+        // Measures the overlay against the settled screen geometry. The
+        // measurement is taken twice: once during the layout pass that triggered
+        // it, and once on the dispatcher queue after the layout has settled.
+        void ApplySearchOverlayLayout();
+        bool searchOverlayLayoutQueued_{false};
         winrt::fire_and_forget ExecuteSearchAsync(mayasaba::SearchPageRequest req);
         void RenderSearchResults(bool isAppend);
         void NavigateToMessage(std::string const& submissionId);

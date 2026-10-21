@@ -1789,4 +1789,179 @@ The Phase 9 focus assertion now re-establishes foreground first, polls focus for
 4. The corrected-harness runs, the controlled mutation and its restored-state rerun were executed with a concurrent agent's uncommitted edits **compiled into** the tested binary `40C79F1D…` (see the identity correction in §18.1). Those edits change zero lines in the navigation or details-focus paths under test, but the tested binary is not a build of committed `fb00748` source. The flake runs used `9FF21B88…`, which does predate those edits. A reader must not combine a flake-run result and a corrected-run result as though one artifact produced both.
 5. The controlled mutation proves the Phase 4 assertion discriminates an unsatisfiable postcondition. It does not reproduce the original intermittent race, and the Phase 9 focus assertion has no equivalent mutation recorded here; its corrected behavior rests on the four clean runs and on the foreground measurement in §18.3.
 
+## 19. UI acceptance harness, second pass: attachment-preview layout cycle, scroll-oracle correction, complete run (2026-10-21)
+
+### 19.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Source revision | `1835b656d5529abf281faa7af84f7a6db07fa481` **plus uncommitted working-tree changes** (see build hygiene below). This record does not describe a build of committed source. |
+| Application binary, bisection runs (§19.4) | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, one distinct SHA-256 per variant: `c03e96f3…79848` (A–E), `afd1d071…514ff` (F), `183caf1a…a1602` (G, H), `40833c5d…ad708` (I), `1492f7c0…e9b02` (L), `fe891509…e792` (M). Each row of §19.4 is a separate link. |
+| Application binary, final run (§19.7) | `Mayasaba.exe`, SHA-256 `c8c1d1eb9840f21fba1a0d5c00d16245aaf22a592bb1b82582a413ac4ef08294`, relinked 19:55:06 |
+| Compiled XAML, bisection runs and final run | `MainWindow.xbf`, SHA-256 `fd1b3c02a71f21f564b3b6d6e1f4d54122860f5b6fce9c52cdd7477272862e6d` — **identical in all thirteen binaries**, so no XAML separates any of them and every behavioural difference in §19.4 is a code difference |
+| Compiled XAML, earlier runs of the same day | `09b1b911…5b94`, `f1790d9e…8879`, `2c3ac199…021e`, `c1e76bbc…aaa8`. The XBF changes once, at run `1902`, when the preview panel was moved from `ChatBody` to `ChatScreen`; it is constant from that run onward. Runs before `1902` are not comparable to runs after it and no claim here combines them. |
+| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 100% scaling |
+| Build hygiene | Thirteen builds were issued by this assignment, one per variant plus the final restoration. Each variant was a single-file edit to `MainWindow.xaml.cpp`, rebuilt, run, and reverted before the next. The final binary is a build of the working tree with **all instrumentation removed**; `grep -n "cstdio\|TracePreviewStep\|PreviewVariantChar\|MAYASABA_PREVIEW_VARIANT\|_dupenv_s\|traceHooked\|preview-trace"` over `MainWindow.xaml.cpp` returns no match on the shipped file. |
+
+**Why a per-variant binary matters.** A WinUI 3 XBF is compiled from XAML, and XAML comments are compiled into it. A comment-only XAML edit therefore changes `MainWindow.xbf` while `Mayasaba.exe` can stay byte-identical, so a run cannot be carried across that boundary. The reverse also holds and is what makes §19.4 readable: a `.cpp`-only edit leaves the XBF byte-identical (verified at `fd1b3c02…` across all thirteen builds), so the XBF column being constant is positive evidence that the variants differ only in the code path under test.
+
+### 19.2 What was reported, and what the binary does
+
+The inherited report was that inspecting a non-English attachment does not show the withholding notice — criterion 14 fails, and the preview panel appears never to open. That description is accurate as an observation and misleading as a diagnosis: the panel does not fail to open, it opens and then **the process fail-fasts**.
+
+Measured on the final binary, the sequence at Phase 10.3 is: the attachment chip realizes and its inspect button is invocable (`PASS: Attachment chip realized with inspect button 'Inspect hola_mundo.txt'.`), the inspect is invoked, three notice samples are taken over 6.3 s and every one reports `element=MISSING`, the panel is then read directly and reports `AttachmentPreviewPanel visible for non-English inspection: False`, and the next phase finds `BLOCKED: the application had already exited (0xC000027B)`. The two FAIL strings are the two halves of that:
+
+```
+FAIL: The preview panel never opened, so no withholding was demonstrated.
+FAIL: The notice surface did not report the withholding. element_found=False, texts=[]
+```
+
+Criterion 14 is therefore an explicit **FAIL**, not a PASS and not an INCONCLUSIVE: the stimulus was delivered, the harness stayed alive long enough to look, and what it found was a dead window.
+
+### 19.3 The failure signature, and why the trace ends
+
+`App.xaml.cpp` registers `Application::UnhandledException` and appends `hresult=0x%08X | message=…` to `%LOCALAPPDATA%\Mayasaba\unhandled-exception.log` while leaving `Handled` false. That log holds **16 entries** for the day, every one of them identical in kind:
+
+```
+hresult=0x802B0014 | message=Layout cycle detected.  Layout could not complete.
+```
+
+timestamps `18:35:21, 18:56:18, 19:03:54, 19:08:51, 19:14:04, 19:20:07, 19:22:28, 19:24:44, 19:27:04, 19:29:35, 19:33:22, 19:36:59, 19:39:18, 19:46:50, 19:52:12, 19:57:51`. One entry per crashing run, no run produced two. `E_LAYOUTCYCLE` (`0x802B0014`) is raised into the app's unhandled-exception path, which WinRT turns into `STATUS_STOWED_EXCEPTION` (`0xC000027B`) — the exit code the harness records.
+
+**`LayoutUpdated` is not raised when the layout pass throws.** This is the single most important diagnostic fact in this section, because it inverts the obvious reading of the trace. A run that was instrumented to append one line per `LayoutUpdated` produced this on variant `M`, verbatim from `%LOCALAPPDATA%\Mayasaba\preview-trace.log`:
+
+```
+[19:52:06.042] variant=M
+[19:52:06.049] branch=content: enter
+[19:52:06.055] branch=content: box text set
+[19:52:06.062] branch=content: scroller visible
+[19:52:06.068] branch=content: notice collapsed
+[19:52:06.075] panel: before visible
+[19:52:06.080] panel: after visible
+[19:52:06.087] panel: after focus
+[19:52:06.104] layout pass 1: panel=616.0x136.8 notice=0.0x0.0 scroller=580.8x41.6
+[19:52:06.128] layout pass 2: panel=616.8x136.8 notice=0.0x0.0 scroller=581.6x41.6
+…   passes 3–33 identical: panel=616.8x136.8 notice=0.0x0.0 scroller=581.6x41.6
+[19:52:12.256] variant=M
+[19:52:12.263] branch=notice: enter
+[19:52:12.270] layout pass 34: panel=616.8x136.8 notice=0.0x0.0 scroller=581.6x41.6
+[19:52:12.277] branch=notice: box text cleared
+[19:52:12.283] branch=notice: scroller collapsed
+[19:52:12.290] branch=notice: notice text set
+[19:52:12.296] branch=notice: notice visible
+[19:52:12.303] panel: before visible
+[19:52:12.309] panel: after visible
+[19:52:12.317] panel: after focus
+```
+
+Three things in that excerpt are load-bearing:
+
+1. **Pass 34 fires between `branch=notice: enter` and `branch=notice: box text cleared`** — that is, *before the branch has set a single property*. A layout pass can therefore run synchronously inside this method, between two statements, not only at a dispatcher turn.
+2. **The trace stops at `panel: after focus` and there is no pass 35**, while `0x802B0014` is written in the same second. The failure is a **gap in the trace, not a repeated line**: the pass that throws never reaches `LayoutUpdated`, so it cannot log. A reader who expects "a cycle looks like the same numbers over and over" will misread this log as a hang.
+3. **Pass 34 reports `panel=616.8x136.8` while the panel is collapsed.** A collapsed WinUI element retains its last measured size, so these figures are retained geometry, not a visibility reading. Any figure read from this trace while the panel is hidden must be described as retained, and no visibility claim may be inferred from it.
+
+### 19.4 The bisection: twelve instrumented builds
+
+Each variant is one edit to `MainWindow::InspectAttachmentAsync` (`native/Mayasaba/MainWindow.xaml.cpp:2554`) or to `MainWindow::CloseAttachmentPreview` (`:2649`), rebuilt and run through the whole harness. Verdict counts are the harness's own summary line; the crash column is whether the process fail-fasted during the run.
+
+| Variant | Evidence dir | Shape under test | P / I / F / B / NR | Crashed |
+| --- | --- | --- | --- | --- |
+| A | `1930-varA` | baseline: production notice branch | 15/3/1/1/0 | yes |
+| B | `1934-varB` | notice `TextWrapping::NoWrap` | 15/3/1/1/0 | yes |
+| C | `1938-varC` | content scroller left `Visible` | 14/3/1/2/0 | yes |
+| D | `1942-varD` | no programmatic focus | 14/3/2/1/0 | yes |
+| E | `1945-varE` | notice left `Collapsed` | 15/3/1/1/0 | yes |
+| F | `1952-varF` | box text not cleared — **confounded, see below** | 15/3/1/1/0 | yes |
+| G | `1957-varG` | **no child touched at all, only re-show the panel** | 15/3/1/1/0 | yes |
+| H | `2001-varH` | **all child mutations done, panel never shown** | 14/3/2/1/0 | yes |
+| I | `2006-varI` | `co_return` before the branch is entered | 15/3/2/0/0 | **no** |
+| L | `2012-varL` | notice branch taken on **every** inspection | 14/3/2/1/0 | 1st inspection clean / 2nd crashed |
+| M | `2022-varM` | dismissal leaves the hidden child untouched | 15/3/1/1/0 | yes |
+| — | `2026-final` | production shape restored, instrumentation removed | 15/3/1/1/0 | yes at 10.3 |
+
+Read as a whole, the table eliminates the whole of the branch's content and the visibility change as necessary conditions:
+
+| Hypothesis | Variant | Measurement | Result |
+| --- | --- | --- | --- |
+| A child mutation in the notice branch causes the cycle | G | Panel re-shown with **no child property set at all** | **Refuted.** Still crashed. Nothing the branch sets is necessary. |
+| Making the panel visible causes the cycle | H | All mutations performed, `Visibility` never set | **Refuted.** Still crashed. Showing the panel is not necessary either. |
+| Something outside the preview subtree causes the cycle | I | `co_return` before the branch is entered | **Refuted as a complete explanation.** No crash — and this run is the only one of the twelve with `Blocked: 0`, because the process survived to the end. Some invalidation of this subtree *is* required. |
+| The stale `Text(L"")` on the collapsed box during dismissal causes it | M | Dismissal leaves the hidden child untouched | **Refuted.** Still crashed. |
+| A wrapped `TextBlock` notice inside a content-height `Border`, with the scroller collapsed, is the cyclic shape | L | The **same** branch, **same** content, **same** mutations, run on a first inspection | **Refuted.** It settled to **28 stable layout passes** at `panel=341.6x109.6 notice=65.8x13.8 scroller=0.0x0.0` and then crashed on the **second** inspection with **zero** layout passes. The shape is not inherently cyclic; the discriminator is prior state. |
+
+**Variant F is recorded as confounded, not as evidence.** Its intended shape was "leave the content box's text in place", but `CloseAttachmentPreview()` already clears `AttachmentPreviewContentBox().Text(L"")` during Phase 10.2's Escape, so the box was empty before the variant could preserve anything. F tested nothing F did not intend to test, and it is listed for completeness of the run record, not as a refutation.
+
+**The narrowed statement.** Any re-measure of `AttachmentPreviewPanel` **after it has been laid out once and then collapsed** raises `E_LAYOUTCYCLE`, and there are **two independent sufficient routes** to it: a child mutation while the panel is hidden (G, H), and a re-show with no child mutation at all (M). Neither route is necessary on its own, which is why removing either one changed nothing.
+
+### 19.5 What the structure is, and why the structure is not the diagnosis
+
+The element tree under test, `native/Mayasaba/MainWindow.xaml:978–1031`:
+
+```xml
+<Border x:Name="AttachmentPreviewPanel" Grid.Row="1" MaxWidth="760"
+        Visibility="Collapsed" Canvas.ZIndex="21" Padding="16" …>
+    <StackPanel Spacing="10">
+        <Grid ColumnSpacing="12"> … ClosePreviewButton … </Grid>
+        <TextBlock x:Name="AttachmentPreviewMeta" TextWrapping="Wrap" …/>
+        <ScrollViewer x:Name="AttachmentPreviewContentScroller" MaxHeight="320"
+                      Visibility="Collapsed">
+            <TextBox x:Name="AttachmentPreviewContentBox" TextWrapping="Wrap" …/>
+        </ScrollViewer>
+        <TextBlock x:Name="AttachmentPreviewUnavailableNotice"
+                   TextWrapping="Wrap" Visibility="Collapsed" …/>
+    </StackPanel>
+</Border>
+```
+
+A content-driven `StackPanel` containing a wrapped `TextBlock`, a `MaxHeight`-bounded `ScrollViewer`, and a second wrapped `TextBlock` whose visibility is toggled is the classic shape in which two measures each change the other's input: the scroller's `MaxHeight` depends on how much height the wrapped notice needs, and the notice's wrapped height depends on the width the scroller leaves. That is a genuinely suspicious shape and it is why it was tested first. Variant `L` is what makes the suspicion insufficient: the identical shape converged to 28 stable passes on a first inspection. The shape is necessary for the *failure to be reachable*, and it is not sufficient to produce it.
+
+### 19.6 The scroll-oracle correction (criteria 16–18)
+
+The inherited report was that the saved-message search overlay's results list does not scroll at 640×480 but does at 1440×740, and does at 640×480 if the tall size is loaded first — a state-dependent signature. **The list scrolls at both sizes. The oracle was wrong, and no application change was made.**
+
+The old oracle compared each realized result item's top edge before and after the wheel. At 640×480 the list's viewport is 54 px and a result card is taller than that, so the single realized item is clipped to the viewport and keeps filling it exactly while the content beneath it moves: the rect is `T294 H54` before and after. A rect-only oracle therefore reports a list that scrolls as a list that does not, and the "works at the tall size" observation is explained by the viewport being taller than one card there.
+
+The corrected oracle (`native/tests/test_full_ui_acceptance.py:1699–1730`) reads the list's own `UIA_ScrollPattern` offset **and** compares realized-item identity, polls the offset for up to 5 s at 100 ms rather than sampling once, and treats "offset static but realized content changed" as a third outcome that is logged rather than passed. On the final binary the short-height leg records:
+
+```
+NOTE: the results list's viewport is 54px at 640x480; a result card is taller than
+that, so less than one full card is visible at rest. UX-28 requires the short window
+to remain usable and names no list minimum.
+Scroll offset before the wheel: (0.0, 3.0927835051546393)
+Scroll offset after the wheel: (2.859042553191489, 3.0927835051546393)
+PASS: The bounded results list scrolls at the short window height (offset 0.000% -> 2.859%).
+PASS: The narrow window keeps the overlay, its scrolling list and the paging action inside the window.
+```
+
+The tuple is `(vertical, horizontal)` — index 0 is the vertical percent — so the wheel moved the list vertically from 0.000% to 2.859% and left the horizontal offset untouched. A separate diagnostic measured twelve notches advancing the same offset 0.000% → 5.585% in twelve distinct steps while the realized item's rect stayed `T294 H54`, which is the same effect at twice the notch count.
+
+### 19.7 Criteria for this assignment
+
+Full harness run, evidence dir `native/tests/evidence/ui-acceptance-20261021-2026-final`, `EXIT=1` after 2 m 17 s, log 317 lines, `artifact-identity.json` and `harness-run.log` both written, `Cleanup complete.` reached at line 317 — the run was not abandoned mid-way.
+
+| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
+| --- | --- | --- | --- | --- | --- |
+| N-01 | The reported list-scroll defect is a product defect. | Native run | Short-height leg: offset `0.000%` → `2.859%` under a wheel, 54 px viewport. The old rect-only oracle saw `T294 H54` before and after. | **FAIL (report refuted)** | One window size and one store state. The report is refuted for 640×480; no claim is made about other heights. |
+| N-02 | The corrected scroll oracle detects a non-scrolling list. | Oracle inspection | It fails on `offset_after[0] <= offset_before[0]` **and** unchanged realized identity, and logs the intermediate case separately. | PASS | Not proved by a controlled mutation, unlike §18's H-06. The three-way branch is read, not forced. |
+| N-03 | The attachment-inspect fail-fast is reproducible. | Native run | 15 of 16 harness runs of the day crashed; `unhandled-exception.log` holds 16 `0x802B0014` entries with one per run. | PASS | Reproduction is on one machine, one build configuration, one display scale. |
+| N-04 | The fail-fast is caused by the notice branch's child mutations. | Controlled variant | G (no child mutated) crashed; H (no `Visibility` set) crashed. | **FAIL (refuted)** | Refutes the branch content as a necessary cause; does not identify the actual one. |
+| N-05 | The fail-fast is caused by making the panel visible. | Controlled variant | H performed every mutation and never set `Visibility`; still crashed. | **FAIL (refuted)** | As above. |
+| N-06 | The fail-fast requires invalidation of the preview subtree. | Controlled variant | I (`co_return` before the branch) did not crash and is the only run with `Blocked: 0`. | PASS | Shows a requirement, not a mechanism. |
+| N-07 | The notice shape is cyclic on its own. | Controlled variant | L: 28 stable passes on inspection 1, zero on inspection 2, same shape and same content. | **FAIL (refuted)** | The discriminator is prior state; which state is not established. |
+| N-08 | The production binary produces the same failure as the variants. | Native run | `2026-final`, `c8c1d1eb…`, instrumentation removed: crash at Phase 10.3. | PASS | Confirms the variants were measuring the shipped shape. |
+| N-09 | Criterion 14 is a real product failure. | Native run | `FAIL: The preview panel never opened…` / `FAIL: The notice surface did not report the withholding. element_found=False, texts=[]` | **FAIL** | The user-visible symptom is "no notice"; the cause is a process death, not a suppressed notice. |
+| N-10 | Criterion 13 passes on the shipped binary. | Native run | `13. Seeded Attachment Chip Realization & Diagnostics [PASS]` | PASS | Its FAIL on variant L is an artifact of forcing the notice branch on every inspection, not a product state. |
+| N-11 | Criteria 11, 12 and 19 are genuinely unevidenced. | Native run | `ole_drop.exe exit code: 4`, `WATCHDOG: DoDragDrop modal loop timed out under OS environment.`, `dropped records count: 0`; hero perspective unmeasured. | PASS (as INCONCLUSIVE) | The drop helper cannot complete under this OS environment, so the criterion is not reachable by this harness at all. |
+| N-12 | Criterion 15 is BLOCKED rather than FAIL. | Native run | `BLOCKED: the application had already exited (0xC000027B) when profiling was due to start.` | PASS (as BLOCKED) | No stimulus was applied, so no measurement exists. It must not be read as a performance result. |
+
+### 19.8 What this record does not claim
+
+1. **The fail-fast is not fixed.** It reproduces on the shipped binary. `MainWindow.xaml.cpp` carries a `KNOWN OPEN DEFECT` comment at the show site and `MainWindow.xaml` carries the structural-correction comment, both pointing here; neither is a repair.
+2. **The originally reported Phase 10.2 defect is not claimed fixed.** It was never reproduced against a current binary, so there is nothing to have fixed.
+3. **Which measure loop fails to converge, and why, is unknown.** The throwing pass raises no `LayoutUpdated`, and no debugger is installed on this machine (`cdb` and `windbg` are both absent; only `devenv` is present), which is the concrete reason the stack was never symbolised. Crash dumps do exist at `%LOCALAPPDATA%\CrashDumps\Mayasaba.exe.<pid>.dmp` (about 21 MB each, one per crash), but symbolising a WER-style minidump is not a shortcut to the answer: the stowed-exception array lives on the faulting thread's stack, which such a dump does not capture, and the linker map is too sparse to resolve a return address inside a static-library region. Answering this needs a debugger attached at the throw, which this machine does not have.
+4. **Moving the panel from `ChatBody` to `ChatScreen` did not fix anything.** It is recorded as a structural correction only, because a content-height child spanning a content-sized grid's rows is given only the height those rows leave over — nothing — and would collapse. The fail-fast reproduces identically in either position.
+5. **The Phase 4 File-flyout flake is untouched.** One occurrence in five runs, not reproducible in isolation, and deliberately not given a retry, a sleep, or a keyboard fallback: §18 established that the keyboard fallback is unreachable dead code, so re-adding one would convert an unreachable control into a reported switch failure. It remains open.
+6. **Every run in §19.4 is a build of a dirty working tree.** The tested binaries contain the uncommitted changes listed in the commit that introduces this section, not committed source alone. A reader must not treat any figure here as a property of committed `1835b656`.
+7. **A PASS from this harness is not evidence for anything the phases do not assert.** Fifteen of twenty criteria pass; that says nothing about the five that do not, and the run exits non-zero for exactly that reason.
+
 

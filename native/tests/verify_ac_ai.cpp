@@ -2185,6 +2185,98 @@ int main()
         CASES_END();
     }
 
+    // -------------------------------------------------------------------------
+    // Test 13: A failed recovery must not hide the attachments the draft had
+    // -------------------------------------------------------------------------
+    {
+        CASES_BEGIN("Test 13: Failed recovery preserves prior drafts or retains reload results");
+
+        auto makeSlot = [](std::string const& id, std::wstring const& path, std::string const& name) {
+            mayasaba::AttachmentCandidate c;
+            c.id = id;
+            c.fileName = name;
+            c.originalPath = path;
+            c.status = mayasaba::AttachmentStatus::Ready;
+            return c;
+        };
+
+        std::vector<mayasaba::AttachmentCandidate> const previous = {
+            makeSlot("existing-1", L"C:/src/first.txt", "first.txt"),
+            makeSlot("existing-2", L"C:/src/second.txt", "second.txt")
+        };
+
+        // 13.1 A reload that failed falls back to the snapshot from before the batch, so
+        // an unreadable store cannot hide the chips the draft already had.
+        {
+            auto const result = mayasaba::AttachmentIngestionCoordinator::ResolveRecoveryDrafts(
+                {}, false, true, previous);
+            EXPECT(result.size() == previous.size());
+            EXPECT(result[0].id == "existing-1");
+            EXPECT(result[1].id == "existing-2");
+        }
+
+        // 13.2 A cleanup failure does not invalidate a reload that succeeded: the reloaded
+        // truth is the set that survives, and the cleanup failure is reported instead.
+        {
+            std::vector<mayasaba::AttachmentCandidate> reloaded = {
+                makeSlot("existing-1", L"C:/src/first.txt", "first.txt"),
+                makeSlot("reloaded-2", L"C:/src/third.txt", "third.txt")
+            };
+            auto const result = mayasaba::AttachmentIngestionCoordinator::ResolveRecoveryDrafts(
+                reloaded, true, false, previous);
+            EXPECT(result.size() == 2);
+            EXPECT(result[0].id == "existing-1");
+            EXPECT(result[1].id == "reloaded-2");
+        }
+
+        // 13.3 A fully successful recovery keeps the reloaded truth unchanged.
+        {
+            std::vector<mayasaba::AttachmentCandidate> reloaded = {
+                makeSlot("reloaded-1", L"C:/src/only.txt", "only.txt")
+            };
+            auto const result = mayasaba::AttachmentIngestionCoordinator::ResolveRecoveryDrafts(
+                reloaded, true, true, previous);
+            EXPECT(result.size() == 1);
+            EXPECT(result[0].id == "reloaded-1");
+        }
+
+        // 13.4 Both failed: the snapshot still stands, because nothing readable
+        // replaced it.
+        {
+            auto const result = mayasaba::AttachmentIngestionCoordinator::ResolveRecoveryDrafts(
+                {}, false, false, previous);
+            EXPECT(result.size() == previous.size());
+            EXPECT(result[1].id == "existing-2");
+        }
+
+        CASES_END();
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 14: A stale completion must not deny the write that completed
+    // -------------------------------------------------------------------------
+    {
+        CASES_BEGIN("Test 14: Stale completion distinguishes a persisted batch from a cancellation");
+        using Report = mayasaba::AttachmentIngestionCoordinator::StaleCompletionReport;
+
+        // 14.1 The write completed: the files exist as durable records under the previous
+        // project, so the completion may not claim nothing was added.
+        EXPECT(mayasaba::AttachmentIngestionCoordinator::ClassifyStaleCompletion(true, true) ==
+            Report::PersistedUnderPreviousProject);
+
+        // 14.2 The write was never attempted: nothing was added, and that is what must be
+        // said.
+        EXPECT(mayasaba::AttachmentIngestionCoordinator::ClassifyStaleCompletion(false, false) ==
+            Report::NothingPersisted);
+
+        // 14.3 An attempted write that failed persisted nothing durable; the caller turns
+        // that into a persistence failure rather than a stale completion.
+        EXPECT(mayasaba::AttachmentIngestionCoordinator::ClassifyStaleCompletion(true, false) ==
+            Report::NothingPersisted);
+
+        CASES_END();
+    }
+
     fs::remove_all(folder);
     // The summary is derived from the cases that actually ran, not a fixed count.
     auto const& cases = Cases();

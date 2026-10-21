@@ -355,6 +355,13 @@ namespace winrt::Mayasaba::implementation
         motion_.SetAnimationsEnabled(animationsEnabled_);
         ApplyHighContrast();
         ApplyHeroMotion(WelcomeScreen().Visibility() == Visibility::Visible);
+
+        // A live preference change cancels the effects it invalidates. The search
+        // overlay must never be left half-faded, half-slid or rotated by a reveal
+        // that is no longer permitted, so it is stopped and returned to its flat
+        // resting state whenever the animation permission is re-read.
+        motion_.Cancel(MessageSearchPanel());
+        ResetSearchOverlayPresentation();
     }
 
     // Reads the current Windows high-contrast setting and registers a live handler.
@@ -575,6 +582,33 @@ namespace winrt::Mayasaba::implementation
         setStage(EmptyHeroArt());
         if (auto const core = WelcomeHeroCoreTransform()) core.Rotation(decorative ? -8.0 : 0.0);
         if (auto const glyph = WelcomeHeroGlyphRotate()) glyph.Angle(decorative ? 8.0 : 0.0);
+
+        // The hero art keeps its sculpted resting orientation, and the status says
+        // so. The overlay fix removed the hero rotation from the surfaces the motion
+        // layer creates; this is the observation that the hero itself still has its
+        // perspective.
+        PublishHeroOrientation(WelcomeHeroMark(), L"welcome-hero");
+        PublishHeroOrientation(EmptyHeroMark(), L"empty-chat-hero");
+    }
+
+    // Publishes the hero's declared resting orientation as a read-only automation
+    // status. It is read from the hero's own transform, so it reports what the hero
+    // actually carries rather than what it is supposed to carry.
+    void MainWindow::PublishHeroOrientation(FrameworkElement const& element, std::wstring const& label)
+    {
+        if (!element) return;
+        double rotationX = 0.0;
+        double rotationY = 0.0;
+        double rotationZ = 0.0;
+        if (auto const transform = element.Transform3D().try_as<Microsoft::UI::Xaml::Media::Media3D::CompositeTransform3D>())
+        {
+            rotationX = transform.RotationX();
+            rotationY = transform.RotationY();
+            rotationZ = transform.RotationZ();
+        }
+        std::wstring status = label + L";resting_rotation=";
+        status += to_hstring(rotationX) + L"," + to_hstring(rotationY) + L"," + to_hstring(rotationZ);
+        Automation::AutomationProperties::SetItemStatus(element, status);
     }
 
     void MainWindow::CopyToClipboard(hstring const& text)
@@ -1077,17 +1111,30 @@ namespace winrt::Mayasaba::implementation
             double const nonCardHeader = headerHeight - cardHeight;
             double const composerReserve = ComposerHost().ActualHeight();
             double const available = chatHeight - nonCardHeader - composerReserve - 24.0;
-            // Floor keeps the card's Auto rows (title, status and actions) plus at least one
-            // list row intact; ceiling stops a tall window from handing the card the
-            // conversation. On a very short window the list is reduced to roughly one row —
-            // that is the real limit of the space, and Show details opens the full-height
-            // sheet for reading the whole set, so no item becomes unreachable.
-            double const cardCap = std::clamp(available, 150.0, 300.0);
-            if (ActionCenterPanel().MaxHeight() != cardCap)
+            // The card's chrome is the floor: its title, status, padding and
+            // spacing are what it needs to say anything at all, and the item list
+            // is the part that gives way. A short window therefore reduces the
+            // card to its chrome, and the card's status line still states what it
+            // found.
+            //
+            // When even the chrome does not fit, the card is bound to zero rather
+            // than clipped: a clipped card would hide the very obligations it
+            // exists to surface, while a collapsed one hides nothing that the
+            // card's own summary did not already say. The bound returns as soon
+            // as the window has the room again.
+            double const cardChrome = 88.0;
+            double const cardCap = std::clamp(available, 0.0, 300.0);
+            double const wanted = cardCap < cardChrome ? 0.0 : cardCap;
+            if (ActionCenterPanel().MaxHeight() != wanted)
             {
-                ActionCenterPanel().MaxHeight(cardCap);
+                ActionCenterPanel().MaxHeight(wanted);
             }
         }
+
+        // The saved-message search overlay is bounded by the space that is really
+        // free above the composer, so its results list scrolls on a short window
+        // and its paging action never ends up below the fold.
+        UpdateSearchOverlayLayout();
 
         if (bodyWidth <= 0 || bodyHeight <= 0) return;
 
@@ -1298,7 +1345,18 @@ namespace winrt::Mayasaba::implementation
 
         // Each concern has its own guard: an early return on one must never skip
         // the other, or a state set during startup can never be corrected later.
-        bool const stackReadiness = width < 900.0;
+        // The entries stack when the width really cannot hold them on one line.
+        // A fixed width threshold stacked them while there was still room for
+        // them, and the stacked entries cost the Chat header about forty pixels
+        // of height that the conversation needed on a short window.
+        double required = 0.0;
+        for (auto const& status : {HermesStatus(), KiloStatus(), ClaudeStatus()})
+        {
+            if (!status) continue;
+            required += status.DesiredSize().Width;
+        }
+        required += 2.0 * 15.0; // the spacing between the three entries
+        bool const stackReadiness = width <= 0.0 || width < required;
         if (stackReadiness != readinessStacked_)
         {
             readinessStacked_ = stackReadiness;
@@ -1359,6 +1417,16 @@ namespace winrt::Mayasaba::implementation
                 {
                     readiness.HorizontalAlignment(readinessStacked_ ? HorizontalAlignment::Left : HorizontalAlignment::Right);
                 }
+            }
+            // On a narrow header the readiness entries take row 2, so the Action
+            // Center card moves to its own row below them. Leaving the card in row 2
+            // put it on top of the readiness entries, and the two read as one
+            // overlapping surface.
+            if (auto card = ActionCenterPanel())
+            {
+                card.SetValue(Grid::RowProperty(), winrt::box_value(narrowHeader ? 3 : 2));
+                card.SetValue(Grid::ColumnProperty(), winrt::box_value(0));
+                card.SetValue(Grid::ColumnSpanProperty(), winrt::box_value(2));
             }
         }
     }
@@ -2062,6 +2130,12 @@ namespace winrt::Mayasaba::implementation
         // adopted only after the write succeeded.
         std::string saveError;
         bool committed = false;
+        // Whether this batch's own write was attempted and whether it completed. The
+        // stale-completion report is derived from these two facts: a batch that wrote
+        // its durable rows must not be reported as "nothing was added", and a batch
+        // whose write was never attempted genuinely added nothing.
+        bool saveAttempted = false;
+        bool saveSucceeded = false;
         using Coordinator = mayasaba::AttachmentIngestionCoordinator;
         Coordinator::BatchCommitPlan plan = Coordinator::PlanBatchCommit(
             dropCtx,
@@ -2080,6 +2154,7 @@ namespace winrt::Mayasaba::implementation
             std::string const persistProject = activeProject_;
             std::vector<mayasaba::AttachmentCandidate> const toPersist = plan.drafts;
             bool saveFailed = false;
+            saveAttempted = true;
             try
             {
                 co_await selectorQueue_.Background();
@@ -2090,6 +2165,7 @@ namespace winrt::Mayasaba::implementation
                 saveError = ex.what();
                 saveFailed = true;
             }
+            saveSucceeded = !saveFailed;
 
             if (!co_await resume_foreground(ui)) co_return;
 
@@ -2138,7 +2214,14 @@ namespace winrt::Mayasaba::implementation
                 }
                 RenderAttachmentChips();
                 UpdateComposerState();
-                ShowNotice(L"Attachment preparation was discarded because the project changed. Nothing was added.", true);
+                // The report is classified, not assumed. A batch whose write completed
+                // produced durable records under the project that was current when it ran,
+                // so saying "nothing was added" would deny records that exist. A batch
+                // whose write was never attempted genuinely added nothing.
+                auto const staleReport = Coordinator::ClassifyStaleCompletion(saveAttempted, saveSucceeded);
+                ShowNotice(staleReport == Coordinator::StaleCompletionReport::PersistedUnderPreviousProject
+                    ? L"Attachment preparation finished after the project changed. The files were saved under the previous project; nothing was added to this draft."
+                    : L"Attachment preparation was discarded because the project changed. Nothing was added.", true);
                 co_return;
             }
 
@@ -2156,6 +2239,20 @@ namespace winrt::Mayasaba::implementation
             std::vector<mayasaba::AttachmentCandidate> durableDrafts;
             if (attachmentService_ && !activeProject_.empty())
             {
+                // The draft list as it was before this batch added its placeholders. It is
+                // the fallback when the durable store cannot be read: the chips the draft
+                // already had must not disappear because a reload failed.
+                std::vector<mayasaba::AttachmentCandidate> previousSnapshot;
+                {
+                    std::unordered_set<std::string> prepSet(preparingIds.begin(), preparingIds.end());
+                    previousSnapshot.reserve(draftAttachments_.size());
+                    for (auto const& c : draftAttachments_)
+                    {
+                        if (prepSet.count(c.id) > 0) continue;
+                        previousSnapshot.push_back(c);
+                    }
+                }
+
                 // Reclaim only preparation intent this finished batch abandoned: PREPARING
                 // records and their staged copies. Durable READY results stay tracked and
                 // are therefore preserved.
@@ -2190,11 +2287,19 @@ namespace winrt::Mayasaba::implementation
                     co_return;
                 }
 
-                if (reclaimFailed || loadFailed)
+                // Which draft set survives the recovery is decided by the reload's outcome:
+                // a readable store is the durable truth, and an unreadable one falls back to
+                // the snapshot taken before the batch. A failed cleanup of the staging area
+                // is reported, not paid for with the user's attachments.
+                durableDrafts = Coordinator::ResolveRecoveryDrafts(
+                    std::move(durableDrafts), !loadFailed, !reclaimFailed, previousSnapshot);
+                if (loadFailed)
                 {
-                    // An unreadable recovery result is not a reason to invent failures from
-                    // the placeholder list; the explicit per-file failures below still stand.
-                    durableDrafts.clear();
+                    ShowNotice(L"Attachment recovery could not read the durable store. The attachments already in this draft were kept.", true);
+                }
+                else if (reclaimFailed)
+                {
+                    ShowNotice(L"Attachment recovery could not clean up abandoned preparation. The attachments already in this draft were kept.", true);
                 }
             }
 
@@ -2513,6 +2618,12 @@ namespace winrt::Mayasaba::implementation
             AttachmentPreviewUnavailableNotice().Visibility(Visibility::Visible);
         }
 
+        // KNOWN OPEN DEFECT: re-measuring this panel after it has been laid out once and then
+        // collapsed raises E_LAYOUTCYCLE (0x802B0014) from the layout pass, and the process
+        // fail-fasts to 0xC000027B. It is not caused by anything set below: the cycle was
+        // reproduced with every child mutation removed, and again with this show removed, while
+        // returning before the subtree is touched at all avoids it. Do not read the shape of
+        // this block as the diagnosis. See native/LOCAL-VALIDATION.md §19.
         AttachmentPreviewPanel().Visibility(Visibility::Visible);
         ClosePreviewButton().Focus(FocusState::Programmatic);
 
@@ -3445,7 +3556,30 @@ namespace winrt::Mayasaba::implementation
         catch (...) {}
 
         SetVisible(MessageSearchPanel(), true);
-        motion_.DepthReveal(MessageSearchPanel());
+        // The overlay is a flat temporary surface, never a hero. It rests at
+        // (0,0,0) rotation with no depth transform, and it is revealed with a
+        // subtle fade and a short vertical slide instead of the hero's depth
+        // settle, which used to leave the panel tilted at the hero's resting
+        // orientation (15 / -22 / -9 degrees).
+        ResetSearchOverlayPresentation(false);
+        // The rows are measured before the height bound is derived from them, so
+        // the bound is computed from real heights instead of nominal ones.
+        MessageSearchPanel().UpdateLayout();
+        UpdateSearchOverlayLayout();
+        auto weakSelf = get_weak();
+        // The panel is published as "revealing" while the entrance transition runs and
+        // as "resting" once it has settled, so a reader can tell a finished reveal
+        // from one that is still running. When animation is not permitted the
+        // completion runs immediately and the panel is published as resting at once.
+        PublishSearchOverlayPresentation(L"revealing");
+        motion_.Enter(MessageSearchPanel(), mayasaba::ui::MotionTokens::EnterOffset, 0,
+                      [weakSelf]()
+                      {
+                          if (auto self = weakSelf.get())
+                          {
+                              self->PublishSearchOverlayPresentation(L"resting");
+                          }
+                      });
         MessageSearchBox().Focus(FocusState::Programmatic);
 
         // When reopening search with an existing query, reset pagination to page 0
@@ -3471,6 +3605,11 @@ namespace winrt::Mayasaba::implementation
     {
         if (!searchController_.IsOpen()) return;
         searchController_.Close();
+        // The reveal in flight is stopped and committed to the resting state, so a
+        // panel that is closed mid-animation is never left half-faded or invisible,
+        // and the next open starts from a flat, fully readable surface.
+        motion_.Cancel(MessageSearchPanel());
+        ResetSearchOverlayPresentation();
         SetVisible(MessageSearchPanel(), false);
         if (searchReturnFocus_)
         {
@@ -3481,6 +3620,243 @@ namespace winrt::Mayasaba::implementation
         {
             ComposerBox().Focus(FocusState::Programmatic);
         }
+    }
+
+    // The resting presentation of the search overlay: fully opaque, untranslated,
+    // unrotated and without a depth transform. The overlay is a readable
+    // information surface, so nothing about it may depend on a 3D orientation, and
+    // a cancelled, interrupted or repeated reveal must leave it exactly here.
+    void MainWindow::ResetSearchOverlayPresentation(bool publish)
+    {
+        auto const panel = MessageSearchPanel();
+        if (!panel) return;
+        panel.Opacity(1);
+        if (auto const transform = panel.RenderTransform().try_as<CompositeTransform>())
+        {
+            transform.TranslateX(0);
+            transform.TranslateY(0);
+        }
+        if (auto const transform = panel.Transform3D().try_as<Microsoft::UI::Xaml::Media::Media3D::CompositeTransform3D>())
+        {
+            transform.RotationX(0);
+            transform.RotationY(0);
+            transform.RotationZ(0);
+            transform.ScaleX(1);
+            transform.ScaleY(1);
+            transform.TranslateZ(0);
+        }
+        if (publish) PublishSearchOverlayPresentation(L"resting");
+    }
+
+    // Publishes the observed presentation of the overlay as a read-only automation
+    // status. It is a truthful projection of the surface's own transform and opacity,
+    // never a claim: it names the resting orientation, the live opacity and the live
+    // translation, and it is refreshed whenever the presentation is set. A reader can
+    // therefore confirm that the panel rests flat, unrotated and fully opaque, and can
+    // see that a transition is still running instead of silently assuming it ended.
+    void MainWindow::PublishSearchOverlayPresentation(std::wstring const& state)
+    {
+        auto const panel = MessageSearchPanel();
+        if (!panel) return;
+        searchOverlayState_ = state;
+
+        double rotationX = 0.0;
+        double rotationY = 0.0;
+        double rotationZ = 0.0;
+        if (auto const transform = panel.Transform3D().try_as<Microsoft::UI::Xaml::Media::Media3D::CompositeTransform3D>())
+        {
+            rotationX = transform.RotationX();
+            rotationY = transform.RotationY();
+            rotationZ = transform.RotationZ();
+        }
+
+        std::wstring status = state + L";rotation=";
+        status += to_hstring(rotationX) + L"," + to_hstring(rotationY) + L"," + to_hstring(rotationZ);
+        status += L";opacity=" + to_hstring(panel.Opacity());
+        status += L";translate=";
+        if (auto const transform = panel.RenderTransform().try_as<CompositeTransform>())
+        {
+            status += to_hstring(transform.TranslateX()) + L"," + to_hstring(transform.TranslateY());
+        }
+        else
+        {
+            status += L"0,0";
+        }
+        // The permission the window has actually observed is part of the projection:
+        // a reader can tell a panel that is flat because it settled from a panel that
+        // never animated at all.
+        status += animationsEnabled_ ? L";animations=on" : L";animations=off";
+        // The surface's own realized geometry is published with it. A panel that
+        // reports no size is visibly absent, and the reason has to be in the
+        // projection rather than only in the reader's head.
+        status += L";vis=";
+        status += (panel.Visibility() == Visibility::Visible ? std::wstring(L"Visible") : std::wstring(L"Collapsed"));
+        status += L";size=" + to_hstring(panel.ActualWidth()) + L"x" + to_hstring(panel.ActualHeight());
+        status += L";maxh=" + to_hstring(panel.MaxHeight());
+        status += searchOverlayLayoutMetrics_;
+        Automation::AutomationProperties::SetItemStatus(panel, status);
+    }
+
+    // The overlay's height is bounded by the space that is actually free above the
+    // composer, and its results list is the only flexible part of it. On a short
+    // window the list shrinks and scrolls; the query, the status and the paging
+    // action stay inside the panel and stay reachable. On a tall window the list
+    // keeps its own cap, so the overlay never becomes a full-height sheet.
+    void MainWindow::UpdateSearchOverlayLayout()
+    {
+        ApplySearchOverlayLayout();
+
+        // The measurements above are taken while the layout pass that triggered
+        // them is still running, so some of them are the size the screen had
+        // BEFORE that change. A short window was measured against the previous,
+        // taller screen, and the surface was bounded by a height that did not
+        // exist. A second pass on the dispatcher queue runs after the layout has
+        // settled and therefore measures the real geometry. It only applies a
+        // change when the numbers differ, so it converges instead of looping.
+        if (searchOverlayLayoutQueued_) return;
+        searchOverlayLayoutQueued_ = true;
+        auto weakSelf = get_weak();
+        DispatcherQueue().TryEnqueue([weakSelf]()
+        {
+            if (auto self = weakSelf.get())
+            {
+                self->searchOverlayLayoutQueued_ = false;
+                self->ApplySearchOverlayLayout();
+            }
+        });
+    }
+
+    void MainWindow::ApplySearchOverlayLayout()
+    {
+        auto const panel = MessageSearchPanel();
+        if (!panel) return;
+
+        // The overlay is a Chat SCREEN level surface, so it is bounded by the
+        // screen and not by the conversation grid. The conversation grid hands a
+        // spanning child only the height its other rows left over, and on a short
+        // window that share collapses to a few pixels: a surface measured against
+        // it collapses with it, and the reader loses the query they opened it for.
+        double const screenHeight = ChatScreen().ActualHeight();
+        if (screenHeight <= 0.0) return;
+
+        double const headerHeight = ChatHeaderGrid().ActualHeight();
+        double const marginTop = 10.0;
+        double const marginBottom = 8.0;
+        double const belowHeader = screenHeight - headerHeight - marginTop - marginBottom;
+
+        // Compact metrics when the space is short: the chrome shrinks before the
+        // results list does, because the list can scroll and the chrome cannot.
+        bool const compact = belowHeader < 360.0;
+        double const padding = compact ? 10.0 : 16.0;
+        double const spacing = compact ? 6.0 : 10.0;
+
+        Thickness const wantedPadding{padding, padding, padding, padding};
+        if (panel.Padding() != wantedPadding) panel.Padding(wantedPadding);
+        if (MessageSearchLayout().RowSpacing() != spacing) MessageSearchLayout().RowSpacing(spacing);
+
+        // The chrome is measured from the fixed rows, never from the panel's own
+        // height: the rows are auto-sized and do not change with the bound, so the
+        // measurement cannot chase its own output.
+        double chrome = 2.0 * padding + 4.0 * spacing;
+        double const header = SearchHeaderRow().ActualHeight();
+        double const query = SearchQueryRow().ActualHeight();
+        if (header > 0.0 && query > 0.0)
+        {
+            chrome += header + query + SearchStatusText().ActualHeight();
+            // The paging action is collapsed until there is a continuation. Its
+            // row is auto sized, so a collapsed action needs no room at all and
+            // reserving room for it would take that space away from the results
+            // on a window that cannot afford it.
+            chrome += SearchLoadMoreButton().Visibility() == Visibility::Visible
+                ? SearchLoadMoreButton().ActualHeight() : 0.0;
+        }
+        else
+        {
+            // Nominal row heights for a panel that has not been measured yet.
+            chrome += 32.0 + 32.0 + 16.0 + 32.0;
+        }
+
+        // The results list keeps at least one visible row, and never more than its
+        // own cap. The panel therefore always contains its chrome and a scrollable
+        // list.
+        double const listFloor = 48.0;
+        double const listCap = 280.0;
+        double const minimum = chrome + listFloor;
+
+        // The panel sits under the Chat header when the screen has room for both,
+        // and over the header when it does not. It is never below the screen, so
+        // the paging action cannot end up under the window edge.
+        double const topMargin = belowHeader >= minimum ? (headerHeight + marginTop) : marginTop;
+        double const free = screenHeight - topMargin - marginBottom;
+        double const cap = std::clamp(free, minimum, chrome + listCap);
+
+        Thickness const wantedMargin{18.0, topMargin, 18.0, 0.0};
+        if (panel.Margin() != wantedMargin) panel.Margin(wantedMargin);
+        if (panel.MaxHeight() != cap) panel.MaxHeight(cap);
+        // The surface carries the bound as its own height, not only as a maximum.
+        // A surface whose height is content driven hands its results row the
+        // leftover of a measurement that is still running, and a row that is
+        // measured against an unbounded slot gives the list a viewport that never
+        // overflows. A list that never overflows is a list that never scrolls, and
+        // a window that cannot show all of the results then looks like a window
+        // that has none. With a height of its own the results row is given a
+        // finite share of the surface and the list scrolls inside it.
+        if (panel.Height() != cap) panel.Height(cap);
+        // The minimum height states what the surface needs to be usable at all: a
+        // bound keeps the panel from growing, but without this floor a screen with
+        // too little room would measure the panel down to nothing.
+        if (panel.MinHeight() != minimum) panel.MinHeight(minimum);
+
+        double const listHeight = std::clamp(cap - chrome, listFloor, listCap);
+        // The list is given the height of its share of the surface as its own
+        // height, so its scroll viewport is that height and not the height of
+        // its whole content. A list that is measured against an unbounded slot
+        // takes the height of everything it holds, overflows the surface and has
+        // nothing left to scroll.
+        if (SearchResultsList().Height() != listHeight)
+        {
+            SearchResultsList().Height(listHeight);
+        }
+
+        // The numbers that produced the bound are published with the surface, so a
+        // reader can tell a panel that was deliberately bounded from a panel that
+        // collapsed for a reason the window did not record.
+        searchOverlayLayoutMetrics_ = L";screen=" + to_hstring(screenHeight) +
+            L";header=" + to_hstring(headerHeight) +
+            L";topMargin=" + to_hstring(topMargin) +
+            L";free=" + to_hstring(free) +
+            L";chrome=" + to_hstring(chrome) +
+            L";cap=" + to_hstring(cap) +
+            L";floor=" + to_hstring(minimum) +
+            L";list=" + to_hstring(listHeight) +
+            L";compact=" + std::wstring(compact ? L"1" : L"0") +
+            PublishChatLayoutMetrics();
+        PublishSearchOverlayPresentation(searchOverlayState_);
+    }
+
+    // Publishes the Chat screen's own layout measurements. The overlay's bound is
+    // derived from them, so a reader that sees the overlay collapse can see the
+    // row that took the space instead of guessing at it.
+    std::wstring MainWindow::PublishChatLayoutMetrics()
+    {
+        std::wstring metrics;
+        auto const sizeOf = [](FrameworkElement const& element) -> std::wstring {
+            if (!element) return std::wstring(L"none");
+            return std::wstring(to_hstring(element.ActualHeight()));
+        };
+        metrics = L";root=" + sizeOf(RootLayout()) +
+            L";chatScreen=" + sizeOf(ChatScreen()) +
+            L";header=" + sizeOf(ChatHeaderGrid()) +
+            L";actionCenter=" + sizeOf(ActionCenterPanel()) +
+            L";actionCenterCap=" + to_hstring(ActionCenterPanel().MaxHeight()) +
+            L";timeline=" + sizeOf(HistoryScroller()) +
+            L";topSpacer=" + to_hstring(ChatTopSpacer().ActualHeight()) +
+            L";bottomSpacer=" + to_hstring(ChatBottomSpacer().ActualHeight()) +
+            L";fileMenu=" + sizeOf(NativeFileMenu()) +
+            L";notice=" + sizeOf(Notice()) +
+            L";noticeOpen=" + (Notice().IsOpen() ? L"1" : L"0") +
+            L";readiness=" + sizeOf(ChatReadinessPanel());
+        return metrics;
     }
 
     void MainWindow::OnSearchQueryChanged(IInspectable const&, Controls::TextChangedEventArgs const&)
@@ -3647,6 +4023,7 @@ namespace winrt::Mayasaba::implementation
             labelBlock.FontSize(12);
             labelBlock.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
             labelBlock.Foreground(Token(L"MayasabaBrandBrush"));
+            labelBlock.TextTrimming(TextTrimming::CharacterEllipsis);
             headerStack.Children().Append(labelBlock);
 
             TextBlock timeBlock{};
@@ -3654,6 +4031,7 @@ namespace winrt::Mayasaba::implementation
             timeBlock.FontSize(11);
             timeBlock.FontFamily(FontFamily{L"Cascadia Mono"});
             timeBlock.Foreground(Token(L"MayasabaSoftBrush"));
+            timeBlock.TextTrimming(TextTrimming::CharacterEllipsis);
             headerStack.Children().Append(timeBlock);
 
             textStack.Children().Append(headerStack);
@@ -3671,6 +4049,9 @@ namespace winrt::Mayasaba::implementation
             idBlock.FontSize(10.5);
             idBlock.FontFamily(FontFamily{L"Cascadia Mono"});
             idBlock.Foreground(Token(L"MayasabaMutedBrush"));
+            // The durable identity wraps instead of being trimmed: on a narrow
+            // window it must stay readable, never shortened.
+            idBlock.TextWrapping(TextWrapping::Wrap);
             textStack.Children().Append(idBlock);
 
             itemGrid.Children().Append(textStack);
@@ -3694,6 +4075,16 @@ namespace winrt::Mayasaba::implementation
             Automation::AutomationProperties::SetName(itemBorder, L"Saved user message. " + Utf16(match.submissionId));
             SearchResultsList().Items().Append(itemBorder);
         }
+
+        // The list is measured again after the results are in it. The items were
+        // appended while the surface was still being laid out, and a list whose
+        // scroll extent was measured before its content existed has no extent to
+        // scroll: the wheel then did nothing at all, and a window that cannot
+        // show all of the results looked like a window that had none.
+        SearchResultsList().InvalidateMeasure();
+        SearchResultsList().InvalidateArrange();
+        SearchResultsList().UpdateLayout();
+        UpdateSearchOverlayLayout();
     }
 
     void MainWindow::NavigateToMessage(std::string const& submissionId)

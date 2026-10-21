@@ -36,7 +36,13 @@ namespace mayasaba::ui
         static constexpr double MaxTiltDegrees = 4.0;
         static constexpr double TiltPerspective = 900.0;
         // Hero resting 3D perspective orientation from the approved dimensional proposal:
-        // rotateX(15deg) rotateY(-22deg) rotateZ(-9deg)
+        // rotateX(15deg) rotateY(-22deg) rotateZ(-9deg).
+        //
+        // This orientation belongs to the hero art alone. It is declared in XAML on
+        // `WelcomeHeroTilt` and `EmptyHeroTilt`, and the motion layer applies it only
+        // as the resting base of the hero pointer tilt. Any other surface that receives
+        // a 3D transform from this layer rests flat at (0, 0, 0): a card, panel or
+        // overlay must never inherit the hero's sculpted rotation.
         static constexpr double RestingRotationX = 15.0;
         static constexpr double RestingRotationY = -22.0;
         static constexpr double RestingRotationZ = -9.0;
@@ -89,14 +95,22 @@ namespace mayasaba::ui
         // New screen or card: fade plus a short vertical settle. `delayMs` lets a
         // caller build one finite, ordered entrance sequence (identity, then
         // message, then actions) without animating each text run separately.
+        // `completed` runs when the transition reaches its resting state, and also
+        // when it is cancelled, so a caller can publish that resting state.
         void Enter(winrt::Microsoft::UI::Xaml::FrameworkElement const& element,
                    double fromOffset = MotionTokens::EnterOffset,
-                   double delayMs = 0);
+                   double delayMs = 0,
+                   std::function<void()> completed = nullptr);
 
         // Newly inserted timeline entry: fade plus a short horizontal settle.
         // Never used for restored history.
         void SlideIn(winrt::Microsoft::UI::Xaml::FrameworkElement const& element,
                      double fromOffset = MotionTokens::SlideInOffset);
+
+        // Stops the transitions this controller started for `element` and leaves the
+        // element at its flat resting state. A cancelled transition must never leave a
+        // surface half-faded, half-slid, rotated or invisible.
+        void Cancel(winrt::Microsoft::UI::Xaml::FrameworkElement const& element);
 
         // Inline detail reveal.
         void Appear(winrt::Microsoft::UI::Xaml::FrameworkElement const& element);
@@ -158,8 +172,19 @@ namespace mayasaba::ui
         // underlying local value when it is stopped, so the commit has to happen
         // before the stop or the end state is lost.
         static constexpr std::size_t MaxTracked = 96;
+
+        // One tracked transition. `element` is the surface the transition belongs to,
+        // so a single surface can be cancelled without stopping the others.
+        struct Tracked
+        {
+            winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard board{nullptr};
+            winrt::weak_ref<winrt::Microsoft::UI::Xaml::FrameworkElement> element{nullptr};
+            std::function<void()> commit{nullptr};
+        };
+
         void Track(winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard const& board,
-                   std::function<void()> commit);
+                   std::function<void()> commit,
+                   winrt::Microsoft::UI::Xaml::FrameworkElement const& element = nullptr);
         void Prune();
 
         winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard BuildDouble(
@@ -177,7 +202,7 @@ namespace mayasaba::ui
         winrt::Microsoft::UI::Xaml::Media::CompositeTransform EnsureTransform(
             winrt::Microsoft::UI::Xaml::FrameworkElement const& element);
 
-        std::vector<winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard> tracked_;
+        std::vector<Tracked> tracked_;
         // Ambient loops are kept apart from the bounded transition registry: they
         // never complete, and evicting one would leave an unowned clock running.
         std::vector<winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard> ambient_;

@@ -87,11 +87,19 @@ namespace mayasaba::ui
             }
         }
         activeHovers_.clear();
-        for (auto const& board : tracked_)
+        // A cancelled transition is committed to its resting state before it is
+        // stopped. Stopping a clock reverts the animated property to the underlying
+        // local value, so a surface whose reveal was interrupted half-way would
+        // otherwise be left invisible (opacity 0) or part-way slid.
+        for (auto const& entry : tracked_)
         {
+            if (entry.commit)
+            {
+                try { entry.commit(); } catch (...) {}
+            }
             try
             {
-                if (board) board.Stop();
+                if (entry.board) entry.board.Stop();
             }
             catch (...)
             {
@@ -102,14 +110,42 @@ namespace mayasaba::ui
         StopAmbient();
     }
 
-    void MotionController::Prune()
+    void MotionController::Cancel(FrameworkElement const& element)
     {
-        std::erase_if(tracked_, [](Storyboard const& board)
+        if (!element) return;
+        for (auto const& entry : tracked_)
         {
-            if (!board) return true;
+            auto const target = entry.element.get();
+            if (!target || target != element) continue;
+            if (entry.commit)
+            {
+                try { entry.commit(); } catch (...) {}
+            }
             try
             {
-                return board.GetCurrentState() == ClockState::Stopped;
+                if (entry.board) entry.board.Stop();
+            }
+            catch (...)
+            {
+                // Best effort: a surface that cannot be stopped still has its resting
+                // state committed above.
+            }
+        }
+        std::erase_if(tracked_, [&](Tracked const& entry)
+        {
+            auto const target = entry.element.get();
+            return target && target == element;
+        });
+    }
+
+    void MotionController::Prune()
+    {
+        std::erase_if(tracked_, [](Tracked const& entry)
+        {
+            if (!entry.board) return true;
+            try
+            {
+                return entry.board.GetCurrentState() == ClockState::Stopped;
             }
             catch (...)
             {
@@ -118,7 +154,8 @@ namespace mayasaba::ui
         });
     }
 
-    void MotionController::Track(Storyboard const& board, std::function<void()> commit)
+    void MotionController::Track(Storyboard const& board, std::function<void()> commit,
+                                 FrameworkElement const& element)
     {
         Prune();
         while (tracked_.size() >= MaxTracked)
@@ -126,12 +163,16 @@ namespace mayasaba::ui
             // Bounded registry: stopped before being evicted so the storyboard does not run unowned.
             try
             {
-                if (tracked_.front()) tracked_.front().Stop();
+                if (tracked_.front().board) tracked_.front().board.Stop();
             }
             catch (...) {}
             tracked_.erase(tracked_.begin());
         }
-        tracked_.push_back(board);
+        Tracked entry;
+        entry.board = board;
+        entry.commit = commit;
+        if (element) entry.element = make_weak(element);
+        tracked_.push_back(std::move(entry));
 
         // A held-end clock keeps its target alive forever, which would retain
         // recycled list items. On completion the end state is committed as a local
@@ -147,7 +188,7 @@ namespace mayasaba::ui
             if (!self) return;
             if (commit) commit();
             self.Stop();
-            std::erase_if(tracked_, [&](Storyboard const& candidate) { return candidate == self; });
+            std::erase_if(tracked_, [&](Tracked const& candidate) { return candidate.board == self; });
         });
     }
 
@@ -200,10 +241,15 @@ namespace mayasaba::ui
             auto transform = element.Transform3D().try_as<CompositeTransform3D>();
             if (!transform)
             {
+                // A transform created here rests flat. The hero's sculpted resting
+                // orientation (15 / -22 / -9 degrees) is declared in XAML on the hero
+                // art itself and belongs to that art alone: applying it here gave
+                // every surface that received a 3D transform from this layer - a card,
+                // a panel, the saved-message search overlay - the hero's rotation.
                 transform = CompositeTransform3D{};
-                transform.RotationX(MotionTokens::RestingRotationX);
-                transform.RotationY(MotionTokens::RestingRotationY);
-                transform.RotationZ(MotionTokens::RestingRotationZ);
+                transform.RotationX(0.0);
+                transform.RotationY(0.0);
+                transform.RotationZ(0.0);
                 element.Transform3D(transform);
             }
             // Rotation must be about the element centre; a default centre of zero
@@ -217,12 +263,14 @@ namespace mayasaba::ui
         }
     }
 
-    void MotionController::Enter(FrameworkElement const& element, double fromOffset, double delayMs)
+    void MotionController::Enter(FrameworkElement const& element, double fromOffset, double delayMs,
+                                 std::function<void()> completed)
     {
         if (!element) return;
         if (!Allowed())
         {
             element.Opacity(1);
+            if (completed) completed();
             return;
         }
         auto const transform = EnsureTransform(element);
@@ -240,11 +288,12 @@ namespace mayasaba::ui
         Storyboard::SetTargetProperty(slide, L"TranslateY");
         board.Children().Append(slide);
 
-        Track(board, [element, transform]
+        Track(board, [element, transform, completed]
         {
             element.Opacity(1);
             transform.TranslateY(0);
-        });
+            if (completed) completed();
+        }, element);
         board.Begin();
     }
 
