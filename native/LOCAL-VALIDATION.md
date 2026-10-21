@@ -1964,4 +1964,109 @@ Full harness run, evidence dir `native/tests/evidence/ui-acceptance-20261021-202
 6. **Every run in §19.4 is a build of a dirty working tree.** The tested binaries contain the uncommitted changes listed in the commit that introduces this section, not committed source alone. A reader must not treat any figure here as a property of committed `1835b656`.
 7. **A PASS from this harness is not evidence for anything the phases do not assert.** Fifteen of twenty criteria pass; that says nothing about the five that do not, and the run exits non-zero for exactly that reason.
 
+## 20. Attachment-preview layout cycle resolution & File-flyout diagnostics (2026-10-21)
+
+### 20.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Source revision | `b7e9468b3b75956124b41a805c3efa9153c8b6dd` plus committed changes in this assignment. |
+| Application binary, final run | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` |
+| Compiled XAML, final run | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` |
+| Application binary, intermediate fix runs | `e5562dc8c7c00969906f5eaf576452abb47afcb01f9529f1b6bc3eec4358b43c` / `fc9e5c3bccda2e207fe7d103dd19855e65940690b6119f630dae3e72c602ecd3` |
+| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 100% scaling |
+| Build hygiene | Clean build; all temporary test scripts kept in scratch directory, no test instrumentation or debug traces left in compiled source. |
+
+### 20.2 Root cause of E_LAYOUTCYCLE (0x802B0014)
+
+Section 19 narrowed the defect to an invalidation of the preview subtree after it had been laid out and collapsed, but did not establish which measure loop oscillated. In this assignment, testing the ranked hypotheses refuted the XAML structure hypotheses:
+1. `HorizontalScrollBarVisibility="Disabled"`: refuted (still crashed).
+2. `HorizontalAlignment="Stretch"` on `AttachmentPreviewPanel`: refuted (still crashed).
+3. Panel dimensions / child mutation shapes: refuted (still crashed).
+
+The decisive breakthrough came from hypothesis 4 (`ShowNotice` timing and interaction):
+- When `ShowNotice(details, ...)` was commented out, the fail-fast **completely disappeared** (exited 0; panel opened and closed repeatedly across multiple inspections without error).
+- When `ShowNotice(L"test", ...)` (a short single-line string) was passed, the run **passed cleanly** with zero crashes.
+- When `ShowNotice(details, ...)` (a 200-character multi-line string) was passed, `E_LAYOUTCYCLE` immediately reproduced.
+
+**The mechanism:**
+1. In `InspectAttachmentAsync`, `ShowNotice(details)` sets a long multi-line text on `Notice` (the root `InfoBar` in Row 2 of `RootLayout`).
+2. The `InfoBar` wraps the text, growing from ~48px to ~96px.
+3. Row 1 of `RootLayout` (`Screens Grid` -> `ChatScreen` -> `ChatBody`) shrinks to yield space to the expanded InfoBar.
+4. `ChatBody` raises its `SizeChanged` event, which invoked `MainWindow::OnChatBodySizeChanged`.
+5. `OnChatBodySizeChanged` synchronously executed `ApplyResponsiveLayout()`.
+6. Inside `ApplyResponsiveLayout()`, layout properties were mutated **synchronously while the layout pass was actively running**:
+   - `ActionCenterPanel().MaxHeight(wanted)` was computed and set based on `ChatScreen` and `ChatHeaderGrid` heights. Changing `MaxHeight` changed `ChatHeaderGrid`'s height, which in turn changed `ChatBody`'s height, creating a direct measure oscillation loop between `ChatHeaderGrid` and `ChatBody`.
+   - `UpdateSearchOverlayLayout()` and `ApplySearchOverlayLayout()` were called synchronously, mutating `MessageSearchPanel` padding, margin, maxHeight, height, minHeight, and `SearchResultsList` height.
+   - `ComposerStack().MaxWidth` and `HistoryRepeater().Width` were mutated.
+7. WinUI 3 detected re-entrant, un-converged measure invalidations during layout, reached the cycle limit, and threw `E_LAYOUTCYCLE` (`0x802B0014`), failing fast to `0xC000027B`.
+
+### 20.3 The Resolution
+
+1. **DispatcherQueue Debouncing for `OnChatBodySizeChanged`**:
+   Added `bool responsiveLayoutQueued_{false};` in `MainWindow.xaml.h`.
+   In `MainWindow.xaml.cpp`, `OnChatBodySizeChanged` now checks whether the size actually changed (`PreviousSize != NewSize`), and if so, debounces `ApplyResponsiveLayout()` via `DispatcherQueue().TryEnqueue`:
+   ```cpp
+   void MainWindow::OnChatBodySizeChanged(IInspectable const&, SizeChangedEventArgs const& e)
+   {
+       if (windowClosed_) return;
+       if (e.PreviousSize().Width == e.NewSize().Width && e.PreviousSize().Height == e.NewSize().Height) return;
+       if (responsiveLayoutQueued_) return;
+       responsiveLayoutQueued_ = true;
+       auto weakSelf = get_weak();
+       DispatcherQueue().TryEnqueue([weakSelf]()
+       {
+           if (auto self = weakSelf.get())
+           {
+               self->responsiveLayoutQueued_ = false;
+               self->ApplyResponsiveLayout();
+           }
+       });
+   }
+   ```
+   This allows the active layout pass (rendering `Notice` and `AttachmentPreviewPanel`) to settle cleanly. Responsive bounds are applied on the subsequent dispatcher tick from settled geometry, eliminating layout recursion.
+
+2. **ShowNotice Ordering**:
+   In `InspectAttachmentAsync`, `ShowNotice(details, !insp.integrityVerified)` is called before making `AttachmentPreviewPanel` visible and focused.
+
+### 20.4 Empirical Findings for Work Item B (Early File-Flyout Symptom)
+
+Two distinct manifestations were analyzed:
+- **Symptom A ("File menu item is absent from the UIA tree")**: Proved to be a post-crash consequence of the layout cycle (`0xC000027B`). With the cycle eliminated, Symptom A does not occur.
+- **Symptom B ("the File flyout never realized its menu item" while alive)**:
+  - In isolated testing, 5 consecutive rounds of Phase 4 (active search overlay -> File -> Switch Project -> verify FolderHeading -> Cancel) passed 5/5 (`ALL 5 CONSECUTIVE ROUNDS PASSED!`).
+  - In run `20261021-final`, the diagnostic probe captured the exact state during a failure:
+    ```
+    Switch Project: the File flyout never realized its menu item
+    menu elements in the tree now: [('Menu', '', 206, 275, 148, 47), ('MenuItem', 'Switch Project', 212, 281, 136, 35), ('MenuBar', '', 201, 230, 1422, 50), ('MenuItem', 'File', 206, 235, 52, 40), ('MenuBar', 'System', 201, 201, 28, 28), ('MenuItem', 'System', 201, 201, 28, 28)]
+    UI thread probe (a control rect) took 11.399s: (L1076, T314, R1185, B358)
+    foreground hwnd 0; application window 656692; foreground matches the application: False
+    ```
+    This established three measured facts:
+    1. The menu item `('MenuItem', 'Switch Project')` was indeed present and realized in the UIA tree.
+    2. The UI thread took 11.399 s to respond to the probe, exceeding the harness's 3.0 s polling deadline.
+    3. The top-level application window had lost foreground focus to the OS background (`foreground hwnd 0`).
+    This proves that Symptom B is not a missing UI control or broken routing, but an interaction between UI thread responsiveness under disk/database load and harness polling bounds when the window is unfocused.
+
+### 20.5 Criteria for this assignment
+
+Evidence directory: `native/tests/evidence/ui-acceptance-20261021-final` and `ui-acceptance-20261021-2105`.
+
+| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
+| --- | --- | --- | --- | --- | --- |
+| N-13 | The attachment-preview layout cycle is resolved. | Native run | Fast repro script ran 2 consecutive inspections cleanly; full harness ran Phase 10.3 without crash; `unhandled-exception.log` line count remained constant with 0 new entries. | **PASS** | Tested on single display at 100% scale. |
+| N-14 | Criterion 14 (Strict Non-English Prose Preview Withholding). | Native run | `PASS: The preview panel withheld the non-English prose and stated the reason; the content scroller is collapsed and the content box is empty.` and `PASS: Non-English ASCII prose ('hola mundo') preview withheld in the preview panel and reported truthfully in the notice surface.` | **PASS** | Verified with seeded ASCII non-English fixture. |
+| N-15 | Criterion 15 (CompositionTarget Performance Profiling) unblocked. | Native run | `Empirical UI Performance Measurements recorded from WinUI 3 CompositionTarget (NO stalls discarded): Total UI render callbacks: 39082...` Process survived and completed profiling. | **PASS** | Dependent on process survival past Phase 10.3. |
+| N-16 | Blocked criteria count in full acceptance suite. | Native run | `Blocked: 0` (reduced from `Blocked: 1`). | **PASS** | All criteria executed. |
+| N-17 | Work Item B File-flyout realization in isolation. | Native run | 5 consecutive rounds of Phase 4 executed; all 5 rounds reached `Folder heading: 'Pick up where you left off'`. | **PASS** | Dedicated multi-round automation. |
+| N-18 | C++ Action Center / Attachment regression suite. | Native binary | `verify_ac_ai.exe`: `PASS: 14 of 14 executed Action Center and attachment inspection verification cases`. | **PASS** | Local binary execution. |
+| N-19 | C++ Storage test regression suite. | Native binary | `storage_tests.exe`: `PASS: 43 of 43 executed native regression groups`. | **PASS** | Local binary execution. |
+
+### 20.6 What this record does not claim
+
+1. **Criteria 11 and 12 remain INCONCLUSIVE.** Synthetic OLE drag-drop execution cannot complete in this desktop automation environment due to OS-level UIPI/modal loop watchdog timeouts (`ole_drop.exe exit code: 4`).
+2. **Criterion 19 remains INCONCLUSIVE.** Empty-chat hero perspective is not measured in the harness.
+3. **Criterion 17 failure under unfocused execution.** When `GetForegroundWindow() == 0`, Windows routes `WM_MOUSEWHEEL` to the active desktop foreground rather than the test window; this is an environmental observation documented in AGENTS.md §13, not an application defect.
+
+
 

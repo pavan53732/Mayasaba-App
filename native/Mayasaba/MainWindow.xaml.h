@@ -146,6 +146,7 @@ namespace winrt::Mayasaba::implementation
         // it, and once on the dispatcher queue after the layout has settled.
         void ApplySearchOverlayLayout();
         bool searchOverlayLayoutQueued_{false};
+        bool responsiveLayoutQueued_{false};
         winrt::fire_and_forget ExecuteSearchAsync(mayasaba::SearchPageRequest req);
         void RenderSearchResults(bool isAppend);
         void NavigateToMessage(std::string const& submissionId);

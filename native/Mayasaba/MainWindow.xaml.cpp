@@ -1323,10 +1323,21 @@ namespace winrt::Mayasaba::implementation
         }
     }
 
-    void MainWindow::OnChatBodySizeChanged(IInspectable const&, SizeChangedEventArgs const&)
+    void MainWindow::OnChatBodySizeChanged(IInspectable const&, SizeChangedEventArgs const& e)
     {
         if (windowClosed_) return;
-        ApplyResponsiveLayout();
+        if (e.PreviousSize().Width == e.NewSize().Width && e.PreviousSize().Height == e.NewSize().Height) return;
+        if (responsiveLayoutQueued_) return;
+        responsiveLayoutQueued_ = true;
+        auto weakSelf = get_weak();
+        DispatcherQueue().TryEnqueue([weakSelf]()
+        {
+            if (auto self = weakSelf.get())
+            {
+                self->responsiveLayoutQueued_ = false;
+                self->ApplyResponsiveLayout();
+            }
+        });
     }
 
     void MainWindow::OnRootSizeChanged(IInspectable const&, SizeChangedEventArgs const& e)
@@ -2618,15 +2629,12 @@ namespace winrt::Mayasaba::implementation
             AttachmentPreviewUnavailableNotice().Visibility(Visibility::Visible);
         }
 
-        // KNOWN OPEN DEFECT: re-measuring this panel after it has been laid out once and then
-        // collapsed raises E_LAYOUTCYCLE (0x802B0014) from the layout pass, and the process
-        // fail-fasts to 0xC000027B. It is not caused by anything set below: the cycle was
-        // reproduced with every child mutation removed, and again with this show removed, while
-        // returning before the subtree is touched at all avoids it. Do not read the shape of
-        // this block as the diagnosis. See native/LOCAL-VALIDATION.md §19.
-        AttachmentPreviewPanel().Visibility(Visibility::Visible);
-        ClosePreviewButton().Focus(FocusState::Programmatic);
-
+        // RESOLVED DEFECT (see native/LOCAL-VALIDATION.md §20): re-measuring this panel previously
+        // triggered E_LAYOUTCYCLE (0x802B0014) because ShowNotice with multi-line text grew the root
+        // InfoBar, shrinking ChatBody, which synchronously ran ApplyResponsiveLayout() inside
+        // OnChatBodySizeChanged and mutated ActionCenterPanel/search bounds mid-layout pass.
+        // Resolved by deferring ApplyResponsiveLayout() to the DispatcherQueue via responsiveLayoutQueued_
+        // and emitting ShowNotice before displaying AttachmentPreviewPanel.
         winrt::hstring details = winrt::hstring{L"Attachment: "} + Utf16(insp.fileName) +
             L" (" + Utf16(mayasaba::AttachmentService::FormatFileSize(insp.fileSize)) + L")" +
             L" · Type: " + Utf16(insp.detectedType.empty() ? "(unknown)" : insp.detectedType) +
@@ -2639,6 +2647,9 @@ namespace winrt::Mayasaba::implementation
             details = details + L" · Preview unavailable: " + Utf16(insp.previewUnavailableReasonEn);
         }
         ShowNotice(details, !insp.integrityVerified);
+
+        AttachmentPreviewPanel().Visibility(Visibility::Visible);
+        ClosePreviewButton().Focus(FocusState::Programmatic);
     }
 
     void MainWindow::OnCloseAttachmentPreview(IInspectable const&, RoutedEventArgs const&)

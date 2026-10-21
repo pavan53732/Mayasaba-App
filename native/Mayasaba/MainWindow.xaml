@@ -972,7 +972,7 @@
                  and take its own controls out of reach. Declared here it occupies
                  ChatScreen's star row, which has a height before its child is measured.
                  This is a structural correction only: the attachment-inspect fail-fast
-                 (E_LAYOUTCYCLE, see native/LOCAL-VALIDATION.md section 19) reproduces
+                 (E_LAYOUTCYCLE, see native/LOCAL-VALIDATION.md sections 19 and 20) reproduces
                  identically with the panel in either position, so moving it did not fix
                  that defect and must not be read as having done so. -->
             <Border x:Name="AttachmentPreviewPanel" Grid.Row="1"
