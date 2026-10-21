@@ -213,6 +213,41 @@ def broadcast_setting_change(section="VisualEffects"):
         log(f"  could not broadcast WM_SETTINGCHANGE('{section}'): {type(exc).__name__}: {exc}")
         return False
 
+def ui_thread_latency(hwnd, timeout_ms=2000):
+    """How long the application's UI thread takes to answer the message pump.
+
+    This is the only probe in this harness that measures UI-thread
+    responsiveness. A UIA descendant walk does not: it is a cross-process COM
+    enumeration whose cost grows with the size of the tree and with the
+    accessibility provider, so a slow walk and a blocked UI thread produce the
+    same number. The 11.399 s recorded in run 20261021-final was a walk, and it
+    was written up as a stall; measuring the pump directly showed the thread
+    answering in well under a millisecond at the same time.
+
+    SendMessageTimeoutW(WM_NULL) asks the target's message loop to process a
+    null message and return. A thread that is not pumping cannot answer, so a
+    timeout here is real evidence of a block.
+
+    Returns (answered, seconds, detail_string).
+    """
+    SMTO_ABORTIFHUNG = 0x0002
+    WM_NULL = 0x0000
+    result = ctypes.c_size_t()
+    started = time.time()
+    try:
+        ok = user32.SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG,
+                                        timeout_ms, ctypes.byref(result))
+    except Exception as exc:
+        return False, time.time() - started, f"raised {type(exc).__name__}: {exc}"
+    elapsed = time.time() - started
+    hung = None
+    try:
+        hung = bool(user32.IsHungAppWindow(hwnd))
+    except Exception:
+        pass
+    return bool(ok), elapsed, f"IsHungAppWindow={hung}"
+
+
 def find_by_aid(parent, aid):
     for d in parent.descendants():
         if d.element_info.automation_id == aid:
@@ -271,21 +306,30 @@ def has_focus(element):
     except Exception:
         return False
 
-def poll_until(predicate, timeout, interval=0.1):
+def poll_until(predicate, timeout, interval=0.1, min_samples=2):
     """Bounded wait for an asynchronous UI postcondition.
 
     A fixed sleep samples one instant and turns a slow-but-correct transition
     into a failure; an unbounded wait hides a genuine hang. Polling with a bound
     keeps both properties: a real defect still fails, but only after the
     transition has had its full allowance.
+
+    `min_samples` guarantees more than one look. Without it a single slow
+    predicate can consume the whole deadline and the "poll" degrades into one
+    snapshot -- which is exactly the failure `wait_for_notice` was fixed for, and
+    which survived here. The deadline is therefore a lower bound on the
+    observation window rather than a cap on the number of observations.
     """
     deadline = time.time() + timeout
-    while time.time() < deadline:
+    samples = 0
+    while True:
         value = predicate()
+        samples += 1
         if value:
             return value
+        if time.time() >= deadline and samples >= min_samples:
+            return None
         time.sleep(interval)
-    return None
 
 
 def log_menu_failure_diagnostics(win, reason):
@@ -322,9 +366,22 @@ def log_menu_failure_diagnostics(win, reason):
         started = time.time()
         probe = find_by_aid(win, "SearchMessagesButton")
         rect = probe.rectangle() if probe else None
-        log(f"    UI thread probe (a control rect) took {time.time() - started:.3f}s: {rect}")
+        log(f"    UIA walk cost (a full descendant scan plus one rect) took "
+            f"{time.time() - started:.3f}s: {rect}")
     except Exception as exc:
-        log(f"    UI thread probe raised {type(exc).__name__}: {exc}")
+        log(f"    UIA walk cost raised {type(exc).__name__}: {exc}")
+    try:
+        # A real UI-thread latency reading, which the walk above is NOT. The
+        # walk enumerates every descendant over cross-process COM, so its
+        # duration is dominated by enumeration cost and says nothing about
+        # whether the application's message pump is answering. The 11.399 s
+        # figure recorded in run 20261021-final was this walk, and it was read
+        # as a UI-thread stall; measuring the pump directly separates the two.
+        ui_ok, ui_secs, ui_detail = ui_thread_latency(win.handle)
+        log(f"    UI thread latency (WM_NULL, the message pump answering): "
+            f"{ui_secs:.3f}s answered={ui_ok} {ui_detail}")
+    except Exception as exc:
+        log(f"    UI thread latency probe raised {type(exc).__name__}: {exc}")
     try:
         foreground = user32.GetForegroundWindow()
         log(f"    foreground hwnd {foreground}; application window {win.handle}; "
@@ -390,13 +447,15 @@ def open_switch_project(win, timeout=10.0):
     item = poll_until(switch_item, timeout=3.0, interval=0.05)
     item_already_invoked = False
     if item is None:
-        # Before declaring the flyout absent, probe the UIA tree for the item one
-        # more time and also measure UI-thread latency.  In the 11.4 s stall
-        # incident (20261021-final) the item was present at (212, 281, 136, 35)
-        # when the menu-failure diagnostic ran -- meaning the flyout HAD realized
-        # its item, but the UI thread was too slow to answer during the 3 s poll
-        # window.  A UI-thread stall and a missing menu item are different
-        # conditions and must be reported differently.
+        # Before declaring the flyout absent, scan the tree for the item once
+        # more and measure UI-thread latency separately from the scan.
+        #
+        # These are two different quantities and were previously conflated. In
+        # run 20261021-final the item WAS present at (212, 281, 136, 35) when
+        # this diagnostic ran, and the 11.399 s figure that was read as a stall
+        # is the cost of a full UIA descendant scan, not the application's
+        # message pump. A measured pump probe is recorded alongside it so a
+        # stall claim rests on the pump and not on enumeration cost.
         probe_start = time.time()
         try:
             probe_btn = find_by_aid(win, "SearchMessagesButton")
@@ -405,15 +464,31 @@ def open_switch_project(win, timeout=10.0):
         except Exception as probe_exc:
             probe_rect = None
             probe_elapsed = time.time() - probe_start
-            log(f"  Switch Project: UI-thread probe raised {type(probe_exc).__name__}: {probe_exc}")
-        log(f"  Switch Project: UI-thread probe took {probe_elapsed:.3f}s; rect={probe_rect}")
+            log(f"  Switch Project: UIA walk raised {type(probe_exc).__name__}: {probe_exc}")
+        log(f"  Switch Project: UIA walk took {probe_elapsed:.3f}s; rect={probe_rect}")
+        try:
+            ui_ok, ui_secs, ui_detail = ui_thread_latency(win.handle)
+            log(f"  Switch Project: UI thread latency {ui_secs:.3f}s "
+                f"answered={ui_ok} {ui_detail}")
+            ui_stalled = (not ui_ok) or ui_secs > 1.0
+        except Exception as probe_exc:
+            ui_stalled = None
+            log(f"  Switch Project: UI thread latency probe raised "
+                f"{type(probe_exc).__name__}: {probe_exc}")
 
-        # One last scan for the item now that the UI thread has had extra time.
+        # One last scan for the item now that the poll deadline has expired.
         late_item = switch_item()
         if late_item is not None:
-            log(f"  Switch Project: 'Switch Project' MenuItem found after poll deadline expired "
-                f"(probe latency {probe_elapsed:.3f}s); this is a UI-thread stall timeout, not "
-                f"a missing menu item.  Attempting to invoke the late item.")
+            if ui_stalled:
+                log(f"  Switch Project: 'Switch Project' MenuItem found after the poll deadline "
+                    f"expired, and the UI thread did not answer the pump probe in {ui_secs:.3f}s; "
+                    f"this is a UI-thread stall timeout, not a missing menu item. "
+                    f"Attempting to invoke the late item.")
+            else:
+                log(f"  Switch Project: 'Switch Project' MenuItem found after the poll deadline "
+                    f"expired while the UI thread was answering normally; this is a poll "
+                    f"deadline that was too short for a correct-but-slow realization, not a "
+                    f"UI-thread stall and not a missing menu item. Attempting to invoke it.")
             try:
                 late_item.iface_invoke.Invoke()
                 item = late_item

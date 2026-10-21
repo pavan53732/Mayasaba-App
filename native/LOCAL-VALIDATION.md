@@ -2089,6 +2089,8 @@ Evidence directory: `native/tests/evidence/ui-acceptance-20261021-final` and `ui
    | Scroll intervals > 33 ms | 1129 | — | (informational) |
    | Scroll callbacks > 100 ms | 385 | — | (informational) |
 
+**Superseded in part by §22.** Item 3 of §20.6 ("criteria 11 and 12 remain INCONCLUSIVE due to OS-level UIPI/modal loop watchdog timeouts") and the "UI thread took 11.399 s" reading in §20.4 are both superseded. §22 measured the OLE helper as failing identically against a known-good drop target with zero drag-loop iterations, so the timeout is a helper/session limit and not an OS refusal of Mayasaba; and §22 established that the 11.399 s figure was a UIA enumeration cost, not a UI-thread stall. The verdicts themselves do not change — criteria 11 and 12 remain INCONCLUSIVE — only the stated reason does. The Phase 10.2 note in §19.8 item 2 ("not claimed fixed") is likewise superseded by §22.4, which re-ran the scenario on the current binary and recorded PASS.
+
 ## 21. Criterion-15 correction, probe reclassification, storage counter fix (2026-10-22)
 
 ### 21.1 Identity of this record
@@ -2184,4 +2186,197 @@ When the window is not the OS foreground during typing, WinUI 3 processes keystr
 | N-23 | Storage test counter corrected to 44 of 44. | Native binary | `native/tests/bin/storage_tests.exe`: `PASS: 44 of 44 executed native regression groups`. | **PASS** |
 | N-24 | Full harness EXIT=0, 0 FAILs, 0 BLOCKs. | Native run | `ui-acceptance-20261022-0031`: `Total: 20 criteria | Passed: 16 | Inconclusive: 4 | Failed: 0 | Blocked: 0`. | **PASS** |
 | N-25 | No new `0x802B0014` entries in `unhandled-exception.log` for 2026-10-22. | Log inspection | `Select-String` on 2026-10-22 timestamps: empty result. All existing entries are pre-fix (2026-10-21). | **PASS** |
+
+## 22. UI-thread stall investigation: hypothesis refuted, OLE helper defect found, foreground restored (2026-10-22)
+
+### 22.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Executable | `Mayasaba.exe` SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` |
+| Compiled XAML | `MainWindow.xbf` SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` |
+| Source commit at run | `61961e101b6bd87cc8dc6c771dd465428c90e4ea` |
+| Application source changed by this assignment | **No.** The executable and XBF are byte-identical to the artifacts recorded in §21. Every conclusion below is about that unchanged build. |
+| Harness binaries changed | `native/tests/ole_drop.exe` rebuilt twice. Final artifact SHA-256 `565af5522bcf5b381b24734f67cb3f008866035594764aaa8a18283420558f2c` (mtime 2026-10-22 01:29:28); the intermediate build measured in §22.5 was `5dd4860dcfe8b305ebac58ec4dffe85dad0ec76d4389df2118bd9c6bbc4ecbb4`. See §22.9 for which observations belong to which artifact. |
+| Evidence directory | `native/tests/evidence/ui-acceptance-20261022-w1w4` (primary run); `native/tests/evidence/ui-acceptance-20261022-w1w4-final` (confirmation run on the committed harness — see §22.10) |
+| Probe workspaces | `C:\Users\pavan\PROJECTS\_ui-verify\{stall,walk,search,fg,fgwalk,ole,harness-stall,probe-discriminate}-probe` |
+
+The executable mtime (2026-10-21 23:42:20) is later than `MainWindow.xaml.cpp` (23:39:48) and `MainWindow.xaml` (23:40:06), and the XBF (23:40:53) is later than the XAML, so the artifacts exercised correspond to the sources on disk. No relink occurred during this assignment.
+
+### 22.2 The hypothesis under test, and its verdict
+
+The assignment proposed that a multi-second UI-thread stall blocked the application, and that this one defect explained four open items: the original Phase 10.2 failure, criteria 11/12, criterion 17, and criterion 15's instability. The proposed mechanism was the UI thread awaiting background storage work that was waiting on a SQLite write lock held by the harness.
+
+**Verdict: REFUTED.** The UI thread was measured continuously across a complete harness run and never blocked for more than 380 ms. Each link of the proposed causal chain was tested separately and each failed:
+
+| Proposed link | Test | Result |
+| --- | --- | --- |
+| A synchronous SQLite call runs on the UI thread | Code inspection of every `storage_->` call site | **False.** All 14 call sites are behind `co_await selectorQueue_.Background()` (`MainWindow.xaml.cpp` 281, 744, 846, 1484, 1899, 2072, 2124, 2171, 2280, 2357, 2582, 2852, 2988, 3199, 3456, 3493, 3933, 4506, 4596, 4754). No `.get()`, `WaitForSingleObject`, or `Sleep` appears on the UI path. |
+| A held write lock blocks the UI thread | 15 s `BEGIN EXCLUSIVE` on the live store from a second connection, with a storage-triggering click driven | **False.** 295/295 pings answered, p50 0.17 ms, max 13.57 ms. |
+| The 11.399 s figure was a UI-thread stall | Re-ran the same diagnostic shape; measured the pump directly | **False.** 11.399 s was the cost of a full UIA descendant enumeration, not the message pump. See §22.3. |
+| The app blocks during the whole run | `WM_NULL` sampled every 50 ms for an entire harness run | **False.** 2601 samples: p50 0.12 ms, p95 10.63 ms, p99 32.12 ms, max 379.7 ms, **0** samples over 1000 ms. |
+
+The application's own `CompositionTarget::Rendering` heartbeat, which runs on the UI thread, corroborates this independently: the maximum render-callback interval in the failing run `20261021-final` was **1865 ms**, and in the three runs measured here 492 ms, 432 ms and 632 ms. A thread blocked for 11.4 s cannot report an 1865 ms maximum interval over 43 335 callbacks.
+
+### 22.3 What the 11.399 s figure actually measured
+
+The harness diagnostic named "UI thread probe" calls `find_by_aid(win, "SearchMessagesButton")` and then `.rectangle()`. That is a cross-process COM enumeration of every descendant in the tree followed by a rect fetch. Its duration is dominated by enumeration cost and says nothing about whether the application's message pump is answering.
+
+Measured walk cost against the same binary:
+
+| State | Elements | Walk | UI-thread pump |
+| --- | --- | --- | --- |
+| Selector screen | 51 | 56 ms | 0.30 ms |
+| Bound chat, 50 contributions | 52 | 103–139 ms | 0.06–0.43 ms |
+| Search overlay, results populated | 8 | 83–145 ms | 0.06–0.15 ms |
+| App **not** foreground | 52 | 42–63 ms | 0.11 ms |
+
+Two further observations bound the original figure. First, the same failing run logged an ordinary notice walk of **7.88 s**, which is the same order as the 11.399 s "stall" and is unambiguously enumeration cost in a `wait_for_notice` loop, not a UI-thread condition. Second, the harness's own comment in `wait_for_notice` already states that "a slow walk and a notice that never opened look identical in a single figure" — the lesson was applied there and not to the probe that produced the stall claim.
+
+**The probe has been corrected rather than re-argued.** `log_menu_failure_diagnostics` now logs the walk as `UIA walk cost` and separately logs a real pump measurement as `UI thread latency (WM_NULL, ...)`. `open_switch_project` no longer concludes "this is a UI-thread stall timeout" from a slow walk; it attributes a post-deadline find to a short poll deadline unless the pump probe independently shows a block.
+
+**The new probe was proved to discriminate.** Against Mayasaba's owning process: healthy `answered=True` at 0.000 s, all 30 threads suspended `answered=False` after 1.507 s, resumed `answered=True` at 0.000 s. The first attempt at this control was invalid — the "Notepad" window it found belonged to a pre-existing process (pid 8040) rather than the process it launched (16104), so suspending the launched process proved nothing about the window being probed. That invalid control produced a spurious "does not discriminate" verdict, which was discarded when `GetWindowThreadProcessId` showed the ownership mismatch. The measurement that replaced it is the one reported here.
+
+### 22.4 W2 — the original Phase 10.2 failure
+
+Run `ui-acceptance-20261021-130452` recorded two symptoms against a binary that no longer exists: "Switch Project: the File flyout never realized its menu item", and "FAIL: 'Inspect sample_spec.txt' button not found in AttachmentChipsPanel". Run `20261021-final` captured the state during a recurrence and showed the `Switch Project` MenuItem **present and realized** at (212, 281, 136, 35) while the poll reported it missing.
+
+The scenario was re-run end to end in `ui-acceptance-20261022-w1w4`, seeded exactly as Phase 10.2 seeds it (`file_name='sample_spec.txt'`, `status='READY'`, staged under `<store dir>\attachments\staging\<alpha_id>`), with the pump probe available:
+
+```
+--- 10.2 Managed Draft Attachment Chip Realization & Content Preview Panel (Seeded Fixture Evidence) ---
+PASS: Attachment chip realized with inspect button 'Inspect sample_spec.txt'.
+```
+
+Criterion 13 is **PASS** in that run, and the File → Switch Project step it depends on completed. The original symptom did not recur.
+
+**Explanation, and its limit.** The symptom is explained by the interaction of two harness conditions rather than by a product defect: a 3.0 s poll deadline measured against an operation whose diagnostic instrumentation is itself expensive, in a run where the application was not foreground. The menu item was always present. This does **not** claim the original run's environment is reproduced — that run's `foreground hwnd 0` condition was not re-created, and the specific flake remains unreproduced on demand. What is established is that the control was present, the application was responsive, and the criterion now passes on the current binary.
+
+### 22.5 W3 — criteria 11 and 12: the failure is in the helper, not the application
+
+The helper was instrumented and run while the application's UI thread was sampled. The table below is the measurement on the intermediate helper build `5dd4860d…`; §22.9 re-measures the final artifact, whose foreground outcome differs:
+
+| Measurement | Value |
+| --- | --- |
+| `ole_drop.exe` exit | 4 |
+| Helper's own foreground report | `foreground=app`, `foreground_hwnd` = target |
+| App foreground across the attempt | 332/332 samples (100 %) |
+| App UI-thread p50 during the attempt | 0.14 ms |
+| App UI-thread max during the attempt | 0.98 ms |
+| App UI-thread timeouts | 0 |
+| **`QueryContinueDrag` calls** | **0** |
+
+`DoDragDrop` never entered a single drag iteration. No amount of waiting, foreground work, or guard tuning can complete a drag that the OLE loop never starts, so the helper's timeout is not evidence about the drop target.
+
+**Control experiment.** The same helper was run against a text editor with a registered drop target: identical result, `exit=4`, `QueryContinueDrag calls: 0`. A helper that fails the same way against a known-good target is measuring itself.
+
+Two defects in the helper were found and fixed:
+
+1. **The guard could never fire.** `QueryContinueDrag` force-dropped at 2500 ms while the watchdog killed the process at 2400 ms, so the process always died before its own safeguard. The helper now settles at 1200 ms, inside a 4.0 s watchdog budget.
+2. **The watchdog blamed the environment for a condition it created.** Its message asserted "timed out under OS environment", which is a guess inside a test artifact. It now reports the drag-loop iteration count, which is the measurement that distinguishes "never delivered" from "delivered and refused".
+
+The helper also now reports whether `SetForegroundWindow` actually took effect, because it previously called the function and never checked.
+
+**Criteria 11 and 12 remain INCONCLUSIVE.** They are now honestly unmeasurable: the evidence says the harness cannot deliver a synthetic OLE drag in this session, and says nothing about Mayasaba's drop handling. The drop target itself is correctly declared in `MainWindow.xaml` (`AllowDrop="True" Drop="OnComposerDrop"` at lines 928 and 935) with handlers at `MainWindow.xaml.cpp` 2437 and 2452, but a declaration is not a verified drop.
+
+### 22.6 W4 — the foreground
+
+`GetForegroundWindow()` returned **0** throughout every run in the earlier series. That is not a normal interactive state, and the probe here establishes that it is not a machine limit:
+
+| Attempt | Result |
+| --- | --- |
+| `GetForegroundWindow()` from an ordinary process on this machine | valid HWND (133422) |
+| After launching the app | app is foreground (`match=True`) |
+| `win.set_focus()` (what the harness calls) | foreground = app, still app 3 s later |
+| `AttachThreadInput` + `SetForegroundWindow` | returned `True`, held for 3 s |
+
+The full harness run in `ui-acceptance-20261022-w1w4` logged **zero** occurrences of "the application window is not the foreground window", against 3 in `20261022-0031`. Criterion 17 consequently returned **PASS**, and criterion 15's typing p95 was 26.26 ms against a 100 ms threshold.
+
+**What is not established.** The mechanism that produced `foreground hwnd 0` in the earlier runs was not identified. It did not reproduce in four separate runs today, so the honest statement is that the condition is not reproducible here and the foreground can be established and held reliably — not that a specific cause was found and fixed. Criterion 15 is recorded as PASS for this run only; §21.4's conclusion that the reading is context-dependent stands.
+
+### 22.7 Criteria for this assignment
+
+| ID | Criterion | Evidence type | Observation | Verdict |
+| --- | --- | --- | --- | --- |
+| W-01 | The UI-thread stall hypothesis is tested by measurement, not assumed. | Native probe | 2601 samples over a 142.9 s harness run: p50 0.12 ms, p95 10.63 ms, p99 32.12 ms, max 379.7 ms, 0 over 1000 ms. | **PASS** (hypothesis refuted) |
+| W-02 | A held SQLite write lock does not block the UI thread. | Native probe | 15 s `BEGIN EXCLUSIVE` + storage-triggering click: 295/295 pings answered, max 13.57 ms. | **PASS** |
+| W-03 | The 11.399 s figure is attributed to its actual cause. | Native probe + code | Walk cost 42–145 ms while the pump answered in 0.06–0.43 ms; the same run logged a 7.88 s notice walk. | **PASS** |
+| W-04 | The stall diagnostic no longer conflates enumeration cost with a blocked pump. | Harness change + run | `UIA walk cost` and `UI thread latency (WM_NULL)` logged separately; the stall conclusion now requires the pump probe. | **PASS** |
+| W-05 | The new pump probe discriminates a real block. | Native probe | Healthy `True`/0.000 s, 30 threads suspended `False`/1.507 s, resumed `True`/0.000 s. | **PASS** |
+| W-06 | The original Phase 10.2 symptom is re-tested on the current binary. | Native run | `PASS: Attachment chip realized with inspect button 'Inspect sample_spec.txt'.` | **PASS** |
+| W-07 | The OLE failure is attributed to the helper or the application by measurement. | Native probe | `QueryContinueDrag calls: 0` with app foreground 332/332 and UI max 0.98 ms. | **PASS** (attributed to helper) |
+| W-08 | The OLE helper's internal guards are consistent. | Source + rebuild | Self-drop 1200 ms inside a 4000 ms watchdog; the previous 2500 ms guard could never fire before a 2400 ms kill. | **PASS** |
+| W-09 | The OLE helper cannot complete an OLE drag against any target here. | Control experiment | Identical `exit=4`, `QueryContinueDrag calls: 0` against a known-good drop target. | **PASS** (helper/session limit established) |
+| W-10 | Foreground can be established and held. | Native probe + run | `set_focus` and `AttachThreadInput` both hold for 3 s; 0 foreground warnings in the full run. | **PASS** |
+| W-11 | Full harness completes with no failures or blocks. | Native run | `Total: 20 criteria | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0`. | **PASS** |
+| W-12 | `poll_until` cannot degrade into a single snapshot. | Harness change | `min_samples=2` added, matching the guard `wait_for_notice` already had. | **PASS** |
+| W-13 | Criteria 11 and 12 are measurable. | Native run | Not measurable: the synthetic OLE drag never starts. | **INCONCLUSIVE** |
+| W-14 | Criterion 19 (hero perspective) is measurable. | Native run | Not measurable by the harness. | **INCONCLUSIVE** |
+| W-15 | The mechanism behind the earlier `foreground hwnd 0` is identified. | — | Did not reproduce in four runs; the condition was not explained, only not observed. | **INCONCLUSIVE** |
+
+### 22.8 What this record does not claim
+
+1. **It does not claim a stall was fixed.** No stall was found to fix. The application's UI thread answered within 380 ms at worst across a full run, and the earlier 11.399 s figure was a UIA enumeration cost that had been mislabelled as a stall. No application source was changed by this assignment.
+2. **It does not claim the original Phase 10.2 flake is reproduced or root-caused.** The symptom did not recur; the control was present and the criterion passes. The earlier run's `foreground hwnd 0` environment was not re-created.
+3. **It does not claim criteria 11 or 12 pass.** They remain INCONCLUSIVE. The measurement shows the harness cannot start an OLE drag in this session — against Mayasaba *and* against a known-good control target — so these criteria carry no information about Mayasaba's drop handling in either direction.
+4. **It does not claim a foreground defect was fixed.** The foreground was established and held in every run today; the cause of the earlier `foreground hwnd 0` was not determined.
+5. **Criterion 15's PASS is this run's reading, not a stable baseline.** §21.4 remains in force: the metric moves with the execution context.
+6. **The OLE helper fixes do not make criteria 11/12 measurable.** They make the helper's failure report truthful; they do not make it succeed.
+
+### 22.9 Re-measurement on the final helper artifact
+
+The helper was rebuilt a second time after §22.5 to remove a use-after-free: the watchdog thread read the `QueryContinueDrag` counter from the `DropSource` object, which `Release()` deletes when `DoDragDrop` returns, so the watchdog could read freed memory in the window between completion and its own observation. The counter is now owned by `wmain`'s stack frame and passed to `DropSource` by reference (`native/tests/ole_drop.cpp` lines 22-24, 261-263). The measurement was then repeated against the final artifact so the record names the binary it belongs to.
+
+| Measurement | Intermediate build `5dd4860d…` (§22.5) | Final build `565af552…` (§22.9) |
+| --- | --- | --- |
+| `ole_drop.exe` exit | 4 | 4 |
+| Elapsed | — | 4.84 s |
+| **`QueryContinueDrag` calls** | **0** | **0** |
+| Helper's own post-call foreground read | `foreground=app` | `foreground=other` (`foreground_hwnd=199242`, target `0x40A42`) |
+| App foreground, sampled over the attempt | 332/332 (100 %) | 282/333 (84.7 %) |
+| App UI-thread p50 | 0.14 ms | 0.14 ms |
+| App UI-thread max | 0.98 ms | 3.59 ms |
+| App UI-thread timeouts | 0 | 0 |
+
+**The conclusion is unchanged and the lifetime fix did not alter it.** The drag loop still never iterated, so the synthetic drag was never delivered and the timeout remains evidence about the helper, not about the drop target.
+
+**The foreground reading needs care, because the two columns measure different things.** The helper's field is a single read taken immediately after `SetForegroundWindow` returns; the sampler's is 333 reads spread across the 4.84 s attempt. The sampler observed the application foreground for 84.7 % of the attempt, including after the helper's own read reported otherwise, so the immediate post-call value is not a settled observation of the activation — Windows can complete a foreground change after the call returns. This is the same distinction §13 draws for layout: a figure read in the same pass that changed the state reports the previous pass. It also means the intermediate build's `foreground=app` was not proof that the activation took, merely that the read happened to land after it.
+
+The residual 15.3 % of samples with another window foreground was not investigated; it is consistent with the watchdog's synthetic `VK_ESCAPE` and the process teardown, but that is a hypothesis, not a measurement.
+
+**What this changes in the record:** the attribution in §22.5 stands, W-07 and W-13 keep their verdicts, and criteria 11 and 12 remain **INCONCLUSIVE**. What changes is only that §22.1 now names the final artifact, and that the foreground evidence is recorded as sampled rather than assumed from one read.
+
+### 22.10 Confirmation run on the committed harness, and the harness oracle test
+
+The primary run in §22.7 exercised the harness as it stood mid-assignment. Two changes were made to the harness afterwards, so the recorded run no longer matched the file being committed:
+
+1. **A message defect in my own diagnostic.** The late-item branch interpolated `probe_elapsed` -- the *UIA walk* duration -- into a sentence claiming the UI thread had not answered. That is precisely the conflation the assignment was about, reintroduced in the code written to fix it. It now interpolates `ui_secs`, the measured pump latency.
+2. **A misleading variable name.** The walk-diagnostic bound the pump result to `ui_ms` while it holds seconds. Renamed to `ui_secs`.
+
+The full harness was re-run against the committed harness, with the same binary:
+
+| Field | Value |
+| --- | --- |
+| Executable SHA-256 | `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` (identical to §22.1) |
+| Compiled XAML SHA-256 | `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` (identical to §22.1) |
+| Evidence directory | `native/tests/evidence/ui-acceptance-20261022-w1w4-final` |
+| Result | `Total: 20 criteria | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0` |
+| Inconclusive criteria | 11, 12, 19 — unchanged |
+| Typing p95 (criterion 15) | 33.91 ms against a 100 ms threshold |
+| Foreground warnings | 0 |
+
+The confirmation run reproduces the primary run's verdicts exactly, on the same binary, from a fresh store. The two edits are message- and naming-only and cannot change a verdict; that is a claim about the diff, and the re-run is what checks it.
+
+**The harness's own helpers now have an oracle and a controlling mutation.** `native/tests/test_harness_oracles.py` tests `poll_until` and `ui_thread_latency` directly, because a harness helper that silently degrades produces product failures that cannot be reproduced on demand. `python native/tests/test_harness_oracles.py` -- 8 tests, exit 0.
+
+The controlling mutation for the `poll_until` fix was applied to `native/tests/test_full_ui_acceptance.py` itself, not simulated: the `min_samples` guard was reverted to the original single-snapshot loop, and the test run then reported
+
+```
+FAIL: test_poll_until_takes_more_than_one_sample: only 1 sample(s): the poll degraded to a snapshot
+FAIL: 1 failure(s)
+```
+
+with exit code 1. The fix was restored and the file verified byte-identical by SHA-256 (`38e52bba66168057c498818436d42244e65ad7538ee9d7762c4a9ba6a4b97d50`) before the confirmation run. This mutation makes the postcondition unsatisfiable by construction; it does not reproduce the original timing race, and it proves only that the assertion discriminates *that* degradation.
+
+**A stale test binary was caught and must not be confused with a regression.** `native/tests/storage_tests.exe` (the legacy path, mtime 2026-10-15) failed at a line number that did not match the symbol's location in the current source (`secondaryFailed` is at line 573; the message cited 445). The current build lives at `native/tests/bin/storage_tests.exe` (mtime 2026-10-22 00:14) and reports `PASS: 44 of 44 executed native regression groups`, exit 0. The failing copy predates commit `61961e1`. Recorded here because a stale binary at a legacy path is a recurring trap: check the mtime and the path before attributing a failure to a source change.
 

@@ -14,7 +14,14 @@
 class DropSource : public IDropSource
 {
 public:
-    DropSource() : refCount_(1), startTime_(std::chrono::steady_clock::now()) {}
+    // The counter is owned by the caller, not by this object. The watchdog reads
+    // it from another thread, and this object is destroyed by Release() when
+    // DoDragDrop returns, so storing the count here would let the watchdog read
+    // freed memory in the window between completed being set and the watchdog
+    // observing it.
+    explicit DropSource(std::atomic<int>& continueCalls)
+        : refCount_(1), startTime_(std::chrono::steady_clock::now()),
+          continueCalls_(continueCalls) {}
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) override
     {
@@ -39,12 +46,21 @@ public:
 
     HRESULT STDMETHODCALLTYPE QueryContinueDrag(BOOL fEscapePressed, DWORD grfKeyState) override
     {
+        continueCalls_.fetch_add(1);
         if (fEscapePressed) return DRAGDROP_S_CANCEL;
 
-        // Bounded safeguard: after 2.5 seconds, force drop completion so DoDragDrop never hangs
+        // Bounded safeguard: force drop completion so DoDragDrop never hangs.
+        //
+        // This MUST stay well inside the watchdog's budget in wmain. The two were
+        // previously inconsistent -- the safeguard waited 2500 ms while the
+        // watchdog killed the process at 2400 ms -- so the guard could never run
+        // and every attempt ended in ExitProcess(4) labelled "OS environment",
+        // which named the environment for a condition this helper created. The
+        // helper now settles at 1200 ms, half the watchdog's budget, so a drop
+        // that the app accepts is reported as a drop rather than as a timeout.
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - startTime_).count();
-        if (elapsed > 2500)
+        if (elapsed > 1200)
         {
             return DRAGDROP_S_DROP;
         }
@@ -65,6 +81,7 @@ public:
 private:
     std::atomic<ULONG> refCount_;
     std::chrono::steady_clock::time_point startTime_;
+    std::atomic<int>& continueCalls_;
 };
 
 class FileDataObject : public IDataObject
@@ -229,15 +246,32 @@ int wmain(int argc, wchar_t* argv[])
     SetForegroundWindow(targetHwnd);
     SetCursorPos(targetX, targetY);
 
-    auto* pDropSource = new DropSource();
+    // Report whether the activation actually took. Windows refuses
+    // SetForegroundWindow from a process that does not own the foreground and
+    // returns nothing useful, so the previous code could not tell "the drop was
+    // refused" from "the synthetic drag never reached a focused window". The
+    // measured foreground is written to stdout so the harness records it.
+    HWND fgAfter = GetForegroundWindow();
+    std::wcout << L"foreground=" << (fgAfter == targetHwnd ? L"app" : L"other")
+               << L" target=" << targetHwnd
+               << L" foreground_hwnd=" << reinterpret_cast<unsigned long long>(fgAfter) << L"\n";
+
+    // Owned by this stack frame so the watchdog can read it safely after
+    // DoDragDrop has returned and released the drop source.
+    std::atomic<int> continueCalls{0};
+
+    auto* pDropSource = new DropSource(continueCalls);
     auto* pDataObject = new FileDataObject(files);
 
     DWORD mainThreadId = GetCurrentThreadId();
     std::atomic<bool> completed{false};
 
-    // Watchdog thread: unblocks OLE modal loop if UIPI or message pump stalls
-    std::thread watchdog([mainThreadId, &completed]() {
-        for (int i = 0; i < 20; ++i)
+    // Watchdog thread: unblocks OLE modal loop if UIPI or message pump stalls.
+    // The budget is 4.0 s so it stays outside the DropSource safeguard (1.2 s);
+    // a watchdog that fires first would mask the very condition it is meant to
+    // escape from.
+    std::thread watchdog([mainThreadId, &completed, &continueCalls]() {
+        for (int i = 0; i < 40; ++i)
         {
             if (completed.load()) return;
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -250,7 +284,12 @@ int wmain(int argc, wchar_t* argv[])
             std::this_thread::sleep_for(std::chrono::milliseconds(400));
             if (!completed.load())
             {
-                std::wcerr << L"WATCHDOG: DoDragDrop modal loop timed out under OS environment.\n";
+                std::wcerr << L"WATCHDOG: DoDragDrop modal loop did not complete. "
+                           << L"QueryContinueDrag calls so far: "
+                           << continueCalls.load()
+                           << L" (0 means the OLE drag loop never iterated, so the "
+                           << L"synthetic drag was never delivered to the target and "
+                           << L"this is not evidence about the drop target).\n";
                 ExitProcess(4);
             }
         }
