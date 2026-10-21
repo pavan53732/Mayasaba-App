@@ -2,6 +2,7 @@
 #include "ProjectRoot.h"
 #include "NativeIds.h"
 #include "ProtectedDraft.h"
+#include "Sha256Hex.h"
 #include <filesystem>
 #include <utility>
 #include <sstream>
@@ -1118,7 +1119,7 @@ namespace mayasaba
                 Statement version(db_, "PRAGMA user_version;");
                 Check(sqlite3_step(version.value), db_);
                 schemaVersion = sqlite3_column_int(version.value, 0);
-                if (schemaVersion > 3) throw std::runtime_error("Store schema is newer than this application; no migration was attempted");
+                if (schemaVersion > 4) throw std::runtime_error("Store schema is newer than this application; no migration was attempted");
             }
             Exec("PRAGMA foreign_keys=ON;");
             Exec("PRAGMA journal_mode=WAL;");
@@ -1318,7 +1319,100 @@ namespace mayasaba
                 protectColumn("SELECT project_id,body FROM pending_submissions;","UPDATE pending_submissions SET body=?2 WHERE project_id=?1;");
                 protectColumn("SELECT operation_id,request_bytes FROM selection_receipts;","UPDATE selection_receipts SET request_bytes=?2 WHERE operation_id=?1;");
             }
-            Exec("PRAGMA user_version=3;");
+
+            // ------------------------------------------------------------------
+            // Gate I1: durable delivery.
+            //
+            // The outbox, inbox and receipt tables are created here, inside the
+            // same migration transaction as everything else, so a store either
+            // has all of them or none. They are created rather than migrated from
+            // an earlier shape because nothing wrote them before this version: an
+            // earlier build had no outbox at all.
+            //
+            // `request_bytes` on command_receipts stores canonical bytes, for the
+            // same reason selection_receipts does: idempotency compares bytes, so
+            // a re-spelling of the same command must compare equal and a different
+            // command must not.
+            // ------------------------------------------------------------------
+            Exec("CREATE TABLE IF NOT EXISTS outbox_envelopes("
+                 "envelope_id TEXT PRIMARY KEY,"
+                 "original_envelope_id TEXT,"
+                 "message_class TEXT NOT NULL,"
+                 "sender TEXT NOT NULL,"
+                 "recipients TEXT NOT NULL,"
+                 "project_id TEXT NOT NULL,"
+                 "approved_epoch TEXT NOT NULL,"
+                 "operation_id TEXT NOT NULL,"
+                 "effect_id TEXT NOT NULL,"
+                 "ordering_scope TEXT NOT NULL,"
+                 "sequence INTEGER NOT NULL,"
+                 "correlation_id TEXT NOT NULL,"
+                 "payload_type TEXT NOT NULL,"
+                 "payload_digest TEXT NOT NULL,"
+                 "payload TEXT NOT NULL DEFAULT '',"
+                 "managed_artifact_id TEXT NOT NULL DEFAULT '',"
+                 "created_at_utc TEXT NOT NULL,"
+                 "ack_required INTEGER NOT NULL DEFAULT 1,"
+                 // Delivery bookkeeping belongs to MCF-v2, but a row cannot be
+                 // said to be durably queued without recording that it has not
+                 // yet been sent. 0 means queued; only a receiver acknowledgement
+                 // moves it.
+                 "dispatched INTEGER NOT NULL DEFAULT 0,"
+                 "UNIQUE(ordering_scope, sequence));");
+            Exec("CREATE INDEX IF NOT EXISTS outbox_project ON outbox_envelopes(project_id, sequence);");
+
+            Exec("CREATE TABLE IF NOT EXISTS inbox_envelopes("
+                 "envelope_id TEXT PRIMARY KEY,"
+                 "message_class TEXT NOT NULL,"
+                 "sender TEXT NOT NULL,"
+                 "project_id TEXT NOT NULL,"
+                 "approved_epoch TEXT NOT NULL,"
+                 "ordering_scope TEXT NOT NULL,"
+                 "sequence INTEGER NOT NULL,"
+                 "payload_digest TEXT NOT NULL,"
+                 "payload TEXT NOT NULL DEFAULT '',"
+                 "received_at_utc TEXT NOT NULL,"
+                 // Admitted, then applied. An envelope is admitted exactly once;
+                 // the two flags are what let a crash between them be reconciled
+                 // instead of re-delivered.
+                 "admitted INTEGER NOT NULL DEFAULT 1,"
+                 "applied INTEGER NOT NULL DEFAULT 0,"
+                 "UNIQUE(ordering_scope, sequence));");
+
+            Exec("CREATE TABLE IF NOT EXISTS command_receipts("
+                 "receipt_id TEXT PRIMARY KEY,"
+                 "command_id TEXT NOT NULL,"
+                 "operation_id TEXT NOT NULL,"
+                 // The idempotency identity is the operation id plus the exact
+                 // canonical bytes, so the same operation with different input is
+                 // detectable rather than silently deduplicated.
+                 "request_bytes TEXT NOT NULL,"
+                 "request_digest TEXT NOT NULL,"
+                 "result_kind TEXT NOT NULL,"
+                 "owner TEXT NOT NULL,"
+                 "result_record_id TEXT NOT NULL DEFAULT '',"
+                 "result_record_version TEXT NOT NULL DEFAULT '',"
+                 "event_ids TEXT NOT NULL DEFAULT '',"
+                 "error_code TEXT NOT NULL DEFAULT '',"
+                 "error_message TEXT NOT NULL DEFAULT '',"
+                 "retry_kind TEXT NOT NULL DEFAULT 'NEVER',"
+                 "source_owner TEXT NOT NULL DEFAULT '',"
+                 "original_receipt_id TEXT NOT NULL DEFAULT '',"
+                 "original_receipt_digest TEXT NOT NULL DEFAULT '',"
+                 "physical_outcome TEXT NOT NULL,"
+                 "recorded_at_utc TEXT NOT NULL,"
+                 // No UNIQUE(operation_id) here, deliberately. This table is an
+                 // append-only attempt log, not a one-row-per-operation table:
+                 // a duplicate or a conflicting re-presentation is itself a
+                 // recorded fact and must not overwrite the original. The
+                 // *earliest* row for an operation is the authoritative one,
+                 // because CommitCommand only writes an outcome-establishing row
+                 // when no prior row exists; every later row is a DUPLICATE or a
+                 // conflict refusal and says so in its result_kind.
+                 "UNIQUE(receipt_id));");
+            Exec("CREATE INDEX IF NOT EXISTS receipt_operation ON command_receipts(operation_id);");
+
+            Exec("PRAGMA user_version=4;");
             Exec("COMMIT;");
             ReconcileCrashOperations();
         }
@@ -1633,9 +1727,393 @@ namespace mayasaba
         catch (...) { sqlite3_exec(db_,"ROLLBACK;",nullptr,nullptr,nullptr); throw; }
     }
 
-    void Storage::TouchProjectOpened(std::string const& id)
+    // ----------------------------------------------------------------------
+    // Gate I1: durable delivery
+    // ----------------------------------------------------------------------
+
+    namespace
+    {
+        // Joins with a separator SQLite can split on. Recipients and event ids
+        // are both `^[A-Za-z0-9._:-]+$`-safe in practice but this is not relied
+        // on: a value containing the separator is refused at insert time by
+        // delivery::Validate for recipients, and event ids are Uuids.
+        std::string JoinValues(std::vector<std::string> const& values)
+        {
+            std::string joined;
+            for (std::size_t i = 0; i < values.size(); ++i)
+            {
+                if (i) joined.push_back('\n');
+                joined.append(values[i]);
+            }
+            return joined;
+        }
+
+        std::vector<std::string> SplitValues(std::string const& joined)
+        {
+            std::vector<std::string> values;
+            if (joined.empty()) return values;
+            std::size_t start = 0;
+            for (;;)
+            {
+                auto const at = joined.find('\n', start);
+                if (at == std::string::npos) { values.push_back(joined.substr(start)); break; }
+                values.push_back(joined.substr(start, at - start));
+                start = at + 1;
+            }
+            return values;
+        }
+    }
+
+    delivery::CommandReceipt Storage::CommitCommand(CommandCommit const& command)
+    {
+        using namespace mayasaba::delivery;
+
+        std::lock_guard lock(mutex_);
+
+        // Admission before any statement is prepared, per AGENTS.md §11. A
+        // quarantined or over-capacity store refuses here rather than midway
+        // through the transaction.
+        AdmitWrite_locked();
+
+        auto nowReceipt = [&](ResultKind kind) -> CommandReceipt
+        {
+            CommandReceipt receipt;
+            receipt.receiptId = NewUuid();
+            receipt.commandId = command.commandId;
+            receipt.operationId = command.operationId;
+            receipt.resultKind = kind;
+            receipt.owner = command.owner;
+            receipt.recordedAtUtc = command.recordedAtUtc;
+            receipt.physicalOutcome = command.physicalOutcome;
+            return receipt;
+        };
+
+        auto insertReceipt = [&](CommandReceipt const& receipt, std::string const& requestDigest)
+        {
+            Statement q(db_, "INSERT INTO command_receipts(receipt_id,command_id,operation_id,request_bytes,request_digest,"
+                             "result_kind,owner,result_record_id,result_record_version,event_ids,error_code,error_message,"
+                             "retry_kind,source_owner,original_receipt_id,original_receipt_digest,physical_outcome,recorded_at_utc) "
+                             "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18);");
+            Bind(q.value, 1, receipt.receiptId);
+            Bind(q.value, 2, receipt.commandId);
+            Bind(q.value, 3, receipt.operationId);
+            Bind(q.value, 4, ProtectDraft(command.canonicalRequestBytes));
+            Bind(q.value, 5, requestDigest);
+            Bind(q.value, 6, ResultKindText(receipt.resultKind));
+            Bind(q.value, 7, receipt.owner);
+            Bind(q.value, 8, receipt.resultRecordId);
+            Bind(q.value, 9, receipt.resultRecordVersion);
+            Bind(q.value, 10, JoinValues(receipt.eventIds));
+            Bind(q.value, 11, receipt.errorCode);
+            Bind(q.value, 12, receipt.errorMessage);
+            Bind(q.value, 13, RetryKindText(receipt.retryKind));
+            Bind(q.value, 14, receipt.sourceOwner);
+            Bind(q.value, 15, receipt.originalReceiptId);
+            Bind(q.value, 16, receipt.originalReceiptDigest);
+            Bind(q.value, 17, receipt.physicalOutcome);
+            Bind(q.value, 18, receipt.recordedAtUtc);
+            Check(sqlite3_step(q.value), db_);
+        };
+
+        // The digest is computed before the transaction opens so a hash failure
+        // cannot leave a half-written command. An unavailable digest fails closed:
+        // without it the idempotency comparison has no basis.
+        auto const requestDigest = Sha256Hex(command.canonicalRequestBytes);
+        if (!requestDigest.has_value())
+            throw std::runtime_error("Command identity digest unavailable; the command was not recorded");
+
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            // C09 step 4. The comparison is on canonical bytes, never on a
+            // parsed value, so a re-spelling is a duplicate and a different
+            // command under the same id is a conflict.
+            {
+                Statement prior(db_, "SELECT receipt_id,request_bytes,result_kind,owner,result_record_id,"
+                                     "result_record_version,event_ids,error_code,error_message,retry_kind,"
+                                     "source_owner,original_receipt_id,original_receipt_digest,physical_outcome,"
+                                     "recorded_at_utc FROM command_receipts WHERE operation_id=?1 "
+                                     "ORDER BY rowid ASC LIMIT 1;");
+                Bind(prior.value, 1, command.operationId);
+                int const rc = sqlite3_step(prior.value);
+                Check(rc, db_);
+                if (rc == SQLITE_ROW)
+                {
+                    std::string const priorBytes = ReadDraft(Text(prior.value, 1));
+                    auto const decision = DecideIdempotency(priorBytes, command.canonicalRequestBytes);
+
+                    if (decision == IdempotencyDecision::Conflict)
+                    {
+                        // Different bytes under one identity. Refused, and the
+                        // original receipt is left exactly as it was.
+                        auto receipt = nowReceipt(ResultKind::Refused);
+                        receipt.errorCode = "IDEMPOTENCY_CONFLICT";
+                        receipt.errorMessage = "This operation identity was already used with different input; "
+                                               "the original receipt is unchanged.";
+                        receipt.retryKind = RetryKind::AfterUserAction;
+                        receipt.sourceOwner = command.owner;
+                        // A refusal is a known outcome: nothing was applied.
+                        receipt.physicalOutcome = "NOT_STARTED";
+                        insertReceipt(receipt, *requestDigest);
+                        Exec("COMMIT;");
+                        return receipt;
+                    }
+
+                    // A duplicate returns a linkage receipt naming the original,
+                    // per C09 step 4. The original is NOT rewritten: a reader
+                    // that followed the link must find what it read the first
+                    // time.
+                    auto receipt = nowReceipt(ResultKind::Duplicate);
+                    receipt.originalReceiptId = Text(prior.value, 0);
+                    receipt.originalReceiptDigest = priorBytes.empty()
+                        ? std::string{}
+                        : Sha256Hex(priorBytes).value_or(std::string{});
+                    receipt.retryKind = RetryKind::Never;
+                    // The duplicate's physical outcome is the original's, because
+                    // that is the effect the caller is asking about.
+                    receipt.physicalOutcome = Text(prior.value, 13);
+                    insertReceipt(receipt, *requestDigest);
+                    Exec("COMMIT;");
+                    return receipt;
+                }
+            }
+
+            // The owner's own write. A throw here rolls back everything,
+            // including any envelope that had already been written.
+            std::string resultRecordId;
+            std::string resultRecordVersion;
+            try
+            {
+                if (command.applyMutation)
+                    command.applyMutation(resultRecordId, resultRecordVersion);
+            }
+            catch (std::exception const& e)
+            {
+                auto receipt = nowReceipt(ResultKind::Refused);
+                receipt.errorCode = "PRECONDITION_FAILED";
+                receipt.errorMessage = e.what();
+                receipt.retryKind = RetryKind::AfterUserAction;
+                receipt.sourceOwner = command.owner;
+                receipt.physicalOutcome = "NOT_STARTED";
+                insertReceipt(receipt, *requestDigest);
+                Exec("COMMIT;");
+                return receipt;
+            }
+
+            // C09 step 7: causal envelopes in the same transaction. Validated
+            // here rather than at the caller so a malformed envelope cannot be
+            // recorded beside a committed state change.
+            for (auto const& envelope : command.envelopes)
+            {
+                auto const error = Validate(envelope);
+                if (error != EnvelopeError::None)
+                    throw std::runtime_error(std::string("Outbox envelope refused: ") + EnvelopeErrorText(error));
+
+                Statement q(db_, "INSERT INTO outbox_envelopes(envelope_id,original_envelope_id,message_class,sender,"
+                                 "recipients,project_id,approved_epoch,operation_id,effect_id,ordering_scope,sequence,"
+                                 "correlation_id,payload_type,payload_digest,payload,managed_artifact_id,created_at_utc,"
+                                 "ack_required) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18);");
+                Bind(q.value, 1, envelope.envelopeId);
+                Bind(q.value, 2, envelope.originalEnvelopeId);
+                Bind(q.value, 3, envelope.messageClass);
+                Bind(q.value, 4, envelope.sender);
+                Bind(q.value, 5, JoinValues(envelope.recipients));
+                Bind(q.value, 6, envelope.projectId);
+                Bind(q.value, 7, envelope.approvedEpoch);
+                Bind(q.value, 8, envelope.operationId);
+                Bind(q.value, 9, envelope.effectId);
+                Bind(q.value, 10, envelope.orderingScope);
+                sqlite3_bind_int64(q.value, 11, static_cast<sqlite3_int64>(envelope.sequence));
+                Bind(q.value, 12, envelope.correlationId);
+                Bind(q.value, 13, envelope.payloadType);
+                Bind(q.value, 14, envelope.payloadDigest);
+                Bind(q.value, 15, envelope.payload);
+                Bind(q.value, 16, envelope.managedArtifactId);
+                Bind(q.value, 17, envelope.createdAtUtc);
+                sqlite3_bind_int(q.value, 18, envelope.ackRequired ? 1 : 0);
+                Check(sqlite3_step(q.value), db_);
+            }
+
+            auto receipt = nowReceipt(ResultKind::Committed);
+            receipt.resultRecordId = resultRecordId;
+            receipt.resultRecordVersion = resultRecordVersion;
+            receipt.eventIds = command.eventIds;
+            receipt.retryKind = RetryKind::Never;
+
+            // Validate the receipt before persisting it: a COMMITTED receipt
+            // without a record identity would be schema-invalid, and recording
+            // one would put an unreadable row in the audit trail.
+            auto const receiptError = Validate(receipt);
+            if (receiptError != ReceiptError::None)
+                throw std::runtime_error(std::string("Command receipt refused: ") + ReceiptErrorText(receiptError));
+
+            insertReceipt(receipt, *requestDigest);
+            Exec("COMMIT;");
+            return receipt;
+        }
+        catch (...)
+        {
+            RollbackAfterFailure_locked();
+            throw;
+        }
+    }
+
+    bool Storage::AdmitInboxEnvelope(delivery::OutboxEnvelope const& envelope)
+    {
+        using namespace mayasaba::delivery;
+
+        std::lock_guard lock(mutex_);
+        AdmitWrite_locked();
+
+        auto const error = Validate(envelope);
+        if (error != EnvelopeError::None)
+            throw std::runtime_error(std::string("Inbox envelope refused: ") + EnvelopeErrorText(error));
+
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            // Admission is durable before any receiver effect, which is what makes
+            // at-least-once delivery safe to apply. A second admission of the same
+            // id is a no-op: the sender is entitled to retry, and refusing the
+            // retry would turn a lost ACK into a lost message.
+            {
+                Statement existing(db_, "SELECT 1 FROM inbox_envelopes WHERE envelope_id=?1;");
+                Bind(existing.value, 1, envelope.envelopeId);
+                int const rc = sqlite3_step(existing.value);
+                Check(rc, db_);
+                if (rc == SQLITE_ROW) { Exec("COMMIT;"); return false; }
+            }
+
+            Statement q(db_, "INSERT INTO inbox_envelopes(envelope_id,message_class,sender,project_id,approved_epoch,"
+                             "ordering_scope,sequence,payload_digest,payload,received_at_utc,admitted,applied) "
+                             "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1,0);");
+            Bind(q.value, 1, envelope.envelopeId);
+            Bind(q.value, 2, envelope.messageClass);
+            Bind(q.value, 3, envelope.sender);
+            Bind(q.value, 4, envelope.projectId);
+            Bind(q.value, 5, envelope.approvedEpoch);
+            Bind(q.value, 6, envelope.orderingScope);
+            sqlite3_bind_int64(q.value, 7, static_cast<sqlite3_int64>(envelope.sequence));
+            Bind(q.value, 8, envelope.payloadDigest);
+            Bind(q.value, 9, envelope.payload);
+            Bind(q.value, 10, envelope.createdAtUtc);
+            Check(sqlite3_step(q.value), db_);
+
+            Exec("COMMIT;");
+            return true;
+        }
+        catch (...)
+        {
+            RollbackAfterFailure_locked();
+            throw;
+        }
+    }
+
+    std::optional<delivery::CommandReceipt> Storage::ReceiptForOperation(std::string const& operationId)
     {
         std::lock_guard lock(mutex_);
+
+        Statement q(db_, "SELECT receipt_id,command_id,operation_id,result_kind,owner,result_record_id,"
+                         "result_record_version,event_ids,error_code,error_message,retry_kind,source_owner,"
+                         "original_receipt_id,original_receipt_digest,physical_outcome,recorded_at_utc "
+                         "FROM command_receipts WHERE operation_id=?1 ORDER BY rowid ASC LIMIT 1;");
+        Bind(q.value, 1, operationId);
+        int const rc = sqlite3_step(q.value);
+        if (rc == SQLITE_DONE) return std::nullopt;
+        Check(rc, db_);
+
+        delivery::CommandReceipt receipt;
+        receipt.receiptId = Text(q.value, 0);
+        receipt.commandId = Text(q.value, 1);
+        receipt.operationId = Text(q.value, 2);
+        receipt.resultKind = delivery::ParseResultKind(Text(q.value, 3)).value_or(delivery::ResultKind::Unknown);
+        if (!delivery::ParseResultKind(Text(q.value, 3)).has_value()) receipt.resultKindUnreadable = true;
+        receipt.owner = Text(q.value, 4);
+        receipt.resultRecordId = Text(q.value, 5);
+        receipt.resultRecordVersion = Text(q.value, 6);
+        receipt.eventIds = SplitValues(Text(q.value, 7));
+        receipt.errorCode = Text(q.value, 8);
+        receipt.errorMessage = Text(q.value, 9);
+        // Retry kind is parsed back from its registry spelling rather than
+        // defaulted. A row this build cannot read leaves the policy unknown, and
+        // the flag says so, because defaulting to NEVER would present an
+        // unreadable policy as the strictest one and quietly forbid a retry the
+        // recorded receipt might have allowed.
+        if (auto const parsed = delivery::ParseRetryKind(Text(q.value, 10)); parsed.has_value())
+            receipt.retryKind = *parsed;
+        else
+            receipt.retryKindUnreadable = true;
+        receipt.sourceOwner = Text(q.value, 11);
+        receipt.originalReceiptId = Text(q.value, 12);
+        receipt.originalReceiptDigest = Text(q.value, 13);
+        receipt.physicalOutcome = Text(q.value, 14);
+        receipt.recordedAtUtc = Text(q.value, 15);
+        return receipt;
+    }
+
+    std::vector<delivery::OutboxEnvelope> Storage::QueuedOutbox(std::string const& projectId, std::size_t limit)
+    {
+        std::lock_guard lock(mutex_);
+
+        std::vector<delivery::OutboxEnvelope> queued;
+        Statement q(db_, "SELECT envelope_id,original_envelope_id,message_class,sender,recipients,project_id,"
+                         "approved_epoch,operation_id,effect_id,ordering_scope,sequence,correlation_id,payload_type,"
+                         "payload_digest,payload,managed_artifact_id,created_at_utc,ack_required "
+                         "FROM outbox_envelopes WHERE project_id=?1 AND dispatched=0 ORDER BY sequence LIMIT ?2;");
+        Bind(q.value, 1, projectId);
+        sqlite3_bind_int64(q.value, 2, static_cast<sqlite3_int64>(limit));
+        int rc{};
+        while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+        {
+            delivery::OutboxEnvelope envelope;
+            envelope.envelopeId = Text(q.value, 0);
+            envelope.originalEnvelopeId = Text(q.value, 1);
+            envelope.messageClass = Text(q.value, 2);
+            envelope.sender = Text(q.value, 3);
+            envelope.recipients = SplitValues(Text(q.value, 4));
+            envelope.projectId = Text(q.value, 5);
+            envelope.approvedEpoch = Text(q.value, 6);
+            envelope.operationId = Text(q.value, 7);
+            envelope.effectId = Text(q.value, 8);
+            envelope.orderingScope = Text(q.value, 9);
+            envelope.sequence = static_cast<std::uint64_t>(sqlite3_column_int64(q.value, 10));
+            envelope.correlationId = Text(q.value, 11);
+            envelope.payloadType = Text(q.value, 12);
+            envelope.payloadDigest = Text(q.value, 13);
+            envelope.payload = Text(q.value, 14);
+            envelope.managedArtifactId = Text(q.value, 15);
+            envelope.createdAtUtc = Text(q.value, 16);
+            envelope.ackRequired = sqlite3_column_int(q.value, 17) != 0;
+            queued.push_back(std::move(envelope));
+        }
+        Check(rc, db_);
+        return queued;
+    }
+
+    bool Storage::MarkEnvelopeDispatched(std::string const& envelopeId)
+    {
+        std::lock_guard lock(mutex_);
+        AdmitWrite_locked();
+
+        Statement q(db_, "UPDATE outbox_envelopes SET dispatched=1 WHERE envelope_id=?1 AND dispatched=0;");
+        Bind(q.value, 1, envelopeId);
+        Check(sqlite3_step(q.value), db_);
+        return sqlite3_changes(db_) == 1;
+    }
+
+    std::uint64_t Storage::LastDeliveredSequence(std::string const& orderingScope)
+    {
+        std::lock_guard lock(mutex_);
+
+        Statement q(db_, "SELECT coalesce(max(sequence),0) FROM outbox_envelopes WHERE ordering_scope=?1 AND dispatched=1;");
+        Bind(q.value, 1, orderingScope);
+        int const rc = sqlite3_step(q.value);
+        if (rc != SQLITE_ROW) { Check(rc, db_); return 0; }
+        return static_cast<std::uint64_t>(sqlite3_column_int64(q.value, 0));
+    }
+
+    void Storage::TouchProjectOpened(std::string const& id)
+    {        std::lock_guard lock(mutex_);
         Exec("BEGIN IMMEDIATE;");
         try
         {

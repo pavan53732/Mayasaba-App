@@ -119,6 +119,9 @@
     <ClInclude Include="Fixtures.h" />
     <ClInclude Include="SearchController.h" />
     <ClInclude Include="NavigationRecovery.h" />
+    <ClInclude Include="CanonicalJson.h" />
+    <ClInclude Include="DeliveryContract.h" />
+    <ClInclude Include="Sha256Hex.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>
@@ -133,6 +136,9 @@
     <ClCompile Include="Storage.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ProjectRoot.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="AttachmentService.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="CanonicalJson.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="DeliveryContract.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Sha256Hex.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

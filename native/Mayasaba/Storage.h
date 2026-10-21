@@ -1,4 +1,5 @@
 #pragma once
+#include "DeliveryContract.h"
 #include <filesystem>
 #include <atomic>
 #include <cstdint>
@@ -240,6 +241,46 @@ namespace mayasaba
         std::string selectorDraft;
     };
 
+    // One owner command committed transactionally with its causal outbox
+    // envelopes and its receipt. See Storage::CommitCommand.
+    //
+    // The identity is `operationId` plus `canonicalRequestBytes`: C09 step 4
+    // compares canonical bytes, so two spellings of one command are one command
+    // and two different commands under one id are a conflict rather than a
+    // duplicate.
+    struct CommandCommit
+    {
+        std::string operationId;
+        std::string commandId;
+        // Canonical bytes of the request as received. Required: without them the
+        // idempotency decision would have nothing to compare, and a duplicate
+        // would have to be assumed rather than established.
+        std::string canonicalRequestBytes;
+        std::string owner;
+        // UTC, `YYYY-MM-DDTHH:MM:SS.mmmZ`. Supplied rather than generated inside
+        // the transaction so a replay records the original time, not the replay's.
+        std::string recordedAtUtc;
+
+        // The owner's own mutation. Called inside the transaction, at most once,
+        // and only when the identity is new. It returns the resulting record
+        // identity and version, which become part of a COMMITTED receipt; a
+        // caller with nothing to report returns empty strings and the commit is
+        // still recorded.
+        //
+        // A throw from here rolls the whole transaction back and is reported as a
+        // REFUSED receipt, so a partially applied command cannot be recorded as
+        // committed.
+        std::function<void(std::string& resultRecordId, std::string& resultRecordVersion)> applyMutation;
+
+        // Causal envelopes written in the same transaction, per C09 step 7.
+        std::vector<delivery::OutboxEnvelope> envelopes;
+        // Domain event identities produced by the mutation, for the receipt.
+        std::vector<std::string> eventIds;
+        // The physical outcome of whatever effect this command had. Defaults to
+        // NOT_STARTED, which is the truthful answer for a pure state change.
+        std::string physicalOutcome{ "NOT_STARTED" };
+    };
+
     // One owning connection and an OS-visible writer mutex, not a domain authority service.
     // ALL public calls are serialized on the owning connection.
     class Storage final
@@ -268,8 +309,7 @@ namespace mayasaba
         // that refused the write, because only the former is unretryable. Every
         // other failure still throws, so no caller can mistake a real refusal for
         // a successful save.
-        bool TrySaveDraft(std::string const& projectId, std::string const& body);
-        void SavePrebindDraft(std::string const& body);
+        bool TrySaveDraft(std::string const& projectId, std::string const& body);        void SavePrebindDraft(std::string const& body);
         uint64_t ReservePrebindRevision() noexcept { return ++requestedDraftRevision_; }
         bool SavePrebindDraft(std::string const& body, uint64_t revision);
         std::string GetPrebindDraft();
@@ -327,9 +367,59 @@ namespace mayasaba
 
         // Action Center: read-only projection over owner records.
         ActionCenterResult QueryActionCenter(ActionCenterQuery const& query);
-
         // Attachment inspection: read-only detail projection.
         AttachmentInspectionResult InspectAttachment(AttachmentInspectionQuery const& query);
+
+        // ------------------------------------------------------------------
+        // Gate I1: durable delivery, transactional receipts and replay.
+        //
+        // ORDERING IS THE CONTRACT. C09's owner transaction protocol writes the
+        // outbox envelope and the command receipt inside the same transaction as
+        // the owner's state change. That is why these entry points are shaped as
+        // "commit a command" rather than "insert an envelope": a caller that
+        // commits its state change first and then asks for an envelope to be
+        // recorded has already lost the guarantee, because the window between the
+        // two commits is where the process dies.
+        //
+        // Every entry point here performs its own BEGIN IMMEDIATE ... COMMIT and
+        // calls AdmitWrite_locked before any statement is prepared, per AGENTS.md
+        // §11. A refusal leaves no row behind.
+        // ------------------------------------------------------------------
+
+        // Commits one owner command: the caller's mutation, its causal outbox
+        // envelope(s), and the receipt, in one transaction.
+        //
+        // `applyMutation` is the owner's own write, executed inside the
+        // transaction after idempotency and before the envelope. It runs at most
+        // once: a duplicate identity short-circuits before it is called.
+        //
+        // Returns the receipt that was actually persisted. A DUPLICATE receipt
+        // links the original; a REFUSED receipt records why and changes nothing.
+        delivery::CommandReceipt CommitCommand(CommandCommit const& command);
+
+        // Admits one received envelope. Durable admission precedes any receiver
+        // effect, which is what makes at-least-once delivery safe to apply. A
+        // second admission of the same envelope id is a no-op reported as such,
+        // not an error: the sender is entitled to retry.
+        bool AdmitInboxEnvelope(delivery::OutboxEnvelope const& envelope);
+
+        // Reads the receipt for an operation, for a caller reconciling a lost
+        // result. This is a read: it never interprets a missing row as "nothing
+        // happened", because absence of a receipt means the outcome is unknown.
+        std::optional<delivery::CommandReceipt> ReceiptForOperation(std::string const& operationId);
+
+        // Queued envelopes for a project in sequence order, so a dispatcher can
+        // deliver them. Read-only.
+        std::vector<delivery::OutboxEnvelope> QueuedOutbox(std::string const& projectId, std::size_t limit = 100);
+
+        // Records a receiver acknowledgement. A dispatched envelope is not a
+        // delivered one, and only this moves it: C09 is explicit that an ACK
+        // means receipt and persistence, never execution.
+        bool MarkEnvelopeDispatched(std::string const& envelopeId);
+
+        // The highest sequence delivered in an ordering scope, for gap detection.
+        std::uint64_t LastDeliveredSequence(std::string const& orderingScope);
+
 
         // Testing hooks for race and concurrency verification
         void SetInspectionFileHashedHookForTesting(std::function<void()> hook) { inspectionFileHashedHook_ = std::move(hook); }

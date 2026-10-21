@@ -18,13 +18,14 @@ This section exists because the acceptance harness reports numbers that are easy
 
 ### What is built
 
-One WinUI 3 desktop application, `native/Mayasaba/`, 34 source files, 15,774 lines of C++ and headers, plus `MainWindow.xaml`. It contains:
+One WinUI 3 desktop application, `native/Mayasaba/`, 41 source files, 18,028 lines of C++ and headers, plus `MainWindow.xaml`. It contains:
 
 | Area | What exists | Where |
 | --- | --- | --- |
 | Three screens and their navigation | Welcome, project selection, Chat. First-run introduction, later-launch selector, `File → Switch Project`, Escape/Back/Skip semantics, composer placement rules, empty-vs-docked composer transition. | `MainWindow.xaml`, `MainWindow.xaml.cpp` |
 | Project identity and binding | Canonical root validation, `FILE_ID_INFO` stable identity, reparse/ancestor checks, recent-project filtering and paging, project closure and reopen records, safe-switch refusal when isolation is unproven. | `ProjectRoot.cpp`, `ProjectService.h`, `Storage.cpp` |
 | Storage | The whole SQLite layer: schema and migrations, write admission, quarantine backstop via `sqlite3_set_authorizer`, single-writer mutex, WAL, drafts, contributions, attachments, selection events and receipts. | `Storage.cpp` (the largest file in the slice) |
+| Durable delivery primitives | `mayasaba-jcs-1` canonical bytes with the registered vectors, SHA-256 digests, envelope and receipt validation, the idempotency and gap decisions, and the transactional `CommitCommand` that writes an owner mutation, its causal outbox envelopes and its receipt in one transaction. **No dispatcher and no transport exist**, so nothing is delivered: a queued envelope is a durable intent (§26). | `CanonicalJson.cpp`, `Sha256Hex.cpp`, `DeliveryContract.cpp`, `Storage.cpp` |
 | Chat contributions and drafts | Immutable `UserContribution` persistence with a submission identity, draft preservation across navigation, recovery notices for failed or uncertain saves, and a classified failure path: a missing project record unbinds and continues instead of wedging navigation and the window close, while a store refusal keeps the binding and refuses only that attempt (§25.2–25.4). | `Storage.cpp`, `NavigationRecovery.h`, `MainWindow.xaml.cpp` |
 | Attachment pipeline | Admission limits, active-time accounting, digest verification, protected-draft handling, recovery policy, non-English preview withholding with metadata inspection preserved. | `AttachmentService.cpp`, `AttachmentAdmission.h`, `AttachmentIngestionCoordinator.h`, `AttachmentRecoveryPolicy.h`, `ProtectedDraft.h` |
 | Search | Saved-message search, pagination and continuation tokens, project-switch safety while a search is open, overlay geometry and paging reachability. | `SearchController.h`, `MainWindow.xaml.cpp` |
@@ -42,7 +43,7 @@ The executable is a real, running application. A person can launch it, pick a fo
 | --- | --- | --- |
 | 1. Control Room UI | Present | The slice described above |
 | 2. Controller Application Services / Orchestrator | **Absent** | No orchestrator type, no scheduling, no barriers, no phase transitions |
-| 3. MCF-v2 Communication Fabric | **Absent** | The string "MCF-v2" appears once, inside a UI card that says it is not implemented |
+| 3. MCF-v2 Communication Fabric | **Absent** | The string "MCF-v2" appears once, inside a UI card that says it is not implemented. The I1 slice adds the *durable facts* Message Delivery needs — outbox rows, inbox admission, receipts — but no fabric: no transport, no dispatcher, no retry, no dead letters, no replay driver (§26.7). |
 | 4. Agent Gateway / Adapters | **Absent** | No adapter, no session identity, no health, no native CLI protocol |
 | 5. Council Engine | **Absent** | The words "council" and "orchestrator" appear in `Storage.cpp` only as entries in an English-word list used for non-English prose detection |
 | 6. Context Synchronizer | **Absent** | No snapshot, no context version, no digest |
@@ -58,7 +59,7 @@ The executable is a real, running application. A person can launch it, pick a fo
 
 **No agent turn exists.** There is no three-agent response, no rotating writer, no peer review, no consolidated reply, no turn finalization. The Chat card at `MainWindow.xaml.cpp:938` says so in the product itself: `"Saved only · agent replies are unavailable in this build"`.
 
-**The twelve authoritative state machines are not implemented.** None of project lifecycle, agent session, message delivery, context, task, lease, council round, synchronization barrier, handoff, execution, validation or repair has an implementation. The slice holds durable project and contribution records; it does not run a state machine over them.
+**The twelve authoritative state machines are not implemented.** None of project lifecycle, agent session, message delivery, context, task, lease, council round, synchronization barrier, handoff, execution, validation or repair has an implementation. The slice holds durable project and contribution records; it does not run a state machine over them. The I1 slice records the durable facts that Message Delivery (machine #3) will need and adds no state machine of its own; its tables are storage, not a machine, and no transition is evaluated over them.
 
 **No MSI exists.** There is no `.wxs` file anywhere in the repository. There is no installer, no OS/build/edition gate, no upgrade path.
 
@@ -86,7 +87,7 @@ The slice described under "What is built and what is not" is a UI shell over a d
 
 | Order | Item | Why here |
 | --- | --- | --- |
-| 1 | **B-slice** — outbox/inbox tables, `mayasaba-jcs-1` canonical bytes with the registered vectors, transactional receipts (C10 gate **I1**) | Invisible to the user, cheap now and expensive later, and it is the C10 order (I1 before I3), so doing it first removes the ordering objection entirely |
+| 1 | **B-slice** — outbox/inbox tables, `mayasaba-jcs-1` canonical bytes with the registered vectors, transactional receipts (C10 gate **I1**) | Invisible to the user, cheap now and expensive later, and it is the C10 order (I1 before I3), so doing it first removes the ordering objection entirely. **Status: implemented and proven for this slice — see §26.** It does not complete gate I1. |
 | 2 | **A + C paired** — Local Execution Kernel (layer 9, prototype 2) with Agent Gateway detection (layer 4) | A alone satisfies §14 prototype 2 and changes nothing user-visible; C converts the hardcoded `UNSUPPORTED` readiness line into a measured one and needs A. Paired, the milestone ends with a user-visible statement that is true *and* measured |
 | — | **D (MSI) deferred** | Nothing to install yet |
 | — | **Containment** | **Explicitly not claimed in either item.** See below |
@@ -2807,3 +2808,102 @@ PASS: The empty-chat hero keeps its declared 15/-22/-9 resting perspective.
 Two rows of the survey at the head of this file are affected and are corrected there: Chat contribution/draft preservation now names the classified failure path, and presentation now names the observable hero orientation. Nothing was added to the "not built" list, and nothing was removed from it.
 
 ---
+
+---
+
+## 26. C10 gate I1: canonical bytes, durable delivery and command receipts (2026-10-22)
+
+### 26.1 Identity of this record
+
+| Artifact | Value |
+|---|---|
+| Executable | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `3651c4fe4f7cfb7db365ccac71be2b28a8bf02ffc56019697032924fff8361f5` |
+| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `84cd621c1875ca638332a5b05e7421e2be9b311fb4016cc3e2c4b9812da01ba9` |
+| Source base | `445978b93c1efa5f72ea5d0b8ac1e353fd24c6bf` plus the uncommitted I1 changes this section describes |
+| Acceptance evidence | `native/tests/evidence/ui-acceptance-i1-release-20261022/` |
+
+The XBF hash is **identical** to section 25's (`84cd621c...`), which is the check that the I1 work touched no XAML. The executable hash differs from section 25's because the storage layer was relinked, so section 25's criteria table is not carried forward here; the table below is a new run against the artifact above.
+
+### 26.2 What was built
+
+Three things, all inside the UI-independent core, per C10's ordering that I1 precedes I3.
+
+**`CanonicalJson.h/.cpp` — the `mayasaba-jcs-1` profile.** A JSON parser and canonicalizer implementing RFC 8785/JCS with this profile's choices: UTF-8 in, UTF-16 code-unit key ordering, ECMAScript number rendering, minimal escaping, no Unicode normalization. It refuses rather than repairs: BOM, invalid UTF-8 (overlong forms, encoded surrogates, code points above U+10FFFF, truncated sequences), duplicate keys, non-I-JSON numbers, negative zero, and lone surrogates each have their own registered error code. C09's parser maximums (1 MiB, 64 levels, 10,000 members, 64 KiB strings) are enforced.
+
+**`Sha256Hex.h/.cpp` — one digest implementation.** BCrypt over a byte range, returning `std::nullopt` on failure rather than a partial digest, because a wrong digest presented as a right one is worse than none.
+
+**`DeliveryContract.h/.cpp` — what may be written into a transaction.** Envelope validation (eight registered message classes, canonical UUIDs, unique recipients, payload XOR managed artifact, and a digest that is **recomputed** rather than trusted), receipt validation enforcing the conditional requirements of all four `result_kind` values, the idempotency decision as a pure value, and the gap/duplicate ordering decision.
+
+**`Storage` — the transaction itself.** `CommitCommand` runs C09 steps 4 and 7-9 in one `BEGIN IMMEDIATE`: read the prior receipt, decide idempotency on canonical bytes, run the owner's mutation, write each causal envelope, write the receipt, commit. `AdmitInboxEnvelope`, `ReceiptForOperation`, `QueuedOutbox`, `MarkEnvelopeDispatched` and `LastDeliveredSequence` complete the durable path. The schema moves to `user_version` 4 with three new tables, created in the existing migration transaction so a store has all of them or none.
+
+### 26.3 Two defects the tests found in my own first implementation
+
+Both were found by writing the fault-injection tests, not by review, and both are recorded because the corrected behaviour is the claim.
+
+1. **A `UNIQUE(operation_id)` constraint contradicted the append-only design.** `CommitCommand` records a DUPLICATE or conflict-refusal attempt as its own row, so the second attempt for one operation failed the constraint. The table is an attempt log, not one-row-per-operation; the constraint was removed and `UNIQUE(receipt_id)` retained.
+
+2. **The prior-receipt read had no ordering, so the authoritative attempt was whichever row SQLite returned first.** With multiple attempt rows for one operation, that is not a property the schema guarantees. The read is now `ORDER BY rowid ASC LIMIT 1` in both `CommitCommand` and `ReceiptForOperation`, and the table comment states that the earliest row is authoritative because only it can be an outcome-establishing one.
+
+A third, smaller correction: `ReceiptForOperation` assigned `retryKind = Never` unconditionally while its comment claimed the value was read back as text. It now parses the registry spelling and sets `retryKindUnreadable` (and `resultKindUnreadable`) when a stored value is not one this build registers — an unreadable policy is not the strictest policy, and defaulting to it would have forbidden a retry the recorded receipt allowed.
+
+### 26.4 Checks actually executed
+
+| Check | Command | Result |
+|---|---|---|
+| Canonical vectors | `native/tests/bin/canonical_vectors.exe` | **PASS**: 10 accepted and 11 rejected registered vectors, plus bounds and ordering properties |
+| Storage regression | `native/tests/bin/storage_tests.exe` | **PASS**: 45 of 45 executed groups (group 45 is new) |
+| Action Center / navigation | `native/tests/bin/verify_ac_ai.exe` | **PASS**: 15 of 15 cases |
+| Contract registry | `validate_contract_registry.py` (managed venv) | **PASS**: 124 checks |
+| Native UI acceptance | `test_full_ui_acceptance.py` against the Release artifact | **18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN** |
+| Application build | MSBuild `Release|x64`, `v145` | Clean |
+
+### 26.5 Group 45 and its controlling mutations
+
+Group 45 exercises the failures the ordering exists to survive: a committed command records state, envelope and receipt together; the same identity with the same canonical bytes is a DUPLICATE that runs no mutation, adds no envelope and rewrites no original; the same identity with **different** bytes is `IDEMPOTENCY_CONFLICT` with the original untouched; a mutation that throws rolls back state, envelope and receipt; a malformed envelope is refused with nothing recorded and no quarantine; only an acknowledgement moves an envelope out of the queue; a second inbox admission of one envelope id is a no-op; receipts, queued envelopes and inbox admissions survive a restart; and a store written by a newer build is refused.
+
+Each mutation was applied, built and run, then restored and verified by hash:
+
+| Mutation | Observed result |
+|---|---|
+| Trust the supplied payload digest instead of recomputing it | Initially **PASSED**, which proved the assertion did not discriminate: the tampered commit was being refused by the receipt validator because it had no record identity. The test was tightened to supply a valid record identity so the envelope is the only possible cause; the mutation then failed at `refusedBadEnvelope`. |
+| Take the latest attempt rather than the earliest (`ORDER BY rowid DESC`) | **FAILED** at `reread->receiptId == originalReceiptId` — the assertion that encodes "the original is not rewritten". |
+| Do not persist the envelope | **FAILED** at `queued.size() == 1`. |
+
+Restored hashes: `DeliveryContract.cpp` `b41b943c3edc2efc72977fb66195b7ce921dd7c60492236a38393af6ed4cd133`, `Storage.cpp` `9b5f501d914ade7cadb2c058ff6f103d5b86b611f69974d23b7ca45ff1fce4bb`. The unordered-read mutation is also recorded as **not discriminating** on its own: SQLite returned rowid order for that scan, so removing the `ORDER BY` alone changed nothing observable. That is a fact about the engine's current plan, not a guarantee, and the ordering is kept.
+
+A migration case reconstructs a `user_version` 3 store by dropping exactly the three tables v4 adds, and confirms reopening recreates them while preserving an existing project and its draft. The newer-schema refusal is re-confirmed at `user_version` 99.
+
+### 26.6 Criteria for this assignment
+
+| ID | Criterion | Evidence | Verdict |
+|---|---|---|---|
+| I1-01 | Canonical bytes match every registered accepted vector, including its SHA-256 | `canonical_vectors.exe` | **PASS** |
+| I1-02 | Every registered rejected vector is refused with its registered error code | `canonical_vectors.exe` | **PASS** |
+| I1-03 | Each C09 parser bound accepts N and refuses N+1 | `canonical_vectors.exe` bounds properties | **PASS** |
+| I1-04 | Canonicalization is idempotent and key order is UTF-16 code-unit order | `canonical_vectors.exe` properties | **PASS** |
+| I1-05 | State change, causal envelopes and receipt commit in one transaction | Group 45; mutation "do not persist the envelope" | **PASS** |
+| I1-06 | A duplicate identity returns a linkage receipt and rewrites nothing | Group 45; mutation "latest attempt" | **PASS** |
+| I1-07 | A changed request under one identity is `IDEMPOTENCY_CONFLICT` | Group 45 | **PASS** |
+| I1-08 | A throwing mutation rolls back state, envelope and receipt | Group 45 | **PASS** |
+| I1-09 | A malformed envelope is refused and nothing is recorded | Group 45; mutation "trust the digest" | **PASS** |
+| I1-10 | Only an acknowledgement leaves an envelope queued; ACK means receipt, not execution | Group 45 | **PASS** |
+| I1-11 | Inbox admission is durable and a repeated envelope id is a no-op | Group 45, before and after restart | **PASS** |
+| I1-12 | Receipts, outbox and inbox survive restart; replay after restart is still a duplicate | Group 45 restart block | **PASS** |
+| I1-13 | An unreadable stored result kind or retry policy is reported, not defaulted | Group 45 newer-build block | **PASS** |
+| I1-14 | A v3 store migrates to v4 preserving existing records | Group 45 migration block | **PASS** |
+| I1-15 | A store from a newer schema is refused | Group 45 | **PASS** |
+| I1-16 | Every storage mutation is admitted before touching SQLite | Group 44 (existing) | **PASS** |
+| I1-17 | No UI, no XAML and no new owner or state machine was introduced | XBF hash unchanged; no `.xaml` in the diff; `DeliveryContract` is a value module | **PASS** |
+| I1-18 | The native UI acceptance criteria are unchanged by this work | Fresh run: 18 PASS / 2 INCONCLUSIVE / 0 FAIL, matching section 25.7's table | **PASS** |
+
+### 26.7 What this record does not claim
+
+1. **It does not claim I1 is complete as a gate.** It claims the canonical-bytes, outbox/inbox and receipt slice is implemented and proven. Schema *loading and validation* of every registered contract document, and full deterministic replay of an agent conversation, are not part of this slice and are not claimed.
+2. **It does not claim any message is delivered.** There is no dispatcher and no MCF-v2 transport. `QueuedOutbox` returns rows; nothing sends them. A queued envelope is a durable intent, not a delivery.
+3. **It does not claim a passing launch, a containment property, a passing I3, or a deployable architecture.** No process is launched by this build. Nothing here bounds a CLI's file or network effects.
+4. **It does not claim the receipt path is exercised by any user-facing flow.** No UI path calls `CommitCommand` yet; the coverage is native unit-level plus the unchanged acceptance suite.
+5. **It does not re-open** any of the findings section 25.8 lists.
+
+### 26.8 Open finding: another agent's uncommitted harness work
+
+`native/tests/test_full_ui_acceptance.py` and `native/tests/test_harness_oracles.py` carry uncommitted modifications that this assignment did not make: a polling `read_status_text` helper, an `acquire_store_lock` helper and a `msvcrt` import, with matching oracle tests. They were observed in the working tree during this assignment. Per AGENTS.md section 12 they were **not** staged, built over or committed; this assignment's diff excludes them. The acceptance runs above used the harness as it stands on disk, so their behaviour is part of what the run measured, and that is recorded rather than assumed away.

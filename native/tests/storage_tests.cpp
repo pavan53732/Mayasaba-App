@@ -6,6 +6,8 @@
 #include "../Mayasaba/AttachmentAdmission.h"
 #include "../Mayasaba/SerialQueue.h"
 #include "../Mayasaba/TimelineEntry.h"
+#include "../Mayasaba/Sha256Hex.h"
+#include <cstdio>
 #include <fstream>
 #include <future>
 #include <atomic>
@@ -4040,6 +4042,323 @@ int main()
             EXPECT(!reopened.IsQuarantinedForTesting());
             reopened.SaveDraft("proj-q", "after reopen");
             EXPECT(reopened.Project("proj-q")->draft == "after reopen");
+            CASES_END();
+        }
+
+        // 45. C10 gate I1: the owner transaction protocol's durable delivery half.
+        // C09 steps 7-9 require the causal outbox envelope and the command receipt to
+        // be written inside the same transaction as the owner's state change, so a
+        // crash cannot leave an effect with no envelope or an envelope with no
+        // receipt. These cases inject the failures that ordering exists to survive:
+        // a duplicate identity, a changed request under one identity, a mutation that
+        // throws, a malformed envelope, a lost acknowledgement and a restart.
+        {
+            CASES_BEGIN("45. Durable outbox, inbox admission and command receipts (C09 steps 7-9)");
+            namespace delivery = mayasaba::delivery;
+
+            auto const uuid = [](char const* seed) -> std::string
+            {
+                // A deterministic, canonical UUIDv4-shaped identity. Version and
+                // variant nibbles are set so the validator's shape check is
+                // exercised rather than bypassed.
+                unsigned long long h = 1469598103934665603ull;
+                for (char const* p = seed; *p; ++p) { h ^= static_cast<unsigned char>(*p); h *= 1099511628211ull; }
+                char buf[37];
+                unsigned long long a = h, b = h * 6364136223846793005ull + 1442695040888963407ull;
+                std::snprintf(buf, sizeof buf, "%08llx-%04llx-4%03llx-a%03llx-%012llx",
+                              a & 0xFFFFFFFFull,
+                              (a >> 32) & 0xFFFFull,
+                              (a >> 48) & 0x0FFFull,
+                              (b >> 8) & 0x0FFFull,
+                              b & 0xFFFFFFFFFFFFull);
+                return std::string(buf);
+            };
+
+            auto makeEnvelope = [&](char const* seed, std::uint64_t sequence) -> delivery::OutboxEnvelope
+            {
+                delivery::OutboxEnvelope envelope;
+                envelope.envelopeId = uuid(seed);
+                envelope.messageClass = "TASK_CONTROL";
+                envelope.sender = "controller";
+                envelope.recipients = { "hermes-agent" };
+                envelope.projectId = uuid("project");
+                envelope.approvedEpoch = "1";
+                envelope.operationId = uuid("operation");
+                envelope.effectId = uuid("effect");
+                envelope.orderingScope = "project:" + uuid("project");
+                envelope.sequence = sequence;
+                envelope.correlationId = uuid("correlation");
+                envelope.payloadType = "task.control.v1";
+                // Already canonical: one key, no whitespace, so the validator's
+                // "payload must be canonical" rule is satisfied by construction.
+                envelope.payload = "{\"a\":1}";
+                auto const digest = mayasaba::Sha256Hex(envelope.payload);
+                EXPECT(digest.has_value());
+                envelope.payloadDigest = *digest;
+                envelope.createdAtUtc = "2026-10-22T09:00:00.000Z";
+                return envelope;
+            };
+
+            {
+                mayasaba::Storage store(folder / "delivery.db");
+
+                // ---- C09 step 9: a committed command records state, envelope and
+                // receipt together.
+                delivery::OutboxEnvelope first = makeEnvelope("envelope-1", 1);
+                mayasaba::CommandCommit commit;
+                commit.operationId = uuid("operation");
+                commit.commandId = uuid("command-1");
+                commit.canonicalRequestBytes = "{\"task\":\"write-file\"}";
+                commit.owner = "task-dag-engine";
+                commit.recordedAtUtc = "2026-10-22T09:00:00.000Z";
+                commit.eventIds = { uuid("event-1") };
+                commit.envelopes = { first };
+                int mutationCalls = 0;
+                commit.applyMutation = [&](std::string& recordId, std::string& version)
+                {
+                    ++mutationCalls;
+                    recordId = uuid("record-1");
+                    version = "1";
+                };
+
+                auto const committed = store.CommitCommand(commit);
+                EXPECT(committed.resultKind == delivery::ResultKind::Committed);
+                EXPECT(mutationCalls == 1);
+                EXPECT(committed.resultRecordId == uuid("record-1"));
+                EXPECT(committed.resultRecordVersion == "1");
+                EXPECT(committed.eventIds.size() == 1);
+
+                // The envelope is queued, not delivered. A row that says it was sent
+                // when nothing acknowledged it would make a lost ACK invisible.
+                auto queued = store.QueuedOutbox(uuid("project"));
+                EXPECT(queued.size() == 1);
+                EXPECT(queued[0].envelopeId == first.envelopeId);
+                EXPECT(queued[0].payload == "{\"a\":1}");
+                EXPECT(queued[0].recipients.size() == 1);
+                EXPECT(store.LastDeliveredSequence("project:" + uuid("project")) == 0);
+
+                // ---- C09 step 4: the same identity with the same canonical bytes is
+                // a DUPLICATE that runs no mutation and rewrites no original.
+                auto const originalReceiptId = committed.receiptId;
+                auto const duplicate = store.CommitCommand(commit);
+                EXPECT(duplicate.resultKind == delivery::ResultKind::Duplicate);
+                EXPECT(mutationCalls == 1);                       // not applied twice
+                EXPECT(duplicate.originalReceiptId == originalReceiptId);
+                EXPECT(duplicate.originalReceiptDigest.size() == 64);
+                // The original receipt is untouched: a reader that follows the link
+                // must find what it read the first time.
+                auto const reread = store.ReceiptForOperation(uuid("operation"));
+                EXPECT(reread.has_value());
+                EXPECT(reread->receiptId == originalReceiptId);
+                EXPECT(reread->resultKind == delivery::ResultKind::Committed);
+                // Exactly one outbox row: the duplicate added no envelope.
+                EXPECT(store.QueuedOutbox(uuid("project")).size() == 1);
+
+                // ---- Same identity, DIFFERENT canonical bytes: refused, and nothing
+                // is applied or rewritten. This is the case that separates "at least
+                // once delivery" from "silently deduplicated".
+                auto conflicting = commit;
+                conflicting.commandId = uuid("command-conflict");
+                conflicting.canonicalRequestBytes = "{\"task\":\"delete-file\"}";
+                int conflictCalls = 0;
+                conflicting.applyMutation = [&](std::string&, std::string&) { ++conflictCalls; };
+                auto const refused = store.CommitCommand(conflicting);
+                EXPECT(refused.resultKind == delivery::ResultKind::Refused);
+                EXPECT(refused.errorCode == "IDEMPOTENCY_CONFLICT");
+                EXPECT(conflictCalls == 0);
+                EXPECT(store.QueuedOutbox(uuid("project")).size() == 1);
+                // The refused attempt is recorded as its own receipt, but the
+                // operation's receipt is still the original commit.
+                auto const afterConflict = store.ReceiptForOperation(uuid("operation"));
+                EXPECT(afterConflict->receiptId == originalReceiptId);
+                EXPECT(afterConflict->resultKind == delivery::ResultKind::Committed);
+
+                // ---- A mutation that throws rolls back the whole transaction: no
+                // state change, no envelope, and a REFUSED receipt that does not
+                // claim a commit.
+                delivery::OutboxEnvelope second = makeEnvelope("envelope-2", 2);
+                mayasaba::CommandCommit throwing;
+                throwing.operationId = uuid("operation-throw");
+                throwing.commandId = uuid("command-throw");
+                throwing.canonicalRequestBytes = "{\"task\":\"throwing\"}";
+                throwing.owner = "workspace-manager";
+                throwing.recordedAtUtc = "2026-10-22T09:01:00.000Z";
+                throwing.eventIds = { uuid("event-throw") };
+                throwing.envelopes = { second };
+                throwing.applyMutation = [](std::string&, std::string&)
+                {
+                    throw std::runtime_error("precondition failed");
+                };
+                auto const refusedMutation = store.CommitCommand(throwing);
+                EXPECT(refusedMutation.resultKind == delivery::ResultKind::Refused);
+                EXPECT(refusedMutation.errorCode == "PRECONDITION_FAILED");
+                EXPECT(refusedMutation.physicalOutcome == "NOT_STARTED");
+                EXPECT(store.QueuedOutbox(uuid("project")).size() == 1);   // no envelope leaked
+
+                // ---- A malformed envelope is refused, and the refusal is a throw
+                // rather than a COMMITTED receipt beside an unrecordable envelope.
+                delivery::OutboxEnvelope tampered = makeEnvelope("envelope-3", 3);
+                tampered.payload = "{\"a\":2}";        // digest no longer matches
+                mayasaba::CommandCommit badEnvelope;
+                badEnvelope.operationId = uuid("operation-bad-envelope");
+                badEnvelope.commandId = uuid("command-bad-envelope");
+                badEnvelope.canonicalRequestBytes = "{\"task\":\"bad-envelope\"}";
+                badEnvelope.owner = "task-dag-engine";
+                badEnvelope.recordedAtUtc = "2026-10-22T09:02:00.000Z";
+                badEnvelope.eventIds = { uuid("event-bad") };
+                badEnvelope.envelopes = { tampered };
+                // A valid record identity, so the envelope is the ONLY thing that
+                // can make this commit fail. Without it the commit would be refused
+                // by the receipt validator instead, and the assertion below would
+                // pass for a reason that has nothing to do with the envelope --
+                // which is exactly what a controlling mutation exposed.
+                badEnvelope.applyMutation = [&](std::string& recordId, std::string& version)
+                { recordId = uuid("record-bad"); version = "1"; };
+                bool refusedBadEnvelope = false;
+                try { store.CommitCommand(badEnvelope); }
+                catch (std::exception const&) { refusedBadEnvelope = true; }
+                EXPECT(refusedBadEnvelope);
+                // Nothing recorded: not the envelope, not a receipt.
+                EXPECT(store.QueuedOutbox(uuid("project")).size() == 1);
+                EXPECT(!store.ReceiptForOperation(uuid("operation-bad-envelope")).has_value());
+                // And the store is still usable, not quarantined by the rollback.
+                EXPECT(!store.IsQuarantinedForTesting());
+
+                // ---- Delivery bookkeeping. Only an acknowledgement moves an
+                // envelope out of the queue, and a second acknowledgement of the
+                // same envelope is not a second delivery.
+                EXPECT(store.MarkEnvelopeDispatched(first.envelopeId));
+                EXPECT(!store.MarkEnvelopeDispatched(first.envelopeId));
+                EXPECT(store.QueuedOutbox(uuid("project")).empty());
+                EXPECT(store.LastDeliveredSequence("project:" + uuid("project")) == 1);
+
+                // ---- Inbox admission. A second admission of one envelope id is a
+                // no-op, not an error: the sender is entitled to retry, and refusing
+                // the retry would turn a lost ACK into a lost message.
+                EXPECT(store.AdmitInboxEnvelope(first));
+                EXPECT(!store.AdmitInboxEnvelope(first));
+                // A different sequence in the same scope is a different message.
+                delivery::OutboxEnvelope third = makeEnvelope("envelope-4", 2);
+                EXPECT(store.AdmitInboxEnvelope(third));
+            }
+
+            // ---- Restart: the receipts and the queued outbox survive, and the
+            // idempotency decision is made against durable state rather than
+            // memory.
+            {
+                mayasaba::Storage reopened(folder / "delivery.db");
+                auto const receipt = reopened.ReceiptForOperation(uuid("operation"));
+                EXPECT(receipt.has_value());
+                EXPECT(receipt->resultKind == delivery::ResultKind::Committed);
+                EXPECT(receipt->resultRecordVersion == "1");
+                EXPECT(!receipt->resultKindUnreadable);
+                EXPECT(!receipt->retryKindUnreadable);
+
+                // A replay of the same identity after restart is still a duplicate.
+                mayasaba::CommandCommit replay;
+                replay.operationId = uuid("operation");
+                replay.commandId = uuid("command-1");
+                replay.canonicalRequestBytes = "{\"task\":\"write-file\"}";
+                replay.owner = "task-dag-engine";
+                replay.recordedAtUtc = "2026-10-22T09:00:00.000Z";
+                int replayCalls = 0;
+                replay.applyMutation = [&](std::string&, std::string&) { ++replayCalls; };
+                auto const replayReceipt = reopened.CommitCommand(replay);
+                EXPECT(replayReceipt.resultKind == delivery::ResultKind::Duplicate);
+                EXPECT(replayCalls == 0);
+                EXPECT(replayReceipt.originalReceiptId == receipt->receiptId);
+
+                // The inbox row admitted before the restart is still there, so a
+                // redelivery after the restart is still recognised as a duplicate.
+                EXPECT(!reopened.AdmitInboxEnvelope(makeEnvelope("envelope-1", 1)));
+                EXPECT(reopened.LastDeliveredSequence("project:" + uuid("project")) == 1);
+            }
+
+            // ---- A receipt written by a newer build must not be silently
+            // reinterpreted by an older reader. Unreadable kind and policy are
+            // reported, not defaulted.
+            {
+                mayasaba::Storage store(folder / "delivery-newer.db");
+                mayasaba::CommandCommit commit;
+                commit.operationId = uuid("operation-future");
+                commit.commandId = uuid("command-future");
+                commit.canonicalRequestBytes = "{\"task\":\"future\"}";
+                commit.owner = "task-dag-engine";
+                commit.recordedAtUtc = "2026-10-22T09:03:00.000Z";
+                commit.eventIds = { uuid("event-future") };
+                commit.applyMutation = [&](std::string& recordId, std::string& version)
+                { recordId = uuid("record-future"); version = "2"; };
+                store.CommitCommand(commit);
+            }
+            {
+                // Rewrite the stored result kind and retry policy to values this
+                // build does not register, the way a newer build could.
+                std::string const path = (folder / "delivery-newer.db").string();
+                sqlite3* raw = nullptr;
+                std::wstring const wide(path.begin(), path.end());
+                EXPECT(sqlite3_open16(wide.c_str(), &raw) == SQLITE_OK);
+                std::string const update = "UPDATE command_receipts SET result_kind='RECONCILING', "
+                                           "retry_kind='WHEN_READY' WHERE operation_id='" + uuid("operation-future") + "';";
+                EXPECT(sqlite3_exec(raw, update.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK);
+                sqlite3_close(raw);
+
+                mayasaba::Storage store(folder / "delivery-newer.db");
+                auto const receipt = store.ReceiptForOperation(uuid("operation-future"));
+                EXPECT(receipt.has_value());
+                EXPECT(receipt->resultKindUnreadable);
+                EXPECT(receipt->retryKindUnreadable);
+            }
+
+            // ---- Migration from a store this build's predecessor wrote. A v3
+            // store differs from v4 by exactly the three delivery tables and the
+            // version number, so removing those tables and resetting the version
+            // reconstructs the v3 shape. Reopening must create them without
+            // disturbing the records that were already there.
+            {
+                std::string const path = (folder / "delivery-migrate.db").string();
+                {
+                    mayasaba::Storage store(folder / "delivery-migrate.db");
+                    store.BindProject("proj-migrate", "Migrate", "C:/Migrate");
+                    store.SaveDraft("proj-migrate", "draft survives migration");
+                }
+                {
+                    sqlite3* raw = nullptr;
+                    std::wstring const wide(path.begin(), path.end());
+                    EXPECT(sqlite3_open16(wide.c_str(), &raw) == SQLITE_OK);
+                    char const* const downgrade =
+                        "DROP TABLE outbox_envelopes; DROP TABLE inbox_envelopes; DROP TABLE command_receipts; "
+                        "PRAGMA user_version=3;";
+                    EXPECT(sqlite3_exec(raw, downgrade, nullptr, nullptr, nullptr) == SQLITE_OK);
+                    sqlite3_close(raw);
+                }
+                {
+                    mayasaba::Storage store(folder / "delivery-migrate.db");
+                    EXPECT(store.Project("proj-migrate").has_value());
+                    EXPECT(store.Project("proj-migrate")->draft == "draft survives migration");
+                    // The tables exist and are usable, so the migration ran rather
+                    // than leaving the version alone.
+                    EXPECT(store.QueuedOutbox(uuid("project")).empty());
+                    EXPECT(store.LastDeliveredSequence("any-scope") == 0);
+                    EXPECT(!store.ReceiptForOperation(uuid("operation-migrate")).has_value());
+                    EXPECT(store.AdmitInboxEnvelope(makeEnvelope("envelope-migrate", 1)));
+                }
+            }
+
+            // ---- The schema version guard still refuses a store from a newer build
+            // rather than reading it with the wrong table shapes.
+            {
+                std::string const path = (folder / "delivery-future.db").string();
+                sqlite3* raw = nullptr;
+                std::wstring const wide(path.begin(), path.end());
+                EXPECT(sqlite3_open16(wide.c_str(), &raw) == SQLITE_OK);
+                EXPECT(sqlite3_exec(raw, "CREATE TABLE probe(x); PRAGMA user_version=99;", nullptr, nullptr, nullptr) == SQLITE_OK);
+                sqlite3_close(raw);
+
+                bool refused = false;
+                try { mayasaba::Storage store(folder / "delivery-future.db"); }
+                catch (std::exception const&) { refused = true; }
+                EXPECT(refused);
+            }
             CASES_END();
         }
 
