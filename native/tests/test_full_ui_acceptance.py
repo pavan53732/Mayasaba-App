@@ -139,6 +139,110 @@ def has_focus(element):
     except Exception:
         return False
 
+def poll_until(predicate, timeout, interval=0.1):
+    """Bounded wait for an asynchronous UI postcondition.
+
+    A fixed sleep samples one instant and turns a slow-but-correct transition
+    into a failure; an unbounded wait hides a genuine hang. Polling with a bound
+    keeps both properties: a real defect still fails, but only after the
+    transition has had its full allowance.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(interval)
+    return None
+
+
+def open_switch_project(win, timeout=10.0):
+    """Drive the native File -> Switch Project menu; return Screen 2's heading or None.
+
+    Two choices here are deliberate and were measured, not assumed:
+
+    * The flyout is POLLED for after expanding, never sampled after a fixed
+      sleep. It realizes in 0.074-0.232 s over 20/20 measured rounds, so a fixed
+      1.0 s sleep nearly always passed -- but "nearly always" is not an oracle,
+      and this exact sampling point produced the intermittent Phase 4 failure.
+
+    * There is no keyboard fallback. `MenuBarItem Title="File"` and
+      `MenuFlyoutItem Text="Switch Project"` declare no AccessKey in
+      MainWindow.xaml, so `send_keys("%(FS)")` cannot reach either control; it
+      was verified to leave the flyout closed. The old fallback therefore made
+      an unreachable menu indistinguishable from a broken switch, and silently
+      guaranteed failure whenever the scan came back empty. Returning None with
+      the reason logged is the honest result.
+    """
+    file_menu = None
+    for d in win.descendants():
+        try:
+            if (d.element_info.control_type == "MenuItem"
+                    and (d.window_text() == "File" or d.element_info.name == "File")):
+                file_menu = d
+                break
+        except Exception:
+            continue
+    if file_menu is None:
+        log("  Switch Project: the File menu item is absent from the UIA tree")
+        return None
+
+    try:
+        file_menu.iface_invoke.Invoke()
+    except Exception as exc:
+        log(f"  Switch Project: invoking File raised {type(exc).__name__}: {exc}")
+        return None
+
+    def switch_item():
+        for d in win.descendants():
+            try:
+                if ("Switch Project" in d.window_text()
+                        and d.element_info.control_type == "MenuItem"):
+                    return d
+            except Exception:
+                continue
+        return None
+
+    # The item is selected by control type as well as text: the flyout also
+    # exposes a Text child carrying the same string, and that child has no
+    # InvokePattern.
+    item = poll_until(switch_item, timeout=3.0, interval=0.05)
+    if item is None:
+        log("  Switch Project: the File flyout never realized its menu item")
+        return None
+
+    try:
+        item.iface_invoke.Invoke()
+    except Exception as exc:
+        log(f"  Switch Project: invoking the menu item raised {type(exc).__name__}: {exc}")
+        return None
+
+    def folder_heading():
+        candidate = find_by_aid(win, "FolderHeading")
+        if candidate is not None and candidate.is_visible():
+            return candidate
+        return None
+
+    heading = poll_until(folder_heading, timeout=timeout, interval=0.1)
+    if heading is None:
+        log(f"  Switch Project: Screen 2 did not appear within {timeout:.0f}s")
+    return heading
+
+
+def window_is_foreground(win):
+    """Whether this window is the OS foreground window.
+
+    UIA reports CurrentHasKeyboardFocus false for every element when the
+    top-level window is not foreground, so a focus assertion taken without this
+    check cannot distinguish an app that failed to move focus from a harness
+    that lost the foreground window.
+    """
+    try:
+        return ctypes.windll.user32.GetForegroundWindow() == win.handle
+    except Exception:
+        return None
+
+
 def send_key_to_window(win_handle, vk_code):
     input_hwnds = []
     def enum_cb(h, _):
@@ -836,29 +940,7 @@ def main():
         time.sleep(0.5)
 
         log("Opening application menu File -> Switch Project...")
-        file_menu = find_by_name(win, "File")
-        if file_menu:
-            file_menu.iface_invoke.Invoke()
-            time.sleep(1.0)
-            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
-            if sw_items:
-                sw_items[0].iface_invoke.Invoke()
-            else:
-                send_keys("%(FS)")
-        else:
-            send_keys("%(FS)")
-        # Switching persists the current draft on the background lane before it shows
-        # Screen 2, so a fixed sleep can sample before the screen has actually changed.
-        # Poll the real postcondition instead, with a bound that still fails a genuine
-        # hang rather than waiting forever.
-        folder_heading = None
-        switch_deadline = time.time() + 10.0
-        while time.time() < switch_deadline:
-            candidate = find_by_aid(win, "FolderHeading")
-            if candidate is not None and candidate.is_visible():
-                folder_heading = candidate
-                break
-            time.sleep(0.1)
+        folder_heading = open_switch_project(win)
         log(f"Folder heading after switch request: {folder_heading.window_text() if folder_heading else 'None'}")
         if not folder_heading:
             log("FAIL: Screen 2 Project Selector not reached on Switch Project")
@@ -1124,18 +1206,7 @@ def main():
         conn.close()
 
         log("\nSwitching to closed project 'gamma' via File -> Switch Project...")
-        file_menu = find_by_name(win, "File")
-        if file_menu:
-            file_menu.iface_invoke.Invoke()
-            time.sleep(1.0)
-            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
-            if sw_items:
-                sw_items[0].iface_invoke.Invoke()
-            else:
-                send_keys("%(FS)")
-        else:
-            send_keys("%(FS)")
-        time.sleep(2.0)
+        open_switch_project(win)
 
         # On Screen 2, open gamma
         open_gamma = find_by_name(win, "Open project gamma")
@@ -1266,12 +1337,44 @@ def main():
 
         # Focus moves into the detail and returns to the invoking control on close, so
         # keyboard position is preserved across the expansion.
+        #
+        # Focus is POLLED rather than sampled once. The handler sets Visibility and then
+        # calls Focus(Programmatic) in the same tick, before the layout pass that makes
+        # the button focusable, so the transfer lands a frame or two later. A single
+        # immediate read turned that ordering into an intermittent failure: the same
+        # binary passed and failed this assertion across otherwise identical runs.
+        #
+        # Foreground is re-established first. UIA reports CurrentHasKeyboardFocus false
+        # for EVERY element when the top-level window is not foreground, so without this
+        # the assertion would fail for a lost foreground rather than for the app, and the
+        # two are not distinguishable from the result alone.
+        if not window_is_foreground(win):
+            log("  Re-establishing window foreground before measuring focus...")
+            try:
+                win.set_focus()
+            except Exception as exc:
+                log(f"  set_focus raised {type(exc).__name__}: {exc}")
+            poll_until(lambda: window_is_foreground(win), timeout=3.0, interval=0.1)
+
         close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
         if not close_details_btn:
             log("FAIL: CloseActionCenterDetailsButton not found inside the details panel")
             return 1
-        if not has_focus(close_details_btn):
+        focused = poll_until(lambda: has_focus(close_details_btn), timeout=3.0, interval=0.05)
+        if not focused:
             log("FAIL: Opening details did not move focus into the detail sheet")
+            # Recorded so an app defect is never confused with a lost foreground: only
+            # the former is a failure of the product.
+            log(f"  window was foreground while measuring: {window_is_foreground(win)}")
+            holders = []
+            for d in win.descendants():
+                try:
+                    if d.element_info.element.CurrentHasKeyboardFocus:
+                        holders.append(f"{d.element_info.control_type}"
+                                       f"[{d.element_info.automation_id or '-'}]")
+                except Exception:
+                    continue
+            log(f"  elements holding keyboard focus: {holders if holders else 'NONE'}")
             return 1
         close_details_btn.iface_invoke.Invoke()
         time.sleep(0.6)
@@ -1280,7 +1383,8 @@ def main():
             log("FAIL: Closing the details panel left it visible")
             return 1
         show_details_again = find_by_aid(win, "ShowActionCenterDetailsButton")
-        if show_details_again is None or not has_focus(show_details_again):
+        if show_details_again is None or not poll_until(
+                lambda: has_focus(show_details_again), timeout=3.0, interval=0.05):
             log("FAIL: Closing details did not return focus to ShowActionCenterDetailsButton")
             return 1
         log("PASS: Details sheet is focus-safe: opens into the sheet and restores the invoking control.")
@@ -1355,18 +1459,7 @@ def main():
 
         # 9.6 Switch back to alpha
         log("\nSwitching back to project alpha...")
-        file_menu = find_by_name(win, "File")
-        if file_menu:
-            file_menu.iface_invoke.Invoke()
-            time.sleep(1.0)
-            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
-            if sw_items:
-                sw_items[0].iface_invoke.Invoke()
-            else:
-                send_keys("%(FS)")
-        else:
-            send_keys("%(FS)")
-        time.sleep(2.0)
+        open_switch_project(win)
 
         open_alpha = find_by_name(win, "Open project alpha")
         if not open_alpha:
@@ -1574,18 +1667,7 @@ def main():
 
         # Reload alpha project to realize draft attachment chip
         log("Reloading alpha project to realize draft attachment chip...")
-        file_menu = find_by_name(win, "File")
-        if file_menu:
-            file_menu.iface_invoke.Invoke()
-            time.sleep(1.0)
-            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
-            if sw_items:
-                sw_items[0].iface_invoke.Invoke()
-            else:
-                send_keys("%(FS)")
-        else:
-            send_keys("%(FS)")
-        time.sleep(2.0)
+        open_switch_project(win)
 
         open_alpha = find_by_name(win, "Open project alpha")
         if open_alpha:
@@ -1710,18 +1792,7 @@ def main():
 
         # Reload alpha project to realize non-English attachment chip
         log("Reloading alpha project to realize non-English attachment chip...")
-        file_menu = find_by_name(win, "File")
-        if file_menu:
-            file_menu.iface_invoke.Invoke()
-            time.sleep(1.0)
-            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
-            if sw_items:
-                sw_items[0].iface_invoke.Invoke()
-            else:
-                send_keys("%(FS)")
-        else:
-            send_keys("%(FS)")
-        time.sleep(2.0)
+        open_switch_project(win)
 
         open_alpha = find_by_name(win, "Open project alpha")
         if open_alpha:
@@ -1778,18 +1849,7 @@ def main():
 
         # Reload alpha again to clear chip for performance profiling
         log("Reloading clean alpha project for performance profiling...")
-        file_menu = find_by_name(win, "File")
-        if file_menu:
-            file_menu.iface_invoke.Invoke()
-            time.sleep(1.0)
-            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
-            if sw_items:
-                sw_items[0].iface_invoke.Invoke()
-            else:
-                send_keys("%(FS)")
-        else:
-            send_keys("%(FS)")
-        time.sleep(2.0)
+        open_switch_project(win)
 
         open_alpha = find_by_name(win, "Open project alpha")
         if open_alpha:
@@ -1799,18 +1859,7 @@ def main():
 
         # Reload alpha again to clear chip for performance profiling
         log("Reloading clean alpha project for performance profiling...")
-        file_menu = find_by_name(win, "File")
-        if file_menu:
-            file_menu.iface_invoke.Invoke()
-            time.sleep(1.0)
-            sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
-            if sw_items:
-                sw_items[0].iface_invoke.Invoke()
-            else:
-                send_keys("%(FS)")
-        else:
-            send_keys("%(FS)")
-        time.sleep(2.0)
+        open_switch_project(win)
 
         open_alpha = find_by_name(win, "Open project alpha")
         if open_alpha:

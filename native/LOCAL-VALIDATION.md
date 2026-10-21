@@ -1704,3 +1704,89 @@ The fix has three parts, in this order of reliance:
 3. The controlled mutations demonstrate that groups 43 and 44 detect the defects they were written for. They do not demonstrate detection for every assertion in those groups, and they are not a general test-quality proof.
 4. Storage correctness here is proved at the storage/service boundary with isolated temp stores. No concurrency, fault-injection or multi-process evidence was produced in this pass beyond the pre-existing groups.
 
+## 18. UI acceptance harness: flake diagnosis and oracle corrections (2026-10-21)
+
+### 18.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Source revision | `fb00748` (HEAD) for the harness under test; `native/tests/test_full_ui_acceptance.py` is the only file changed by this assignment |
+| Application binary, flake runs (§18.2) | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `9FF21B8894AB3F87F9429C65CF4C7E2B4B291285B9E3C34B6D0EC86F2E3A3B51` — identical to §17.1 |
+| Application binary, corrected runs (§18.6) | `Mayasaba.exe`, SHA-256 `40C79F1D0916A7E89820C48422455B14D9C2A5777BD702E045AC2BCE75997564`, relinked 12:43:15 |
+| Compiled XAML, both | `MainWindow.xbf`, SHA-256 `50353CD298844F5CCA9C72AC094DD92B1E59F04C1497819C15E58C34335901BC` — identical in both binaries, so no XAML change separates them |
+| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 125% scaling |
+| Build hygiene | **No build was issued by this assignment.** The relink between the flake runs and the corrected runs was performed by a different agent; see the correction below. |
+
+**Identity correction (recorded rather than silently amended).** An earlier draft of this section stated that every run drove the single binary `9FF21B88…` and that no rebuild occurred. That is true only of the flake runs in §18.2. The corrected-harness runs, the controlled mutation and its restored-state rerun all executed `40C79F1D…`, because a concurrent agent edited `MainWindow.xaml.cpp` at 12:41:43 and relinked at 12:43:15, before corrected run 1. The comparison therefore **crosses a binary boundary**, and no claim in this record treats the flake runs and the corrected runs as the same artifact.
+
+That confound was bounded by inspection rather than assumed away: `git diff` of the concurrent agent's `MainWindow.xaml.cpp` changes **zero** lines in `NavigateAsync`, `ChangeClosureAsync`, `navigationBusy_`, `resume_foreground`, `OnSwitchProject`, `OnShowActionCenterDetails` or the details-sheet focus path. Its edits are confined to attachment stale-completion reporting. The two defects diagnosed below live in code unchanged between the two binaries, so the diagnosis transfers; the *run results* do not, and are recorded per binary.
+
+### 18.2 The problem: two different assertions failed on one identical binary
+
+Five full harness runs were executed against the artifact above with no source or binary change between them:
+
+| Run | Result | Failing assertion |
+| --- | --- | --- |
+| 1 | FAIL (exit 1) | Phase 4: "Screen 2 Project Selector not reached on Switch Project" |
+| 2 | PASS (exit 0) | — |
+| 3 | FAIL (exit 1) | Phase 9: "Opening details did not move focus into the detail sheet" |
+| 4 | PASS (exit 0) | — |
+| 5 | PASS (exit 0) | — |
+
+Two failures in five runs, at **two different** assertions, on one binary. A green run therefore could not be treated as evidence that either property held, and a red run could not be attributed to the product.
+
+### 18.3 Hypotheses tested and refuted
+
+Each was measured directly rather than reasoned about, because the first four all fit the observed signature.
+
+| Hypothesis | Measurement | Result |
+| --- | --- | --- |
+| `sw_items[0]` sometimes resolves to the `Text` child, which has no `InvokePattern` | Opened the File flyout 15 times and recorded the element order of every "Switch Project" match | **Refuted.** 15/15 identical order `('MenuItem', 'Text')`; `sw_items[0]` always had `iface_invoke`. |
+| The flyout realizes more slowly than the harness's fixed `time.sleep(1.0)` | 20 rounds, polling for the `MenuItem` after invoking File | **Refuted.** Realize latency 0.074–0.232 s (mean 0.098 s); 0/20 exceeded 1.0 s. |
+| `find_by_name(win, "File")` is ambiguous | Enumerated every element matching "File" for 20 rounds | **Refuted.** Exactly one match, always `MenuItem`. |
+| UIA `InvokePattern` on the `MenuBarItem` sometimes fails to expand the flyout | 12 rounds invoking File and polling for the item | **Refuted.** 12/12 expanded, 0.08–0.25 s. |
+| The details-sheet focus transfer is a real app defect | 8 rounds opening and closing the sheet, sampling `CurrentHasKeyboardFocus` every 50 ms while the window was verified foreground | **Refuted.** Focus arrived in 0.08–0.10 s in 8/8 rounds. |
+
+### 18.4 Two confirmed defects in the harness
+
+**D1 — the keyboard fallback was dead code, and it made an unreachable menu indistinguishable from a broken switch.** All seven call sites drove the menu as:
+
+```python
+sw_items = [d for d in win.descendants() if "Switch Project" in d.window_text()]
+if sw_items: sw_items[0].iface_invoke.Invoke()
+else:        send_keys("%(FS)")
+```
+
+`MainWindow.xaml` declares `MenuBarItem Title="File"` and `MenuFlyoutItem Text="Switch Project"` with **no `AccessKey`**, so there is no `Alt+F` accelerator for the fallback to reach. Measured directly: `send_keys("%(FS)")` with no flyout open leaves it closed. The fallback could therefore never succeed, so any empty scan was guaranteed to produce the Phase 4 failure string regardless of whether the app worked. The scan also selected by text alone, which matches the `Text` child as well as the `MenuItem`; only the measured stability of element order kept that from failing sooner.
+
+**D2 — asynchronous postconditions were sampled at a single instant.** Phase 4's `time.sleep(1.0)` and Phase 9's immediate `has_focus()` read both assume a transition has completed by the time the next statement runs. Phase 4 already polled `FolderHeading` correctly, which is why the same file contained both the right pattern and the wrong one. Focus is additionally gated on foreground state: UIA reports `CurrentHasKeyboardFocus` false for **every** element when the top-level window is not foreground, so a focus assertion taken without that check cannot separate an app that failed to move focus from a harness that lost the window.
+
+### 18.5 The correction
+
+`open_switch_project(win, timeout=10.0)` replaces all seven call sites. It selects the `File` element by `control_type == "MenuItem"`, invokes it, **polls** for the "Switch Project" `MenuItem` (3 s bound), selects that item by control type as well as text, invokes it, and polls `FolderHeading` (10 s bound). There is no keyboard fallback: when the menu cannot be reached it logs the specific reason and returns `None`, so an unreachable control is reported as such instead of being reported as a failed switch.
+
+`poll_until(predicate, timeout, interval)` is the shared bounded-wait helper. `window_is_foreground(win)` exposes the OS foreground comparison.
+
+The Phase 9 focus assertion now re-establishes foreground first, polls focus for 3 s, and on failure records the foreground state and **every** element in the tree holding keyboard focus, so the two causes remain distinguishable in the log.
+
+### 18.6 Criteria for this assignment
+
+| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
+| --- | --- | --- | --- | --- | --- |
+| H-01 | The observed variation is real and is not a build difference. | Native run | Five full harness runs against one unchanged binary: 3 PASS / 2 FAIL at two different assertions (§18.2). | PASS | The flake rate is 2/5 on this machine and display configuration; it is not an estimate of the rate elsewhere. |
+| H-02 | The dead keyboard fallback cannot reach the menu. | Direct measurement | `diag_expand.py`: with no flyout open, `send_keys("%(FS)")` leaves the flyout closed (`flyout open after %(FS): False`); the XAML declares no `AccessKey` on either item. | PASS | Confirms the fallback is unreachable, not that no keyboard path exists for a user pressing keys directly. |
+| H-03 | The element-order hypothesis is refuted. | Direct measurement | `diag_menu_order.py`: 15/15 rounds `order=('MenuItem','Text')`, `sw_items[0]` invokable every time. | PASS | One store state and one window size. |
+| H-04 | The flyout-latency hypothesis is refuted. | Direct measurement | `diag_flyout_latency.py`: 20 rounds, realize 0.074–0.232 s, 0/20 later than the harness's 1.0 s sleep. | PASS | — |
+| H-05 | The details-focus failure is not an app defect under foreground. | Direct measurement | `diag_details_focus.py`: 8/8 rounds focus arrived in 0.08–0.10 s with the window verified foreground. | PASS | Does **not** establish that focus always arrives; it establishes that it arrives when foreground is held, which is the condition the harness must create. |
+| H-06 | The corrected harness still detects a genuine switch failure. | Controlled mutation | The postcondition was mutated (`find_by_aid(win, "FolderHeading")` → `"FolderHeading__CONTROLLED_MUTATION"`) so the switch could never be observed satisfied. Run: `EXIT=1`, failing at `FAIL: Screen 2 Project Selector not reached on Switch Project` with the specific cause logged (`Switch Project: Screen 2 did not appear within 10s`, `Folder heading after switch request: None`). Harness restored byte-identically (`d8646d53…`, zero mutation markers) and rerun: `EXIT=0`, `Total: 15 \| Passed: 13 \| Inconclusive: 2 \| Failed: 0`. | PASS | The mutation makes the postcondition unsatisfiable by construction, so it proves the assertion discriminates *that* failure. It does not reproduce the original intermittent race, which is timing-dependent and was not forced. |
+| H-07 | The corrected harness runs clean repeatedly. | Native run | Four consecutive runs against `40C79F1D…`: three in the fixed set (`EXIT=0` each, `Total: 15 \| Passed: 13 \| Inconclusive: 2 \| Failed: 0`, zero `FAIL:` lines) plus the post-mutation restored-state rerun (`EXIT=0`, same totals). Both originally-failing assertions pass in every run: Phase 4 logs `Folder heading after switch request: Pick up where you left off`; Phase 9 logs `PASS: Details sheet is focus-safe: opens into the sheet and restores the invoking control.` | PASS | 4/4 on one machine and display configuration. The original flake rate was 2/5, so 4 clean runs is consistent with the defects being removed but is not a statistical proof of zero residual flake. |
+
+### 18.7 What this record does not claim
+
+1. **The app-side latch was found but not fixed.** `NavigateAsync` sets `navigationBusy_ = true` and clears it only after `co_await resume_foreground(ui)` succeeds; the early return when that await yields false leaves the latch set, and the guard `if (navigationBusy_ || busy_ || windowClosed_) co_return;` then silently drops every later Switch Project for the life of the process. `ChangeClosureAsync` has the identical shape, as does `SelectAsync` relative to `FinishSelection`. This is a real correctness defect, it was **not** the cause of the Phase 4 failure recorded here, and it was **not** repaired in this assignment because the file is being edited concurrently by another agent. It remains open.
+2. No application source was changed by this assignment, and no build was issued by it. Claims about `40C79F1D…` are claims about a binary another agent produced; nothing here endorses that agent's changes or extends to any later build.
+3. The corrections address oracle adequacy and observability. They do not raise the coverage of the phases they sit in, and a PASS from the corrected harness is not evidence for any criterion those phases do not assert.
+4. The corrected-harness runs, the controlled mutation and its restored-state rerun were executed with a concurrent agent's uncommitted edits **compiled into** the tested binary `40C79F1D…` (see the identity correction in §18.1). Those edits change zero lines in the navigation or details-focus paths under test, but the tested binary is not a build of committed `fb00748` source. The flake runs used `9FF21B88…`, which does predate those edits. A reader must not combine a flake-run result and a corrected-run result as though one artifact produced both.
+5. The controlled mutation proves the Phase 4 assertion discriminates an unsatisfiable postcondition. It does not reproduce the original intermittent race, and the Phase 9 focus assertion has no equivalent mutation recorded here; its corrected behavior rests on the four clean runs and on the foreground measurement in §18.3.
+
+
