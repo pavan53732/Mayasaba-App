@@ -11,6 +11,30 @@
 #include <thread>
 #include <atomic>
 
+// Drag-loop budgets in milliseconds. Their ORDER is the correctness condition,
+// and it spans two processes:
+//
+//   self-drop 1200  <  watchdog 4000  <  watchdog + escape 4400  <  harness wait
+//
+// * The in-process safeguard in QueryContinueDrag (kSelfDropMs) must settle well
+//   inside the watchdog, or the watchdog kills the process before the safeguard
+//   can complete a drop the target would have accepted. That was the 2500/2400
+//   inversion fixed previously.
+// * The watchdog must have time to send its escape AND report what it observed
+//   (kEscapeMs) before the harness that drives this helper gives up. The harness
+//   used to wait exactly 4000 ms, which killed the process at the instant the
+//   escape began, so the escape never ran and the "QueryContinueDrag calls so
+//   far" diagnostic never printed -- the harness reported a bare timeout and the
+//   measurement that distinguishes the causes was lost.
+//
+// `native/tests/test_full_ui_acceptance.py` names OLE_DROP_TIMEOUT_S and derives
+// it from this total. If you change a budget here, change that constant too;
+// the helper prints its own total on startup so a mismatch is visible in the log.
+constexpr int kSelfDropMs = 1200;
+constexpr int kWatchdogMs = 4000;
+constexpr int kEscapeMs = 400;
+constexpr int kWatchdogPollMs = 100;
+
 class DropSource : public IDropSource
 {
 public:
@@ -51,16 +75,15 @@ public:
 
         // Bounded safeguard: force drop completion so DoDragDrop never hangs.
         //
-        // This MUST stay well inside the watchdog's budget in wmain. The two were
-        // previously inconsistent -- the safeguard waited 2500 ms while the
-        // watchdog killed the process at 2400 ms -- so the guard could never run
-        // and every attempt ended in ExitProcess(4) labelled "OS environment",
-        // which named the environment for a condition this helper created. The
-        // helper now settles at 1200 ms, half the watchdog's budget, so a drop
-        // that the app accepts is reported as a drop rather than as a timeout.
+        // This MUST stay well inside the watchdog's budget in wmain -- see the
+        // budget block at the top of this file. The two were previously
+        // inconsistent: the safeguard waited 2500 ms while the watchdog killed
+        // the process at 2400 ms, so the guard could never run and every attempt
+        // ended in ExitProcess(4) labelled "OS environment", which named the
+        // environment for a condition this helper created.
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - startTime_).count();
-        if (elapsed > 1200)
+        if (elapsed > kSelfDropMs)
         {
             return DRAGDROP_S_DROP;
         }
@@ -238,6 +261,16 @@ int wmain(int argc, wchar_t* argv[])
         return 3;
     }
 
+    // Printed so the harness log carries the budget this binary actually uses.
+    // The harness waits kWatchdogMs + kEscapeMs plus a margin; a mismatch shows
+    // up here as a number the harness can compare against, instead of as a bare
+    // timeout with no explanation.
+    std::wcout << L"budgets: selfdrop=" << kSelfDropMs
+               << L" watchdog=" << kWatchdogMs
+               << L" escape=" << kEscapeMs
+               << L" total=" << (kWatchdogMs + kEscapeMs) << L"\n";
+    std::wcout.flush();
+
     RECT rc{};
     GetWindowRect(targetHwnd, &rc);
     int targetX = (rc.left + rc.right) / 2;
@@ -255,6 +288,11 @@ int wmain(int argc, wchar_t* argv[])
     std::wcout << L"foreground=" << (fgAfter == targetHwnd ? L"app" : L"other")
                << L" target=" << targetHwnd
                << L" foreground_hwnd=" << reinterpret_cast<unsigned long long>(fgAfter) << L"\n";
+    // ExitProcess does not flush iostream buffers. The watchdog leaves via
+    // ExitProcess(4), so any line not flushed here is lost at the kill boundary --
+    // which is precisely how a measurement becomes "no evidence". Flush every
+    // line that must survive the watchdog.
+    std::wcout.flush();
 
     // Owned by this stack frame so the watchdog can read it safely after
     // DoDragDrop has returned and released the drop source.
@@ -267,21 +305,21 @@ int wmain(int argc, wchar_t* argv[])
     std::atomic<bool> completed{false};
 
     // Watchdog thread: unblocks OLE modal loop if UIPI or message pump stalls.
-    // The budget is 4.0 s so it stays outside the DropSource safeguard (1.2 s);
-    // a watchdog that fires first would mask the very condition it is meant to
-    // escape from.
+    // The budget ordering is explained at the top of this file; the short form is
+    // that this must fire after the DropSource safeguard and must finish
+    // reporting before the harness that drives us stops waiting.
     std::thread watchdog([mainThreadId, &completed, &continueCalls]() {
-        for (int i = 0; i < 40; ++i)
+        for (int i = 0; i < kWatchdogMs / kWatchdogPollMs; ++i)
         {
             if (completed.load()) return;
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kWatchdogPollMs));
         }
         if (!completed.load())
         {
             keybd_event(VK_ESCAPE, 0, 0, 0);
             keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0);
             PostThreadMessageW(mainThreadId, WM_CANCELMODE, 0, 0);
-            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            std::this_thread::sleep_for(std::chrono::milliseconds(kEscapeMs));
             if (!completed.load())
             {
                 std::wcerr << L"WATCHDOG: DoDragDrop modal loop did not complete. "
@@ -290,6 +328,7 @@ int wmain(int argc, wchar_t* argv[])
                            << L" (0 means the OLE drag loop never iterated, so the "
                            << L"synthetic drag was never delivered to the target and "
                            << L"this is not evidence about the drop target).\n";
+                std::wcerr.flush();
                 ExitProcess(4);
             }
         }

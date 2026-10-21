@@ -430,6 +430,14 @@ Keep this file an operating-rules document. Do **not** duplicate the evidence ta
 
 Never record an unverified acceptance claim in this file. If a criterion was not observed, say it is not observed.
 
+**A timeout that fires before the thing it waits for has finished destroys the evidence.** The budget-ordering rule already applied inside `ole_drop.cpp` (safeguard inside watchdog) also governs the boundary between a test helper and the harness that drives it. The harness waited exactly `timeout=4` on a helper whose watchdog fired at 4000 ms and then spent 400 ms sending an escape and printing what it observed, so Python killed the helper at the instant its escape began: the diagnostic never printed, and the run recorded a bare "reached bounded timeout" that named no cause. Derive the harness timeout from the helper's declared budgets plus margin, name the constant on both sides, and have the helper print its own budget total on startup so a mismatch is visible in the log. The same applies to any bounded wait around a subprocess.
+
+**`ExitProcess` does not flush iostream buffers, so a helper that dies via its watchdog silently loses every line it wrote.** A `std::wcout` line followed by `ExitProcess(4)` is not evidence — it is a measurement that was made and then discarded at the kill boundary. Flush explicitly after any line that must survive the watchdog, or write through a handle you flush. This cost a whole run's `foreground=` reading, which then looked like the probe had never measured the foreground at all.
+
+**A probe whose child output is captured only on clean exit measures nothing when the child hangs.** `subprocess.run(capture_output=True)` discards everything when it raises `TimeoutExpired`, so a hanging target produces a timeout with no evidence in it. Have the child write each stage to its own log file, flushed as it goes, and read that file whether the child exited or was killed. Two consecutive probe runs here returned four timeouts and zero measurements before this was fixed.
+
+**A synthetic input probe run from a non-foreground child cannot establish the foreground.** `SetForegroundWindow` is refused for a process that does not already own the foreground, and the refusal is silent. Measured here: a Python parent set a control window foreground successfully (`GetForegroundWindow()` matched), and every C++ child launched from it then read `fg_before_press` as a *different* window and never matched the target. If a drag or click probe depends on the target being foreground, the child must be given the foreground by a mechanism that works across processes, or the probe must record the refusal and stop — not proceed and report a null result as a finding about the target.
+
 ### 17.2 Commit with a complete message
 
 Commit only reviewed, verified changes, under the workflow in §12. The message must stand on its own for a reader who has only the commit:

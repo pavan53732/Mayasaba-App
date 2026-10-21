@@ -2380,3 +2380,101 @@ with exit code 1. The fix was restored and the file verified byte-identical by S
 
 **A stale test binary was caught and must not be confused with a regression.** `native/tests/storage_tests.exe` (the legacy path, mtime 2026-10-15) failed at a line number that did not match the symbol's location in the current source (`secondaryFailed` is at line 573; the message cited 445). The current build lives at `native/tests/bin/storage_tests.exe` (mtime 2026-10-22 00:14) and reports `PASS: 44 of 44 executed native regression groups`, exit 0. The failing copy predates commit `61961e1`. Recorded here because a stale binary at a legacy path is a recurring trap: check the mtime and the path before attributing a failure to a source change.
 
+## 23. OLE drag: budget coupling fixed, session limit isolated, criteria 11/12/19 left INCONCLUSIVE (2026-10-22)
+
+### 23.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Executable | `Mayasaba.exe` SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` (unchanged from §21/§22) |
+| Compiled XAML | `MainWindow.xbf` SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` (unchanged) |
+| Application source changed | **No.** Third consecutive commit in which the product binary is byte-identical. |
+| Harness binary | `native/tests/bin/ole_drop.exe` SHA-256 `0cf37f55139fc0f017533c378248e6e13f3d2636c61bfbe26a5ac10e7d0cbe9e` |
+| Evidence directory | `native/tests/evidence/ui-acceptance-20261022-r1budget` |
+| Run result | `Total: 20 criteria | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0` |
+
+### 23.2 The budget coupling, confirmed and fixed
+
+The follow-on assignment identified an exact defect: `test_full_ui_acceptance.py` invoked the helper with `timeout=4` while the helper's watchdog fired at 4000 ms and then spent 400 ms sending `VK_ESCAPE`, posting `WM_CANCELMODE`, and printing the measurement that distinguishes "never delivered" from "delivered and refused". Python therefore killed the helper at the instant its escape began.
+
+**Confirmed, then fixed.** The budgets are now named constants on both sides (`kSelfDropMs`/`kWatchdogMs`/`kEscapeMs` in `ole_drop.cpp`; `OLE_DROP_WATCHDOG_MS`/`OLE_DROP_ESCAPE_MS`/`OLE_DROP_MARGIN_S` in the harness), the harness timeout is derived rather than hard-coded (`OLE_DROP_TIMEOUT_S` = 8.4 s), and the helper prints its own total on startup so a mismatch is visible in the log.
+
+Before and after, in the harness's own words:
+
+| | Observation |
+| --- | --- |
+| Before (§22 run) | `ole_drop.exe invocation reached bounded 4s timeout` — no exit code, no diagnostic, no measurement |
+| After (`ui-acceptance-20261022-r1budget`) | `ole_drop.exe exit code: 4`, stdout `budgets: selfdrop=1200 watchdog=4000 escape=400 total=4400`, stderr `WATCHDOG: ... QueryContinueDrag calls so far: 0` |
+
+The criterion verdict did not change, and was not expected to: the fix restores the *evidence*, not the drag. That is the difference between an INCONCLUSIVE that names its cause and one that does not.
+
+### 23.3 A second evidence-destroying defect, in the helper
+
+On the first run after the decoupling, the helper's stdout contained the `budgets:` line but **not** the `foreground=` line, even though the source writes it earlier in the program. Cause: `ExitProcess(4)` does not flush iostream buffers, so every `std::wcout` line written before the watchdog's exit was discarded at the kill boundary. The measurement had been taken and then thrown away, which is indistinguishable in the log from never having taken it.
+
+Fixed by flushing explicitly after the lines that must survive the watchdog. Verified after rebuild:
+
+```
+exit= 4
+STDOUT: budgets: selfdrop=1200 watchdog=4000 escape=400 total=4400
+foreground=other target=0000000000080738 foreground_hwnd=2228396
+STDERR: WATCHDOG: DoDragDrop modal loop did not complete. QueryContinueDrag calls so far: 0 ...
+```
+
+### 23.4 What the drag probes established, and what they did not
+
+Four drag strategies were run against a known-good control target (Notepad), each in a fresh process, each writing every stage to its own log file so a hang could not erase the evidence:
+
+| Strategy | Aim | Input API | `QueryContinueDrag` calls | Exit |
+| --- | --- | --- | --- | --- |
+| `legacy` | `rect.bottom - 75` (what the helper does) | `SetCursorPos` + `mouse_event` | 0 | 4 |
+| `absolute` | client-area centre via `ClientToScreen` | `MOUSEEVENTF_ABSOLUTE` + `SendInput` | 0 | 4 |
+| `sendinput` | client-area centre | `SendInput` only | 0 | 4 |
+| `nopress` | none — **no button pressed at all** | none | 0 | 4 |
+
+The decisive observation is not the zero counts but a line common to all four: `fg_before_press=2228396 match=0`. `SetForegroundWindow(target)` was **refused** in every child process, while the Python parent that launched them had just set that same window foreground successfully and read a matching `GetForegroundWindow()`. A non-foreground process cannot give itself the foreground, and the refusal is silent.
+
+`nopress` matters because it separates two hypotheses: with no input injected at all, `DoDragDrop` still never iterates. So the zero count is not explained by the press landing in the wrong place, by the drag threshold, or by `mouse_event` versus `SendInput`. The drag loop does not start in this session for reasons upstream of all three.
+
+**What this does not establish.** It does not prove that Mayasaba's drop target is correct, and it does not prove it is broken. It establishes that this harness, in this session, cannot deliver an OLE drag to *any* target — so criteria 11 and 12 carry no information about the application in either direction. The declaration `AllowDrop="True" Drop="OnComposerDrop"` in `MainWindow.xaml` remains an unverified declaration.
+
+### 23.5 A mechanism for the earlier `foreground hwnd 0`, measured
+
+§22.6 recorded the `GetForegroundWindow() == 0` condition as an unexplained known unknown. A child-process isolation probe found a reproducible mechanism:
+
+| Variant | Result |
+| --- | --- |
+| bare child, no OLE, no input | `fg` = target, match |
+| after `OleInitialize` | `fg` = target, match |
+| after `SetForegroundWindow(target)` | `fg` = target, match |
+| after `SetCursorPos` + `mouse_event` **at the target's centre** | `fg` = target, match |
+| after `SetCursorPos(10,10)` + `mouse_event` **outside any app window** | **`fg` = 0** |
+| subsequent read | `fg` = a different window |
+
+A synthetic click that lands on the desktop rather than on an application window moves the foreground to the shell, and `GetForegroundWindow()` returns 0 during that transition. This is consistent with the original runs, where a click aimed by a guessed offset (`rect.bottom - 75`) could miss every window.
+
+This is a **mechanism, not a fix**. It was measured in an isolation probe, not in the failing runs of 2026-10-21, whose exact click positions were not recorded. It is offered as the most probable explanation and is not claimed as the established cause of those runs.
+
+### 23.6 Criteria for this assignment
+
+| ID | Criterion | Evidence type | Observation | Verdict |
+| --- | --- | --- | --- | --- |
+| X-01 | The harness timeout contains the helper's watchdog, escape and report. | Source + native run | Timeout derived to 8.4 s from 4000 + 400 ms; helper reports exit 4 with its diagnostic where it previously reported a bare timeout. | **PASS** |
+| X-02 | The budget relationship is named on both sides and visible in the log. | Source + run log | `kWatchdogMs`/`kEscapeMs` and `OLE_DROP_WATCHDOG_MS`/`OLE_DROP_ESCAPE_MS`; helper prints `total=4400` on startup. | **PASS** |
+| X-03 | A helper that exits via its watchdog does not lose its measurements. | Native probe | `ExitProcess` skipped iostream flush; `foreground=` line absent before the fix, present after. | **PASS** |
+| X-04 | The drag failure is attributed by measurement, not by guesswork. | Native probe | Four strategies, including one with no input at all, all `continueCalls=0`; `SetForegroundWindow` refused in every child. | **PASS** (attributed to session/helper foreground refusal) |
+| X-05 | The `foreground hwnd 0` condition has a measured mechanism. | Isolation probe | A synthetic click outside any app window produces `fg=0`, then a different window. | **PASS** (mechanism found; not the established cause of the original runs) |
+| X-06 | Criteria 11 and 12 become measurable. | Native run | Still not measurable: no OLE drag starts in this session, against any target. | **INCONCLUSIVE** |
+| X-07 | Criterion 19 (empty-chat hero) becomes measurable. | — | Not attempted in this milestone; deferred deliberately. | **INCONCLUSIVE** |
+| X-08 | Harness hygiene (stale binary, ignore rules). | — | Not attempted in this milestone; deferred deliberately. | **INCONCLUSIVE** |
+
+X-07 and X-08 are recorded as INCONCLUSIVE rather than omitted: they were in the assignment and were not done. They are the next milestone's first two items.
+
+### 23.7 What this record does not claim
+
+1. **It does not claim criteria 11 or 12 improved.** Their verdict is unchanged. What changed is that their reason is now measured and printed in the run log instead of being a bare timeout.
+2. **It does not claim the application's drop handling is correct.** No drag reached it.
+3. **It does not claim the environment is a permanent limit.** The evidence is that this session cannot inject a cross-process OLE drag with the target foreground. Whether a correctly-privileged process could is untested; a process that already owns the foreground, or a UIAccess/input-capable launcher, has not been tried.
+4. **It does not claim the `foreground hwnd 0` cause is established.** A mechanism was reproduced in isolation; the original runs' click coordinates were never recorded, so the connection is inference.
+5. **It does not claim criterion 19 or the hygiene items were examined.** They were deferred and are recorded as INCONCLUSIVE.
+6. **It does not claim the product was tested differently.** The executable and XBF are byte-identical to §21 and §22.

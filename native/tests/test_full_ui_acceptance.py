@@ -25,6 +25,27 @@ EVIDENCE_DIR = ""
 WINDOW_WAIT_SECONDS = 40
 OLE_DROP_EXE = r"C:\Users\pavan\PROJECTS\Mayasaba-App\native\tests\bin\ole_drop.exe"
 
+# How long to wait for ole_drop.exe, derived from the budgets that helper runs on
+# rather than from a number chosen independently of them.
+#
+# This coupling has already caused a false finding once. The helper's watchdog
+# fires at OLE_DROP_WATCHDOG_MS, then sends VK_ESCAPE, then waits
+# OLE_DROP_ESCAPE_MS before it prints the "QueryContinueDrag calls so far"
+# diagnostic and exits 4. The harness previously used timeout=4 -- exactly the
+# watchdog interval -- so Python killed the helper at the instant its escape
+# began. The escape never ran, the diagnostic never printed, and the run recorded
+# a bare "reached bounded 4s timeout" with no measurement in it. A timeout must
+# contain the whole escape-and-report sequence with margin, or it destroys the
+# evidence it is waiting for.
+#
+# Keep these equal to kWatchdogMs / kEscapeMs in native/tests/ole_drop.cpp. The
+# helper prints "budgets: selfdrop=... watchdog=... escape=... total=..." on
+# startup, so a mismatch is visible in the run log.
+OLE_DROP_WATCHDOG_MS = 4000
+OLE_DROP_ESCAPE_MS = 400
+OLE_DROP_MARGIN_S = 4.0
+OLE_DROP_TIMEOUT_S = (OLE_DROP_WATCHDOG_MS + OLE_DROP_ESCAPE_MS) / 1000.0 + OLE_DROP_MARGIN_S
+
 
 def apply_cli_overrides(argv):
     """Accepts --exe/--store/--perf-log/--evidence-dir without disturbing the defaults."""
@@ -2566,7 +2587,7 @@ def main():
                 [OLE_DROP_EXE, str(win.handle), single_drop_file],
                 capture_output=True,
                 text=True,
-                timeout=4
+                timeout=OLE_DROP_TIMEOUT_S
             )
             drop_proc_returncode = drop_proc.returncode
             log(f"ole_drop.exe exit code: {drop_proc.returncode}")
@@ -2574,7 +2595,9 @@ def main():
             if drop_proc.stderr:
                 log(f"ole_drop.exe stderr: {drop_proc.stderr.strip()}")
         except subprocess.TimeoutExpired:
-            log("ole_drop.exe invocation reached bounded 4s timeout (OS modal loop / non-interactive session protection).")
+            log(f"ole_drop.exe invocation reached bounded {OLE_DROP_TIMEOUT_S:.1f}s timeout "
+                f"(helper watchdog {OLE_DROP_WATCHDOG_MS}ms + escape {OLE_DROP_ESCAPE_MS}ms "
+                f"+ {OLE_DROP_MARGIN_S:.1f}s margin).")
 
         time.sleep(1.5) # allow background file copy, hash, and staging to complete
 
@@ -2644,11 +2667,11 @@ def main():
                 [OLE_DROP_EXE, str(win.handle), sub_folder, mixed_drop_file],
                 capture_output=True,
                 text=True,
-                timeout=4
+                timeout=OLE_DROP_TIMEOUT_S
             )
             mixed_proc_returncode = mixed_batch_proc.returncode
         except subprocess.TimeoutExpired:
-            log("Mixed batch ole_drop.exe reached bounded timeout.")
+            log(f"Mixed batch ole_drop.exe reached bounded {OLE_DROP_TIMEOUT_S:.1f}s timeout.")
 
         # Locate actual control "Notice" and wait for fresh rejection tied to the attempted batch
         rejection_msg = "Folders cannot be attached; entire batch rejected."
