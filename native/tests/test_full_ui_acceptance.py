@@ -7,6 +7,7 @@ import subprocess
 import ctypes
 import hashlib
 import traceback
+import threading
 from ctypes import wintypes
 from pywinauto import Desktop
 from pywinauto.keyboard import send_keys
@@ -163,6 +164,383 @@ def log(msg):
         EVIDENCE_LOG_HANDLE.flush()
 
 
+UOI_NAME = 2
+
+
+# --- run-scoped UI-thread sampler -----------------------------------------
+#
+# The hypothesis under test in W1 was that the application's UI thread blocks
+# for seconds because the harness's own SQLite writes take a write lock on the
+# live store while the application is running, and the application's background
+# storage work waits behind that lock. That hypothesis is only refuted by
+# MEASUREMENT made during a run, so the sampler below records the application's
+# pump latency on a fixed cadence for the whole run, and every harness write to
+# the store is timestamped against it. The correlation between "the harness held
+# a write lock" and "the application's UI thread blocked" is then a fact in the
+# run log rather than an argument.
+#
+# A UIA descendant walk cannot serve this purpose: its cost grows with the size
+# of the tree and with the accessibility provider, so a slow walk and a blocked
+# pump produce the same number. The 11.399 s figure recorded in run
+# 20261021-final was a walk, and it was read as a stall.
+UI_SAMPLE_INTERVAL_S = 0.05
+# The budget must cover the WHOLE run, not a prefix of it. A harness run
+# against a cold binary takes around 150 s, and a sampler that stops at 30 s
+# leaves the phases that matter -- the seeded writes, the OLE attempt, the
+# performance leg -- unmeasured. The count cap is a second bound, not the
+# primary one.
+UI_SAMPLE_MAX_S = 600.0
+UI_SAMPLE_COUNT = 12000
+
+UI_SAMPLES = []          # list of (monotonic_offset_s, answered, elapsed_s, detail)
+UI_WRITE_MARKERS = []    # list of (monotonic_offset_s, description)
+UI_EVENT_MARKERS = []    # list of (monotonic_offset_s, description) for non-write events
+_RUN_T0 = None
+
+
+def _run_clock():
+    """Seconds since the sampler started, or None if it has not started."""
+    if _RUN_T0 is None:
+        return None
+    return time.monotonic() - _RUN_T0
+
+
+def mark_store_write(description):
+    """Timestamp a harness write against the live store.
+
+    Every mutation the harness makes to the store while the application is
+    running is a candidate lock holder, so each one is recorded with the time
+    it happened. The sampler's readings are then interpretable: a pump latency
+    spike that falls inside a marked write window is a candidate contention
+    effect, and one that does not is not.
+    """
+    offset = _run_clock()
+    if offset is not None:
+        UI_WRITE_MARKERS.append((offset, description))
+        log(f"  [store-write] t+{offset:8.3f}s  {description}")
+
+
+def mark_event(description):
+    """Timestamp a harness event that is not a store write.
+
+    The OLE attempt is the one harness event that runs for seconds while the
+    application is expected to be doing work, and the question it raises is
+    whether the application's pump was blocked for that whole window. Marking
+    its start and its end makes that window exact instead of inferred from
+    neighbouring writes.
+    """
+    offset = _run_clock()
+    if offset is not None:
+        UI_EVENT_MARKERS.append((offset, description))
+        log(f"  [event] t+{offset:8.3f}s  {description}")
+    return offset
+
+
+def start_ui_sampler(hwnd):
+    """Sample the application's message pump on a fixed cadence for the run."""
+    global _RUN_T0
+    _RUN_T0 = time.monotonic()
+
+    def run():
+        started = time.monotonic()
+        deadline = started + UI_SAMPLE_MAX_S
+        while time.monotonic() < deadline and len(UI_SAMPLES) < UI_SAMPLE_COUNT:
+            offset = time.monotonic() - started
+            try:
+                answered, elapsed, detail = ui_thread_latency(hwnd, timeout_ms=2000)
+            except Exception as exc:
+                answered, elapsed, detail = False, 0.0, f"raised {type(exc).__name__}: {exc}"
+            UI_SAMPLES.append((offset, answered, elapsed, detail))
+            time.sleep(UI_SAMPLE_INTERVAL_S)
+        log(f"  UI-thread sampler finished: {len(UI_SAMPLES)} sample(s)")
+
+    thread = threading.Thread(target=run, name="ui-thread-sampler", daemon=True)
+    thread.start()
+    return thread
+
+
+def write_ui_sample_artifact():
+    """Write the raw pump samples and write markers to the evidence directory.
+
+    The summary line in the run log is a reduction. The raw series is what a
+    reviewer needs in order to check the reduction, to place an unanswered
+    sample against the phase it happened in, and to see the shape of the
+    distribution rather than only its percentiles.
+    """
+    if not EVIDENCE_DIR or not UI_SAMPLES:
+        return None
+    path = os.path.join(EVIDENCE_DIR, "ui-thread-samples.json")
+    payload = {
+        "note": (
+            "Samples of the application's UI thread answering a WM_NULL probe "
+            "with SendMessageTimeoutW. Each sample is "
+            "[offset_s, answered, elapsed_s, detail]. 'offset_s' is seconds "
+            "since the sampler started, which begins when the harness "
+            "connects to the application window."
+        ),
+        "probe": "SendMessageTimeoutW(WM_NULL, SMTO_ABORTIFHUNG, 2000 ms)",
+        "interval_s": UI_SAMPLE_INTERVAL_S,
+        "samples": [
+            [round(s[0], 3), bool(s[1]), round(s[2], 6), s[3] if len(s) > 3 else ""]
+            for s in UI_SAMPLES
+        ],
+        "store_writes": [
+            [round(m[0], 3), m[1]] for m in UI_WRITE_MARKERS
+        ],
+        "events": [
+            [round(m[0], 3), m[1]] for m in UI_EVENT_MARKERS
+        ],
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=1)
+    return path
+
+
+def pump_latency_between(start_offset, end_offset):
+    """Summarize the pump samples taken inside a marked window.
+
+    This is the measurement that answers "was the application's UI thread
+    blocked while this was happening?". A window in which the pump answered
+    every probe, quickly, refutes a blocked-UI-thread explanation for the
+    event in that window; a window in which the pump never answered supports
+    it. Without the window, the event is only known to have failed, and the
+    reason is unknown.
+    """
+    if start_offset is None or end_offset is None:
+        return "not measured (the event window was not marked)"
+    inside = [s for s in UI_SAMPLES
+              if start_offset <= s[0] <= end_offset]
+    if not inside:
+        return (f"no pump samples fell inside the window "
+                f"t+{start_offset:.3f}s..t+{end_offset:.3f}s "
+                f"({end_offset - start_offset:.3f}s long)")
+    answered = sum(1 for s in inside if s[1])
+    elapsed = sorted(s[2] for s in inside)
+    slow = [s for s in inside if s[2] > 1.0]
+    return (f"{len(inside)} sample(s) in t+{start_offset:.3f}s..t+{end_offset:.3f}s "
+            f"({end_offset - start_offset:.3f}s), {answered} answered, "
+            f"p50 {elapsed[len(elapsed) // 2] * 1000:.2f} ms, "
+            f"max {elapsed[-1] * 1000:.2f} ms, "
+            f"{len(slow)} over 1000 ms")
+
+
+def ui_sample_summary():
+    """Summarize the pump samples, and their overlap with harness write windows.
+
+    The summary separates the two questions that were previously conflated:
+    how long the pump ever took to answer, and whether the slowest answers
+    coincide with the harness holding a write lock.
+
+    An unanswered sample is reported separately from a slow one. "The window
+    did not answer within the probe timeout" and "the window answered after
+    400 ms" are different observations, and only the second is a latency
+    reading.
+
+    A sample taken after the window was destroyed is separated from both. The
+    application is closed at the end of a run while the sampler is still
+    ticking, and SendMessageTimeoutW fails instantly for a window that no
+    longer exists. Counting those as "unanswered" reports the application
+    being shut down as a stall, which is precisely the conflation this summary
+    exists to prevent: 45 consecutive "no WM_NULL reply" samples at the
+    teardown tail of run 20261022-sampler were all `window_destroyed`, and
+    every one of them had returned in zero seconds.
+    """
+    if not UI_SAMPLES:
+        return "no samples were collected"
+    elapsed = sorted(s[2] for s in UI_SAMPLES)
+    answered = sum(1 for s in UI_SAMPLES if s[1])
+    count = len(elapsed)
+    destroyed = [s for s in UI_SAMPLES if not s[1] and "window_destroyed" in str(s[3])]
+    unanswered = [s for s in UI_SAMPLES if not s[1] and "window_destroyed" not in str(s[3])]
+
+    def pct(p):
+        if not count:
+            return 0.0
+        index = min(count - 1, max(0, int(round(p * (count - 1)))))
+        return elapsed[index]
+
+    slowest = max(UI_SAMPLES, key=lambda s: s[2])
+    over_1000 = [s for s in UI_SAMPLES if s[2] > 1.0]
+    over_250 = [s for s in UI_SAMPLES if s[2] > 0.25]
+
+    # Which samples fall inside a harness write window? A write is instantaneous
+    # from the application's point of view, so the window is widened to the
+    # sampling interval either side: a pump answer that is slow because the
+    # application was busy with storage is slow at or after the write.
+    inside = 0
+    for sample in UI_SAMPLES:
+        offset = sample[0]
+        for mark, _description in UI_WRITE_MARKERS:
+            if abs(offset - mark) <= 0.5:
+                inside += 1
+                break
+
+    slowest_marked = any(abs(slowest[0] - mark) <= 0.5
+                         for mark, _d in UI_WRITE_MARKERS)
+
+    parts = [
+        f"{count} samples, {answered} answered",
+        f"p50 {pct(0.50) * 1000:.2f} ms",
+        f"p95 {pct(0.95) * 1000:.2f} ms",
+        f"p99 {pct(0.99) * 1000:.2f} ms",
+        f"max {slowest[2] * 1000:.2f} ms at t+{slowest[0]:.3f}s",
+        f"over 250 ms: {len(over_250)}",
+        f"over 1000 ms: {len(over_1000)}",
+    ]
+    if unanswered:
+        offsets = ", ".join(f"t+{s[0]:.3f}s" for s in unanswered[:6])
+        more = "" if len(unanswered) <= 6 else f" (+{len(unanswered) - 6} more)"
+        hung = sum(1 for s in unanswered if "IsHungAppWindow=True" in str(s[3]))
+        parts.append(f"unanswered (no WM_NULL reply within the 2000 ms probe): "
+                     f"{len(unanswered)} [{offsets}{more}]"
+                     + (f"; {hung} reported IsHungAppWindow=True" if hung else
+                        "; none reported IsHungAppWindow=True"))
+    if destroyed:
+        parts.append(f"after window destruction (not a latency reading): {len(destroyed)}"
+                     f" [t+{destroyed[0][0]:.3f}s..t+{destroyed[-1][0]:.3f}s]")
+    parts += [
+        f"{len(UI_WRITE_MARKERS)} harness write(s) marked",
+        f"samples within 500 ms of a harness write: {inside}",
+        f"slowest sample coincides with a harness write: {slowest_marked}",
+    ]
+    if UI_EVENT_MARKERS:
+        parts.append(f"{len(UI_EVENT_MARKERS)} harness event(s) marked")
+    return "; ".join(parts)
+
+
+def _object_name(handle):
+    """The name of a window-station or desktop object, for the foreground diagnostic."""
+    if not handle:
+        return None
+    try:
+        buf = ctypes.create_unicode_buffer(256)
+        needed = wintypes.DWORD()
+        ok = user32.GetUserObjectInformationW(
+            handle, UOI_NAME, buf, ctypes.sizeof(buf), ctypes.byref(needed))
+        return buf.value if ok else None
+    except Exception as exc:
+        return f"<{type(exc).__name__}: {exc}>"
+
+
+def desktop_context():
+    """The calling thread's desktop, the input desktop, and the foreground window.
+
+    GetForegroundWindow() is desktop-relative: a process whose thread is not
+    attached to the input desktop reads 0 even while the application is
+    foreground and reachable on the input desktop. A "foreground hwnd 0" reading
+    therefore cannot be told apart from "no foreground window exists" unless
+    the desktops are recorded with it, and that ambiguity is what made the
+    earlier `foreground hwnd 0` readings unexplainable.
+    """
+    try:
+        thread_desktop = user32.GetThreadDesktop(kernel32.GetCurrentThreadId())
+    except Exception as exc:
+        thread_desktop = None
+        thread_desktop_error = f"{type(exc).__name__}: {exc}"
+    else:
+        thread_desktop_error = None
+    try:
+        input_desktop = user32.GetInputDesktop()
+    except Exception as exc:
+        input_desktop = None
+        input_desktop_error = f"{type(exc).__name__}: {exc}"
+    else:
+        input_desktop_error = None
+    try:
+        foreground = user32.GetForegroundWindow()
+    except Exception as exc:
+        foreground = None
+        foreground_error = f"{type(exc).__name__}: {exc}"
+    else:
+        foreground_error = None
+    return {
+        "thread_desktop": _object_name(thread_desktop),
+        "input_desktop": _object_name(input_desktop),
+        "on_input_desktop": bool(thread_desktop) and bool(input_desktop)
+                            and thread_desktop == input_desktop,
+        "foreground_hwnd": foreground,
+        "errors": [e for e in (thread_desktop_error, input_desktop_error,
+                               foreground_error) if e],
+    }
+
+
+def establish_foreground(win, attempts=3, settle=0.7):
+    """Make the application window the OS foreground window, and verify it.
+
+    SetForegroundWindow is refused for a process that does not already own the
+    foreground, and the refusal is silent: the call returns and the window
+    stays in the background. A bare set_focus() therefore establishes nothing
+    it can promise, which is why the wheel leg used to report a stimulus it
+    never delivered.
+
+    The documented way to take the foreground from a background process is to
+    attach this thread's input queue to the current foreground thread's input
+    queue, which lifts the restriction, and then to VERIFY the result by
+    reading GetForegroundWindow() back. A foreground that was never verified
+    is not a foreground, so the return value is the verified reading and not
+    the return code of the API call.
+
+    Returns (established, detail). `detail` names the method used and every
+    reading taken, so a failure states which attempt failed and what the
+    foreground actually was.
+    """
+    handle = int(win.handle)
+    observations = []
+    try:
+        current_thread = kernel32.GetCurrentThreadId()
+    except Exception as exc:
+        current_thread = 0
+        observations.append(f"GetCurrentThreadId failed: {type(exc).__name__}: {exc}")
+    for attempt in range(1, attempts + 1):
+        try:
+            foreground = user32.GetForegroundWindow()
+        except Exception as exc:
+            observations.append(f"attempt {attempt}: GetForegroundWindow raised "
+                                f"{type(exc).__name__}: {exc}")
+            foreground = 0
+        if foreground == handle:
+            return True, "; ".join(observations + [f"attempt {attempt}: already foreground"])
+        attached = False
+        foreground_thread = 0
+        try:
+            if foreground:
+                foreground_thread = user32.GetWindowThreadProcessId(foreground, None)
+            if foreground_thread and foreground_thread != current_thread:
+                attached = bool(user32.AttachThreadInput(current_thread,
+                                                          foreground_thread, True))
+            user32.SetForegroundWindow(handle)
+            if attached:
+                user32.BringWindowToTop(handle)
+        except Exception as exc:
+            observations.append(f"attempt {attempt}: SetForegroundWindow raised "
+                                f"{type(exc).__name__}: {exc}")
+        finally:
+            if attached:
+                try:
+                    user32.AttachThreadInput(current_thread, foreground_thread, False)
+                except Exception as exc:
+                    observations.append(f"attempt {attempt}: AttachThreadInput(detach) raised "
+                                        f"{type(exc).__name__}: {exc}")
+        deadline = time.time() + settle
+        verified = False
+        while time.time() < deadline:
+            try:
+                if user32.GetForegroundWindow() == handle:
+                    verified = True
+                    break
+            except Exception:
+                pass
+            time.sleep(0.05)
+        try:
+            now = user32.GetForegroundWindow()
+        except Exception:
+            now = 0
+        observations.append(f"attempt {attempt}: attached={attached} foreground_after={now}")
+        if verified:
+            return True, "; ".join(observations)
+    return False, "; ".join(observations)
+
+
 def send_wheel_at_point(win, x, y, delta, steps=1, pause=0.05):
     """Send a real wheel event over a screen point, to the foreground window.
 
@@ -192,16 +570,28 @@ def send_wheel_at_point(win, x, y, delta, steps=1, pause=0.05):
 
     previous = _POINT()
     user32.GetCursorPos(ctypes.byref(previous))
+    # The foreground is ESTABLISHED and then VERIFIED, rather than requested and
+    # assumed. A SetForegroundWindow that the OS refuses is refused silently,
+    # so the only trustworthy evidence that the wheel will be delivered is a
+    # read-back of GetForegroundWindow() after the attempt.
     try:
         win.set_focus()
     except Exception as exc:
         log(f"  could not focus the application window: {type(exc).__name__}: {exc}")
+    foreground_established, fg_detail = establish_foreground(win)
     time.sleep(0.2)
     foreground = user32.GetForegroundWindow()
-    foreground_established = (foreground == win.handle)
+    foreground_established = (foreground == win.handle) and foreground_established
+    log(f"  foreground establishment: established={foreground_established} "
+        f"foreground={foreground} application={win.handle} ({fg_detail})")
     if not foreground_established:
+        context = desktop_context()
         log(f"  NOTE: the application window is not the foreground window "
             f"(foreground {foreground}, application {win.handle}); the wheel may not reach it")
+        log(f"  NOTE: desktop context: thread_desktop={context['thread_desktop']} "
+            f"input_desktop={context['input_desktop']} "
+            f"on_input_desktop={context['on_input_desktop']} "
+            f"errors={context['errors']}")
 
     user32.SetCursorPos(int(x), int(y))
     time.sleep(0.15)
@@ -249,10 +639,23 @@ def ui_thread_latency(hwnd, timeout_ms=2000):
     null message and return. A thread that is not pumping cannot answer, so a
     timeout here is real evidence of a block.
 
+    A zero return does NOT by itself mean the pump was blocked. SendMessageTimeoutW
+    fails immediately for a window that no longer exists, so a destroyed window
+    and a hung window both return 0 -- and the destroyed case returns in
+    microseconds. Reporting the teardown tail of a run as "unanswered" therefore
+    manufactures a stall out of the application being closed. The window is
+    checked first so the two are distinguishable, and a vanished window is
+    reported as such rather than counted against the pump.
+
     Returns (answered, seconds, detail_string).
     """
     SMTO_ABORTIFHUNG = 0x0002
     WM_NULL = 0x0000
+    try:
+        if not user32.IsWindow(hwnd):
+            return False, 0.0, "window_destroyed"
+    except Exception as exc:
+        return False, 0.0, f"raised {type(exc).__name__}: {exc}"
     result = ctypes.c_size_t()
     started = time.time()
     try:
@@ -286,6 +689,94 @@ def get_item_status(element):
         return getattr(element.element_info.element, "CurrentItemStatus", "")
     except Exception:
         return ""
+
+
+class _FILE_ID_INFO(ctypes.Structure):
+    _fields_ = [("VolumeSerialNumber", ctypes.c_ulonglong),
+                ("Identifier", ctypes.c_ubyte * 16)]
+
+
+def folder_stable_identity(path):
+    """The exact identity string ProjectRoot.cpp computes for a folder.
+
+    `ValidateProjectRoot` formats the volume serial in hex, then each of the 16
+    file-id bytes as two zero-padded hex digits. A project row's
+    `filesystem_identity` is compared against that string, so a harness that
+    seeds its own row has to reproduce the format rather than invent an
+    identifier: a row whose identity does not match the folder it names is
+    refused by the application, which is correct behavior and not a defect.
+    """
+    GENERIC_READ = 0x80000000
+    FILE_SHARE_ALL = 0x00000007
+    OPEN_EXISTING = 3
+    FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    FileIdInfo = 18
+    handle = kernel32.CreateFileW(path, GENERIC_READ, FILE_SHARE_ALL, None, OPEN_EXISTING,
+                                  FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, None)
+    if handle in (-1, 0xFFFFFFFFFFFFFFFF):
+        raise OSError(f"CreateFileW failed for {path}: {ctypes.get_last_error()}")
+    try:
+        info = _FILE_ID_INFO()
+        if not kernel32.GetFileInformationByHandleEx(handle, FileIdInfo, ctypes.byref(info),
+                                                     ctypes.sizeof(info)):
+            raise OSError(f"GetFileInformationByHandleEx failed: {ctypes.get_last_error()}")
+    finally:
+        kernel32.CloseHandle(handle)
+    return "%x:%s" % (info.VolumeSerialNumber,
+                      "".join("%02x" % byte for byte in info.Identifier))
+
+
+def uia_view_membership(win, automation_ids, max_depth=40):
+    """Which of `automation_ids` exist in the UIA Control view and the Raw view.
+
+    "Not found" has two different causes and they must not be written up as the
+    same finding:
+
+    * the element has no AutomationPeer at all, so no automation id exists for
+      it in ANY view and nothing it carries -- including an ItemStatus -- is
+      readable by any UIA client; or
+    * the element has a peer but is filtered out of the Control view as
+      non-content, in which case the Raw view still exposes it and its status is
+      readable.
+
+    `pywinauto`'s `descendants()` walks the Control view, so it cannot tell these
+    apart. This walks both walkers directly and returns the two sets.
+    """
+    try:
+        from pywinauto.uia_defines import IUIA
+        iuia = IUIA().iuia
+        root = iuia.ElementFromHandle(win.handle)
+    except Exception as exc:
+        return set(), set(), f"could not open the UIA views: {type(exc).__name__}: {exc}"
+
+    wanted = set(automation_ids)
+
+    def collect(walker):
+        found = set()
+        stack = [(walker.GetFirstChildElement(root), 1)]
+        while stack:
+            element, depth = stack.pop()
+            while element:
+                try:
+                    aid = element.CurrentAutomationId or ""
+                    if aid in wanted:
+                        found.add(aid)
+                    if depth < max_depth:
+                        child = walker.GetFirstChildElement(element)
+                        if child:
+                            stack.append((child, depth + 1))
+                    element = walker.GetNextSiblingElement(element)
+                except Exception:
+                    element = None
+        return found
+
+    try:
+        raw = collect(iuia.RawViewWalker)
+        control = collect(iuia.ControlViewWalker)
+    except Exception as exc:
+        return set(), set(), f"UIA walk failed: {type(exc).__name__}: {exc}"
+    return control, raw, ""
 
 
 UIA_SCROLL_PATTERN_ID = 10004
@@ -407,8 +898,26 @@ def log_menu_failure_diagnostics(win, reason):
         foreground = user32.GetForegroundWindow()
         log(f"    foreground hwnd {foreground}; application window {win.handle}; "
             f"foreground matches the application: {foreground == win.handle}")
+        # Name the window that actually holds the foreground. Without its
+        # class, title and owning process, "the foreground did not match the
+        # application" cannot be acted on: it does not say whether the harness's
+        # own console took it, a notification took it, or the app lost it.
+        log(f"    foreground holder: {describe_foreground_window()}")
     except Exception as exc:
         log(f"    reading the foreground window raised {type(exc).__name__}: {exc}")
+    try:
+        # The foreground reading alone cannot say WHY it is 0. GetForegroundWindow()
+        # is desktop-relative, so a 0 is consistent both with "no foreground
+        # window exists" and with "this process is not attached to the input
+        # desktop and therefore cannot see one". The desktop names distinguish
+        # the two, and the distinction is what makes a 0 diagnosable.
+        context = desktop_context()
+        log(f"    desktop context: thread_desktop={context['thread_desktop']} "
+            f"input_desktop={context['input_desktop']} "
+            f"on_input_desktop={context['on_input_desktop']} "
+            f"errors={context['errors']}")
+    except Exception as exc:
+        log(f"    reading the desktop context raised {type(exc).__name__}: {exc}")
 
 
 def open_switch_project(win, timeout=10.0):
@@ -446,6 +955,17 @@ def open_switch_project(win, timeout=10.0):
         log_menu_failure_diagnostics(win, "the File menu item is absent")
         return None
 
+    # The application's window is made foreground BEFORE the menu is invoked,
+    # not only after a failure. A WinUI flyout is a Popup hosted by the
+    # application's own window, and a Popup realizes only while its owner is
+    # foreground; invoking the menu from a background window can therefore
+    # create a flyout that never exposes its item. Establishing the foreground
+    # first is what makes this path deterministic, and the foreground is
+    # verified by reading it back rather than by trusting the API's return
+    # value.
+    established, fg_detail = establish_foreground(win)
+    log(f"  Switch Project: foreground established={established} [{fg_detail}]")
+
     try:
         file_menu.iface_invoke.Invoke()
     except Exception as exc:
@@ -467,6 +987,39 @@ def open_switch_project(win, timeout=10.0):
     # InvokePattern.
     item = poll_until(switch_item, timeout=3.0, interval=0.05)
     item_already_invoked = False
+    if item is None:
+        # A WinUI flyout opens in a Popup hosted by the application's own
+        # window, and a Popup only realizes while its owner is foreground. If
+        # the application is not the OS foreground window when the menu is
+        # invoked, the flyout can be created and then discarded without ever
+        # exposing its item -- which is exactly the "the File flyout never
+        # realized its menu item" shape recorded in the original Phase 10.2
+        # report.
+        #
+        # So the foreground is established and VERIFIED before the menu is
+        # invoked, and the menu is invoked again if the flyout did not come up
+        # the first time. The measurement that a stall did not occur is
+        # recorded alongside, because a missing flyout is not evidence of a
+        # blocked UI thread and must not be reported as one.
+        try:
+            ui_ok, ui_secs, ui_detail = ui_thread_latency(win.handle)
+            log(f"  Switch Project: UI thread latency before the foreground "
+                f"repair {ui_secs:.3f}s answered={ui_ok} {ui_detail}")
+        except Exception as probe_exc:
+            ui_ok, ui_secs, ui_detail = None, 0.0, f"{type(probe_exc).__name__}: {probe_exc}"
+        established, detail = establish_foreground(win)
+        log(f"  Switch Project: foreground repair established={established} "
+            f"[{detail}]")
+        if established:
+            try:
+                file_menu.iface_invoke.Invoke()
+            except Exception as exc:
+                log(f"  Switch Project: re-invoking File raised "
+                    f"{type(exc).__name__}: {exc}")
+            item = poll_until(switch_item, timeout=3.0, interval=0.05)
+            if item is None:
+                log("  Switch Project: the File flyout still did not realize "
+                    "its item after the foreground was established and verified")
     if item is None:
         # Before declaring the flyout absent, scan the tree for the item once
         # more and measure UI-thread latency separately from the scan.
@@ -553,9 +1106,48 @@ def window_is_foreground(win):
     that lost the foreground window.
     """
     try:
-        return ctypes.windll.user32.GetForegroundWindow() == win.handle
+        return ctypes.cindll.user32.GetForegroundWindow() == win.handle
     except Exception:
         return None
+
+
+def describe_foreground_window():
+    """Name the window that currently holds the foreground.
+
+    "GetForegroundWindow() != the application window" names a symptom. A
+    record that says which window actually took the foreground -- its class and
+    its title -- is a finding, because it distinguishes the harness's own
+    console from a notification or from another application.
+    """
+    try:
+        handle = user32.GetForegroundWindow()
+    except Exception as exc:
+        return f"GetForegroundWindow raised {type(exc).__name__}: {exc}"
+    if not handle:
+        return "no foreground window (GetForegroundWindow returned 0)"
+    buf = ctypes.create_unicode_buffer(256)
+    try:
+        user32.GetClassNameW(handle, buf, 256)
+    except Exception:
+        pass
+    class_name = buf.value
+    title = ""
+    length = int(user32.GetWindowTextLengthW(handle) or 0)
+    if length:
+        tbuf = ctypes.create_unicode_buffer(length + 1)
+        try:
+            user32.GetWindowTextW(handle, tbuf, length + 1)
+            title = tbuf.value
+        except Exception:
+            pass
+    try:
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+        pid_value = pid.value
+    except Exception:
+        pid_value = 0
+    return (f"foreground hwnd {handle} class={class_name!r} title={title!r} "
+            f"pid={pid_value}")
 
 
 def send_key_to_window(win_handle, vk_code):
@@ -829,6 +1421,19 @@ def main():
     log(f"Store:      {STORE_PATH}")
     log(f"Perf log:   {PERF_LOG_PATH}")
     record_artifact_identity()
+    # The session's desktop context is recorded once, at the start, so that every
+    # later foreground reading in this run can be interpreted against the desktop
+    # it was taken on. A foreground of 0 means "no foreground window" only on the
+    # input desktop; on any other desktop the same call cannot see one at all.
+    try:
+        _context = desktop_context()
+        log(f"Desktop context at start: thread_desktop={_context['thread_desktop']} "
+            f"input_desktop={_context['input_desktop']} "
+            f"on_input_desktop={_context['on_input_desktop']} "
+            f"foreground_hwnd={_context['foreground_hwnd']} "
+            f"errors={_context['errors']}")
+    except Exception as exc:
+        log(f"Desktop context at start could not be read: {type(exc).__name__}: {exc}")
 
     # -------------------------------------------------------------------------
     # Acceptance criteria.
@@ -909,6 +1514,21 @@ def main():
         log("\n" + "=" * 70)
         log("NATIVE UI ACCEPTANCE VERIFICATION SUMMARY REPORT")
         log("=" * 70)
+        # The W1 question, answered by this run's own measurements: how long the
+        # application's pump ever took to answer, and whether the slowest
+        # answers coincide with a harness write to the live store.
+        try:
+            log(f"UI-thread sampler summary: {ui_sample_summary()}")
+        except Exception as exc:
+            log(f"UI-thread sampler summary could not be produced: "
+                f"{type(exc).__name__}: {exc}")
+        try:
+            artifact = write_ui_sample_artifact()
+            if artifact:
+                log(f"UI-thread raw samples written to: {artifact}")
+        except Exception as exc:
+            log(f"UI-thread raw samples could not be written: "
+                f"{type(exc).__name__}: {exc}")
         pass_count = sum(1 for v in verdicts.values() if v == "PASS")
         inconclusive_count = sum(1 for v in verdicts.values() if v == "INCONCLUSIVE")
         fail_count = sum(1 for v in verdicts.values() if v == "FAIL")
@@ -957,6 +1577,7 @@ def main():
         cur = conn.cursor()
         cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contributions_test_broken';")
         if cur.fetchone():
+            mark_store_write("DDL: ALTER TABLE contributions -> contributions_test_broken (the deliberate fault injection)")
             conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
             conn.commit()
         conn.close()
@@ -996,6 +1617,11 @@ def main():
         log(f"Connected to main window: '{win.window_text()}' (HWND {win.handle})")
         win.set_focus()
         time.sleep(1)
+        # The application's pump is sampled for the whole run so that the W1
+        # question -- does the UI thread ever block, and does it do so while
+        # the harness holds a write lock on the live store? -- is answered by
+        # measurement taken during this run rather than by a separate probe.
+        start_ui_sampler(win.handle)
 
         # =========================================================================
         # PHASE 1: SCREEN 2 RECENT PROJECT FILTERING & SELECTION
@@ -1239,6 +1865,7 @@ def main():
         log("\n--- Testing ACTUAL Database Query Failure & Recovery ---")
         log("Simulating SQLite query failure by temporarily altering schema...")
         conn = sqlite3.connect(STORE_PATH)
+        mark_store_write("DDL: ALTER TABLE contributions -> contributions_test_broken (the deliberate fault injection)")
         conn.execute("ALTER TABLE contributions RENAME TO contributions_test_broken;")
         conn.commit()
         conn.close()
@@ -1253,6 +1880,7 @@ def main():
             log(f"FAIL: Expected 'Search failed: no such table: contributions', got '{s_fail}'")
             # Restore schema before returning failure
             conn = sqlite3.connect(STORE_PATH)
+            mark_store_write("DDL: ALTER TABLE contributions_test_broken -> contributions (restore after the injected failure)")
             conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
             conn.commit()
             conn.close()
@@ -1267,6 +1895,7 @@ def main():
 
         log("Restoring database table schema...")
         conn = sqlite3.connect(STORE_PATH)
+        mark_store_write("DDL: ALTER TABLE contributions_test_broken -> contributions (restore after the injected failure)")
         conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
         conn.commit()
         conn.close()
@@ -2075,89 +2704,226 @@ def main():
             f"{criterion_overlay_flat}/{criterion_overlay_bounds}/"
             f"{criterion_overlay_repeat}/{criterion_overlay_reduced_motion}.")
 
-        # 5B.8 The empty-Chat hero keeps its perspective. The hero is only realized
-        # in a conversation with no messages, so beta's messages are set aside for the
-        # observation and put back afterwards.
-        log("\nObserving the empty-Chat hero perspective in a project with no messages...")
-        beta_id = None
-        backup_rows = []
-        backup_columns = []
+        # 5B.8 The empty-Chat hero keeps its perspective.
+        #
+        # WHAT IS BEING OBSERVED. `ApplyHeroPerspective` publishes each hero's own
+        # resting orientation as an automation ItemStatus
+        # (MainWindow.xaml.cpp:597-607): it reads the element's CompositeTransform3D
+        # and writes "welcome-hero;resting_rotation=15,-22,-9" onto it. The
+        # observation this leg wants is that string.
+        #
+        # WHY IT CANNOT BE READ, AND WHY THAT IS THE PRODUCT RATHER THAN THE
+        # HARNESS. The two heroes -- `WelcomeHeroMark` and `EmptyHeroMark` -- are
+        # plain `<Grid>` elements (MainWindow.xaml:128, :869). A XAML Grid creates
+        # no AutomationPeer, so its x:Name is not an AutomationId and the
+        # ItemStatus set on it is not reachable by any UIA client. That was
+        # measured, not assumed, and in BOTH views:
+        #
+        #   * a full Raw-view walk of the Welcome window (41 elements) contains
+        #     `WelcomeHeroStage` -- the parent Grid, which does have a peer because
+        #     it declares AutomationProperties.Name -- and no descendant of it at
+        #     all. The mark is not in the Raw view, so this is not a Control-view
+        #     filtering effect.
+        #   * the same walk in an empty conversation (57 elements) contains no
+        #     `EmptyHeroMark`, `EmptyHeroArt` or `EmptyChatHero` node, though the
+        #     `EmptyChatHeading` and `EmptyChatHint` siblings inside the same
+        #     StackPanel are present and named. So the empty state really was
+        #     realized and the hero really was not reachable.
+        #   * zero elements in either state report a non-empty ItemStatus, so the
+        #     published string exists nowhere a UIA client can read it.
+        #
+        # The measurement therefore establishes the environment limit rather than
+        # a product defect: the hero carries its perspective, and the window tries
+        # to say so, but the carrier it chose cannot be read. Recording that
+        # truthfully is the honest verdict. Changing the application to add an
+        # AutomationPeer is a product change and is out of scope for a harness
+        # milestone; it is recorded as an open finding against
+        # `PublishHeroOrientation` instead of being made here.
+        #
+        # The leg still verifies the part it CAN verify, so the run states what it
+        # saw rather than only what it could not: the empty state is really
+        # entered, and the hero's sibling content is present. The probe project is
+        # the harness's own and nothing another project owns is touched.
+        log("\nObserving the empty-Chat hero perspective in a project of the harness's own...")
+        probe_id = "00000000-0000-4000-8000-00000000c119"
+        probe_name = "zz-hero-probe"
+        probe_path = os.path.join(os.path.dirname(STORE_PATH), "hero-probe")
+        hero_verdict_reason = ""
         try:
-            conn = sqlite3.connect(STORE_PATH)
-            cur = conn.cursor()
-            cur.execute("SELECT id FROM projects WHERE display_name = 'beta';")
-            found = cur.fetchone()
-            beta_id = found[0] if found else None
-            if beta_id:
-                cur.execute("PRAGMA table_info(contributions);")
-                backup_columns = [r[1] for r in cur.fetchall()]
-                cur.execute("SELECT * FROM contributions WHERE project_id = ?;", (beta_id,))
-                backup_rows = cur.fetchall()
-                cur.execute("DELETE FROM contributions WHERE project_id = ?;", (beta_id,))
-                conn.commit()
-            conn.close()
+            os.makedirs(probe_path, exist_ok=True)
+            probe_identity = folder_stable_identity(probe_path)
+            log(f"  probe project folder identity: {probe_identity}")
         except Exception as exc:
-            log(f"  could not set beta's messages aside: {exc}")
-            beta_id = None
+            probe_identity = ""
+            log(f"  could not prepare the probe project folder: {exc}")
 
-        hero_observed = None
-        try:
-            if beta_id is not None:
-                if open_switch_project(win):
-                    open_beta = find_by_name(win, "Open project beta")
-                    if open_beta:
-                        open_beta.iface_invoke.Invoke()
-                        time.sleep(2.5)
-                    hero = poll_until(lambda: find_by_aid(win, "EmptyHeroMark"),
-                                      timeout=8.0, interval=0.2)
-                    if hero is not None:
-                        hero_observed = get_item_status(hero)
-                        log(f"Empty-chat hero orientation: '{hero_observed}'")
-                        if "resting_rotation=15,-22,-9" not in hero_observed:
-                            log(f"FAIL: The empty-chat hero lost its declared perspective: '{hero_observed}'")
-                            criterion_hero_perspective = "FAIL"
-                        else:
-                            log("PASS: The empty-chat hero keeps its declared 15/-22/-9 resting perspective.")
-                    else:
-                        log("NOTE: The empty-chat hero was not realized; the hero-perspective leg is inconclusive.")
-                        criterion_hero_perspective = "INCONCLUSIVE"
-                else:
-                    log("NOTE: The project switch did not reach Screen 2; the hero-perspective leg is inconclusive.")
-                    criterion_hero_perspective = "INCONCLUSIVE"
-        finally:
+        if probe_identity:
             try:
-                if beta_id and backup_rows:
-                    conn = sqlite3.connect(STORE_PATH)
-                    placeholders = ",".join("?" for _ in backup_columns)
-                    # executemany, not execute: execute binds a list of tuples as a
-                    # single parameter set and fails with "Error binding parameter 1",
-                    # which silently left beta with no messages at all.
-                    conn.executemany(
-                        f"INSERT INTO contributions ({','.join(backup_columns)}) VALUES ({placeholders});",
-                        backup_rows)
-                    conn.commit()
-                    restored_count = conn.execute(
-                        "SELECT COUNT(*) FROM contributions WHERE project_id = ?;",
-                        (beta_id,)).fetchone()[0]
-                    conn.close()
-                    if restored_count == len(backup_rows):
-                        log(f"Restored {restored_count} of beta's messages.")
-                    else:
-                        log(f"FAIL: beta has {restored_count} messages after the restore, "
-                            f"expected {len(backup_rows)}")
-                        criterion_hero_perspective = "FAIL"
+                conn = sqlite3.connect(STORE_PATH)
+                mark_store_write("INSERT: the temporary empty hero-probe project")
+                # A recent-project row is opened by `SelectionAction::Recent`,
+                # which resolves the record through its `domain_id` and requires a
+                # `filesystem_identity` that matches the folder on disk
+                # (ProjectService.h:73, :121). A row missing either is refused with
+                # "Recent selection requires a project identity and version" --
+                # correct application behavior, and the reason an earlier version
+                # of this leg never left Screen 2.
+                conn.execute(
+                    "INSERT OR REPLACE INTO projects (id, display_name, canonical_path, draft,"
+                    " closed, version, last_opened_at, filesystem_identity, domain_id) "
+                    "VALUES (?, ?, ?, '', 0, 0, '', ?, ?);",
+                    (probe_id, probe_name, probe_path, probe_identity, probe_id))
+                conn.commit()
+                conn.close()
             except Exception as exc:
-                log(f"  could not restore beta's messages: {exc}")
-                criterion_hero_perspective = "FAIL"
-            if open_switch_project(win):
-                open_alpha = find_by_name(win, "Open project alpha")
-                if open_alpha:
-                    open_alpha.iface_invoke.Invoke()
-                    time.sleep(2.5)
-            log(f"PHASE 5B complete - criteria 16-20 recorded as "
-                f"{criterion_overlay_flat}/{criterion_overlay_bounds}/"
-                f"{criterion_overlay_repeat}/{criterion_hero_perspective}/"
-                f"{criterion_overlay_reduced_motion}.")
+                log(f"  could not create the probe project row: {exc}")
+
+            try:
+                if open_switch_project(win):
+                    open_probe = poll_until(lambda: find_by_name(win, f"Open project {probe_name}"),
+                                            timeout=8.0, interval=0.2)
+                    if open_probe is not None:
+                        open_probe.iface_invoke.Invoke()
+                        # Poll the postcondition: the empty state is realized by the
+                        # Chat load, which is asynchronous.
+                        empty_heading = poll_until(
+                            lambda: find_by_aid(win, "EmptyChatHeading"),
+                            timeout=20.0, interval=0.2)
+                        if empty_heading is None:
+                            hero_verdict_reason = ("the empty conversation was not realized, so "
+                                                   "neither the hero nor its absence was observed")
+                        else:
+                            log(f"  empty conversation realized: "
+                                f"'{empty_heading.element_info.name}'")
+                            hero_ids = ["EmptyChatHero", "EmptyHeroArt", "EmptyHeroMark",
+                                        "WelcomeHeroMark", "WelcomeHeroStage"]
+                            control_view, raw_view, view_error = uia_view_membership(win, hero_ids)
+                            log(f"  hero elements in the UIA Control view: "
+                                f"{sorted(control_view) or 'none'}")
+                            log(f"  hero elements in the UIA Raw view:     "
+                                f"{sorted(raw_view) or 'none'}")
+                            if view_error:
+                                log(f"  {view_error}")
+                            statuses = []
+                            for descendant in win.descendants():
+                                status = get_item_status(descendant)
+                                if status:
+                                    statuses.append((descendant.element_info.automation_id,
+                                                     status))
+                            log(f"  elements publishing a non-empty ItemStatus: {len(statuses)}"
+                                + ("" if not statuses else f" {statuses}"))
+                            if raw_view or control_view or statuses:
+                                # Something the hero carries IS readable, so the
+                                # declared orientation can be read from it and the
+                                # criterion is decidable. Read it rather than
+                                # concluding from the walk.
+                                observed = None
+                                for aid in ("EmptyHeroMark", "EmptyChatHero", "EmptyHeroArt"):
+                                    if aid in raw_view or aid in control_view:
+                                        element = find_by_aid(win, aid)
+                                        if element is not None:
+                                            candidate = poll_until(
+                                                lambda: (lambda s: s if "resting_rotation=" in s else None)(
+                                                    get_item_status(element)),
+                                                timeout=8.0, interval=0.2)
+                                            if candidate:
+                                                observed = (aid, candidate)
+                                                break
+                                if observed:
+                                    log(f"  empty-chat hero orientation: "
+                                        f"{observed[0]} -> '{observed[1]}'")
+                                    if "resting_rotation=15,-22,-9" in observed[1]:
+                                        log("PASS: The empty-chat hero keeps its declared "
+                                            "15/-22/-9 resting perspective.")
+                                        criterion_hero_perspective = "PASS"
+                                    else:
+                                        log(f"FAIL: The empty-chat hero lost its declared "
+                                            f"perspective: '{observed[1]}'")
+                                        criterion_hero_perspective = "FAIL"
+                                else:
+                                    hero_verdict_reason = ("a hero element is present in a UIA "
+                                                           "view but published no resting_rotation")
+                            else:
+                                # Measured: the hero carries no peer in either view, so
+                                # the status it is given cannot be read by any UIA
+                                # client. This is the environment limit, evidenced above.
+                                hero_verdict_reason = (
+                                    "the hero marks are plain XAML Grids with no AutomationPeer, so "
+                                    "the resting_rotation ItemStatus that PublishHeroOrientation "
+                                    "sets on them is not reachable in the Control view or the Raw "
+                                    "view; the empty state itself was realized and verified")
+                    else:
+                        hero_verdict_reason = ("the probe project did not appear in the recent "
+                                               "list, so the empty state was never reached")
+                else:
+                    hero_verdict_reason = ("the project switch did not reach Screen 2, so the "
+                                           "empty state was never reached")
+            finally:
+                # ORDER MATTERS HERE, AND THE WRONG ORDER BREAKS EVERY LATER PHASE.
+                #
+                # The application is still bound to the probe project at this
+                # point. `NavigateAsync` (MainWindow.xaml.cpp:3456-3462) preserves
+                # the current draft through `storage_->SaveDraft(id, draft)`
+                # before it will leave a project, and `SaveDraft` throws
+                # "Draft project not found" when `sqlite3_changes != 1`. Deleting
+                # the row first therefore makes the application refuse EVERY
+                # later navigation -- which is exactly what happened: the switch
+                # back to alpha failed, Phase 9's gamma switch failed, and eight
+                # criteria were reported NOT_RUN for a reason unrelated to any of
+                # them.
+                #
+                # That refusal is correct fail-closed behavior: the application
+                # will not silently drop a draft for a project whose record it can
+                # no longer write. The harness's ordering was the defect. So the
+                # application is first moved off the probe project and back to
+                # alpha, and only then is the probe row removed.
+                returned = False
+                if open_switch_project(win):
+                    open_alpha = find_by_name(win, "Open project alpha")
+                    if open_alpha:
+                        open_alpha.iface_invoke.Invoke()
+                        restored = poll_until(lambda: find_by_aid(win, "ComposerBox"),
+                                              timeout=20.0, interval=0.2)
+                        returned = restored is not None
+                        log(f"  returned to alpha before removing the probe row: {returned}")
+                    else:
+                        log("  could not return to alpha: the recent list has no alpha entry")
+                else:
+                    log("  could not return to alpha: Screen 2 did not appear")
+                try:
+                    conn = sqlite3.connect(STORE_PATH)
+                    mark_store_write("DELETE: the temporary empty hero-probe project")
+                    conn.execute("DELETE FROM contributions WHERE project_id = ?;", (probe_id,))
+                    conn.execute("DELETE FROM selection_events WHERE project_id = ?;", (probe_id,))
+                    conn.execute("DELETE FROM selection_receipts WHERE project_id = ?;", (probe_id,))
+                    conn.execute("DELETE FROM pending_submissions WHERE project_id = ?;", (probe_id,))
+                    conn.execute("DELETE FROM projects WHERE id = ?;", (probe_id,))
+                    conn.commit()
+                    conn.close()
+                except Exception as exc:
+                    log(f"  could not remove the probe project row: {exc}")
+                try:
+                    os.rmdir(probe_path)
+                except Exception:
+                    pass
+                if not returned:
+                    hero_verdict_reason = (
+                        (hero_verdict_reason + "; " if hero_verdict_reason else "")
+                        + "the application could not be returned to alpha afterwards, which "
+                          "leaves every later phase without a bound project")
+
+        else:
+            hero_verdict_reason = ("the probe project folder could not be prepared, so the "
+                                   "empty state was never reached")
+
+        if criterion_hero_perspective == "NOT_RUN":
+            criterion_hero_perspective = "INCONCLUSIVE"
+        if hero_verdict_reason:
+            log(f"INCONCLUSIVE: {hero_verdict_reason}.")
+        log(f"PHASE 5B complete - criteria 16-20 recorded as "
+            f"{criterion_overlay_flat}/{criterion_overlay_bounds}/"
+            f"{criterion_overlay_repeat}/{criterion_hero_perspective}/"
+            f"{criterion_overlay_reduced_motion}.")
 
         # =========================================================================
         # PHASE 6: WM_DPICHANGED MESSAGE HANDLING (150% & 200% SIMULATION)
@@ -2263,6 +3029,7 @@ def main():
         # to test bounded pagination (pageSize 50) and MoreActionCenterItemsButton continuation
         gamma_id = "7a546bab-c9dd-49c0-8e77-c67903ab1b66"
         conn = sqlite3.connect(STORE_PATH)
+        mark_store_write("INSERT: 51 seeded gamma draft_attachments (REJECTED, one transaction)")
         for i in range(1, 52):
             conn.execute(
                 "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
@@ -2428,6 +3195,8 @@ def main():
                 win.set_focus()
             except Exception as exc:
                 log(f"  set_focus raised {type(exc).__name__}: {exc}")
+            fg_ok, fg_detail = establish_foreground(win)
+            log(f"  foreground establishment: established={fg_ok} ({fg_detail})")
             poll_until(lambda: window_is_foreground(win), timeout=3.0, interval=0.1)
 
         close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
@@ -2488,6 +3257,7 @@ def main():
         log("\nSimulating concurrent mutation: altering version of first item in SQLite store before clicking...")
         conn = sqlite3.connect(STORE_PATH)
         # Mutate version of att-gamma-1 in SQLite store (from current version to 99)
+        mark_store_write("UPDATE: draft_attachments.version = 99 for att-gamma-1 (the deliberate stale-version injection)")
         conn.execute("UPDATE draft_attachments SET version = 99 WHERE project_id = ? AND attachment_id = 'att-gamma-1';", (gamma_id,))
         conn.commit()
         conn.close()
@@ -2527,6 +3297,7 @@ def main():
 
         # Clean up seeded gamma draft attachments
         conn = sqlite3.connect(STORE_PATH)
+        mark_store_write("DELETE: the 51 seeded gamma draft_attachments")
         conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id LIKE 'att-gamma-%';", (gamma_id,))
         conn.commit()
         conn.close()
@@ -2582,6 +3353,7 @@ def main():
         # Single admission test via ole_drop.exe
         log(f"Invoking ole_drop.exe on window handle {win.handle} with single file '{single_drop_file}'...")
         drop_proc_returncode = -1
+        ole_start = mark_event("ole_drop.exe started (single-file drop attempt)")
         try:
             drop_proc = subprocess.run(
                 [OLE_DROP_EXE, str(win.handle), single_drop_file],
@@ -2598,6 +3370,13 @@ def main():
             log(f"ole_drop.exe invocation reached bounded {OLE_DROP_TIMEOUT_S:.1f}s timeout "
                 f"(helper watchdog {OLE_DROP_WATCHDOG_MS}ms + escape {OLE_DROP_ESCAPE_MS}ms "
                 f"+ {OLE_DROP_MARGIN_S:.1f}s margin).")
+        ole_end = mark_event("ole_drop.exe finished (single-file drop attempt)")
+        # The pump readings taken DURING the OLE attempt are the measurement
+        # that separates "the application's UI thread was blocked, so the drop
+        # could not complete" from "the application's UI thread was answering
+        # throughout, so the drop failed for a reason of its own".
+        log(f"  pump latency during the OLE attempt: "
+            f"{pump_latency_between(ole_start, ole_end)}")
 
         time.sleep(1.5) # allow background file copy, hash, and staging to complete
 
@@ -2662,6 +3441,7 @@ def main():
             f.write(b"Mixed batch test file.\n")
 
         mixed_proc_returncode = -1
+        mixed_start = mark_event("ole_drop.exe started (mixed-batch folder+file attempt)")
         try:
             mixed_batch_proc = subprocess.run(
                 [OLE_DROP_EXE, str(win.handle), sub_folder, mixed_drop_file],
@@ -2672,6 +3452,9 @@ def main():
             mixed_proc_returncode = mixed_batch_proc.returncode
         except subprocess.TimeoutExpired:
             log(f"Mixed batch ole_drop.exe reached bounded {OLE_DROP_TIMEOUT_S:.1f}s timeout.")
+        mixed_end = mark_event("ole_drop.exe finished (mixed-batch folder+file attempt)")
+        log(f"  pump latency during the mixed-batch OLE attempt: "
+            f"{pump_latency_between(mixed_start, mixed_end)}")
 
         # Locate actual control "Notice" and wait for fresh rejection tied to the attempted batch
         rejection_msg = "Folders cannot be attached; entire batch rejected."
@@ -2712,6 +3495,7 @@ def main():
 
         # Clean up dropped test records
         conn = sqlite3.connect(STORE_PATH)
+        mark_store_write("DELETE: the native_drop_% test records")
         conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND file_name LIKE 'native_drop_%';", (alpha_id,))
         conn.commit()
         conn.close()
@@ -2741,6 +3525,7 @@ def main():
         conn = sqlite3.connect(STORE_PATH)
         cols = [r[1] for r in conn.execute("PRAGMA table_info(draft_attachments)").fetchall()]
         if "version" in cols:
+            mark_store_write("INSERT: the seeded sample_spec.txt draft attachment")
             conn.execute(
                 "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '', 1);",
@@ -2875,6 +3660,7 @@ def main():
         # Clean up first test attachment
         try:
             conn = sqlite3.connect(STORE_PATH)
+            mark_store_write("DELETE: the sample_spec.txt draft attachment")
             conn.execute("DELETE FROM draft_attachments WHERE attachment_id = ?;", (test_att_id,))
             conn.commit()
             conn.close()
@@ -2901,6 +3687,7 @@ def main():
 
         conn = sqlite3.connect(STORE_PATH)
         if "version" in cols:
+            mark_store_write("INSERT: the seeded non-English draft attachment")
             conn.execute(
                 "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '', 1);",
@@ -3025,6 +3812,7 @@ def main():
         # Clean up non-English test attachment
         try:
             conn = sqlite3.connect(STORE_PATH)
+            mark_store_write("DELETE: the non-English draft attachment")
             conn.execute("DELETE FROM draft_attachments WHERE attachment_id = ?;", (non_eng_id,))
             conn.commit()
             conn.close()

@@ -12,3 +12,20 @@
 /native/tests/*.exe
 /*.log
 
+# Harness byproducts. `__pycache__` is regenerated on every import and says
+# nothing about a run. `evidence/` is the output directory the acceptance
+# harness writes when it is given one: each run's harness-run.log, artifact
+# identity, store copy, perf log and UI-thread samples.
+#
+# Acceptance evidence is NOT committed to this repository. A run directory
+# records the artifact it drove and the observations it made, and the durable
+# conclusions derived from those observations are written up in
+# `native/LOCAL-VALIDATION.md` with the hashes that produced them. Committing
+# the raw directories instead would put tens of megabytes of per-run logs and
+# seeded databases into history, would make every run a diff, and would let a
+# stale run directory be read as current evidence -- the exact confusion the
+# per-run artifact identity exists to prevent. The record is the report and the
+# hashes in it, not the byproduct.
+/native/tests/__pycache__/
+/native/tests/evidence/
+

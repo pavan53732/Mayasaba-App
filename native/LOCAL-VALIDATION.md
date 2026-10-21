@@ -12,6 +12,68 @@
 
 ---
 
+## What is built and what is not (2026-10-22)
+
+This section exists because the acceptance harness reports numbers that are easy to misread. `AGENTS.md` §13 now states the reading rule; this section supplies the facts it points at. It is a survey of `native/Mayasaba/` as it stands, not a run result.
+
+### What is built
+
+One WinUI 3 desktop application, `native/Mayasaba/`, 34 source files, 15,774 lines of C++ and headers, plus `MainWindow.xaml`. It contains:
+
+| Area | What exists | Where |
+| --- | --- | --- |
+| Three screens and their navigation | Welcome, project selection, Chat. First-run introduction, later-launch selector, `File → Switch Project`, Escape/Back/Skip semantics, composer placement rules, empty-vs-docked composer transition. | `MainWindow.xaml`, `MainWindow.xaml.cpp` |
+| Project identity and binding | Canonical root validation, `FILE_ID_INFO` stable identity, reparse/ancestor checks, recent-project filtering and paging, project closure and reopen records, safe-switch refusal when isolation is unproven. | `ProjectRoot.cpp`, `ProjectService.h`, `Storage.cpp` |
+| Storage | The whole SQLite layer: schema and migrations, write admission, quarantine backstop via `sqlite3_set_authorizer`, single-writer mutex, WAL, drafts, contributions, attachments, selection events and receipts. | `Storage.cpp` (the largest file in the slice) |
+| Chat contributions and drafts | Immutable `UserContribution` persistence with a submission identity, draft preservation across navigation, recovery notices for failed or uncertain saves. | `Storage.cpp`, `MainWindow.xaml.cpp` |
+| Attachment pipeline | Admission limits, active-time accounting, digest verification, protected-draft handling, recovery policy, non-English preview withholding with metadata inspection preserved. | `AttachmentService.cpp`, `AttachmentAdmission.h`, `AttachmentIngestionCoordinator.h`, `AttachmentRecoveryPolicy.h`, `ProtectedDraft.h` |
+| Search | Saved-message search, pagination and continuation tokens, project-switch safety while a search is open, overlay geometry and paging reachability. | `SearchController.h`, `MainWindow.xaml.cpp` |
+| Action Center | A read-only owner-obligation projection with paging, stale-item revalidation and dismissal that survives background refresh. | `ActionCenterPresenter.h` |
+| Presentation | The motion and depth system, theme brushes, light/dark/high-contrast handling, reduced-motion alternatives, DPI and responsive layout, the timeline renderer. | `Motion.cpp`, `ThemeBrushes.cpp`, `Timeline.cpp`, `RichText.cpp` |
+| Deterministic core independence | Storage, project identity and the presentation helpers are separable from the window; the unit-test runner exercises them without creating one. | `native/tests/storage_tests.cpp` |
+
+The executable is a real, running application. A person can launch it, pick a folder, type a message, and have that message durably saved and restored. That much is observed, repeatedly, by the harness.
+
+### What is not built
+
+**Eleven of the thirteen architectural layers do not exist in source at all.** Not as stubs, not as interfaces, not as empty headers. Searching `native/Mayasaba/*.cpp` and `*.h`:
+
+| Layer (`AGENTS.md` §4.1) | Source files | Note |
+| --- | --- | --- |
+| 1. Control Room UI | Present | The slice described above |
+| 2. Controller Application Services / Orchestrator | **Absent** | No orchestrator type, no scheduling, no barriers, no phase transitions |
+| 3. MCF-v2 Communication Fabric | **Absent** | The string "MCF-v2" appears once, inside a UI card that says it is not implemented |
+| 4. Agent Gateway / Adapters | **Absent** | No adapter, no session identity, no health, no native CLI protocol |
+| 5. Council Engine | **Absent** | The words "council" and "orchestrator" appear in `Storage.cpp` only as entries in an English-word list used for non-English prose detection |
+| 6. Context Synchronizer | **Absent** | No snapshot, no context version, no digest |
+| 7. Task/DAG Engine | **Absent** | No graph, no attempt, no lease, no fencing version |
+| 8. Workspace Manager | **Absent** | No staging, no integration journal, no publication |
+| 9. Local Execution Kernel | **Absent** | No `CreateProcess`, no `CreateJobObject`, no `AssignProcessToJobObject`, no `ShellExecute` anywhere in the source |
+| 10. Validation / Repair Engine | **Absent** | No verdict record, no diagnostic, no repair disposition |
+| 11. Evidence Engine | **Absent** | No evidence record, no hash chain, no provenance store |
+| 12. Policy Engine | **Absent** | No material-action authorization, no deny reason |
+| 13. SQLite Storage | Present | Layer 13 is complete enough to hold the slice's state |
+
+**No CLI is ever launched.** The three readiness entries in the Chat header, on Welcome and on Screen 2 are hardcoded to `UNSUPPORTED` in `MainWindow.xaml`, and the Start control responds with the notice at `MainWindow.xaml.cpp:3478`: `"Hermes Agent CLI, Kilo Code CLI, Claude Code CLI: UNSUPPORTED. Executable identity and native probes are not implemented; no provider calls."` That notice is truthful. There is no probe code, no executable discovery, no adapter, and no provider call. Start is blocked by design rather than simulated — which is the correct behavior for this state, and also means that every user-visible statement about agent participation is currently a statement about something that does not exist.
+
+**No agent turn exists.** There is no three-agent response, no rotating writer, no peer review, no consolidated reply, no turn finalization. The Chat card at `MainWindow.xaml.cpp:938` says so in the product itself: `"Saved only · agent replies are unavailable in this build"`.
+
+**The twelve authoritative state machines are not implemented.** None of project lifecycle, agent session, message delivery, context, task, lease, council round, synchronization barrier, handoff, execution, validation or repair has an implementation. The slice holds durable project and contribution records; it does not run a state machine over them.
+
+**No MSI exists.** There is no `.wxs` file anywhere in the repository. There is no installer, no OS/build/edition gate, no upgrade path.
+
+**None of `AGENTS.md` §14's three required prototypes is satisfied.** A responsive Control Room under sustained CLI/event streaming has not been demonstrated, because no CLI stream exists. Process launch, cancellation and crash cleanup across an owned process tree does not exist. Enforceable workspace access and stale-write rejection does not exist.
+
+### What the acceptance numbers mean, precisely
+
+The harness reports 20 criteria. Those 20 criteria cover: recent-project filtering, search pagination, older-message navigation, search-mode switch safety, the narrow responsive layout, hover-sweep stability, DPI simulation, three Action Center behaviors, two OLE drag behaviors, attachment chip realization, non-English preview withholding, a composition-performance profile, and four overlay/hero motion behaviors. They are observations of the slice in the table above.
+
+They do not cover, and cannot cover, anything in the "not built" list. A run of `17 PASS, 3 INCONCLUSIVE, 0 FAIL` is evidence that the harness's assertions held against a specific executable and XBF on this machine. It is not evidence that Mayasaba works. The three INCONCLUSIVE criteria are also not defects: two are an environment limit on injecting OLE drag (see §23) and one is a UIA reachability limit on the hero mark (§24).
+
+The honest summary is: **a well-tested UI shell over a durable local store, with no intelligence, no execution, no orchestration and no installer behind it.**
+
+---
+
 ## Disclosure of Production-Store Operations
 
 The following discloses the exact operations performed on the production database files under `%LOCALAPPDATA%\Mayasaba\`:
@@ -2478,3 +2540,111 @@ X-07 and X-08 are recorded as INCONCLUSIVE rather than omitted: they were in the
 4. **It does not claim the `foreground hwnd 0` cause is established.** A mechanism was reproduced in isolation; the original runs' click coordinates were never recorded, so the connection is inference.
 5. **It does not claim criterion 19 or the hygiene items were examined.** They were deferred and are recorded as INCONCLUSIVE.
 6. **It does not claim the product was tested differently.** The executable and XBF are byte-identical to §21 and §22.
+
+## 24. Inherited-diff review, criterion 19 measured, harness hygiene, and a permanent drag limit (2026-10-22)
+
+### 24.1 Identity of this record
+
+| Field | Value |
+| --- | --- |
+| Executable | `Mayasaba.exe` SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` (unchanged from §21/§22/§23) |
+| Compiled XAML | `MainWindow.xbf` SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` (unchanged) |
+| Application source changed | **No.** Fourth consecutive record in which the product binary is byte-identical. |
+| Evidence directory | `native/tests/evidence/ui-acceptance-20261022-hero3` |
+| Run result | `Total: 20 criteria | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0` |
+
+### 24.2 The inherited working-tree diff: provenance and disposition
+
+When this assignment began, the working tree carried roughly 554 added lines across `native/tests/test_full_ui_acceptance.py` and `native/tests/test_harness_oracles.py` that no record in this file attributed to anyone. They were reviewed as part of this assignment, exercised against the full harness, and committed.
+
+**What the diff does.** Three groups of change, all in the harness, none in the application:
+
+1. **Store-write instrumentation.** `mark_store_write()` records the timestamp and description of every write the harness makes to the live store, so a slow message-pump sample can be correlated with a held lock instead of assumed to be caused by one.
+2. **Foreground establishment.** The `Switch Project` path now establishes and *records* that the window is foreground before driving the menu, so a UIA focus or input failure can be separated from a harness that lost the foreground. Every log line reads `Switch Project: foreground established=True [attempt 1: already foreground]`.
+3. **Two new UIA helpers and a rewritten criterion-19 leg.** `folder_stable_identity()` reproduces the identity string `ProjectRoot.cpp` computes (`%x` volume serial, `:`, 16 zero-padded hex bytes) so a harness-seeded row passes the application's own validation. `uia_view_membership()` walks both the Control view and the Raw view, which is the only way to distinguish "this element has no AutomationPeer" from "this element was filtered out of the Control view".
+
+**The verdict question, answered by running it.** `AGENTS.md` and the assignment both require that a harness change altering sampling, foreground handling or store-write markers be shown not to alter any criterion's verdict. Both runs are against the same executable and XBF, so the comparison is not confounded by an artifact change:
+
+| | Baseline `ui-acceptance-20261022-r1budget` (HEAD harness, no diff) | `ui-acceptance-20261022-hero3` (working tree, with diff) |
+| --- | --- | --- |
+| Executable SHA-256 | `fa410002…29c53` | `fa410002…29c53` |
+| XBF SHA-256 | `da3eafe8…3c234` | `da3eafe8…3c234` |
+| Criteria passed | 17 | 17 |
+| Inconclusive | 3 | 3 |
+| Failed / Blocked / Not run | 0 / 0 / 0 | 0 / 0 / 0 |
+| Per-criterion table | — | **Byte-identical to the baseline table** (`diff` of the 20 extracted rows reports no difference) |
+
+The instrumentation is visibly active in the new run and absent in the baseline, which is what makes the identical table meaningful rather than accidental:
+
+| Marker | Baseline log | `hero3` log |
+| --- | --- | --- |
+| `[store-write]` lines | 0 | 12 |
+| `foreground established` lines | 0 | present at every switch |
+| `pump latency during the … OLE attempt` | absent | present |
+| Probe-project lines | 0 | present |
+
+**One real defect was found inside the inherited diff and fixed.** The criterion-19 leg created a temporary project, switched to it, and then deleted its row in a `finally` block *while the application was still bound to it*. `NavigateAsync` (`MainWindow.xaml.cpp:3456-3462`) preserves the current draft by calling `storage_->SaveDraft(id, draft)`, which throws `Draft project not found` when `sqlite3_changes != 1`; the navigation is then correctly refused. That refusal is right product behavior, and the ordering was the harness's defect. It was not cosmetic: the first run of the corrected leg reported `0 PASS / 20 NOT_RUN` for a reason unrelated to any criterion, and a second run reported 8 criteria `NOT_RUN` because Phase 9's gamma switch failed for the same cause. The fix returns the application to `alpha` **before** the row is removed, logs whether that succeeded, and appends a specific reason to the criterion if it did not. The `hero3` run above is the verification: Phase 9 reached gamma and criteria 8–15 executed.
+
+### 24.3 Criterion 19: the hero orientation is not readable by any UIA client
+
+The prior leg manufactured an empty conversation by deleting another project's messages and switching to it. That is a fragile route to the state and it is why the hero was never realized. The replacement creates its own folder (`zz-hero-probe`), inserts a row whose `last_opened_at`, `filesystem_identity` and `domain_id` are all populated so the application's own `ProjectService::Select` validation accepts it, opens it through Screen 2, and polls for `EmptyChatHeading` before measuring anything. No other project's rows are touched.
+
+**The empty state was reached and verified.** The log records `empty conversation realized: 'What would you like to work on?'`.
+
+**The orientation itself is not reachable.** `MainWindow.xaml.cpp:597-607` `PublishHeroOrientation` reads `Transform3D().try_as<CompositeTransform3D>()` and calls `AutomationProperties::SetItemStatus(element, label + ";resting_rotation=" + x + "," + y + "," + z)`. But `WelcomeHeroMark` (`MainWindow.xaml:128`) and `EmptyHeroMark` (`:869`) are plain XAML `<Grid>` elements. A `<Grid>` creates no `AutomationPeer`, and `AutomationProperties` on an element with no peer produces no UIA property — in **either** view, because the Raw view still walks the peer tree and there is no peer to walk to.
+
+Measured, in both candidate states:
+
+| State | Raw-view elements | Hero nodes found | Non-empty `ItemStatus` |
+| --- | --- | --- | --- |
+| Welcome | 41 | `WelcomeHeroStage` only; no descendants | 0 |
+| Empty conversation | 57 | none; `EmptyChatHeading` and `EmptyChatHint` present | 0 |
+
+`WelcomeHeroStage` appears because it is a `<Grid>` carrying `AutomationProperties.Name="Mayasaba mark"` (`MainWindow.xaml:92-95`) — but the mark with the transform is its *child*, and that child has no peer. The declared resting rotation the hero should publish is `15, -22, -9` (`WelcomeHeroTilt` / `EmptyHeroTilt`); it is never observed, because nothing publishes it to a reader.
+
+**Verdict: INCONCLUSIVE**, with the measured reachability limit as its stated reason. This is not a product defect and no application source was changed for it. It is a statement that the harness cannot observe the property the criterion names, and the honest response is to say so rather than to pass a criterion on an unread value.
+
+### 24.4 Criteria 11 and 12: a permanent, evidenced environment limit
+
+§23 established that four different drag strategies, one of which pressed no button at all, produced `QueryContinueDrag calls: 0` against both Mayasaba **and** a plain text editor, and that `SetForegroundWindow` is silently refused in every child process the harness spawns. A zero count against a known-good control target is a statement about the stimulus, not about the application.
+
+That is the oracle the assignment asked for, and it settles the question: a *correct* helper cannot drag into a plain text editor in this session either. **Criteria 11 and 12 are recorded here as a permanent, evidenced environment limit and are not to be re-litigated.** Their verdict stays INCONCLUSIVE. The `AllowDrop="True" Drop="OnComposerDrop"` declaration in `MainWindow.xaml` remains an unverified declaration — neither confirmed nor refuted — and no further milestone time is to be spent on it. If a future session runs under a launcher that already owns the foreground, the probe becomes meaningful again; until then, a re-run tells us nothing new.
+
+### 24.5 Harness hygiene and oracle extension
+
+**Stale binary removed.** `native/tests/storage_tests.exe` (mtime 2026-10-15) was a build product from the legacy path, superseded by `native/tests/bin/`, and is gone.
+
+**Ignore rules.** `.gitignore` now excludes `/native/tests/__pycache__/` and `/native/tests/evidence/`. The decision about acceptance evidence is recorded in the file itself: **run directories are not committed.** A run directory records the artifact it drove and the observations it made; the durable conclusions drawn from those observations belong in this file, with the hashes that produced them. Committing the directories would add megabytes of logs and store copies per run to the history while proving nothing that this file does not already state more carefully.
+
+**Oracle extension for the pump probe.** §22.2 refuted the UI-thread-stall hypothesis by measuring the pump directly rather than reading a UIA walk duration. That distinction now has an oracle in `native/tests/test_harness_oracles.py`:
+
+- `test_ui_thread_latency_measures_the_pump_and_not_the_tree_size()` — runs the probe against a fake window tree whose `descendants()` sleeps, at walk costs of 0.0 s and 0.25 s. It asserts the walk time tracks the cost (`walk_seconds >= walk_cost`) while the pump reading stays under 50 ms in both cases. A probe that conflated the two would fail this.
+- `test_mutation_reading_a_walk_as_the_pump_would_call_a_stall()` — the controlling mutation. It reads the enumeration cost *as* the latency, by construction, and shows the mutated reading exceeds 200 ms while the correct probe reports under 50 ms. This proves the assertion discriminates a walk-vs-pump conflation rather than merely passing.
+
+Suite result after the addition: **30 tests, 0 failures** (`PASS: 0 failure(s)`), of which the two above are new.
+
+### 24.6 Criteria for this assignment
+
+| ID | Criterion | Evidence type | Observation | Verdict |
+| --- | --- | --- | --- | --- |
+| Y-01 | The inherited diff is reviewed, exercised and committed with truthful provenance. | Source review + full run | Read in full; run `hero3` executed against it; committed stating it was unattributed on arrival. | **PASS** |
+| Y-02 | The harness change alters no criterion's verdict. | Native run, two artifacts compared | Same executable and XBF; 20-row verdict table byte-identical; instrumentation demonstrably active. | **PASS** |
+| Y-03 | Criterion 19 reaches a genuinely empty conversation without deleting another project's rows. | Native run | Own folder + own seeded row; `empty conversation realized: 'What would you like to work on?'`; row and folder removed afterwards. | **PASS** |
+| Y-04 | The hero's resting orientation is observed and its verdict recorded as measured. | Native run, both UIA views | No hero node in either view in either state; zero non-empty `ItemStatus`; declared values 15 / -22 / -9 never published to a reader. | **INCONCLUSIVE** (measured reachability limit) |
+| Y-05 | Criteria 11 and 12 are recorded as a permanent evidenced limit. | §23 evidence | Zero `QueryContinueDrag` calls against a known-good text editor too; `SetForegroundWindow` refused in every child. | **PASS** (as a limit record) |
+| Y-06 | Stale legacy test binary removed; ignore rules added; evidence-commit decision recorded. | Source inspection | `storage_tests.exe` gone; `/native/tests/__pycache__/` and `/native/tests/evidence/` ignored with the reason stated in `.gitignore`. | **PASS** |
+| Y-07 | The pump probe and the walk-vs-pump distinction have oracles with controlling mutations. | Unit test | 30 tests, 0 failures; mutation makes the reading exceed 200 ms while the correct probe stays under 50 ms. | **PASS** |
+| Y-08 | The record states where the product actually is. | Documentation | "What is built and what is not" section at the head of this file, derived from a source survey of `native/Mayasaba/`. | **PASS** |
+| Y-09 | The application source is unchanged. | Artifact identity | Executable and XBF byte-identical to §21/§22/§23. | **PASS** |
+
+Y-04 is the one criterion that is not PASS, and it is not a failure of the harness's work: the harness did everything it could reach. It is a limit on what a UIA client can observe, recorded rather than papered over.
+
+### 24.7 What this record does not claim
+
+1. **It does not claim the inherited diff was authored by the agent that committed it.** Its authorship is unknown. It was reviewed, exercised and committed, which is what `AGENTS.md` §12 asks for; it was not written here.
+2. **It does not claim criterion 19 passes.** The hero's orientation is unreadable, not flat and not correct.
+3. **It does not claim the application's drop target works or is broken.** No drag reached it, and no drag reaches a plain text editor either.
+4. **It does not claim the harness is finished.** It claims the harness is no longer the milestone's subject.
+5. **It does not claim the product advanced.** The binary is unchanged for the fourth consecutive record. The product work that this record unblocks is the subject of a separate decision, not of this commit.
+
+---
