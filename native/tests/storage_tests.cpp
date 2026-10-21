@@ -1360,6 +1360,8 @@ int main()
             EXPECT(clockResultsB[0].status == mayasaba::AttachmentStatus::Ready);
             EXPECT(clockResultsB[1].status == mayasaba::AttachmentStatus::Ready); // Did not time out!
 
+            CASES_END();
+            CASES_BEGIN("20. Manifest deterministic sorting, pre-commit sealing and crash recovery");
             // 20. Manifest deterministic sorting and hashing performance
             std::vector<mayasaba::AttachmentRecord> manifestSet = { recOnly, recM1 };
             std::string manifest1 = mayasaba::Storage::ComputeAttachmentManifest(manifestSet);

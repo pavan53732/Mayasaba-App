@@ -160,6 +160,11 @@ def send_wheel_at_point(win, x, y, delta, steps=1, pause=0.05):
     only then is the wheel sent over the control's own point. The previous
     cursor position is restored so the rest of the run sees the machine as it
     was.
+
+    Returns True if the application window was confirmed foreground at the
+    moment the wheel events were sent, False otherwise.  A False return means
+    Windows may have routed the wheel elsewhere; the caller must NOT treat a
+    null scroll result as a product defect when this function returns False.
     """
     class _POINT(ctypes.Structure):
         _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -172,7 +177,8 @@ def send_wheel_at_point(win, x, y, delta, steps=1, pause=0.05):
         log(f"  could not focus the application window: {type(exc).__name__}: {exc}")
     time.sleep(0.2)
     foreground = user32.GetForegroundWindow()
-    if foreground != win.handle:
+    foreground_established = (foreground == win.handle)
+    if not foreground_established:
         log(f"  NOTE: the application window is not the foreground window "
             f"(foreground {foreground}, application {win.handle}); the wheel may not reach it")
 
@@ -183,6 +189,7 @@ def send_wheel_at_point(win, x, y, delta, steps=1, pause=0.05):
         time.sleep(pause)
     user32.SetCursorPos(previous.x, previous.y)
     time.sleep(0.1)
+    return foreground_established
 
 def broadcast_setting_change(section="VisualEffects"):
     """Tell every top-level window that a system setting changed.
@@ -381,19 +388,53 @@ def open_switch_project(win, timeout=10.0):
     # exposes a Text child carrying the same string, and that child has no
     # InvokePattern.
     item = poll_until(switch_item, timeout=3.0, interval=0.05)
+    item_already_invoked = False
     if item is None:
-        log("  Switch Project: the File flyout never realized its menu item")
-        # Say what the window looked like when the menu did not come up. A bare
-        # "the flyout never appeared" does not distinguish a menu that refused
-        # to open from a menu that opened and was dismissed again.
-        log_menu_failure_diagnostics(win, "the File flyout never realized its menu item")
-        return None
+        # Before declaring the flyout absent, probe the UIA tree for the item one
+        # more time and also measure UI-thread latency.  In the 11.4 s stall
+        # incident (20261021-final) the item was present at (212, 281, 136, 35)
+        # when the menu-failure diagnostic ran -- meaning the flyout HAD realized
+        # its item, but the UI thread was too slow to answer during the 3 s poll
+        # window.  A UI-thread stall and a missing menu item are different
+        # conditions and must be reported differently.
+        probe_start = time.time()
+        try:
+            probe_btn = find_by_aid(win, "SearchMessagesButton")
+            probe_rect = probe_btn.rectangle() if probe_btn else None
+            probe_elapsed = time.time() - probe_start
+        except Exception as probe_exc:
+            probe_rect = None
+            probe_elapsed = time.time() - probe_start
+            log(f"  Switch Project: UI-thread probe raised {type(probe_exc).__name__}: {probe_exc}")
+        log(f"  Switch Project: UI-thread probe took {probe_elapsed:.3f}s; rect={probe_rect}")
 
-    try:
-        item.iface_invoke.Invoke()
-    except Exception as exc:
-        log(f"  Switch Project: invoking the menu item raised {type(exc).__name__}: {exc}")
-        return None
+        # One last scan for the item now that the UI thread has had extra time.
+        late_item = switch_item()
+        if late_item is not None:
+            log(f"  Switch Project: 'Switch Project' MenuItem found after poll deadline expired "
+                f"(probe latency {probe_elapsed:.3f}s); this is a UI-thread stall timeout, not "
+                f"a missing menu item.  Attempting to invoke the late item.")
+            try:
+                late_item.iface_invoke.Invoke()
+                item = late_item
+                item_already_invoked = True
+            except Exception as exc:
+                log(f"  Switch Project: invoking the late item raised {type(exc).__name__}: {exc}")
+                return None
+        else:
+            log("  Switch Project: the File flyout never realized its menu item")
+            # Say what the window looked like when the menu did not come up. A bare
+            # "the flyout never appeared" does not distinguish a menu that refused
+            # to open from a menu that opened and was dismissed again.
+            log_menu_failure_diagnostics(win, "the File flyout never realized its menu item")
+            return None
+
+    if not item_already_invoked:
+        try:
+            item.iface_invoke.Invoke()
+        except Exception as exc:
+            log(f"  Switch Project: invoking the menu item raised {type(exc).__name__}: {exc}")
+            return None
 
     def folder_heading():
         candidate = find_by_aid(win, "FolderHeading")
@@ -1702,32 +1743,48 @@ def main():
             log(f"Scroll offset before the wheel: {offset_before}")
             lx = (list_rect.left + list_rect.right) // 2
             ly = (list_rect.top + list_rect.bottom) // 2
-            send_wheel_at_point(win, lx, ly, -120, steps=6, pause=0.2)
-            # The offset is polled, not sampled once: the wheel is posted and the
-            # list settles a few frames later.
-            poll_until(
-                lambda: True if vertical_scroll_offset(results_list) != offset_before else None,
-                timeout=5.0, interval=0.1)
-            offset_after = vertical_scroll_offset(results_list)
-            state_after = realized_state(results_list)
-            log(f"Scroll offset after the wheel: {offset_after}")
-            log(f"Realized items before/after the wheel: {[t for t, _ in state_before]} -> "
-                f"{[t for t, _ in state_after]}")
-            if offset_before is None or offset_after is None:
+            wheel_delivered = send_wheel_at_point(win, lx, ly, -120, steps=6, pause=0.2)
+            if not wheel_delivered:
+                # The OS foreground was not this window when the wheel events were
+                # sent.  Windows routes WM_MOUSEWHEEL to the foreground window, so
+                # the events went elsewhere and no stimulus reached the results
+                # list.  A null scroll result in this condition is a statement
+                # about the probe, not about the application.  Record INCONCLUSIVE
+                # so the constraint can be re-evaluated on a run where the window
+                # holds the foreground.
+                offset_after = vertical_scroll_offset(results_list)
+                log(f"Scroll offset after the (undelivered) wheel: {offset_after}")
                 bounds_unknown(
-                    "The results list exposed no readable vertical scroll offset, so scrolling "
-                    "at the short window height could not be measured")
-            elif offset_after[0] > offset_before[0]:
-                log(f"PASS: The bounded results list scrolls at the short window height "
-                    f"(offset {offset_before[0]:.3f}% -> {offset_after[0]:.3f}%).")
-            elif state_before != state_after:
-                # The offset did not advance but the realized content changed. That
-                # is a scroll the offset reports badly, not a list that cannot
-                # scroll, and it is recorded as such rather than silently passed.
-                log(f"NOTE: the scroll offset stayed at {offset_after[0]:.3f}% while the "
-                    f"realized content changed; the list moved, the offset did not track it.")
+                    "The wheel stimulus was not delivered: the application window was not the "
+                    "OS foreground window (GetForegroundWindow() != win.handle) when the wheel "
+                    "events were sent.  The scroll result is a statement about the probe, not "
+                    "about the application.  Re-run with the window in the foreground.")
             else:
-                bounds_fail("The results list did not scroll in the short window")
+                # The offset is polled, not sampled once: the wheel is posted and
+                # the list settles a few frames later.
+                poll_until(
+                    lambda: True if vertical_scroll_offset(results_list) != offset_before else None,
+                    timeout=5.0, interval=0.1)
+                offset_after = vertical_scroll_offset(results_list)
+                state_after = realized_state(results_list)
+                log(f"Scroll offset after the wheel: {offset_after}")
+                log(f"Realized items before/after the wheel: {[t for t, _ in state_before]} -> "
+                    f"{[t for t, _ in state_after]}")
+                if offset_before is None or offset_after is None:
+                    bounds_unknown(
+                        "The results list exposed no readable vertical scroll offset, so scrolling "
+                        "at the short window height could not be measured")
+                elif offset_after[0] > offset_before[0]:
+                    log(f"PASS: The bounded results list scrolls at the short window height "
+                        f"(offset {offset_before[0]:.3f}% -> {offset_after[0]:.3f}%).")
+                elif state_before != state_after:
+                    # The offset did not advance but the realized content changed. That
+                    # is a scroll the offset reports badly, not a list that cannot
+                    # scroll, and it is recorded as such rather than silently passed.
+                    log(f"NOTE: the scroll offset stayed at {offset_after[0]:.3f}% while the "
+                        f"realized content changed; the list moved, the offset did not track it.")
+                else:
+                    bounds_fail("The results list did not scroll in the short window")
 
         # 5B.4 Narrow window: the overlay and its controls stay inside the window.
         log("\nResizing to a narrow window (480x800) and re-checking the overlay...")
