@@ -3363,3 +3363,14 @@ UI-thread sampler for this run: 2,366 samples, 2,318 answered, p50 0.11 ms, p95 
 6. **Not a reproducible build.** MSBuild is not reproducible here: restoring the mutation byte-identically and rebuilding produced `51c466fa…` where the pre-mutation build was `cd1aa288…`, with the XBF unchanged. Every figure in this section is scoped to the artifact named at its head.
 
 **Next gate.** §14 prototype 3 — containment — which nothing in this milestone advances.
+
+## Layout oscillation verification run (2026-10-23)
+
+Harness: native/tests/test_full_ui_acceptance.py
+Store: C:/Users/pavan/PROJECTS/_ui-verify/layout_run/store.db (fixture copy)
+Evidence dir: C:/Users/pavan/PROJECTS/_ui-verify/layout_run/evidence
+Artifact: Mayasaba.exe d7e062c3cbb1a54e7c56b90779dfaf18f3e1b5478c7f1281509386dc6d539edb, MainWindow.xbf 8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a
+Result: 19 PASS, 2 INCONCLUSIVE (criteria 11, 12 OLE drag-drop, environmental), 0 FAIL, 0 BLOCKED, 0 NOT_RUN.
+Relevant criteria: 5 (narrow 520px) PASS; 8 (Action Center pagination) PASS; 9 (stale invalidation/refresh) PASS; 10 (dismissal stability) PASS; 15 (composition perf) PASS; 16 (search overlay flat resting) PASS; 17 (bounded height/scroll/paging) PASS; 18 (repeated open/close) PASS; 20 (reduced motion) PASS; 21 (readiness projection) PASS.
+Controlling mutation: NOT executed in this session. The harness result supports the implemented shared-pool correction but does not by itself prove the regression test would catch its removal; that remains a required follow-up.
+Model used: kilo-auto/free (Kilo Code). No provider/model configuration changed.
