@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import json
+import msvcrt
 import sqlite3
 import subprocess
 import ctypes
@@ -195,6 +196,7 @@ UI_SAMPLE_COUNT = 12000
 UI_SAMPLES = []          # list of (monotonic_offset_s, answered, elapsed_s, detail)
 UI_WRITE_MARKERS = []    # list of (monotonic_offset_s, description)
 UI_EVENT_MARKERS = []    # list of (monotonic_offset_s, description) for non-write events
+UI_UIA_WINDOWS = []      # list of (start_offset_s, end_offset_s, description) for harness UIA walks
 _RUN_T0 = None
 
 
@@ -236,6 +238,70 @@ def mark_event(description):
     return offset
 
 
+class uia_walk:
+    """Record the window during which the harness walked the UIA tree.
+
+    A cross-process UIA enumeration is a request to the application's own
+    thread: the provider answers it. So a pump-latency sample taken while the
+    harness is walking the tree measures the application *answering the
+    harness*, which is not the application doing its own work, and the two
+    must not be reported as the same thing.
+
+    Recording the walk's own start and end makes the attribution measurable
+    rather than a matter of interpretation.
+    """
+
+    def __init__(self, description):
+        self.description = description
+        self.start = None
+
+    def __enter__(self):
+        self.start = time.monotonic()
+        return self
+
+    def __exit__(self, *exc):
+        if _RUN_T0 is not None:
+            UI_UIA_WINDOWS.append((self.start - _RUN_T0,
+                                    time.monotonic() - _RUN_T0,
+                                    self.description))
+        return False
+
+
+def install_uia_walk_tracker():
+    """Record every cross-process UIA enumeration the harness performs.
+
+    A UIA enumeration is a request the application's own thread must answer:
+    the provider is inside the application. A pump-latency sample taken while
+    the harness is walking the tree therefore measures the application
+    answering the harness, which is not the application doing its own work.
+    The two must not be reported as the same thing, so the walk's own window
+    is recorded and the samples are attributed against it.
+
+    The patch is installed on the pywinauto base class rather than on this
+    file's helpers, because the walks are spread over a dozen call sites and
+    an un-instrumented one would silently leave samples unattributable.
+    """
+    from pywinauto.base_wrapper import BaseWrapper
+
+    if getattr(BaseWrapper, "_mayasaba_walk_tracked", False):
+        return
+
+    original = BaseWrapper.descendants
+
+    def tracked(self, **kwargs):
+        start = time.monotonic()
+        try:
+            return original(self, **kwargs)
+        finally:
+            if _RUN_T0 is not None:
+                UI_UIA_WINDOWS.append((start - _RUN_T0,
+                                        time.monotonic() - _RUN_T0,
+                                        "uia.descendants"))
+
+    BaseWrapper.descendants = tracked
+    BaseWrapper._mayasaba_walk_tracked = True
+
+
 def start_ui_sampler(hwnd):
     """Sample the application's message pump on a fixed cadence for the run."""
     global _RUN_T0
@@ -245,7 +311,9 @@ def start_ui_sampler(hwnd):
         started = time.monotonic()
         deadline = started + UI_SAMPLE_MAX_S
         while time.monotonic() < deadline and len(UI_SAMPLES) < UI_SAMPLE_COUNT:
-            offset = time.monotonic() - started
+            # The same origin the store-write and UIA-window markers use, so
+            # a sample and a marker can be compared without a skew term.
+            offset = time.monotonic() - _RUN_T0
             try:
                 answered, elapsed, detail = ui_thread_latency(hwnd, timeout_ms=2000)
             except Exception as exc:
@@ -289,6 +357,9 @@ def write_ui_sample_artifact():
         ],
         "events": [
             [round(m[0], 3), m[1]] for m in UI_EVENT_MARKERS
+        ],
+        "uia_windows": [
+            [round(w[0], 3), round(w[1], 3), w[2]] for w in UI_UIA_WINDOWS
         ],
     }
     with open(path, "w", encoding="utf-8") as handle:
@@ -378,13 +449,29 @@ def ui_sample_summary():
     slowest_marked = any(abs(slowest[0] - mark) <= 0.5
                          for mark, _d in UI_WRITE_MARKERS)
 
+    # A cross-process UIA enumeration is a request the application's own
+    # thread has to service. A pump sample taken while the harness is walking
+    # the tree therefore measures the application answering the harness, which
+    # is not the application doing its own work. The two are separated here so
+    # the slow samples can be attributed rather than merely counted.
+    def in_uia_window(sample):
+        for start, end, _description in UI_UIA_WINDOWS:
+            if start <= sample[0] <= end:
+                return True
+        return False
+
+    slow_in_uia = sum(1 for s in over_250 if in_uia_window(s))
+    slow_not_uia = len(over_250) - slow_in_uia
+
     parts = [
         f"{count} samples, {answered} answered",
         f"p50 {pct(0.50) * 1000:.2f} ms",
         f"p95 {pct(0.95) * 1000:.2f} ms",
         f"p99 {pct(0.99) * 1000:.2f} ms",
         f"max {slowest[2] * 1000:.2f} ms at t+{slowest[0]:.3f}s",
-        f"over 250 ms: {len(over_250)}",
+        f"over 250 ms: {len(over_250)} "
+        f"(inside a harness UIA walk: {slow_in_uia}; "
+        f"outside every harness UIA walk: {slow_not_uia})",
         f"over 1000 ms: {len(over_1000)}",
     ]
     if unanswered:
@@ -677,6 +764,76 @@ def find_by_aid(parent, aid):
         if d.element_info.automation_id == aid:
             return d
     return None
+
+
+def read_status_text(win, expected, timeout=5.0, interval=0.05):
+    """Read the search panel's status line, polling for `expected`.
+
+    Two defects are avoided by construction, and both were observed in a
+    recorded run rather than reasoned about:
+
+    * **The element is resolved on every attempt.** The search panel is
+      destroyed and rebuilt when it is closed and reopened, so a UIA element
+      resolved before the close refers to a node that no longer exists. It
+      reads as an empty string against a panel that is working correctly, and
+      a harness that caches it reports a product failure that does not exist.
+      Re-resolving costs one descendant scan and removes the stale reference
+      from the failure mode entirely.
+    * **The postcondition is polled, not sampled.** A fixed sleep observes one
+      instant, which turns a slow-but-correct transition into a failure. The
+      bound still expires, so a genuine defect still fails.
+
+    The text last seen is returned, so a failure can report what the panel
+    actually said instead of nothing.
+    """
+    deadline = time.time() + timeout
+    text = ""
+    while True:
+        element = find_by_aid(win, "SearchStatusText")
+        if element is not None:
+            try:
+                text = element.window_text() or ""
+            except Exception:
+                text = ""
+        if expected in text:
+            return text
+        if time.time() >= deadline:
+            return text
+        time.sleep(interval)
+
+
+def acquire_store_lock(store_path):
+    """Take an exclusive lock on the acceptance store, or fail closed.
+
+    Two acceptance runs against one store interleave their DDL fault
+    injection, their seeded rows and their deletes, and each run's evidence
+    then describes a store the other run was mutating underneath it. That
+    happened here: a run failed in Phase 2 while a second run was writing to
+    the same database, and neither run's log could afterwards be used as
+    evidence about the product.
+
+    The lock makes that state unreachable. The second run refuses to start
+    with a message naming the lock file, rather than starting and producing
+    evidence it cannot trust. The returned handle must stay open for the
+    lifetime of the run; closing it releases the lock.
+    """
+    lock_path = os.path.abspath(store_path) + ".harness.lock"
+    handle = open(lock_path, "a+b")
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        handle.close()
+        raise RuntimeError(
+            f"another acceptance run holds the store lock {lock_path}; "
+            "two runs must not share one store, because each run's writes "
+            "invalidate the other's evidence"
+        )
+    return handle
 
 def find_by_name(parent, name):
     for d in parent.descendants():
@@ -1571,31 +1728,58 @@ def main():
     # Run unit tests of drop verdict classification logic
     test_drop_verdict_classification()
 
-    # Ensure store schema is in clean state before launch
+    # The store is locked for the whole run, BEFORE the first write. Every
+    # criterion in this harness writes to the store the live application has
+    # open -- DDL fault injection, seeded rows, stale-version injection,
+    # deletes -- and a second run against the same file interleaves those
+    # writes with this run's, so each run's evidence describes a database the
+    # other was mutating underneath it. A run that cannot have the lock does
+    # not start.
+    store_lock = None
     try:
-        conn = sqlite3.connect(STORE_PATH)
-        cur = conn.cursor()
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contributions_test_broken';")
-        if cur.fetchone():
-            mark_store_write("DDL: ALTER TABLE contributions_test_broken -> contributions (restore of a schema left broken by an earlier run)")
-            conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
-            conn.commit()
-        conn.close()
-    except Exception as e:
-        log(f"Notice during store schema check: {e}")
+        store_lock = acquire_store_lock(STORE_PATH)
+    except RuntimeError as lock_exc:
+        log(f"ABORTED BEFORE LAUNCH: {lock_exc}")
+        log("No criteria were exercised; the table below reports them as NOT_RUN.")
+        return emit_report()
+    log(f"Store lock held: {os.path.abspath(STORE_PATH)}.harness.lock")
 
-    if os.path.exists(PERF_LOG_PATH):
+    # Everything from here to the launch is inside its own try, because the
+    # lock is held from this point on: if any of it fails, the lock has to be
+    # released or every later run refuses to start on a store nobody is using.
+    try:
+        # Ensure store schema is in clean state before launch
         try:
-            os.remove(PERF_LOG_PATH)
+            conn = sqlite3.connect(STORE_PATH)
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='contributions_test_broken';")
+            if cur.fetchone():
+                mark_store_write("DDL: ALTER TABLE contributions_test_broken -> contributions (restore of a schema left broken by an earlier run)")
+                conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
+                conn.commit()
+            conn.close()
+        except Exception as e:
+            log(f"Notice during store schema check: {e}")
+
+        if os.path.exists(PERF_LOG_PATH):
+            try:
+                os.remove(PERF_LOG_PATH)
+            except Exception:
+                pass
+
+        env = os.environ.copy()
+        env["MAYASABA_STORE_PATH"] = STORE_PATH
+        env["MAYASABA_PERF_LOG"] = PERF_LOG_PATH
+
+        proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env)
+        log(f"Launched Mayasaba.exe (PID {proc.pid})")
+    except BaseException:
+        try:
+            store_lock.close()
+            log("Store lock released after a pre-launch failure.")
         except Exception:
             pass
-
-    env = os.environ.copy()
-    env["MAYASABA_STORE_PATH"] = STORE_PATH
-    env["MAYASABA_PERF_LOG"] = PERF_LOG_PATH
-
-    proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env)
-    log(f"Launched Mayasaba.exe (PID {proc.pid})")
+        raise
 
     try:
         # Bounded wait rather than a fixed sleep: the window appears after roughly
@@ -1621,6 +1805,11 @@ def main():
         # question -- does the UI thread ever block, and does it do so while
         # the harness holds a write lock on the live store? -- is answered by
         # measurement taken during this run rather than by a separate probe.
+        # The UIA walk tracker is installed first so that every enumeration the
+        # harness performs is attributable: a sample taken while the
+        # application is answering a UIA request is not the application doing
+        # its own work, and the two are counted apart.
+        install_uia_walk_tracker()
         start_ui_sampler(win.handle)
 
         # =========================================================================
@@ -1767,11 +1956,10 @@ def main():
         search_box.set_edit_text("contribution")
         time.sleep(1.5)
 
-        status_text = find_by_aid(win, "SearchStatusText")
         load_more_btn = find_by_aid(win, "SearchLoadMoreButton")
 
         # Page 1 (20/50)
-        s1 = status_text.window_text() if status_text else ""
+        s1 = read_status_text(win, "Showing 20 of 50 matching messages")
         log(f"Page 1 status: '{s1}'")
         if "Showing 20 of 50 matching messages" not in s1:
             log(f"FAIL: Expected 'Showing 20 of 50 matching messages', got '{s1}'")
@@ -1785,7 +1973,7 @@ def main():
         log("Clicking 'Load more results' (Page 2)...")
         load_more_btn.iface_invoke.Invoke()
         time.sleep(1.5)
-        s2 = status_text.window_text() if status_text else ""
+        s2 = read_status_text(win, "Showing 40 of 50 matching messages")
         log(f"Page 2 status: '{s2}'")
         if "Showing 40 of 50 matching messages" not in s2:
             log(f"FAIL: Expected 'Showing 40 of 50 matching messages', got '{s2}'")
@@ -1796,7 +1984,7 @@ def main():
         log("Clicking 'Load more results' (Page 3)...")
         load_more_btn.iface_invoke.Invoke()
         time.sleep(1.5)
-        s3 = status_text.window_text() if status_text else ""
+        s3 = read_status_text(win, "Showing 50 of 50 matching messages")
         log(f"Page 3 status: '{s3}'")
         if "Showing 50 of 50 matching messages" not in s3:
             log(f"FAIL: Expected 'Showing 50 of 50 matching messages', got '{s3}'")
@@ -1830,7 +2018,7 @@ def main():
         search_btn.iface_invoke.Invoke()
         time.sleep(1.5)
 
-        s_reopen = status_text.window_text() if status_text else ""
+        s_reopen = read_status_text(win, "Showing 20 of 50 matching messages")
         log(f"Reopened status: '{s_reopen}'")
         if "Showing 20 of 50 matching messages" not in s_reopen:
             log(f"FAIL: Reopened search did not restart at page 0: '{s_reopen}'")
@@ -1843,7 +2031,7 @@ def main():
         search_box.set_edit_text("contribution 4")
         time.sleep(1.5)
 
-        s_filtered = status_text.window_text() if status_text else ""
+        s_filtered = read_status_text(win, "Showing 11 of 11 matching messages")
         log(f"Filtered status: '{s_filtered}'")
         if "Showing 11 of 11 matching messages" not in s_filtered:
             log(f"FAIL: Filtered status mismatch: '{s_filtered}'")
@@ -1854,7 +2042,7 @@ def main():
         log("\nTesting zero-match search query 'no_matching_messages_expected_999'...")
         search_box.set_edit_text("no_matching_messages_expected_999")
         time.sleep(1.5)
-        s_nomatch = status_text.window_text() if status_text else ""
+        s_nomatch = read_status_text(win, "No saved user messages match your query")
         log(f"Zero-match status: '{s_nomatch}'")
         if "No saved user messages match your query" not in s_nomatch:
             log(f"FAIL: Expected 'No saved user messages match your query', got '{s_nomatch}'")
@@ -1874,7 +2062,7 @@ def main():
         search_box.set_edit_text("trigger_database_error")
         time.sleep(1.5)
 
-        s_fail = status_text.window_text() if status_text else ""
+        s_fail = read_status_text(win, "Search failed:")
         log(f"Failure status text: '{s_fail}'")
         if "Search failed:" not in s_fail or "no such table: contributions" not in s_fail:
             log(f"FAIL: Expected 'Search failed: no such table: contributions', got '{s_fail}'")
@@ -1903,7 +2091,7 @@ def main():
         log("Submitting valid query after database restoration to verify recovery...")
         search_box.set_edit_text("contribution 1")
         time.sleep(1.5)
-        s_recovered = status_text.window_text() if status_text else ""
+        s_recovered = read_status_text(win, "Showing 11 of 11 matching messages")
         log(f"Recovered query status: '{s_recovered}'")
         if "Showing 11 of 11 matching messages" not in s_recovered:
             log(f"FAIL: Expected 'Showing 11 of 11 matching messages' after recovery, got '{s_recovered}'")
@@ -4030,6 +4218,16 @@ def main():
             except Exception:
                 proc.kill()
         log("Cleanup complete.")
+
+        # The store lock is released only after the application is stopped and
+        # the store's own writes are done, so the next run cannot start against
+        # a store this run is still finishing with.
+        if store_lock is not None:
+            try:
+                store_lock.close()
+                log("Store lock released.")
+            except Exception as exc:
+                log(f"Notice while releasing the store lock: {exc}")
 
         # A phase that returned early never reached the normal report call, and a
         # run whose only output was a FAIL line left no table saying which criteria

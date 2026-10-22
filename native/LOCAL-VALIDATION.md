@@ -73,6 +73,8 @@ They do not cover, and cannot cover, anything in the "not built" list. A run of 
 
 The honest summary is: **a well-tested UI shell over a durable local store, with no intelligence, no execution, no orchestration and no installer behind it.**
 
+The harness that produces these numbers is itself instrumented, and what it reports about its own measurements is part of the evidence: a slow pump sample taken while the harness is walking the UIA tree is reported separately from one taken outside every walk, because the application's thread has to answer a cross-process enumeration and that is not the application doing its own work (§27). Two acceptance runs cannot share one store, and the second refuses to start rather than producing evidence about a database another run was mutating (§27.2). Neither of those is a product claim.
+
 ---
 
 ## Current milestone and its gates (2026-10-22)
@@ -88,15 +90,32 @@ The slice described under "What is built and what is not" is a UI shell over a d
 | Order | Item | Why here |
 | --- | --- | --- |
 | 1 | **B-slice** — outbox/inbox tables, `mayasaba-jcs-1` canonical bytes with the registered vectors, transactional receipts (C10 gate **I1**) | Invisible to the user, cheap now and expensive later, and it is the C10 order (I1 before I3), so doing it first removes the ordering objection entirely. **Status: implemented and proven for this slice — see §26.** It does not complete gate I1. |
-| 2 | **A + C paired** — Local Execution Kernel (layer 9, prototype 2) with Agent Gateway detection (layer 4) | A alone satisfies §14 prototype 2 and changes nothing user-visible; C converts the hardcoded `UNSUPPORTED` readiness line into a measured one and needs A. Paired, the milestone ends with a user-visible statement that is true *and* measured |
+| 2 | **A + C paired** — Local Execution Kernel (layer 9, prototype 2) with Agent Gateway detection (layer 4) | A alone satisfies §14 prototype 2 and changes nothing user-visible; C converts the hardcoded `UNSUPPORTED` readiness line into a measured one and needs A. Paired, the milestone ends with a user-visible statement that is true *and* measured. **Status: not started.** |
 | — | **D (MSI) deferred** | Nothing to install yet |
 | — | **Containment** | **Explicitly not claimed in either item.** See below |
+| — | **Harness close-out** (not a gate) | Done first, because a harness that cannot state what it measured cannot certify A+C. §27 |
 
 ### The three gates that must not be confused
 
 1. **A passing launch is not a passing I3.** A successful `CreateProcess` + `CreateJobObject` + teardown proves *ownership and cleanup of a process tree*. It proves nothing about confinement of that tree's file or network effects. `AGENTS.md` §9 requires pre-effect mediation or a tested effective operating-system access boundary for every prohibited read, write, network effect and stale write; a Job Object is neither. A launch milestone must be reported as prototype 2 only, and must not be summarized as making the architecture deployable.
 2. **The `UNSUPPORTED` line is Agent Gateway work, not Kernel work.** The Kernel alone does not make the readiness projection true. The readiness entry is layer 4's observation, and the probe needs a launch path — which is why C is paired with A rather than sequenced after it.
 3. **`INCONCLUSIVE` is a verdict, not a to-do.** Criteria 11 and 12 stay INCONCLUSIVE as a permanent evidenced environment limit (§24.4). Criterion 19 left that class only because the application changed (§25.5), not because the harness was re-tuned.
+
+### A + C: scope, and the three things it must not be read as claiming
+
+**A — Local Execution Kernel (layer 9).** Suspended launch → Job assignment → resume; restricted handle inheritance; redirected streams; cancellation; owned-tree cleanup. Its oracle is §14 prototype 2, which is already written into the project rules. It is the cheapest meaningful gate available and it is the first thing this repository has ever launched.
+
+**C — Agent Gateway detection (layer 4).** Executable identity plus a bounded, non-mutating readiness probe, replacing the hardcoded line at `MainWindow.xaml.cpp:3476-3478` (`… UNSUPPORTED. Executable identity and native probes are not implemented; no provider calls.`) with an observed result. The five readiness states the header already declares — `CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, `PROBE_FAILED` — become reachable rather than constant.
+
+**Paired, not sequenced.** A alone satisfies a prototype and changes nothing a user can see; C is what turns a hardcoded statement into a measured one, and C needs A's launch path. The user-visible statement that becomes true is narrow and specific: *the readiness line for each of the three CLIs is the result of a probe this application actually ran, not a constant this application printed.*
+
+**Three things the milestone must not be read as claiming:**
+
+1. **No containment claim.** §9's "staging is not containment" is the single most likely place to certify something false. A proves ownership and teardown of a process tree; it does **not** bound that tree's file or network effects. A Job Object is not an access boundary, and launching a CLI does not make its internal tools kernel-mediated. The record must say this in its own words, not by pointing at §9.
+2. **No provider usage.** The probe must be bounded and non-mutating. The user's model, provider and authentication settings are theirs (§6); Mayasaba may not select, rewrite or fall back to any of them, and a probe that consumed provider capacity would be a different action requiring different authority.
+3. **No D-11 candidate selection.** Executable identity must not silently pick a CLI. Resolving which binary is Hermes, Kilo Code or Claude Code is the user's decision and a registered choice; a probe that guessed would be exercising an authority it does not have.
+
+**Carried forward from §26.7, not redefined.** The I1 slice has no dispatcher, no transport, no path that sends a queued envelope, and no UI path that calls `CommitCommand`. A+C builds on that contract, so it inherits a *declared* boundary. If A+C changes what any of those sentences means, the record must say which and why; it must not quietly stop being true.
 
 ### What each item must produce before it is called done
 
@@ -2907,3 +2926,155 @@ A migration case reconstructs a `user_version` 3 store by dropping exactly the t
 ### 26.8 Open finding: another agent's uncommitted harness work
 
 `native/tests/test_full_ui_acceptance.py` and `native/tests/test_harness_oracles.py` carry uncommitted modifications that this assignment did not make: a polling `read_status_text` helper, an `acquire_store_lock` helper and a `msvcrt` import, with matching oracle tests. They were observed in the working tree during this assignment. Per AGENTS.md section 12 they were **not** staged, built over or committed; this assignment's diff excludes them. The acceptance runs above used the harness as it stands on disk, so their behaviour is part of what the run measured, and that is recorded rather than assumed away.
+
+**Superseded 2026-10-22 (section 27).** The user reassigned those two files to a follow-on assignment. They were read, tested against the oracle suite, run through the full acceptance harness in a fresh evidence directory, and committed. This paragraph is retained rather than rewritten because it records what this assignment actually did, which was not to touch them.
+
+## 27. Harness close-out: the store lock, the polling reader, and walk attribution (2026-10-22)
+
+### 27.1 Identity of this record
+
+| Field | Value |
+|---|---|
+| Executable | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `3651c4fe4f7cfb7db365ccac71be2b28a8bf02ffc56019697032924fff8361f5` |
+| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `84cd621c1875ca638332a5b05e7421e2be9b311fb4016cc3e2c4b9812da01ba9` |
+| Source base | `fb970c6c90cfc64efcb9efa56792ec027cf9a8f6` |
+| Acceptance evidence | `native/tests/evidence/ui-acceptance-harness-closeout-20261022/` |
+| Harness under test | `native/tests/test_full_ui_acceptance.py` SHA-256 `9cfc586cb954da52d2516cd2ea8e1892fc50be0e92e61c631d6ff1a1ecd4621c`; `native/tests/test_harness_oracles.py` SHA-256 `5994ed579cafa73db8e4c9aa9f04ec45dee08379dae344d42b4cc27247e98a88` |
+
+This record covers **the harness only**. The application artifact is the one section 26 drove — both hashes are unchanged, no product source was edited by this assignment, and every verdict in the table below is about what the harness measured or about the harness's own instrumentation. It is not a new product acceptance run in the sense of section 25 or 26: it is a re-run of the same 20 criteria against the same binary through a changed harness, which is what makes the changed harness's behaviour measurable.
+
+### 27.2 What the diff does, and the rule each piece implements
+
+The working tree carried 431 uncommitted lines across two files. All four pieces below are harness instrumentation; none of them changes an assertion's threshold, an oracle's verdict rule, or anything the application does.
+
+**1. `acquire_store_lock()` — an exclusive sidecar lock, taken before the first write and before the launch.** It opens `<store>.harness.lock` (never the store), writes a single byte if the file is empty, seeks to 0 and takes `msvcrt.locking(..., LK_NBLCK, 1)`. A second run that cannot take the lock logs `ABORTED BEFORE LAUNCH: another acceptance run holds the store lock <path>; two runs must not share one store, because each run's writes invalidate the other's evidence`, emits the criteria table with all 20 `NOT_RUN`, and exits 1. *Rule implemented:* §11's requirement that a harness mutating the store under a live application must not have its measurements contaminated by a concurrent writer, and §13's rule that an unexecuted criterion is `NOT_RUN` and never a pass. Before this, a run that could not get exclusive use had no way to say so: it started, produced numbers, and the numbers described a store another run was mutating.
+
+**2. `read_status_text()` — re-resolve the element on every attempt and poll the postcondition.** The saved-message search panel is destroyed and rebuilt when it is closed and reopened, so a UIA element resolved before the close refers to a node that no longer exists and reads as an empty string against a panel that is working. The helper calls `find_by_aid` inside the loop rather than caching one element, polls `expected in text` until a bound expires, and returns the last text seen so a genuine failure reports what the panel actually said. All eight search-status reads use it. *Rule implemented:* §13's "a UI assertion must poll for its postcondition, never sample it once" and "a focus/identity assertion must re-establish its subject", both of which the harness already applied elsewhere — the search reads were the remaining fixed-sleep-then-read sites.
+
+**3. `install_uia_walk_tracker()` and the `UI_UIA_WINDOWS` series.** It patches `BaseWrapper.descendants` on the pywinauto base class — not this file's helpers — because the walks are spread over a dozen call sites and an un-instrumented one would leave samples unattributable. Every walk records `(start_offset, end_offset, description)`. `ui_sample_summary()` then reports slow samples split into `inside a harness UIA walk` and `outside every harness UIA walk`, and the raw windows are written into `ui-thread-samples.json` as `uia_windows`. *Rule implemented:* §13's "a UIA walk is not a UI-thread latency probe" — a pump sample taken while the application's own thread is answering a cross-process enumeration measures the application answering the harness, and the two must be counted apart rather than merged into one "slow sample" figure.
+
+**4. One time origin for every series.** `start_ui_sampler` offset its samples from its own `started` while `mark_store_write`, `mark_event` and the walk windows offset from `_RUN_T0`. All four now subtract `_RUN_T0`. *Rule implemented:* the same §13 requirement, at the level of arithmetic — two series that need a correction term to compare are not correlated, they are merely adjacent.
+
+### 27.3 The sidecar lock does not touch the store — demonstrated, not assumed
+
+The brief named this as the one property that must be shown rather than argued, and the oracle alone does not show it: `test_acquire_store_lock_excludes_a_second_holder` proves that a second *harness* holder is refused, which says nothing about whether the application is affected. Three separate observations establish it.
+
+**(a) The lock is on a different path, and the store stays writable while it is held.** A direct probe took the lock on a temporary store and, while holding it, wrote a row through an ordinary `sqlite3` connection and read it back:
+
+```
+lock held on C:\Users\pavan\AppData\Local\Temp\...\store.db.harness.lock
+lock path != store path: True
+writes to the store while the lock is held: 1
+second harness holder refused: True
+```
+
+The write succeeds because the lock is a byte range in a separate file. Had the lock been taken on the store file, SQLite's own locking would have made this write fail or wait — which is the failure mode the sidecar design exists to avoid, and which the probe would have exposed.
+
+**(b) In the full run, the application opened the store and wrote to it while the harness held the lock.** The run log records, in order:
+
+- `Store lock held: ...\ui-acceptance-harness-closeout-20261022\store.db.harness.lock` — before the launch.
+- `Launched Mayasaba.exe (PID 21480)`, `Connected to main window: 'Mayasaba · Engineering Control Room' (HWND 656144)`.
+- Twelve `[store-write]` markers, from `t+21.518s` (the deliberate `ALTER TABLE contributions -> contributions_test_broken` fault injection) to `t+111.534s` (deleting the seeded non-English draft attachment). These are the harness's own writes and they all completed against a store the application had open.
+- `Store lock released.` — after the application was stopped and the cleanup writes were done.
+
+The application's own writes are visible in the store the run produced. The fixture it was seeded from and the store at the end of the run differ in exactly the way the run's own navigation explains:
+
+| Table | Fixture (seed) | End of run |
+|---|---|---|
+| `projects` | 3 | 3 |
+| `contributions` | 52 | 52 |
+| `selection_events` | 327 | 334 |
+| `selection_receipts` | 327 | 334 |
+| `attachments`, `draft_attachments`, `pending_submissions` | 0 | 0 |
+| `user_version` | 3 | **4** |
+
+The seven added `selection_events` and `selection_receipts` rows are `PROJECT_SERVICE` / `ProjectSelected` records, written by the application as the harness switched projects. `user_version` moving 3 → 4 is the application's own migration creating `command_receipts`, `inbox_envelopes` and `outbox_envelopes` — the I1 schema from section 26 — on a store the harness had locked. Both are the application writing to its own database while the harness held the sidecar lock, which is precisely the property under test. `attachments`, `draft_attachments` and `pending_submissions` returning to zero is the harness's cleanup restoring the fixture's shape, not the application failing to write.
+
+**(c) Every store-dependent criterion was measured.** The criteria that cannot pass without a working store, and their observations in this run:
+
+| Criterion | Store-dependent observation |
+|---|---|
+| 1. Recent Projects & Startup Filtering | `'3 projects recorded'`, filtered `'1 matching project'`, zero-match `'0 matching projects'` — read from the seeded `projects` rows |
+| 2. Message Search Pagination | `Showing 20 of 50` → `Showing 40 of 50` → `Showing 50 of 50`; reopened `20 of 50`; filtered `11 of 11`; zero-match `No saved user messages match your query.`; injected failure `Search failed: no such table: contributions`; recovered `11 of 11` — all read from the seeded 50 `contributions` |
+| 8. Action Center Pagination | `'50 item(s) loaded (more available).'` → `'52 item(s) need your attention.'` — from 51 seeded `draft_attachments` plus the existing obligation |
+| 9. Action Center Stale Invalidation | `Action Center item is stale: attachment record version has changed.` — from the deliberate `version = 99` injection |
+| 13. Seeded Attachment Chip | chip realized and inspected from a seeded managed record |
+| 14. Non-English Preview Withholding | seeded non-English attachment inspected; preview withheld with its stated reason |
+
+All six are `PASS`. A run whose store was contended, half-migrated or unwritable could not have produced any of these readings: the search criteria would have returned the failure text at every step, and the Action Center would have reported nothing to load. That is the demonstration the brief asked for — the lock is held for the whole run, the application opened the store and wrote to it, and the criteria that depend on the store were measured rather than skipped.
+
+### 27.4 Checks actually executed
+
+| Check | Command | Result |
+|---|---|---|
+| Harness oracle suite | `C:\Python314\python.exe native/tests/test_harness_oracles.py` | **PASS**: 39 of 39 cases, 0 failures (30 pre-existing + 9 new; 8 are controlling mutations in total) |
+| Full native acceptance | `test_full_ui_acceptance.py --exe ...\Release\Mayasaba.exe --store <fresh>\store.db --perf-log <fresh>\perf.json --evidence-dir <fresh>` | **18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN** |
+| Second-run refusal | the same command with `<store>.harness.lock` held by another process | `ABORTED BEFORE LAUNCH`, 20 `NOT_RUN`, exit 1, no `Mayasaba.exe` launched, store unchanged |
+| Sidecar isolation | direct probe: lock held, store written and read back | write succeeded; lock path ≠ store path |
+| `py_compile` | `python -m py_compile native/tests/test_full_ui_acceptance.py` | Clean |
+
+The second-run refusal was exercised as a real second process, not simulated: a holder took the lock, slept, and the harness was then run against the same store. Its console shows `ABORTED BEFORE LAUNCH` with the lock path, the table with all 20 `NOT_RUN`, and exit code 1; `Launched Mayasaba` does not appear in its output at all, and the store's row counts were unchanged afterwards. Criteria 11 and 12 remain `INCONCLUSIVE` for the permanent reason recorded in section 24.4; nothing in this diff touches the OLE stimulus.
+
+### 27.5 The three controlling mutations
+
+Each was applied to the harness source, run against the oracle suite, observed to fail at the assertion that encodes the defect, then restored and verified by SHA-256.
+
+| Mutation | Observed result |
+|---|---|
+| Hoist `find_by_aid` out of the `read_status_text` loop (cache one element) | **FAILED**: `test_read_status_text_does_not_reuse_an_element_from_before_a_rebuild` reported `Showing 20 of 50 matching messages` — the stale generation's text — and `test_read_status_text_polls_until_the_postcondition_appears` returned an empty string. Both encode the defect. |
+| Remove `msvcrt.locking` from `acquire_store_lock` (open the file, do not lock it) | **FAILED**: `test_acquire_store_lock_excludes_a_second_holder` — `a second holder acquired the same store lock`. |
+| Make `in_uia_window` always return `False` (never attribute a sample to a walk) | **FAILED**: `test_slow_samples_inside_a_uia_walk_are_reported_separately` reported `over 250 ms: 2 (inside a harness UIA walk: 0; outside every harness UIA walk: 2)` — the separation collapses exactly as the attribute exists to prevent. |
+
+Restored and verified byte-identical after each: `test_full_ui_acceptance.py` SHA-256 `9cfc586cb954da52d2516cd2ea8e1892fc50be0e92e61c631d6ff1a1ecd4621c`, and the oracle suite re-ran at 39/39.
+
+As §13 requires, these mutations prove the assertions discriminate *these* failures. They do not reproduce the original races: the panel-rebuild and concurrent-run defects were timing-dependent, and a green run after restoring a fix would be indistinguishable from a lucky one, which is why the postcondition is made unsatisfiable by construction instead.
+
+### 27.6 What the run's own instrumentation reported
+
+The close-out run produced the first reading the walk tracker exists to produce:
+
+```
+2327 samples, 2279 answered; p50 0.10 ms; p95 2.78 ms; p99 22.97 ms; max 282.34 ms at t+80.533s;
+over 250 ms: 3 (inside a harness UIA walk: 3; outside every harness UIA walk: 0); over 1000 ms: 0;
+after window destruction (not a latency reading): 48 [t+120.182s..t+122.553s];
+12 harness write(s) marked; samples within 500 ms of a harness write: 175;
+slowest sample coincides with a harness write: False; 4 harness event(s) marked
+```
+
+The three samples over 250 ms were at `t+69.247` (251.1 ms), `t+80.533` (282.3 ms) and `t+81.219` (278.9 ms), and **all three fall inside a recorded UIA walk**. The artifact records 222 walk windows totalling 25.00 s of walk time, a union coverage of 20.4 % of the 122.6 s sampled span. So the split is not a relabelling of everything: 79.6 % of the run was sampled outside any walk, and nothing in that 79.6 % exceeded 250 ms. The application's pump answered in under 250 ms throughout the periods when the harness was not asking it for UIA data. That is a stronger and more specific statement than the pre-diff figure, which reported three slow samples and left their cause to interpretation.
+
+### 27.7 A process error in this assignment, and how it was recovered
+
+While preparing the mutation evidence I ran `git checkout -- native/tests/test_full_ui_acceptance.py`, intending to revert a mutation. That command reverts to `HEAD`, not to the pre-mutation working copy, and it destroyed the entire 260-line uncommitted diff for that file. The loss was recoverable and was recovered, but the sequence is recorded because the recovery is the only reason the work was not lost outright:
+
+1. The full diff had been read earlier in the assignment, so its hunks were known.
+2. The file was reconstructed from the `HEAD` blob hunk by hunk, with each anchor asserted to occur exactly once so a mismatch fails loudly rather than producing a plausible-looking file.
+3. The reconstruction was checked two independent ways: its byte length matched the recorded pre-checkout length (218692), and its **SHA-256 matched the pre-checkout hash exactly** (`9cfc586c…`). As a third check, it was compared structurally against the cached `native/tests/__pycache__/test_full_ui_acceptance.cpython-314.pyc` — every module-level and nested code object's name, `co_firstlineno`, non-code constants and `co_names` matched — which is a check that does not depend on the reconstruction script having been written correctly.
+4. The restored file was backed up before any further mutation, and every later mutation was reverted with an explicit inverse edit rather than with `git checkout`.
+
+The durable rule is in `AGENTS.md` §17.6. It is not a harness rule; it is a rule about how to hold someone else's uncommitted work.
+
+### 27.8 Criteria for this assignment
+
+| ID | Criterion | Evidence | Verdict |
+|---|---|---|---|
+| HC-01 | A second acceptance run against one store refuses to start and names the lock file | Second-process run: `ABORTED BEFORE LAUNCH`, exit 1 | **PASS** |
+| HC-02 | A refused run launches no application and leaves the store unchanged | No `Launched Mayasaba` line; row counts and `user_version` unchanged afterwards | **PASS** |
+| HC-03 | The lock is a sidecar file and does not make the store unwritable | Direct probe: store written and read while the lock was held; lock path ≠ store path | **PASS** |
+| HC-04 | The application opens the store and writes to it while the lock is held | +7 `selection_events`, +7 `selection_receipts`, `user_version` 3 → 4 in the run's store | **PASS** |
+| HC-05 | Every store-dependent criterion is measured in the locked run | Criteria 1, 2, 8, 9, 13, 14 all `PASS` with store-derived readings | **PASS** |
+| HC-06 | The search status reader re-resolves its element and polls the postcondition | Two oracle cases; mutation "cache the first element" fails both | **PASS** |
+| HC-07 | A slow pump sample inside a UIA walk is reported separately from one outside | Oracle case; mutation "never attribute" collapses the split | **PASS** |
+| HC-08 | The sample, write-marker, event-marker and walk series share one origin | Source: all four subtract `_RUN_T0`; the run's split is computed across them | **PASS** |
+| HC-09 | The full acceptance suite is unchanged by the harness changes | 18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN, identical to §26.4 | **PASS** |
+| HC-10 | No product source, XAML or criterion threshold was changed by this assignment | Executable and XBF hashes identical to §26.1; diff touches only the two harness files, `AGENTS.md` and this document | **PASS** |
+| HC-11 | The harness oracle suite passes in full | 39 of 39 cases, 0 failures | **PASS** |
+| HC-12 | The reconstruction of the discarded diff is byte-identical to what was lost | SHA-256 `9cfc586c…` matches the pre-checkout hash; structural match against the cached `.pyc` | **PASS** |
+
+### 27.9 What this record does not claim
+
+1. **It does not claim a new product acceptance result.** The 18/2/0 table is the same 20 criteria against the same binary; what changed is the harness. A criterion that passed here passed for the same reason it passed in §26.4.
+2. **It does not claim the walk tracker attributes every slow sample correctly.** It records the walks the harness performs through `BaseWrapper.descendants`; a walk performed some other way — a raw `IUIAutomation` call, or a pywinauto method that does not route through `descendants` — would not be recorded, and a sample inside it would be attributed to "outside every harness UIA walk". The 222 recorded windows are the walks this harness makes, not a proof that no other enumeration exists.
+3. **It does not claim the store lock protects against a second *application* instance.** The single-instance lock is the application's own; this lock orders acceptance runs against each other.
+4. **It does not claim containment, a passing I3, or a deployable architecture.** Nothing here launches a process under controller ownership, and nothing bounds any process's file or network effects.
+5. **It does not re-open** any finding in §24.4, §25.8 or §26.7.

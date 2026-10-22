@@ -633,6 +633,208 @@ def test_mark_event_records_a_timestamped_marker():
         H._RUN_T0 = real_t0
 
 
+# --- read_status_text ----------------------------------------------------
+
+class _FakeElement:
+    """A UIA element that carries an AutomationId and a text."""
+
+    def __init__(self, text, automation_id="SearchStatusText"):
+        self._text = text
+        self.element_info = type("_Info", (), {
+            "automation_id": automation_id, "name": "", "control_type": "Text",
+        })()
+
+    def window_text(self):
+        return self._text
+
+
+class _FakeTree:
+    """A minimal stand-in for the pywinauto window.
+
+    `generations` models the panel being destroyed and rebuilt: the element
+    resolved from generation N stops resolving afterwards, exactly as a
+    cached UIA reference does against a rebuilt panel.
+    """
+
+    def __init__(self, generations):
+        self.generations = generations
+        self.calls = 0
+
+    def descendants(self):
+        self.calls += 1
+        index = min(self.calls - 1, len(self.generations) - 1)
+        return list(self.generations[index])
+
+
+def test_read_status_text_polls_until_the_postcondition_appears():
+    """A correct-but-slow transition must pass, not fail on one sample."""
+    tree = _FakeTree([[_FakeElement("")], [_FakeElement("")],
+                       [_FakeElement("Showing 20 of 50 matching messages")]])
+    got = H.read_status_text(tree, "Showing 20 of 50 matching messages",
+                              timeout=5.0, interval=0.01)
+    assert "Showing 20 of 50 matching messages" in got, got
+    assert tree.calls >= 3, tree.calls
+
+
+def test_read_status_text_does_not_reuse_an_element_from_before_a_rebuild():
+    """The defect this guards: a cached element read after the panel is rebuilt.
+
+    The first generation's element would answer "Showing 20 of 50 ..." if it
+    were cached, because the harness resolved it before the panel was closed
+    and reopened. A resolver that re-resolves per attempt reads the NEW
+    element, which is the one that carries the current state.
+    """
+    tree = _FakeTree([[_FakeElement("Showing 20 of 50 matching messages")],
+                       [_FakeElement("Showing 11 of 11 matching messages")]])
+    got = H.read_status_text(tree, "Showing 11 of 11 matching messages",
+                             timeout=2.0, interval=0.01)
+    assert "Showing 11 of 11" in got, got
+    assert tree.calls >= 2, (
+        "the reader resolved the element only once, so it kept the reference "
+        "it took before the panel was rebuilt")
+
+
+def test_read_status_text_returns_the_last_text_when_the_bound_expires():
+    """A genuine defect must still fail, and must say what the panel showed."""
+    tree = _FakeTree([[_FakeElement("Search failed: no such table: contributions")]])
+    got = H.read_status_text(tree, "Showing 20 of 50 matching messages",
+                              timeout=0.2, interval=0.01)
+    assert "no such table: contributions" in got, got
+
+
+def test_mutation_read_status_text_caching_the_first_element_would_miss_it():
+    """Mutation: resolving the element once must reintroduce the defect.
+
+    This does not reproduce the original race -- it makes the postcondition
+    unsatisfiable by construction, so a passing test cannot be a lucky one.
+    """
+    tree = _FakeTree([[_FakeElement("Showing 20 of 50 matching messages")],
+                       [_FakeElement("Showing 11 of 11 matching messages")]])
+    cached = [d for d in tree.descendants()][0]          # the mutation
+    got = cached.window_text()
+    assert "Showing 11 of 11" not in got, (
+        "the mutation did not make the postcondition unsatisfiable")
+
+
+# --- acquire_store_lock ---------------------------------------------------
+
+def test_acquire_store_lock_excludes_a_second_holder():
+    """Two runs must not be able to share one store."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        store = os.path.join(tmp, "store.db")
+        first = H.acquire_store_lock(store)
+        try:
+            raised = None
+            try:
+                H.acquire_store_lock(store)
+            except RuntimeError as exc:
+                raised = exc
+            assert raised is not None, (
+                "a second holder acquired the same store lock")
+            assert "harness.lock" in str(raised), raised
+        finally:
+            first.close()
+
+
+def test_mutation_acquire_store_lock_without_locking_would_not_exclude():
+    """Mutation: opening the file without locking it must not exclude."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        store = os.path.join(tmp, "store.db")
+        path = os.path.abspath(store) + ".harness.lock"
+        first = open(path, "a+b")                       # the mutation: no lock
+        try:
+            second = open(path, "a+b")
+            second.close()                               # succeeds -> no exclusion
+        finally:
+            first.close()
+
+
+# --- uia_walk window attribution ------------------------------------------
+
+def _swap_harness_state(samples=None, writes=None, windows=None, run_t0=None):
+    """Install state, and hand back a callable that puts the old state back.
+
+    The oracle suite runs its cases in name order against one module-level
+    state, so a case that leaves samples behind changes the meaning of every
+    case that runs after it. A case that inspects shared state must restore it.
+    """
+    saved = (list(H.UI_SAMPLES), list(H.UI_WRITE_MARKERS),
+             list(H.UI_UIA_WINDOWS), H._RUN_T0)
+    if samples is not None:
+        H.UI_SAMPLES[:] = samples
+    if writes is not None:
+        H.UI_WRITE_MARKERS[:] = writes
+    if windows is not None:
+        H.UI_UIA_WINDOWS[:] = windows
+    if run_t0 is not None:
+        H._RUN_T0 = run_t0
+
+    def restore():
+        H.UI_SAMPLES[:] = saved[0]
+        H.UI_WRITE_MARKERS[:] = saved[1]
+        H.UI_UIA_WINDOWS[:] = saved[2]
+        H._RUN_T0 = saved[3]
+
+    return restore
+
+
+def test_uia_walk_records_the_window_it_covered():
+    """A UIA walk must record its own start and end, or it cannot be told
+    apart from the application's own work in a latency series."""
+    import time as _time
+    restore = _swap_harness_state(windows=[],
+                                  run_t0=_time.monotonic())
+    try:
+        with H.uia_walk("find_by_aid(Example)"):
+            pass
+        assert len(H.UI_UIA_WINDOWS) == 1, H.UI_UIA_WINDOWS
+        start, end, description = H.UI_UIA_WINDOWS[0]
+        assert end >= start, (start, end)
+        assert description == "find_by_aid(Example)", description
+    finally:
+        restore()
+
+
+def test_slow_samples_inside_a_uia_walk_are_reported_separately():
+    """The summary must distinguish 'the app was answering the harness' from
+    'the app was doing its own work'. A slow sample inside a recorded UIA walk
+    is the former."""
+    import time as _time
+    restore = _swap_harness_state(
+        samples=[(1.0, True, 0.400, ""), (5.0, True, 0.400, "")],
+        writes=[],
+        # a UIA walk covering only t+0.5..t+1.5
+        windows=[(0.5, 1.5, "find_by_aid(Example)")],
+        run_t0=_time.monotonic())
+    try:
+        summary = H.ui_sample_summary()
+    finally:
+        restore()
+    assert "inside a harness UIA walk: 1" in summary, summary
+    assert "outside every harness UIA walk: 1" in summary, summary
+
+
+def test_mutation_a_uia_walk_that_records_nothing_cannot_separate_them():
+    """Mutation: a walk that records no window makes the separation impossible.
+
+    It does not change the latency readings; it destroys the ability to
+    attribute them, which is exactly what the attribute is for.
+    """
+    import time as _time
+    restore = _swap_harness_state(
+        samples=[(1.0, True, 0.400, "")],
+        writes=[],
+        windows=[],
+        run_t0=_time.monotonic())
+    try:
+        summary = H.ui_sample_summary()
+    finally:
+        restore()
+    assert "inside a harness UIA walk: 0" in summary, summary
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
