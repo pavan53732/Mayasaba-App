@@ -91,8 +91,12 @@
       winsqlite3.lib is the Windows SQLite import library (Storage.cpp).
       user32.lib supplies GetKeyState (keyboard state for the Send shortcut).
       shell32.lib supplies SHGetKnownFolderPath (per-user storage location).
+      wintrust.lib/crypt32.lib supply WinVerifyTrust and the certificate chain
+      helpers the Agent Gateway uses to observe a CLI's Authenticode signer.
+      Note this link line grants no containment: the gateway observes an
+      executable's identity; it does not confine what that executable does.
     -->
-    <Link><AdditionalDependencies>user32.lib;shell32.lib;winsqlite3.lib;bcrypt.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><AdditionalDependencies>user32.lib;shell32.lib;winsqlite3.lib;bcrypt.lib;wintrust.lib;crypt32.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ApplicationDefinition Include="App.xaml" />
@@ -122,6 +126,8 @@
     <ClInclude Include="CanonicalJson.h" />
     <ClInclude Include="DeliveryContract.h" />
     <ClInclude Include="Sha256Hex.h" />
+    <ClInclude Include="ExecutionKernel.h" />
+    <ClInclude Include="AgentGateway.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>
@@ -139,6 +145,11 @@
     <ClCompile Include="CanonicalJson.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="DeliveryContract.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Sha256Hex.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <!-- The Local Execution Kernel (layer 9) and the Agent Gateway (layer 4) are
+         deliberately pch-free: they are the two layers the native oracles in
+         native/tests link directly, so they must build without a WinUI header. -->
+    <ClCompile Include="ExecutionKernel.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="AgentGateway.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

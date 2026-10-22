@@ -11,6 +11,8 @@
 #include "Timeline.h"
 #include "SearchController.h"
 #include "ActionCenterPresenter.h"
+#include "AgentGateway.h"
+#include <array>
 #include <memory>
 #include <string>
 #include <winrt/Windows.Foundation.h>
@@ -83,6 +85,20 @@ namespace winrt::Mayasaba::implementation
             mayasaba::ActionCenterItem clicked, std::string projectId, uint64_t gen);
         void OnCloseAttachmentPreview(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
         winrt::fire_and_forget RefreshActionCenterAsync(uint64_t gen);
+        // CLI readiness. `RefreshReadinessAsync` runs discovery, the D-11 selection
+        // rule and the bounded probe off the UI thread, then repaints the projection.
+        // `RecheckCli` is the **Recheck** action; `LocateCli` is **Locate executable**
+        // (and **Choose executable** when a tie must be broken). Neither gates any
+        // user surface.
+        winrt::fire_and_forget RefreshReadinessAsync();
+        winrt::fire_and_forget RecheckCli(int cliIndex);
+        winrt::fire_and_forget LocateCli(int cliIndex);
+        // One bounded detection pass, runnable on the background lane and awaited by
+        // the three entry points above. A fire_and_forget coroutine is not itself
+        // awaitable, so the shared work lives in a real async operation.
+        winrt::Windows::Foundation::IAsyncAction DetectReadinessAsync();
+        void ApplyReadinessProjection();
+        void RebuildProblemCards();
         void OnSearchBoxKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnSearchResultItemClick(IInspectable const&, Microsoft::UI::Xaml::Controls::ItemClickEventArgs const&);
         void OnSearchLoadMore(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
@@ -316,6 +332,23 @@ namespace winrt::Mayasaba::implementation
         bool chatHeaderNarrow_{false};
         bool chatHeaderInitialized_{false};
 
+        // ------------------------------------------------------------------
+        // CLI readiness projection (Agent Gateway, layer 4)
+        // ------------------------------------------------------------------
+        // The last detection result for each CLI, in `gateway::Cli` order. It is a
+        // read-only projection of an observation: it never gates Chat, folder
+        // selection, Send, drafts, history or project switching, and nothing here
+        // launches a working session. Detection runs on `selectorQueue_` because a
+        // cold probe takes seconds, and only the resulting text is applied on the
+        // UI thread.
+        std::array<std::optional<mayasaba::gateway::Detection>, mayasaba::gateway::kCliCount> readiness_;
+        // Incremented per detection pass so a superseded pass cannot paint its
+        // result over a newer one.
+        uint64_t readinessGeneration_{0};
+        // The pinned executable per CLI, as chosen by the user. Empty until the
+        // user selects one; D-11 forbids discovery from filling this in for a
+        // CLI that has more than one verified candidate.
+        std::array<std::wstring, mayasaba::gateway::kCliCount> readinessPinnedPath_{};
         // Reading stability. `following_` is true only while the reader is at the
         // end of the timeline; `unseen_` counts entries appended since then.
         bool following_{true};

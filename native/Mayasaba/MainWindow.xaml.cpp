@@ -301,6 +301,11 @@ namespace winrt::Mayasaba::implementation
         RetryStoreButton().Visibility(Visibility::Collapsed);
         Notice().IsOpen(false);
         if (hasProjects) ShowFolder(SelectorContext::Startup); else ShowWelcome();
+
+        // CLI readiness is observed once the store is available, so the three entries
+        // describe this machine rather than a constant. It is independent of which
+        // screen is showing and of whether a project is bound: it gates nothing.
+        RefreshReadinessAsync();
     }
 
     // ---------------------------------------------------------------------------
@@ -1464,7 +1469,336 @@ namespace winrt::Mayasaba::implementation
                 card.SetValue(Grid::ColumnProperty(), winrt::box_value(0));
                 card.SetValue(Grid::ColumnSpanProperty(), winrt::box_value(2));
             }
+            // The CLI problem cards take the row after the Action Center, so on a
+            // narrow header the surfaces stack in a fixed order instead of sharing a
+            // row. On a wide header they sit under the readiness entries.
+            if (auto problems = ChatProblemCards())
+            {
+                problems.SetValue(Grid::RowProperty(), winrt::box_value(narrowHeader ? 4 : 3));
+                problems.SetValue(Grid::ColumnProperty(), winrt::box_value(0));
+                problems.SetValue(Grid::ColumnSpanProperty(), winrt::box_value(2));
+            }
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // CLI readiness projection.
+    //
+    // The header and both preludes used to print a hardcoded UNSUPPORTED. That was a
+    // truthful statement about the build it shipped in -- no probe existed -- but it
+    // was a constant, not an observation, so it could not be wrong and could not be
+    // right either. This projects a real one: the Agent Gateway discovers the
+    // executable actually installed on this PC, pins it under the D-11 rule, and asks
+    // it one bounded version question through the Local Execution Kernel.
+    //
+    // What this does NOT do, and must never be read as doing:
+    //   * It launches no working agent session. Start is still blocked and says so.
+    //   * It confines nothing. A Job Object owns the probe's process tree; it is not
+    //     an access boundary, and no containment claim follows from a READY here.
+    //   * It touches no model, provider or authentication setting. The probe is one
+    //     `--version` question and reads nothing back but its own stdout.
+    //   * It picks nothing for the user. Two verified candidates produce CHECKING and
+    //     require **Choose executable**; discovery order never breaks the tie.
+    //   * It gates nothing. Chat, folder selection, Send, drafts, history and
+    //     switching behave identically whatever the three entries say.
+    // ---------------------------------------------------------------------------
+
+    namespace
+    {
+        // The three entries appear in three places and must stay in one order. This
+        // is the single mapping from a gateway CLI index to its on-screen carriers.
+        // The dot is a Shape rather than a UIElement, and Shapes is not imported at
+        // file scope, so it is spelled out here.
+        struct ReadinessCarrier
+        {
+            TextBlock text{ nullptr };
+            Microsoft::UI::Xaml::Shapes::Ellipse dot{ nullptr };
+        };
+
+        std::wstring TrimForLabel(std::wstring const& value)
+        {
+            auto const first = value.find_first_not_of(L" \t\r\n");
+            if (first == std::wstring::npos) return L"";
+            auto const last = value.find_last_not_of(L" \t\r\n");
+            return value.substr(first, last - first + 1);
+        }
+    }
+
+    void MainWindow::ApplyReadinessProjection()
+    {
+        if (windowClosed_) return;
+
+        std::array<ReadinessCarrier, 3> welcome{
+            ReadinessCarrier{WelcomeHermesStatus(), WelcomeHermesDot()},
+            ReadinessCarrier{WelcomeKiloStatus(), WelcomeKiloDot()},
+            ReadinessCarrier{WelcomeClaudeStatus(), WelcomeClaudeDot()} };
+        std::array<ReadinessCarrier, 3> folder{
+            ReadinessCarrier{FolderHermesStatus(), FolderHermesDot()},
+            ReadinessCarrier{FolderKiloStatus(), FolderKiloDot()},
+            ReadinessCarrier{FolderClaudeStatus(), FolderClaudeDot()} };
+        std::array<ReadinessCarrier, 3> chat{
+            ReadinessCarrier{HermesStatus(), HermesDot()},
+            ReadinessCarrier{KiloStatus(), KiloDot()},
+            ReadinessCarrier{ClaudeStatus(), ClaudeDot()} };
+
+        for (int i = 0; i < mayasaba::gateway::kCliCount; ++i)
+        {
+            auto const cli = static_cast<mayasaba::gateway::Cli>(i);
+            auto const& detection = readiness_[static_cast<std::size_t>(i)];
+
+            // An entry with no detection yet reads CHECKING, which is a real state
+            // (the question is open), not a placeholder for "no answer".
+            auto const state = detection ? detection->readiness : mayasaba::gateway::Readiness::Checking;
+            auto const stateText = std::wstring{mayasaba::gateway::ReadinessText(state)};
+            auto const label = std::wstring{mayasaba::gateway::CliDisplayName(cli)} + L" · " + stateText;
+            auto const dotToken = mayasaba::gateway::ReadinessDotToken(state);
+            // The token is a narrow literal; Token() takes a wide key.
+            std::wstring dotKey;
+            for (char const* p = dotToken; p && *p; ++p) dotKey.push_back(static_cast<wchar_t>(*p));
+            auto const dotBrush = Token(dotKey.c_str());
+
+            for (auto const* group : { &welcome, &folder, &chat })
+            {
+                auto const& carrier = (*group)[static_cast<std::size_t>(i)];
+                if (carrier.text) carrier.text.Text(label);
+                if (carrier.dot) carrier.dot.Fill(dotBrush);
+            }
+        }
+
+        RebuildProblemCards();
+    }
+
+    void MainWindow::RebuildProblemCards()
+    {
+        if (windowClosed_) return;
+
+        // One card per affected CLI, built imperatively so its buttons can carry
+        // their own CLI index. A healthy CLI produces nothing at all: no card, no
+        // setup banner, no empty container left behind.
+        std::array<StackPanel, 2> hosts{ WelcomeProblemCards(), ChatProblemCards() };
+        bool anyCard = false;
+
+        for (auto& host : hosts)
+        {
+            if (!host) continue;
+            host.Children().Clear();
+        }
+
+        for (int i = 0; i < mayasaba::gateway::kCliCount; ++i)
+        {
+            auto const& detection = readiness_[static_cast<std::size_t>(i)];
+            if (!detection) continue;
+            if (!mayasaba::gateway::NeedsProblemCard(detection->readiness)) continue;
+            anyCard = true;
+
+            auto const cli = static_cast<mayasaba::gateway::Cli>(i);
+            auto const name = std::wstring{mayasaba::gateway::CliDisplayName(cli)};
+            auto const stateText = std::wstring{mayasaba::gateway::ReadinessText(detection->readiness)};
+
+            for (auto& host : hosts)
+            {
+                if (!host) continue;
+
+                Border card{};
+                card.CornerRadius(CornerRadius{10});
+                card.Padding(Thickness{12, 10, 12, 10});
+                card.Background(Token(L"MayasabaSecondaryBrush"));
+                card.BorderBrush(Token(L"MayasabaDangerBrush"));
+                card.BorderThickness(Thickness{1});
+                card.SetValue(Automation::AutomationProperties::NameProperty(),
+                    winrt::box_value(hstring{name + L" problem: " + stateText}));
+
+                StackPanel body{};
+                body.Spacing(5);
+
+                StackPanel heading{};
+                heading.Orientation(Orientation::Horizontal);
+                heading.Spacing(7);
+
+                Microsoft::UI::Xaml::Shapes::Ellipse dot{};
+                dot.Width(8);
+                dot.Height(8);
+                dot.VerticalAlignment(VerticalAlignment::Center);
+                dot.Fill(Token(L"MayasabaDangerBrush"));
+                heading.Children().Append(dot);
+
+                TextBlock title{};
+                title.Text(hstring{name + L" · " + stateText});
+                title.FontSize(12.5);
+                title.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
+                title.Foreground(Token(L"MayasabaInkBrush"));
+                title.VerticalAlignment(VerticalAlignment::Center);
+                heading.Children().Append(title);
+
+                body.Children().Append(heading);
+
+                // The exact cause, not a guess at it, and what it means for the user.
+                TextBlock cause{};
+                cause.Text(hstring{detection->reason});
+                cause.FontSize(12);
+                cause.TextWrapping(TextWrapping::Wrap);
+                cause.Foreground(Token(L"MayasabaSoftBrush"));
+                body.Children().Append(cause);
+
+                TextBlock impact{};
+                impact.Text(L"Chat, folder selection and every existing project are unaffected. "
+                            L"Operations that need this CLI stay unavailable until it is resolved.");
+                impact.FontSize(12);
+                impact.TextWrapping(TextWrapping::Wrap);
+                impact.Foreground(Token(L"MayasabaSoftBrush"));
+                body.Children().Append(impact);
+
+                StackPanel actions{};
+                actions.Orientation(Orientation::Horizontal);
+                actions.Spacing(8);
+
+                // D-11: a tie between two verified installations is the user's
+                // decision, so the action says so rather than implying a retry.
+                Button locate{};
+                locate.Content(winrt::box_value(detection->requiresSelection
+                    ? hstring{ L"Choose executable" } : hstring{ L"Locate executable" }));
+                locate.Padding(Thickness{12, 5, 12, 5});
+                locate.CornerRadius(CornerRadius{9});
+                locate.SetValue(Automation::AutomationProperties::NameProperty(),
+                    winrt::box_value(hstring{ (detection->requiresSelection ? L"Choose the executable for " : L"Locate the executable for ") + name }));
+                locate.Click([weak = get_weak(), i](auto const&, RoutedEventArgs const&)
+                {
+                    if (auto const self = weak.get()) self->LocateCli(i);
+                });
+                actions.Children().Append(locate);
+
+                Button recheck{};
+                recheck.Content(winrt::box_value(hstring{ L"Recheck" }));
+                recheck.Padding(Thickness{12, 5, 12, 5});
+                recheck.CornerRadius(CornerRadius{9});
+                recheck.SetValue(Automation::AutomationProperties::NameProperty(),
+                    winrt::box_value(hstring{ L"Recheck " + name }));
+                recheck.Click([weak = get_weak(), i](auto const&, RoutedEventArgs const&)
+                {
+                    if (auto const self = weak.get()) self->RecheckCli(i);
+                });
+                actions.Children().Append(recheck);
+
+                body.Children().Append(actions);
+                card.Child(body);
+                host.Children().Append(card);
+            }
+        }
+
+        for (auto& host : hosts)
+        {
+            if (host) SetVisible(host, anyCard);
+        }
+    }
+
+    winrt::Windows::Foundation::IAsyncAction MainWindow::DetectReadinessAsync()
+    {
+        // A cold probe is seconds of work, not milliseconds, so none of it runs on
+        // the UI thread. The entries read CHECKING while it is in flight.
+        auto alive = get_strong();
+        auto uiQueue = DispatcherQueue();
+        auto const generation = ++readinessGeneration_;
+
+        std::array<std::optional<mayasaba::gateway::Detection>, mayasaba::gateway::kCliCount> observed{};
+        std::array<std::wstring, mayasaba::gateway::kCliCount> pinned = readinessPinnedPath_;
+
+        co_await selectorQueue_.Background();
+
+        for (int i = 0; i < mayasaba::gateway::kCliCount; ++i)
+        {
+            auto const cli = static_cast<mayasaba::gateway::Cli>(i);
+            try
+            {
+                // A user-selected path is authoritative and is passed through, so a
+                // re-detection of a chosen installation probes that one and no other.
+                observed[static_cast<std::size_t>(i)] =
+                    mayasaba::gateway::Detect(cli, pinned[static_cast<std::size_t>(i)]);
+            }
+            catch (std::exception const&)
+            {
+                // Detection itself failed rather than reporting a state. That is a
+                // PROBE_FAILED observation with a stated cause, never a silent skip:
+                // leaving the entry at CHECKING would imply a question still open.
+                mayasaba::gateway::Detection failed;
+                failed.cli = cli;
+                failed.readiness = mayasaba::gateway::Readiness::ProbeFailed;
+                failed.reason = L"Detection could not be completed because the probe failed to run. "
+                                L"Recheck to try again.";
+                observed[static_cast<std::size_t>(i)] = failed;
+            }
+        }
+
+        co_await resume_foreground(uiQueue);
+        if (windowClosed_) co_return;
+        // A superseded pass must not paint over a newer result.
+        if (generation != readinessGeneration_) co_return;
+
+        readiness_ = observed;
+        ApplyReadinessProjection();
+    }
+
+    winrt::fire_and_forget MainWindow::RefreshReadinessAsync()
+    {
+        co_await DetectReadinessAsync();
+    }
+
+    winrt::fire_and_forget MainWindow::RecheckCli(int cliIndex)
+    {
+        // Recheck is the same detection pass. It is a separate entry point only so
+        // the card's button can name the CLI it belongs to in its own label.
+        (void)cliIndex;
+        co_await DetectReadinessAsync();
+    }
+
+    winrt::fire_and_forget MainWindow::LocateCli(int cliIndex)
+    {
+        if (windowClosed_ || cliIndex < 0 || cliIndex >= mayasaba::gateway::kCliCount) co_return;
+        if (pickerOpen_) co_return;
+
+        auto const cli = static_cast<mayasaba::gateway::Cli>(cliIndex);
+        auto const name = std::wstring{mayasaba::gateway::CliDisplayName(cli)};
+
+        // A file picker rather than a folder picker: this asks for one executable.
+        winrt::Windows::Storage::Pickers::FileOpenPicker picker;
+        picker.FileTypeFilter().Append(L".exe");
+        picker.FileTypeFilter().Append(L".cmd");
+        picker.FileTypeFilter().Append(L".bat");
+        picker.FileTypeFilter().Append(L".com");
+        Microsoft::UI::Xaml::Window window = *this;
+        HWND hwnd{};
+        try
+        {
+            winrt::check_hresult(window.as<IWindowNative>()->get_WindowHandle(&hwnd));
+            winrt::check_hresult(picker.as<IInitializeWithWindow>()->Initialize(hwnd));
+        }
+        catch (winrt::hresult_error const& e)
+        {
+            ShowNotice(hstring{ std::wstring{ L"The file picker could not be opened, so no executable was selected: " } + std::wstring{ e.message() } }, true);
+            co_return;
+        }
+
+        pickerOpen_ = true;
+        winrt::Windows::Storage::StorageFile chosen{ nullptr };
+        std::wstring failure;
+        try { chosen = co_await picker.PickSingleFileAsync(); }
+        catch (winrt::hresult_error const& e) { failure = std::wstring{ e.message() }; }
+        pickerOpen_ = false;
+
+        if (windowClosed_) co_return;
+        if (!failure.empty())
+        {
+            ShowNotice(hstring{ L"The file picker failed, so no executable was selected: " + failure }, true);
+            co_return;
+        }
+        if (!chosen) co_return; // the reader cancelled; nothing changes
+
+        // The selection is the user's decision and is recorded as such. It is not
+        // validated by discovery first: the probe that follows is what reports
+        // whether this file actually answers, and a file that does not becomes
+        // PROBE_FAILED with its own cause rather than being silently replaced.
+        readinessPinnedPath_[static_cast<std::size_t>(cliIndex)] = chosen.Path().c_str();
+        ShowNotice(hstring{ L"Selected " + name + L": " + std::wstring{ chosen.Path().c_str() } + L". Probing it now." });
+        co_await DetectReadinessAsync();
     }
 
     // Bounded hero pointer tilt (+/- 4 degrees). It is optional by construction:
@@ -3534,7 +3868,11 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::OnStart(IInspectable const&, RoutedEventArgs const&)
     {
-        ShowNotice(L"START BLOCKED: three native CLI adapters, independent applied context and pre-effect confinement proof are not implemented. No processes launched.", true);
+        // Start still does not launch working sessions: three native CLI adapters,
+        // independent applied context and a pre-effect confinement proof do not
+        // exist yet, and a READY readiness entry is not any of those. It would be
+        // easy to read a measured READY as permission to start; it is not.
+        ShowNotice(L"START BLOCKED: three native CLI adapters, independent applied context and pre-effect confinement proof are not implemented. No processes launched. CLI readiness in the header is an executable-detection result and does not authorize a session.", true);
     }
     void MainWindow::OnPause(IInspectable const&, RoutedEventArgs const&)
     { ShowNotice(L"No working CLI sessions were started. No external Pause is claimed."); }
@@ -3542,7 +3880,40 @@ namespace winrt::Mayasaba::implementation
     { ShowNotice(L"No working CLI sessions were started; no external effects are claimed ceased."); }
     void MainWindow::OnDiagnostics(IInspectable const&, RoutedEventArgs const&)
     {
-        ShowNotice(L"Hermes Agent CLI, Kilo Code CLI, Claude Code CLI: UNSUPPORTED. Executable identity and native probes are not implemented; no provider calls.", true);
+        // The observed projection, not a constant. Each line names the CLI, its
+        // readiness state and the exact reason the gateway recorded, so a reader can
+        // tell READY from "a version question was answered" and can act on a failure
+        // without a separate page. It reports observations only: it is not a claim
+        // that an agent session works, that anything is confined, or that provider
+        // settings are correct.
+        std::wstring report;
+        for (int i = 0; i < mayasaba::gateway::kCliCount; ++i)
+        {
+            auto const cli = static_cast<mayasaba::gateway::Cli>(i);
+            auto const& detection = readiness_[static_cast<std::size_t>(i)];
+            if (!report.empty()) report += L"\n";
+
+            report += std::wstring{ mayasaba::gateway::CliDisplayName(cli) } + L": ";
+            if (!detection)
+            {
+                report += L"CHECKING — detection has not reported a result yet.";
+                continue;
+            }
+            report += mayasaba::gateway::ReadinessText(detection->readiness);
+            if (!detection->reason.empty()) report += L" — " + detection->reason;
+            if (detection->probe)
+            {
+                auto const& probe = *detection->probe;
+                report += L" [tree=" + std::to_wstring(probe.observedTreeProcesses)
+                        + L" elapsed=" + std::to_wstring(probe.elapsed.count()) + L"ms";
+                if (!probe.observedVersionLine.empty())
+                    report += L" · " + TrimForLabel(probe.observedVersionLine);
+                report += L"]";
+            }
+        }
+        report += L"\nThese are bounded, non-mutating observations. No working session was launched, "
+                  L"no provider setting was read or changed, and nothing here confines a process.";
+        ShowNotice(hstring{ report }, true);
     }
     // Explicit in-app exit for the whole application. The current draft is flushed first
     // so a confirmed Exit never loses the newest composer text; Close() then runs the same

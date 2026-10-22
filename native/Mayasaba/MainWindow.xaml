@@ -55,23 +55,23 @@
                                 Spacing="16" HorizontalAlignment="Right" VerticalAlignment="Center"
                                 AutomationProperties.Name="CLI readiness">
                         <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                            <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                            <Ellipse x:Name="WelcomeHermesDot" Width="8" Height="8" VerticalAlignment="Center"
                                      Fill="{ThemeResource MayasabaAmberBrush}"/>
-                            <TextBlock x:Name="WelcomeHermesStatus" Text="Hermes Agent CLI · UNSUPPORTED"
+                            <TextBlock x:Name="WelcomeHermesStatus" Text="Hermes Agent CLI · CHECKING"
                                        FontSize="12" VerticalAlignment="Center"
                                        Foreground="{ThemeResource MayasabaMutedBrush}"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                            <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                            <Ellipse x:Name="WelcomeKiloDot" Width="8" Height="8" VerticalAlignment="Center"
                                      Fill="{ThemeResource MayasabaAmberBrush}"/>
-                            <TextBlock x:Name="WelcomeKiloStatus" Text="Kilo Code CLI · UNSUPPORTED"
+                            <TextBlock x:Name="WelcomeKiloStatus" Text="Kilo Code CLI · CHECKING"
                                        FontSize="12" VerticalAlignment="Center"
                                        Foreground="{ThemeResource MayasabaMutedBrush}"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                            <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                            <Ellipse x:Name="WelcomeClaudeDot" Width="8" Height="8" VerticalAlignment="Center"
                                      Fill="{ThemeResource MayasabaAmberBrush}"/>
-                            <TextBlock x:Name="WelcomeClaudeStatus" Text="Claude Code CLI · UNSUPPORTED"
+                            <TextBlock x:Name="WelcomeClaudeStatus" Text="Claude Code CLI · CHECKING"
                                        FontSize="12" VerticalAlignment="Center"
                                        Foreground="{ThemeResource MayasabaMutedBrush}"/>
                         </StackPanel>
@@ -240,7 +240,13 @@
 
                             <TextBlock MaxWidth="720" TextWrapping="Wrap" FontSize="12.5"
                                        Foreground="{ThemeResource MayasabaSoftBrush}"
-                                       Text="Native capability probes are not implemented in this build, so each CLI is reported as UNSUPPORTED rather than guessed. Folder selection and Chat are unaffected."/>
+                                       Text="Each CLI is detected from the executable actually installed on this PC and asked one bounded version question. Nothing is installed, configured or authenticated here, and no provider request is made. Folder selection and Chat are unaffected by the result."/>
+
+                            <!-- Problem cards. Populated only for MISSING, UNSUPPORTED and
+                                 PROBE_FAILED; a healthy CLI produces nothing here. Each card
+                                 names the exact cause and offers Locate executable and
+                                 Recheck. It is a projection of an observation, never a gate. -->
+                            <StackPanel x:Name="WelcomeProblemCards" Spacing="8" Visibility="Collapsed"/>
                         </StackPanel>
                     </Grid>
                 </ScrollViewer>
@@ -308,23 +314,23 @@
                                     Spacing="16" HorizontalAlignment="Right" VerticalAlignment="Center"
                                     AutomationProperties.Name="CLI readiness">
                             <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                                <Ellipse x:Name="FolderHermesDot" Width="8" Height="8" VerticalAlignment="Center"
                                          Fill="{ThemeResource MayasabaAmberBrush}"/>
-                                <TextBlock Text="Hermes Agent CLI · UNSUPPORTED" FontSize="12"
+                                <TextBlock x:Name="FolderHermesStatus" Text="Hermes Agent CLI · CHECKING" FontSize="12"
                                            VerticalAlignment="Center"
                                            Foreground="{ThemeResource MayasabaMutedBrush}"/>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                                <Ellipse x:Name="FolderKiloDot" Width="8" Height="8" VerticalAlignment="Center"
                                          Fill="{ThemeResource MayasabaAmberBrush}"/>
-                                <TextBlock Text="Kilo Code CLI · UNSUPPORTED" FontSize="12"
+                                <TextBlock x:Name="FolderKiloStatus" Text="Kilo Code CLI · CHECKING" FontSize="12"
                                            VerticalAlignment="Center"
                                            Foreground="{ThemeResource MayasabaMutedBrush}"/>
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" Spacing="7" VerticalAlignment="Center">
-                                <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                                <Ellipse x:Name="FolderClaudeDot" Width="8" Height="8" VerticalAlignment="Center"
                                          Fill="{ThemeResource MayasabaAmberBrush}"/>
-                                <TextBlock Text="Claude Code CLI · UNSUPPORTED" FontSize="12"
+                                <TextBlock x:Name="FolderClaudeStatus" Text="Claude Code CLI · CHECKING" FontSize="12"
                                            VerticalAlignment="Center"
                                            Foreground="{ThemeResource MayasabaMutedBrush}"/>
                             </StackPanel>
@@ -572,6 +578,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <Grid x:Name="ChatHeaderIdentityPanel" ColumnSpacing="12" VerticalAlignment="Center">
                             <Grid.ColumnDefinitions>
@@ -620,7 +627,7 @@
                             </Button>
                             <Button x:Name="StartButton" Content="Start" Click="OnStart" Padding="15,7"
                                     CornerRadius="11"
-                                    AutomationProperties.HelpText="Starts all three project-scoped CLI sessions. Currently blocked because no native adapter exists."/>
+                                    AutomationProperties.HelpText="Blocked: no native CLI adapter, applied-context proof or confinement proof exists yet. CLI readiness is a detection result and does not authorize a session."/>
                             <Button x:Name="PauseButton" Content="Pause" Click="OnPause" Padding="15,7" CornerRadius="11"/>
                             <Button x:Name="StopButton" Content="Stop" Click="OnStop" Padding="15,7" CornerRadius="11"
                                     AutomationProperties.HelpText="Immediate control. Never waits for an animation or a reply."/>
@@ -700,13 +707,38 @@
                                                             </Border>
                                                             <StackPanel x:Name="ChatReadinessPanel" Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="15"
                                                                         HorizontalAlignment="Right" AutomationProperties.Name="CLI readiness">
-                                                                <TextBlock x:Name="HermesStatus" FontSize="11.5"
-                                                                           Text="Hermes Agent CLI · UNSUPPORTED"/>
-                                                                <TextBlock x:Name="KiloStatus" FontSize="11.5"
-                                                                           Text="Kilo Code CLI · UNSUPPORTED"/>
-                                                                <TextBlock x:Name="ClaudeStatus" FontSize="11.5"
-                                                                           Text="Claude Code CLI · UNSUPPORTED"/>
+                                                                <!-- Each entry carries the CLI name, the observed readiness state as
+                                                                     text, and a coloured dot. The state is never colour-only and never
+                                                                     colour-bearing alone: the accessible name repeats both. -->
+                                                                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                                    <Ellipse x:Name="HermesDot" Width="7" Height="7" VerticalAlignment="Center"
+                                                                             Fill="{ThemeResource MayasabaAmberBrush}"/>
+                                                                    <TextBlock x:Name="HermesStatus" FontSize="11.5"
+                                                                               AutomationProperties.Name="Hermes Agent CLI readiness"
+                                                                               Text="Hermes Agent CLI · CHECKING"/>
+                                                                </StackPanel>
+                                                                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                                    <Ellipse x:Name="KiloDot" Width="7" Height="7" VerticalAlignment="Center"
+                                                                             Fill="{ThemeResource MayasabaAmberBrush}"/>
+                                                                    <TextBlock x:Name="KiloStatus" FontSize="11.5"
+                                                                               AutomationProperties.Name="Kilo Code CLI readiness"
+                                                                               Text="Kilo Code CLI · CHECKING"/>
+                                                                </StackPanel>
+                                                                <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                                                                    <Ellipse x:Name="ClaudeDot" Width="7" Height="7" VerticalAlignment="Center"
+                                                                             Fill="{ThemeResource MayasabaAmberBrush}"/>
+                                                                    <TextBlock x:Name="ClaudeStatus" FontSize="11.5"
+                                                                               AutomationProperties.Name="Claude Code CLI readiness"
+                                                                               Text="Claude Code CLI · CHECKING"/>
+                                                                </StackPanel>
                                                             </StackPanel>
+
+                                                            <!-- Problem cards for MISSING, UNSUPPORTED and PROBE_FAILED.
+                                                                 Row 3 is the header grid's own content row, so a card adds
+                                                                 height to the header instead of being clipped. A healthy CLI
+                                                                 adds nothing, and the panel stays collapsed. -->
+                                                            <StackPanel x:Name="ChatProblemCards" Grid.Row="3" Grid.ColumnSpan="2"
+                                                                        Spacing="8" Visibility="Collapsed"/>
                                                         </Grid>
                         </Border>
 

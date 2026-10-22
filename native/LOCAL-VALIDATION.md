@@ -31,7 +31,9 @@ One WinUI 3 desktop application, `native/Mayasaba/`, 41 source files, 18,028 lin
 | Search | Saved-message search, pagination and continuation tokens, project-switch safety while a search is open, overlay geometry and paging reachability. | `SearchController.h`, `MainWindow.xaml.cpp` |
 | Action Center | A read-only owner-obligation projection with paging, stale-item revalidation and dismissal that survives background refresh. | `ActionCenterPresenter.h` |
 | Presentation | The motion and depth system, theme brushes, light/dark/high-contrast handling, reduced-motion alternatives, DPI and responsive layout, the timeline renderer, and the heroes' declared resting orientation published on a named container so it is readable by a UIA client (§25.5). | `Motion.cpp`, `ThemeBrushes.cpp`, `Timeline.cpp`, `RichText.cpp`, `MainWindow.xaml` |
-| Deterministic core independence | Storage, project identity and the presentation helpers are separable from the window; the unit-test runner exercises them without creating one. | `native/tests/storage_tests.cpp` |
+| Deterministic core independence | Storage, project identity, the presentation helpers, the Local Execution Kernel and the Agent Gateway's detection path are separable from the window; the unit-test runners exercise them without creating one. | `native/tests/storage_tests.cpp`, `execution_tests.cpp`, `gateway_tests.cpp` |
+| Local Execution Kernel (layer 9) | Controller-owned launch: suspended creation, an explicit inherited-handle list, Job Object assignment **before** resume, bounded redirected capture, cancellation, and reaping of survivors when the launched process exits. Its oracle is §14 prototype 2, 11 criteria, and it prints on every run that this is lifecycle ownership and not containment. **The kernel is used by exactly one product path: the readiness probe.** | `ExecutionKernel.h/.cpp`, `native/tests/execution_tests.cpp` |
+| Agent Gateway detection (layer 4) | Executable discovery, `FILE_ID_INFO` stable identity, canonical path, SHA-256, Authenticode signer observation, the D-11 selection rule, and one bounded non-mutating `--version` probe launched through the kernel. Readiness is projected into all three screens as a truthful status entry. **No adapter, no session identity, no health, no native CLI protocol, and no provider interaction.** | `AgentGateway.h/.cpp`, `native/tests/gateway_tests.cpp`, `MainWindow.xaml.cpp` |
 
 The executable is a real, running application. A person can launch it, pick a folder, type a message, and have that message durably saved and restored. That much is observed, repeatedly, by the harness.
 
@@ -44,18 +46,18 @@ The executable is a real, running application. A person can launch it, pick a fo
 | 1. Control Room UI | Present | The slice described above |
 | 2. Controller Application Services / Orchestrator | **Absent** | No orchestrator type, no scheduling, no barriers, no phase transitions |
 | 3. MCF-v2 Communication Fabric | **Absent** | The string "MCF-v2" appears once, inside a UI card that says it is not implemented. The I1 slice adds the *durable facts* Message Delivery needs — outbox rows, inbox admission, receipts — but no fabric: no transport, no dispatcher, no retry, no dead letters, no replay driver (§26.7). |
-| 4. Agent Gateway / Adapters | **Absent** | No adapter, no session identity, no health, no native CLI protocol |
+| 4. Agent Gateway / Adapters | **Partial** | Detection only (§28.4): discovery, stable identity, digest, signer observation, the D-11 rule and a bounded readiness probe. **Absent:** any adapter, session identity, session health, native CLI protocol translation, and session launch. |
 | 5. Council Engine | **Absent** | The words "council" and "orchestrator" appear in `Storage.cpp` only as entries in an English-word list used for non-English prose detection |
 | 6. Context Synchronizer | **Absent** | No snapshot, no context version, no digest |
 | 7. Task/DAG Engine | **Absent** | No graph, no attempt, no lease, no fencing version |
 | 8. Workspace Manager | **Absent** | No staging, no integration journal, no publication |
-| 9. Local Execution Kernel | **Absent** | No `CreateProcess`, no `CreateJobObject`, no `AssignProcessToJobObject`, no `ShellExecute` anywhere in the source |
+| 9. Local Execution Kernel | **Present** | Suspended `CreateProcessW`, `CreateJobObjectW` with `AssignProcessToJobObject` before `ResumeThread`, `TerminateJobObject`, bounded redirected capture (§28.3). **Not an access boundary:** it owns a process tree’s lifecycle and bounds nothing that tree reads, writes or sends. §14 prototype 2 is satisfied; prototype 3 is not. |
 | 10. Validation / Repair Engine | **Absent** | No verdict record, no diagnostic, no repair disposition |
 | 11. Evidence Engine | **Absent** | No evidence record, no hash chain, no provenance store |
 | 12. Policy Engine | **Absent** | No material-action authorization, no deny reason |
 | 13. SQLite Storage | Present | Layer 13 is complete enough to hold the slice's state |
 
-**No CLI is ever launched.** The three readiness entries in the Chat header, on Welcome and on Screen 2 are hardcoded to `UNSUPPORTED` in `MainWindow.xaml`, and the Start control responds with the notice at `MainWindow.xaml.cpp:3478`: `"Hermes Agent CLI, Kilo Code CLI, Claude Code CLI: UNSUPPORTED. Executable identity and native probes are not implemented; no provider calls."` That notice is truthful. There is no probe code, no executable discovery, no adapter, and no provider call. Start is blocked by design rather than simulated — which is the correct behavior for this state, and also means that every user-visible statement about agent participation is currently a statement about something that does not exist.
+**No CLI working session is ever launched.** The three readiness entries on Welcome, on Screen 2 and in the Chat header are now a *measured* projection (§28.7): each names the installed executable the Agent Gateway discovered, its stable identity, and the result of one bounded `--version` probe launched through the Local Execution Kernel. On this machine that reads Hermes `READY`, Kilo Code `READY`, Claude Code `CHECKING` with the stated reason that two installations were found and D-11 requires the user to choose. **What still does not exist:** any adapter, any project-scoped session, any applied context, any agent turn, and any provider interaction. Start remains blocked and says so, now naming the readiness result explicitly so it cannot be misread as permission: `MainWindow.xaml.cpp` `OnStart`. A `READY` here means one version question was answered inside its bound, and nothing more.
 
 **No agent turn exists.** There is no three-agent response, no rotating writer, no peer review, no consolidated reply, no turn finalization. The Chat card at `MainWindow.xaml.cpp:938` says so in the product itself: `"Saved only · agent replies are unavailable in this build"`.
 
@@ -63,7 +65,7 @@ The executable is a real, running application. A person can launch it, pick a fo
 
 **No MSI exists.** There is no `.wxs` file anywhere in the repository. There is no installer, no OS/build/edition gate, no upgrade path.
 
-**None of `AGENTS.md` §14's three required prototypes is satisfied.** A responsive Control Room under sustained CLI/event streaming has not been demonstrated, because no CLI stream exists. Process launch, cancellation and crash cleanup across an owned process tree does not exist. Enforceable workspace access and stale-write rejection does not exist.
+**One of `AGENTS.md` §14's three required prototypes is satisfied; two are not.** Prototype 2 — process launch, cancellation and crash cleanup across an owned process tree — is satisfied by the Local Execution Kernel and its 11-criterion oracle (§28.3). Prototype 1, a responsive Control Room under sustained CLI/event streaming, is **not** demonstrated, because no CLI stream exists. Prototype 3, enforceable workspace access and stale-write rejection for every admitted execution profile, is **not** satisfied and is the gate this slice sits behind: a Job Object owns a process tree's lifecycle and confines nothing that tree reads, writes or sends.
 
 ### What the acceptance numbers mean, precisely
 
@@ -83,7 +85,7 @@ This section records the milestone decision so the next session does not re-deri
 
 ### Where the work stands
 
-The slice described under "What is built and what is not" is a UI shell over a durable local store. Eleven of the thirteen layers are absent, no CLI is ever launched, and none of `AGENTS.md` §14's three required prototypes is satisfied. Tier 1 is therefore **not** the next thing to do; the next thing is the smallest sequence that turns one hardcoded user-visible statement into a measured one.
+The slice described under "What is built and what is not" is a UI shell over a durable local store, plus two tested non-WinUI layers: a controller-owned launch path and an executable-detection path. Eleven of the thirteen layers remain absent or partial, no CLI working session is ever launched, and one of `AGENTS.md` §14's three required prototypes is satisfied. Tier 1 is therefore **not** the next thing to do; the next thing is the containment prototype, which is the gate both new layers sit behind.
 
 ### The order of work
 
@@ -3078,3 +3080,144 @@ The durable rule is in `AGENTS.md` §17.6. It is not a harness rule; it is a rul
 3. **It does not claim the store lock protects against a second *application* instance.** The single-instance lock is the application's own; this lock orders acceptance runs against each other.
 4. **It does not claim containment, a passing I3, or a deployable architecture.** Nothing here launches a process under controller ownership, and nothing bounds any process's file or network effects.
 5. **It does not re-open** any finding in §24.4, §25.8 or §26.7.
+
+## 28. A+C paired: the Local Execution Kernel and a measured CLI readiness projection (2026-10-22)
+
+### 28.1 Identity of this record
+
+| Item | Value |
+|---|---|
+| Executable SHA-256 | `f092ce10224eadb90a2ef8cd3c10824591e76786bf7203c854b7e271a74883b5` |
+| `MainWindow.xbf` SHA-256 | `a3a4af5e50558189c531549a76c8f06d9133ca64eac190394b89ae2c332eefed` |
+| Kernel oracle | `native/tests/bin/execution_tests.exe`, **11 of 11 PASS** |
+| Gateway oracle | `native/tests/bin/gateway_tests.exe`, **12 of 12 PASS** |
+| Readiness UI probe | **PASS** on Welcome and on Screen 2 |
+
+The two oracle executables link `ExecutionKernel.cpp` and `AgentGateway.cpp` directly and build without any WinUI header, so a result from them is evidence about the layers rather than about a window. The application was then rebuilt against the same sources and the readiness probe observed the wired projection in the running product.
+
+### 28.2 Why these two were paired
+
+A alone satisfies §14 prototype 2 and changes nothing a user can see. C is what turns a hardcoded statement into a measured one, and C needs A: the probe does not use `_popen`, `system` or a shell shortcut, it goes through the one controller-owned launch path. Pairing them means the first thing the kernel does in the product is a real, bounded, owned process launch whose result a reader can see, and the first thing the gateway reports is produced by a process whose tree the controller actually owns.
+
+**The pairing does not make either half stronger.** A passing launch is still not containment. A READY is still not a working session.
+
+### 28.3 A — Local Execution Kernel (layer 9)
+
+`ExecutionKernel.h/.cpp`. `CreateProcessW` with `CREATE_SUSPENDED | CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT`, an explicit `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` so only the three declared handles are inherited, a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, `AssignProcessToJobObject` **before** `ResumeThread`, and `TerminateJobObject` for cancellation.
+
+Oracle: §14 prototype 2, "process launch, cancellation, and crash cleanup across an owned process tree". `execution_tests.cpp`, criteria A-1..A-11:
+
+| ID | Criterion | Reading |
+|---|---|---|
+| A-1 | Launch reaches the target and captures its output | PASS |
+| A-2 | The child is assigned to its job before it is resumed | `suspend=1` PASS |
+| A-3 | The job holds a tree, not one process | `tree=2 peak=2` PASS |
+| A-4 | The wall-clock bound is enforced at the boundary | `elapsed=627ms` PASS |
+| A-5 | Cancel terminates the whole tree promptly | `cancel=2ms` PASS |
+| A-6 | A crashing child is observed with its own exit code | PASS |
+| A-7 | A grandchild that outlives its parent dies with the tree | `reaped=2` PASS |
+| A-8 | Dropping a live `Process` terminates its tree | PASS |
+| A-9 | Handle inheritance is restricted to the declared set | PASS |
+| A-10 | Distinct refusals for distinct causes | PASS |
+| A-11 | Captured bytes are bounded and the excess is drained | PASS |
+
+A-2 carries the ordering guarantee through `ResumeThread`'s return value: it reports the *previous* suspend count, which is 1 only if the process really was still suspended when it was assigned to the job. See §28.5 for why that field exists.
+
+### 28.4 C — Agent Gateway detection (layer 4)
+
+`AgentGateway.h/.cpp`. Discovery of an installed executable per CLI; identity as `FILE_ID_INFO` stable identity (`%x:` plus 16 zero-padded hex bytes, the same format `ProjectRoot.cpp` uses), canonical path via `GetFinalPathNameByHandleW`, SHA-256, and an Authenticode signer observation through `WinVerifyTrust` and the provider-chain helpers. Then the D-11 selection rule, then one bounded `--version` probe launched through the kernel.
+
+Oracle: `gateway_tests.cpp`, criteria C-1..C-12, all PASS, including identity recomputed independently (C-1), single-candidate auto-pin (C-2), two candidates requiring the user's choice in **both** discovery orders (C-3), a replaced binary returning to CHECKING (C-4), a vanished pin not switching installations (C-5), MISSING with a stated search (C-6), a missing image as PROBE_FAILED rather than MISSING (C-8), a bounded probe reporting its timeout (C-9), exit zero with no output not being READY (C-10), the five-state vocabulary being complete and distinct (C-11), and a user selection being authoritative (C-12).
+
+The real-machine readings, which are what makes this a measurement rather than a constant:
+
+```
+hermes:      READY    — answered the version probe [Hermes Agent v0.22.2+2224.g4932088 · stable] tree=5 elapsed=4129ms
+kilo-code:   READY    — answered the version probe [7.8.15] tree=4 elapsed=2002ms
+claude-code: CHECKING — More than one installation was found. Choose the executable Mayasaba should use;
+                        no candidate is preferred by discovery order, path or version. [requires selection]
+```
+
+The Claude Code reading is a real D-11 case on this machine, not a contrived one: two distinct `claude.exe` installations (270,863,520 and 260,489,376 bytes) are reachable through two byte-identical `.cmd` shims with the same SHA-256. The rule correctly refuses to choose, and the entry says so.
+
+### 28.5 The M3 refutation, recorded rather than tidied away
+
+The first attempt at a controlling mutation for the assignment ordering removed `CREATE_SUSPENDED` and rebuilt. **All 11 criteria still passed.** That is a refutation, not a success: A-2 as first written did not discriminate the property it claimed to test, because a process created resumed and then assigned to a job is, in the common case, still assigned before anything observable happens.
+
+The correction was to make the ordering observable rather than inferred. `Outcome::resumePreviousSuspendCount` now records what `ResumeThread` returned, and A-2 asserts it equals 1 — which can only hold if the process was genuinely suspended at assignment time. Re-running M3 then failed at exactly that assertion.
+
+This is recorded because the tidier story ("the mutation failed, as expected") is false, and because a mutation that *passes* is the more valuable finding.
+
+### 28.6 Mutation ledger
+
+Each mutation was applied, the affected oracle rebuilt and re-run, the failure recorded at the assertion encoding the defect, and the source restored. M6 was the last to be restored; both oracles were then re-run and pass in full.
+
+| ID | Mutation | Discriminated at |
+|---|---|---|
+| M1 | Tree reaping on root exit disabled | A-7 at `reapedAfterExit` |
+| M2 | Peak process count not recorded | A-2/A-3 at `peakTreeProcesses` |
+| M3 | `CREATE_SUSPENDED` removed | *initially passed* — see §28.5; after strengthening A-2, fails at `resumePreviousSuspendCount == 1` |
+| M4 | Discovery order breaks the tie | C-3 at `requiresSelection` |
+| M5 | Silent success accepted as READY | C-10 at `readiness == ProbeFailed` |
+| M6 | Digest change ignored on a pinned binary | C-4 at `readiness == Checking` |
+| M7 | The detection pass is never started at startup | UI probe: "no entry left CHECKING within 120s", entries at their markup value |
+
+M7 is the one that tests the *wiring* rather than a layer, and it exists because the first version of the UI probe asserted only that every entry read a registered state. `CHECKING` is both a registered state and the value the XAML ships with, so that assertion was satisfied before any detection ran — it reported PASS without measuring anything. The probe now requires at least one entry to read a state other than `CHECKING`, and two consecutive agreeing reads so a mid-transition sample is not mistaken for a settled one.
+
+### 28.7 The wiring: what became true on screen
+
+The hardcoded `UNSUPPORTED` is gone from all nine sites — the three Welcome entries, the three Screen 2 entries, the three Chat header entries — and the explanatory line that said native probes were not implemented has been replaced with a description of what actually happens.
+
+`MainWindow.xaml.cpp` now runs one bounded detection pass on `selectorQueue_` after the store becomes available, and applies only the resulting text on the UI thread. Each entry carries the CLI name, the readiness state as **text**, and a coloured dot; the state is never colour-only. Problem cards are built only for `MISSING`, `UNSUPPORTED` and `PROBE_FAILED`, each naming the exact recorded cause, stating the impact, and offering **Locate executable** (or **Choose executable** when D-11 requires the user's decision) and **Recheck**. A healthy CLI produces no card and no banner. The Chat header gained a fifth auto row so the cards stack under the Action Center rather than sharing a row with it.
+
+The diagnostics notice is now the observed projection per CLI, with the probe's owned-tree size, elapsed time and the version line it printed, closed by the statement that these are bounded non-mutating observations and that nothing was launched, configured or confined.
+
+Measured on this machine, both preludes:
+
+```
+Welcome:  Hermes READY · Kilo Code READY · Claude Code CHECKING
+Screen 2: Hermes READY · Kilo Code READY · Claude Code CHECKING
+```
+
+### 28.8 Criteria for this assignment
+
+| ID | Criterion | Evidence | Verdict |
+|---|---|---|---|
+| AC-01 | A child is assigned to its job before it is resumed | A-2 `suspend=1`; mutation M3 fails the assertion | **PASS** |
+| AC-02 | The kernel owns a tree, not one process, and reaps survivors | A-3 `tree=2 peak=2`; A-7 `reaped=2`; mutation M1 fails A-7 | **PASS** |
+| AC-03 | Launch, cancellation and crash cleanup are bounded and observed | A-4 `elapsed=627ms`, A-5 `cancel=2ms`, A-6 exit code, A-11 bounded capture | **PASS** |
+| AC-04 | Handle inheritance is restricted to the declared set | A-9; the helper reports `handle-visible=0` for an inheritable event | **PASS** |
+| AC-05 | Executable identity is observed, not assumed | C-1 with an independent digest recomputation | **PASS** |
+| AC-06 | The D-11 rule never silently chooses between two candidates | C-3 in both orders; C-5; C-12; mutation M4 fails C-3 | **PASS** |
+| AC-07 | A replaced or vanished executable returns to CHECKING rather than switching | C-4, C-5; mutation M6 fails C-4 | **PASS** |
+| AC-08 | The probe is bounded, non-mutating and reports its own timeout | C-9 `elapsed=715ms` against a 700 ms bound; C-8; C-10 | **PASS** |
+| AC-09 | The five readiness states are complete and distinct | C-11 | **PASS** |
+| AC-10 | The product prints an observed state, not a constant | UI probe: 2 of 3 entries left CHECKING on Welcome **and** Screen 2; mutation M7 fails the probe | **PASS** |
+| AC-11 | A healthy CLI produces no problem card; an affected one names its cause and offers both actions | Source inspection of `RebuildProblemCards`; **not exercised at runtime** — this machine has no MISSING/PROBE_FAILED CLI to render one | **INCONCLUSIVE** |
+| AC-12 | The projection gates nothing | Source: no readiness read in the Send, folder-selection, draft, history or navigation paths | **PASS** (by inspection only) |
+| AC-13 | Readiness is never colour-only | Each entry prints the state as text beside the dot, with a per-CLI accessible name | **PASS** |
+| AC-14 | Start still refuses and says why | `OnStart` notice text; behaviour unchanged | **PASS** |
+
+AC-11 stays **INCONCLUSIVE**. The card builder compiles and is reachable, but no CLI on this machine is in a card-producing state, so the rendered card, its buttons and their handlers were not observed. It must not be recorded as PASS on the strength of the source alone.
+
+### 28.9 What this record does not claim
+
+1. **It does not claim containment.** A Job Object is a lifecycle and accounting boundary. It bounds which processes exist and when they die; it does not bound what those processes read, write or send. §9's "staging is not containment" applies here without qualification, and nothing in this record should be read as a first exception to it. The kernel header says so at the top of the file and `execution_tests.exe` prints it on every run.
+2. **It does not claim a passing I3.** Gate I3 requires a proven pre-effect mediation or a tested effective operating-system access boundary for every prohibited effect, including stale writes. Neither layer implements or tests that.
+3. **It does not claim a working agent session.** No session was launched. Start remains blocked, and `OnStart` now says explicitly that a READY entry is a detection result and does not authorize one.
+4. **It does not claim provider compatibility.** A READY means one `--version` question was answered inside its bound. It says nothing about models, providers, authentication, account state or the user's settings, none of which were read or changed.
+5. **It does not claim the problem-card path works.** AC-11 is INCONCLUSIVE for the reason given there.
+6. **It does not claim the launch path is used by anything but the probe.** The kernel is exercised by its oracle and by the readiness probe. No other product path launches a process.
+7. **It does not re-open** any finding in §24.4, §25.8, §26.7 or §27.9.
+
+### 28.10 The decision brief
+
+**Status.** Layers 9 (Local Execution Kernel) and 4 (Agent Gateway detection) exist as tested, non-WinUI components and are wired into the product's readiness projection. The thirteen layers remain mostly unbuilt; this slice adds two of them in a form that can be tested without a window and observed in one.
+
+**What is proven.** Process launch, tree ownership, cancellation, crash cleanup and bounded capture, against a real process tree. Executable discovery, stable identity, the D-11 selection rule and a bounded non-mutating readiness probe, against the CLIs actually installed here. A user-visible projection of that observation on both preludes and in the Chat header.
+
+**What is explicitly excluded.** Containment of any kind. Any pre-effect mediation. Session launch, context application, handoff, council, leases, the Task/DAG engine, the workspace manager, publication, the MSI, and provider compatibility. The Chat header's readiness entries remain a status projection and nothing more.
+
+**The one thing most likely to be misread.** A green `execution_tests.exe` and a green `gateway_tests.exe` look like progress toward I3, and they are not. They are progress toward prototype 2 and toward an honest status line. I3 needs the confinement proof that neither of these produces.
+
+**Next coherent step.** The containment prototype (§14 item 3), which is the gate both of these currently sit behind. It is not started.
