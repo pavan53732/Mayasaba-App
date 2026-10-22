@@ -125,6 +125,7 @@ WM_CLOSE = 0x0010
 WM_MOUSEWHEEL = 0x020A
 MOUSEEVENTF_WHEEL = 0x0800
 WM_DPICHANGED = 0x02E0
+SW_RESTORE = 9
 VK_ESCAPE = 0x1B
 VK_PRIOR = 0x21
 VK_NEXT = 0x22
@@ -1001,6 +1002,40 @@ def poll_until(predicate, timeout, interval=0.1, min_samples=2):
         time.sleep(interval)
 
 
+def wait_for_count_label(win, expected, timeout=8.0, label=""):
+    """Poll the Screen 2 count label until it reads `expected`.
+
+    Phase 1 sampled this label once after a fixed `time.sleep(1.0)` in seven
+    places. Measured on this machine, the label settles at about +1.56 s after
+    the keystroke, so the fixed sample read the *previous* count and reported a
+    product defect that did not exist. The query itself is a store read on the
+    serial lane, and readiness detection shares that lane, so its latency is
+    not something a single sample can characterise.
+
+    Returns (matched, last_text_seen). The last text is returned on failure so
+    the log names what the label actually said rather than only what was wanted.
+    """
+    last = [""]
+
+    def check():
+        try:
+            el = find_by_aid(win, "RecentProjectsFilterCountLabel")
+        except Exception:
+            return None
+        if not el:
+            return None
+        try:
+            last[0] = el.window_text()
+        except Exception:
+            return None
+        return last[0] if expected in last[0] else None
+
+    got = poll_until(check, timeout=timeout, interval=0.1, min_samples=2)
+    if got is None and label:
+        log(f"  [{label}] count label settled at '{last[0]}' (wanted '{expected}')")
+    return (got is not None), last[0]
+
+
 def log_menu_failure_diagnostics(win, reason):
     """Record what the window looked like when a menu did not come up.
 
@@ -1625,6 +1660,7 @@ def main():
     criterion_overlay_repeat = "NOT_RUN"
     criterion_hero_perspective = "NOT_RUN"
     criterion_overlay_reduced_motion = "NOT_RUN"
+    criterion_cli_readiness = "NOT_RUN"
 
     report_done = False
 
@@ -1650,6 +1686,7 @@ def main():
             "18. Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat": criterion_overlay_repeat,
             "19. Empty-Chat Hero Perspective Preserved": criterion_hero_perspective,
             "20. Reduced-Motion Change Leaves The Overlay Flat": criterion_overlay_reduced_motion,
+            "21. CLI Readiness Projection & Non-Gating": criterion_cli_readiness,
         }
 
     def emit_report():
@@ -1818,10 +1855,13 @@ def main():
         log("\n--- PHASE 1: Screen 2 Recent Projects Filtering & Selection ---")
 
         # 1.1 Check initial project count
-        count_label = find_by_aid(win, "RecentProjectsFilterCountLabel")
-        count_text = count_label.window_text() if count_label else ""
+        #
+        # The list is loaded asynchronously and the label reads "Loading recorded
+        # projects..." until the first query returns, so this is a poll like every
+        # other label assertion here rather than a one-shot sample.
+        ok, count_text = wait_for_count_label(win, "3 projects recorded", label="initial")
         log(f"Initial count label: '{count_text}'")
-        if "3 projects recorded" not in count_text:
+        if not ok:
             log(f"FAIL: Expected '3 projects recorded', got '{count_text}'")
             return 1
         log("PASS: Initial recent project count truthfully reports '3 projects recorded'.")
@@ -1833,11 +1873,12 @@ def main():
             return 1
         log("Typing 'alpha' into RecentProjectsFilterBox...")
         filter_box.set_edit_text("alpha")
-        time.sleep(1.0)
 
-        count_text = count_label.window_text() if count_label else ""
+        # Bounded poll, not a fixed sleep: the label settles at about +1.56 s here
+        # and a single 1.0 s sample read the pre-filter count.
+        ok, count_text = wait_for_count_label(win, "1 matching project", label="alpha")
         log(f"Filtered count label: '{count_text}'")
-        if "1 matching project" not in count_text:
+        if not ok:
             log(f"FAIL: Expected '1 matching project' after filtering for 'alpha', got '{count_text}'")
             return 1
 
@@ -1851,10 +1892,9 @@ def main():
         # 1.3 Zero-results query on Screen 2: type non-matching string
         log("Testing non-matching zero-result query 'nonexistent_project_query_xyz' on Screen 2...")
         filter_box.set_edit_text("nonexistent_project_query_xyz")
-        time.sleep(1.0)
-        count_text = count_label.window_text() if count_label else ""
+        ok, count_text = wait_for_count_label(win, "0 matching projects", label="zero-results")
         log(f"Non-matching query count label: '{count_text}'")
-        if "0 matching projects" not in count_text:
+        if not ok:
             log(f"FAIL: Expected '0 matching projects' for non-matching query, got '{count_text}'")
             return 1
         no_recent = find_by_aid(win, "NoRecentProjectsText")
@@ -1866,10 +1906,9 @@ def main():
         # 1.4 Escape key clears filter and restores full list
         log("Sending Escape key to clear filter...")
         send_key_to_window(win.handle, VK_ESCAPE)
-        time.sleep(1.0)
-        count_text = count_label.window_text() if count_label else ""
+        ok, count_text = wait_for_count_label(win, "3 projects recorded", label="escape")
         log(f"After Escape key: '{count_text}'")
-        if "3 projects recorded" not in count_text:
+        if not ok:
             log(f"FAIL: Expected '3 projects recorded' after Escape key, got '{count_text}'")
             return 1
         log("PASS: Escape key clears query and successfully restores all 3 projects.")
@@ -1877,16 +1916,17 @@ def main():
         # 1.5 Clear button: type 'beta' and click Clear
         log("Typing 'beta' and clicking RecentProjectsClearFilterButton...")
         filter_box.set_edit_text("beta")
-        time.sleep(1.0)
-        clear_filter_btn = find_by_aid(win, "RecentProjectsClearFilterButton")
+        # The clear button only becomes visible once the filter is non-empty, so it
+        # is resolved by a bounded poll rather than sampled at one instant.
+        clear_filter_btn = poll_until(
+            lambda: find_by_aid(win, "RecentProjectsClearFilterButton"), timeout=6.0)
         if not clear_filter_btn:
             log("FAIL: RecentProjectsClearFilterButton not found")
             return 1
         clear_filter_btn.iface_invoke.Invoke()
-        time.sleep(1.0)
-        count_text = count_label.window_text() if count_label else ""
+        ok, count_text = wait_for_count_label(win, "3 projects recorded", label="clear-button")
         log(f"After Clear button: '{count_text}'")
-        if "3 projects recorded" not in count_text:
+        if not ok:
             log(f"FAIL: Expected '3 projects recorded' after Clear button, got '{count_text}'")
             return 1
         log("PASS: Clear button resets filter and restores list.")
@@ -1899,10 +1939,9 @@ def main():
 
         log("Selecting 'Closed projects only' in status filter...")
         status_filter.select(2)
-        time.sleep(1.0)
-        count_text = count_label.window_text() if count_label else ""
+        ok, count_text = wait_for_count_label(win, "1 matching project", label="status-closed")
         log(f"Closed status filter count: '{count_text}'")
-        if "1 matching project" not in count_text:
+        if not ok:
             log(f"FAIL: Expected '1 matching project' for closed projects, got '{count_text}'")
             return 1
         gamma_btn = find_by_name(win, "Open project gamma")
@@ -1913,10 +1952,9 @@ def main():
 
         log("Selecting 'All projects' in status filter...")
         status_filter.select(0)
-        time.sleep(1.0)
-        count_text = count_label.window_text() if count_label else ""
+        ok, count_text = wait_for_count_label(win, "3 projects recorded", label="status-all")
         log(f"All status filter count: '{count_text}'")
-        if "3 projects recorded" not in count_text:
+        if not ok:
             log(f"FAIL: Expected '3 projects recorded', got '{count_text}'")
             return 1
         log("PASS: Status filter 'All projects' restores all 3 projects.")
@@ -3118,6 +3156,44 @@ def main():
         # PHASE 6: WM_DPICHANGED MESSAGE HANDLING (150% & 200% SIMULATION)
         # =========================================================================
         log("\n--- PHASE 6: WM_DPICHANGED Message Handling Simulation (150% and 200%) ---")
+
+        # THE WINDOW MUST BE RESTORED BEFORE THIS LEG, AND THE CHECK MUST KNOW
+        # WHETHER IT IS.
+        #
+        # The oracle below is "the window grew to the suggested rect". A window
+        # that is MAXIMIZED cannot grow: it is already clamped to the work area,
+        # so the suggested rect is larger than the screen and the OS refuses the
+        # size. Measured on this machine (1920x1080, work area 1920x1020): a
+        # zoomed window reports L-9,T-9,R1929,B1029 (1938x1038) -- the maximized
+        # frame overhang -- and sending WM_DPICHANGED 144 cannot enlarge it.
+        #
+        # That state is reachable here: run3 arrived at this leg zoomed, because
+        # something outside the harness (nothing in the harness or the
+        # application calls a maximize API; grepped) zoomed the window during
+        # the preceding phase. It is NOT reliably reachable -- a re-run of the
+        # same sequence stayed normal -- so this is a window-state precondition
+        # that has to be established and RECORDED rather than assumed.
+        #
+        # The old code also did `return 1` on either failure, which ended the
+        # whole run and left criteria 8-15 NOT_RUN. That is the same
+        # silent-evidence-loss defect that criterion 17 carried: one leg's
+        # measurement problem must not destroy every later phase's evidence.
+        # The criterion is recorded INCONCLUSIVE instead and the run continues.
+        dpi_failures = []
+        dpi_inconclusive = []
+
+        if user32.IsZoomed(win.handle):
+            log("  the window is maximized, so it cannot expand to a suggested rect; "
+                "restoring it first")
+            user32.ShowWindow(win.handle, SW_RESTORE)
+            time.sleep(0.6)
+        dpi_zoomed = bool(user32.IsZoomed(win.handle))
+        log(f"  window maximized before the DPI leg: {dpi_zoomed}")
+        if dpi_zoomed:
+            dpi_inconclusive.append(
+                "the window could not be restored from maximized before the DPI leg, and a "
+                "maximized window cannot expand to a suggested rect")
+
         curr_rect = win.rectangle()
 
         # 150% DPI (144 DPI)
@@ -3130,10 +3206,17 @@ def main():
         time.sleep(1.0)
         r150 = win.rectangle()
         log(f"Window bounds at 150% DPI: L{r150.left}, T{r150.top}, R{r150.right}, B{r150.bottom} (W={r150.width()}, H={r150.height()})")
-        if r150.width() <= curr_rect.width() or r150.height() <= 0:
-            log("FAIL: Window failed to expand under 150% DPI suggested rect")
-            return 1
-        log("PASS: 150% DPI WM_DPICHANGED handled cleanly with window expansion.")
+        if r150.height() <= 0:
+            dpi_failures.append("the window collapsed to zero height at 150% DPI")
+        elif not dpi_zoomed and r150.width() <= curr_rect.width():
+            dpi_failures.append(
+                f"the window did not expand under the 150% DPI suggested rect "
+                f"({curr_rect.width()} -> {r150.width()})")
+        elif dpi_zoomed:
+            log("  NOTE: the suggested rect could not be applied because the window is "
+                "maximized; no expansion is possible in that state")
+        else:
+            log("PASS: 150% DPI WM_DPICHANGED handled cleanly with window expansion.")
 
         # 200% DPI (192 DPI)
         dpi200 = 192
@@ -3145,10 +3228,17 @@ def main():
         time.sleep(1.0)
         r200 = win.rectangle()
         log(f"Window bounds at 200% DPI: L{r200.left}, T{r200.top}, R{r200.right}, B{r200.bottom} (W={r200.width()}, H={r200.height()})")
-        if r200.width() <= r150.width() or r200.height() <= 0:
-            log("FAIL: Window failed to expand under 200% DPI suggested rect")
-            return 1
-        log("PASS: 200% DPI WM_DPICHANGED handled cleanly with window expansion.")
+        if r200.height() <= 0:
+            dpi_failures.append("the window collapsed to zero height at 200% DPI")
+        elif not dpi_zoomed and r200.width() <= r150.width():
+            dpi_failures.append(
+                f"the window did not expand under the 200% DPI suggested rect "
+                f"({r150.width()} -> {r200.width()})")
+        elif dpi_zoomed:
+            log("  NOTE: the suggested rect could not be applied because the window is "
+                "maximized; no expansion is possible in that state")
+        else:
+            log("PASS: 200% DPI WM_DPICHANGED handled cleanly with window expansion.")
 
         # Restore baseline 120 DPI (125%)
         dpi120 = 120
@@ -3158,7 +3248,20 @@ def main():
         log("PASS: Display DPI restored to baseline.")
         log("NOTE: Real OS-level display-scale validation (150%/200%) requires system display settings change / sign-out and remains INCONCLUSIVE.")
 
-        criterion_dpi_scaling = "PASS"
+        # The verdict is earned from what was measured, not assigned. A maximized
+        # window makes the expansion oracle inapplicable rather than failed, so
+        # that case is INCONCLUSIVE; a measured non-expansion or a collapse is
+        # FAIL; only a leg with neither is PASS.
+        for reason in dpi_failures:
+            log(f"FAIL: {reason}")
+        if dpi_failures:
+            criterion_dpi_scaling = "FAIL"
+        elif dpi_inconclusive:
+            criterion_dpi_scaling = "INCONCLUSIVE"
+            for reason in dpi_inconclusive:
+                log(f"INCONCLUSIVE: {reason}.")
+        else:
+            criterion_dpi_scaling = "PASS"
 
         # =========================================================================
         # PHASE 9: ACTION CENTER VISIBILITY, OBLIGATION ROUTING & STALE REVALIDATION
@@ -4031,6 +4134,293 @@ def main():
             # whatever project happened to be open. The line says which one it is.
             log("NOTE: the alpha project was NOT reloaded (the File menu was unreachable); "
                 "the profile below describes whichever project is currently open.")
+
+        # =========================================================================
+        # =========================================================================
+        # PHASE 6C: CLI READINESS PROJECTION & NON-GATING (CRITERION 21)
+        # =========================================================================
+        log("\n--- PHASE 6C: CLI Readiness Projection & Non-Gating ---")
+
+        # What this criterion asserts, and why each part is written the way it is:
+        #
+        # 1. One entry per required CLI, each carrying the CLI name, a state from
+        #    the five registered states, and a dot. The state must be READ FROM
+        #    THE PRODUCT, never hardcoded here.
+        # 2. The projection gates nothing. Send is enabled by the draft alone
+        #    (`SendButton().IsEnabled(hasText || hasAttachments)`), and readiness
+        #    is not consulted by Send, folder selection, drafts, history or
+        #    navigation.
+        # 3. A card appears exactly for the CLIs that owe the user something, and
+        #    it offers the actions that condition actually needs.
+        #
+        # SCOPE LIMIT, stated rather than papered over: once a project is bound,
+        # Welcome is not reachable again (Screen 2 is the startup screen and the
+        # prelude has no Back to Welcome after the first binding), so this
+        # criterion compares Screen 2 against the Chat header. Welcome-vs-Chat
+        # agreement was observed separately by `probe_readiness_ui.py`, which
+        # launches against an unbound store and reads both preludes; that
+        # observation is recorded in LOCAL-VALIDATION.md rather than claimed here.
+        READINESS_STATES = ("CHECKING", "READY", "MISSING", "UNSUPPORTED", "PROBE_FAILED")
+        CLI_ENTRIES = (
+            ("Hermes Agent CLI", "HermesStatus"),
+            ("Kilo Code CLI", "KiloStatus"),
+            ("Claude Code CLI", "ClaudeStatus"),
+        )
+        FOLDER_CLI_ENTRIES = (
+            ("Hermes Agent CLI", "FolderHermesStatus"),
+            ("Kilo Code CLI", "FolderKiloStatus"),
+            ("Claude Code CLI", "FolderClaudeStatus"),
+        )
+
+        def parse_readiness(text):
+            """Map an entry's visible text to one of the five states, or None."""
+            if not text:
+                return None
+            for state in READINESS_STATES:
+                if text.rstrip().endswith(state):
+                    return state
+            return "UNRECOGNIZED"
+
+        def read_entries(mapping):
+            found = {}
+            for cli_name, aid in mapping:
+                element = find_by_aid(win, aid)
+                found[cli_name] = element.window_text() if element is not None else None
+            return found
+
+        # PRECONDITION FIRST, before any polling. Every assertion below reads the
+        # Chat header, so if Chat is not open the criterion has observed nothing
+        # and must not report FAIL -- that would assert a defect in the projection
+        # from an observation that was never made. It is BLOCKED, which is what
+        # this harness calls a precondition that stopped an observation. Checked
+        # before the 60s poll so a closed Chat cannot burn the budget and then
+        # report the absence as a projection defect.
+        if find_by_aid(win, "ComposerBox") is None:
+            log("BLOCKED: Chat is not open, so the readiness projection was never "
+                "observable. Criterion 21 is BLOCKED, not FAIL.")
+            try:
+                log(f"  window title: {win.window_text()!r}")
+            except Exception as exc:
+                log(f"  window title unreadable: {type(exc).__name__}: {exc}")
+            criterion_cli_readiness = "BLOCKED"
+            return emit_report()
+
+        # The postcondition is polled and confirmed by two agreeing reads.
+        # "All three read a registered state" is satisfied by the initial markup
+        # (CHECKING is a registered state AND the shipped literal), so it would
+        # report PASS before any detection ran. The only postcondition the markup
+        # cannot produce is "at least one entry left CHECKING".
+        chat_raw = {}
+        chat_states = {}
+        readiness_deadline = time.time() + 60.0
+        while time.time() < readiness_deadline:
+            chat_raw = read_entries(CLI_ENTRIES)
+            parsed = {name: parse_readiness(text) for name, text in chat_raw.items()}
+            if all(text is not None for text in chat_raw.values()) and any(
+                    state not in (None, "CHECKING") for state in parsed.values()):
+                time.sleep(1.0)
+                again = {name: parse_readiness(text)
+                         for name, text in read_entries(CLI_ENTRIES).items()}
+                if again == parsed:
+                    chat_states = again
+                    break
+            time.sleep(1.0)
+
+        readiness_failures = []
+        readiness_notes = []
+
+        if not chat_states:
+            # Report what was actually read. "No entry left CHECKING" is true
+            # both for an entry that stayed at its markup value and for an entry
+            # that is not in the tree at all, and those are different defects.
+            # Without this line the two are indistinguishable in the evidence.
+            log(f"  last readiness read: {json.dumps(chat_raw, ensure_ascii=False)}")
+            readiness_failures.append(
+                "no Chat readiness entry left CHECKING within 60s, so the projection "
+                "could not be distinguished from the initial markup")
+        else:
+            log(f"Chat readiness entries: {json.dumps(chat_raw, ensure_ascii=False)}")
+            for cli_name, aid in CLI_ENTRIES:
+                text = chat_raw.get(cli_name)
+                state = chat_states.get(cli_name)
+                if text is None:
+                    readiness_failures.append(f"{cli_name}: no readiness entry is present")
+                    continue
+                if state == "UNRECOGNIZED":
+                    readiness_failures.append(
+                        f"{cli_name}: entry '{text}' ends in no registered state "
+                        f"({', '.join(READINESS_STATES)})")
+                elif cli_name not in text:
+                    readiness_failures.append(
+                        f"{cli_name}: entry '{text}' does not carry the CLI name")
+                else:
+                    log(f"PASS: {cli_name} reads '{text}' (state {state}).")
+
+            # The dot is decorative in the accessibility tree: the entry's text
+            # already carries both the name and the state, which is what "never
+            # colour-only" requires. Whether the Ellipse itself has a UIA peer is
+            # therefore recorded as an observation, not asserted as a contract --
+            # failing the product for a decorative shape's reachability would be
+            # asserting something the UI contract does not require.
+            dot_ids = ("HermesDot", "KiloDot", "ClaudeDot")
+            dots_found = {aid: find_by_aid(win, aid) is not None for aid in dot_ids}
+            log(f"Readiness dot elements reachable in UIA: {json.dumps(dots_found)}")
+            if not any(dots_found.values()):
+                readiness_notes.append(
+                    "the readiness dots are Ellipses with no UIA peer, so their presence "
+                    "is verified from the XAML rather than from UIA; the entry text carries "
+                    "name and state, so the projection is not colour-only")
+
+            # A settled CHECKING is not "still asking": two agreeing reads confirmed
+            # it, and every path that settles there requires the user to act. A
+            # D-11 tie is therefore a legitimate, non-failure state, not a defect.
+            if "CHECKING" in chat_states.values():
+                tied = [n for n, s in chat_states.items() if s == "CHECKING"]
+                log(f"NOTE: {', '.join(tied)} reads CHECKING. This is a settled state "
+                    f"requiring a user decision (D-11), not a pending detection.")
+
+        # --- The projection must gate nothing ---------------------------------
+        # Behavioural proof at the point the contract names: a draft enables Send
+        # regardless of what the header says about any CLI.
+        composer_probe = find_by_aid(win, "ComposerBox")
+        send_probe = find_by_aid(win, "SendButton")
+        if composer_probe is None or send_probe is None:
+            readiness_failures.append(
+                "the composer or Send control is absent, so non-gating could not be observed")
+        else:
+            send_before = send_probe.is_enabled()
+            composer_probe.set_edit_text("readiness non-gating probe")
+            enabled = poll_until(lambda: find_by_aid(win, "SendButton") is not None
+                                 and find_by_aid(win, "SendButton").is_enabled(),
+                                 timeout=6.0, interval=0.1, min_samples=2)
+            if not enabled:
+                readiness_failures.append(
+                    "Send did not become enabled with a draft present while a CLI reads "
+                    f"{'/'.join(sorted(set(chat_states.values()) or {'unknown'}))}; "
+                    "the readiness projection is gating Send")
+            else:
+                log("PASS: Send enabled from the draft alone, with a CLI not READY in the "
+                    "header; readiness gates nothing.")
+            composer_probe.set_edit_text("")
+            poll_until(lambda: find_by_aid(win, "SendButton") is not None
+                       and not find_by_aid(win, "SendButton").is_enabled(),
+                       timeout=6.0, interval=0.1, min_samples=2)
+            log(f"  Send enabled before the probe: {send_before}")
+
+        # --- Screen 2 must project the same observation ------------------------
+        folder_states = {}
+        if open_switch_project(win) is None:
+            readiness_failures.append(
+                "File -> Switch Project did not reach Screen 2, so the Screen 2 entries "
+                "could not be compared with the Chat header")
+        else:
+            folder_raw = read_entries(FOLDER_CLI_ENTRIES)
+            folder_states = {name: parse_readiness(text) for name, text in folder_raw.items()}
+            log(f"Screen 2 readiness entries: {json.dumps(folder_raw, ensure_ascii=False)}")
+            if not chat_states:
+                readiness_notes.append(
+                    "the Chat header never settled, so no agreement could be computed")
+            else:
+                for cli_name, _ in FOLDER_CLI_ENTRIES:
+                    chat_state = chat_states.get(cli_name)
+                    folder_state = folder_states.get(cli_name)
+                    if folder_state is None:
+                        readiness_failures.append(
+                            f"{cli_name}: Screen 2 has no readiness entry")
+                    elif folder_state != chat_state:
+                        readiness_failures.append(
+                            f"{cli_name}: Screen 2 reads {folder_state} while the Chat "
+                            f"header reads {chat_state}; the two preludes disagree")
+                if not any(cli_name in " ".join(readiness_failures)
+                           for cli_name, _ in FOLDER_CLI_ENTRIES):
+                    log("PASS: Screen 2 projects the same observation as the Chat header.")
+
+            # Return to alpha so the phases after this one run against the same
+            # project they would have run against without this criterion.
+            reopen_alpha = find_by_name(win, "Open project alpha")
+            if reopen_alpha is None:
+                readiness_failures.append(
+                    "the Screen 2 switch left no 'Open project alpha' action, so the run "
+                    "could not be returned to the project the later phases expect")
+            else:
+                reopen_alpha.iface_invoke.Invoke()
+                poll_until(lambda: find_by_aid(win, "ComposerBox") is not None,
+                           timeout=20.0, interval=0.2, min_samples=2)
+                time.sleep(1.0)
+
+        # --- Cards must name the cause and offer the actions it needs ----------
+        def read_readiness_cards():
+            cards = []
+            actions = {"locate": [], "choose": [], "recheck": []}
+            try:
+                for d in win.descendants():
+                    try:
+                        name = d.element_info.name or ""
+                    except Exception:
+                        continue
+                    if (" problem: " in name) or (" needs a decision: " in name):
+                        cards.append(name)
+                    elif name.startswith("Locate the executable for "):
+                        actions["locate"].append(name)
+                    elif name.startswith("Choose the executable for "):
+                        actions["choose"].append(name)
+                    elif name.startswith("Recheck "):
+                        actions["recheck"].append(name)
+            except Exception as exc:
+                log(f"  NOTE: the readiness card scan raised {type(exc).__name__}: {exc}")
+            return cards, actions
+
+        cards, actions = read_readiness_cards()
+        log(f"Readiness cards: {json.dumps(cards, ensure_ascii=False)}")
+        log(f"Readiness card actions: {json.dumps(actions, ensure_ascii=False)}")
+
+        if chat_states:
+            for cli_name, state in chat_states.items():
+                if state == "READY":
+                    if any(cli_name in card for card in cards):
+                        readiness_failures.append(
+                            f"{cli_name} is READY but still shows a problem card")
+                    continue
+                if state is None:
+                    continue
+                # A non-READY CLI owes the user either a fix (Locate) or a
+                # decision (Choose), and always a Recheck. Which one depends on
+                # the state, and the criterion accepts exactly the right one:
+                # demanding Locate for a D-11 tie would assert a control that
+                # cannot resolve a tie, and the tie is not a failure.
+                has_card = any(cli_name in card for card in cards)
+                has_recheck = any(cli_name in name for name in actions["recheck"])
+                if state == "CHECKING":
+                    has_resolver = any(cli_name in name for name in actions["choose"])
+                    resolver = "Choose the executable"
+                else:
+                    has_resolver = any(cli_name in name for name in actions["locate"])
+                    resolver = "Locate executable"
+                if not has_card:
+                    readiness_failures.append(
+                        f"{cli_name} reads {state} but has no card explaining it")
+                elif not has_resolver:
+                    readiness_failures.append(
+                        f"{cli_name} reads {state} but its card offers no {resolver} action")
+                elif not has_recheck:
+                    readiness_failures.append(
+                        f"{cli_name} reads {state} but its card offers no Recheck action")
+                else:
+                    log(f"PASS: {cli_name} ({state}) has a card naming the cause, "
+                        f"{resolver} and Recheck.")
+
+        for note in readiness_notes:
+            log(f"NOTE: {note}")
+
+        if readiness_failures:
+            for reason in readiness_failures:
+                log(f"FAIL: {reason}")
+            criterion_cli_readiness = "FAIL"
+        else:
+            criterion_cli_readiness = "PASS"
+            log("PASS: criterion 21 - one entry per CLI with name, observed state and dot; "
+                "Screen 2 agrees with the Chat header; Send is not gated by readiness; "
+                "cards offer the resolver their condition needs plus Recheck.")
 
         # =========================================================================
         # PHASE 7: ACTUAL UI PERFORMANCE PROFILING (UNCAPPED STALL RETENTION)

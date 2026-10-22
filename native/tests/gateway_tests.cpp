@@ -27,6 +27,9 @@
 //   C-11 the readiness vocabulary is complete and every state has a distinct
 //        text, dot token and problem-card decision
 //   C-12 user selection overrides discovery and is the sole candidate
+//   C-13 a D-11 tie produces a reachable card rather than a dead end: every
+//        state `Select` returns while awaiting the user's decision is a state
+//        the card builder acts on
 //
 // WHAT THIS DOES NOT PROVE
 //
@@ -428,6 +431,71 @@ namespace
     }
 
     // ----------------------------------------------------------------------
+    // C-13: a D-11 tie is actionable, not a dead end
+    // ----------------------------------------------------------------------
+    //
+    // The defect this encodes: `Select` correctly refuses to choose between two
+    // verified installations and reports CHECKING, and the card builder was gated
+    // on `NeedsProblemCard`, which excludes CHECKING. So the entry was stuck at
+    // CHECKING forever with no control that could ever resolve it -- the rule
+    // waited for a decision and no surface offered one.
+    //
+    // The property that must hold is reachability: every state `Select` can
+    // return while it is waiting for the user must also be a state that produces
+    // a card. Asserting `NeedsDecisionCard` returns true in isolation would not
+    // catch the original bug, because the bug was in what the *card builder*
+    // consulted, so this drives the real tie through `Select` and then asks the
+    // same question the builder asks.
+    void TieIsActionable()
+    {
+        SelectionInput tie;
+        tie.cli = Cli::ClaudeCode;
+        tie.candidates.push_back(MakeCandidate(L"C:\\a\\claude.exe", L"aa:01", "d1"));
+        tie.candidates.push_back(MakeCandidate(L"C:\\b\\claude.exe", L"bb:02", "d2"));
+        tie.probeRan = false;
+
+        auto const detection = Select(tie);
+
+        // The premise: this really is the tie state, reported as CHECKING.
+        EXPECT(detection.requiresSelection);
+        EXPECT(detection.readiness == Readiness::Checking);
+        EXPECT(!detection.pinned.has_value());
+
+        // And CHECKING on its own is still not a problem card -- a CLI whose
+        // detection is merely in flight must not sprout a card.
+        EXPECT(!NeedsProblemCard(detection.readiness));
+
+        // The reachability property: the builder must build a card for this
+        // detection. This is the assertion the original code failed.
+        bool const cardIsBuilt = NeedsProblemCard(detection.readiness) ||
+            NeedsDecisionCard(detection.readiness, detection.requiresSelection);
+        EXPECT(cardIsBuilt);
+
+        // A tie never coexists with a problem state here, so the decision card is
+        // not a second way to render a failure.
+        EXPECT(!NeedsDecisionCard(Readiness::Missing, false));
+        EXPECT(!NeedsDecisionCard(Readiness::ProbeFailed, false));
+        EXPECT(!NeedsDecisionCard(Readiness::Unsupported, false));
+        EXPECT(!NeedsDecisionCard(Readiness::Ready, false));
+        // CHECKING without a required selection is "still asking", not a decision.
+        EXPECT(!NeedsDecisionCard(Readiness::Checking, false));
+
+        // Resolving the tie clears the card, so the surface does not persist once
+        // the user has answered.
+        SelectionInput resolved;
+        resolved.cli = Cli::ClaudeCode;
+        Candidate picked = MakeCandidate(L"C:\\b\\claude.exe", L"bb:02", "d2");
+        picked.userSelected = true;
+        resolved.candidates.push_back(picked);
+        resolved.probeRan = true;
+        resolved.probe.readiness = Readiness::Ready;
+        resolved.probe.reason = L"answered";
+        auto const done = Select(resolved);
+        EXPECT(!done.requiresSelection);
+        EXPECT(!NeedsDecisionCard(done.readiness, done.requiresSelection));
+    }
+
+    // ----------------------------------------------------------------------
     // C-11: the vocabulary is complete and distinct
     // ----------------------------------------------------------------------
     void VocabularyIsComplete()
@@ -505,6 +573,7 @@ int main()
     Run("C-10", "exit zero with no output is not READY", SilentSuccessIsNotReady);
     Run("C-11", "the readiness vocabulary is complete and distinct", VocabularyIsComplete);
     Run("C-12", "a user selection is authoritative", UserSelectionWins);
+    Run("C-13", "a D-11 tie is actionable, not a dead end", TieIsActionable);
 
     std::cout << "\n";
     if (!gNotes.empty())

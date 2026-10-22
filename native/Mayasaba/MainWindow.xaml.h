@@ -99,6 +99,9 @@ namespace winrt::Mayasaba::implementation
         winrt::Windows::Foundation::IAsyncAction DetectReadinessAsync();
         void ApplyReadinessProjection();
         void RebuildProblemCards();
+        // The measured one-line summary used by notices that must not assert
+        // anything about which layers exist.
+        std::wstring ReadinessSummaryLine() const;
         void OnSearchBoxKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnSearchResultItemClick(IInspectable const&, Microsoft::UI::Xaml::Controls::ItemClickEventArgs const&);
         void OnSearchLoadMore(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
@@ -121,6 +124,14 @@ namespace winrt::Mayasaba::implementation
     private:
         std::unique_ptr<mayasaba::Storage> storage_;
         mayasaba::SerialQueue selectorQueue_;
+        // CLI readiness detection runs here, NOT on `selectorQueue_`. That lane has
+        // one worker and serializes every store query in the application; a cold
+        // CLI probe blocks inside `process.wait()` for seconds, so sharing the lane
+        // made a Screen 2 filter refresh wait 7.88 s for three probes to finish
+        // (measured; 0.10 s once detection had settled). Detection touches no
+        // store state, so it needs its own lane rather than ordering against
+        // writes it cannot affect. Readiness remains a read-only projection.
+        mayasaba::SerialQueue readinessQueue_;
         bool selectionBusy_{false};
         bool projectClosed_{false}, navigationBusy_{false}, allowClose_{false}, pickerOpen_{false};
         size_t recentOffset_{0};
@@ -162,11 +173,23 @@ namespace winrt::Mayasaba::implementation
         // The Chat screen's own layout measurements, published with the overlay so
         // a reader can see which row took the space.
         std::wstring PublishChatLayoutMetrics();
+        // The height the Action Center card and the CLI cards divide between them,
+        // and whether a CLI card was claiming a share of it. Both cards bound
+        // themselves from the same figure; publishing it distinguishes "the pool
+        // was too small to show two cards" from "the division arithmetic was
+        // wrong", which the element rects alone cannot tell apart.
+        double headerCardPool_{0.0};
+        bool headerCardsPresent_{false};
         // Measures the overlay against the settled screen geometry. The
         // measurement is taken twice: once during the layout pass that triggered
         // it, and once on the dispatcher queue after the layout has settled.
         void ApplySearchOverlayLayout();
         bool searchOverlayLayoutQueued_{false};
+        // Height reserved for the paging action on a pass where it is Visible but
+        // has not been measured yet. `ActualHeight()` is 0 for an element that was
+        // Collapsed when the previous pass measured it, and budgeting that 0
+        // starves the row it belongs to. See ApplySearchOverlayLayout.
+        static constexpr double kPagingActionNominalHeight = 40.0;
         bool responsiveLayoutQueued_{false};
         winrt::fire_and_forget ExecuteSearchAsync(mayasaba::SearchPageRequest req);
         void RenderSearchResults(bool isAppend);
@@ -338,7 +361,7 @@ namespace winrt::Mayasaba::implementation
         // The last detection result for each CLI, in `gateway::Cli` order. It is a
         // read-only projection of an observation: it never gates Chat, folder
         // selection, Send, drafts, history or project switching, and nothing here
-        // launches a working session. Detection runs on `selectorQueue_` because a
+        // launches a working session. Detection runs on `readinessQueue_` because a
         // cold probe takes seconds, and only the resulting text is applied on the
         // UI thread.
         std::array<std::optional<mayasaba::gateway::Detection>, mayasaba::gateway::kCliCount> readiness_;

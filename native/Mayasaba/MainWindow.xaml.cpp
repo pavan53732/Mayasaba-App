@@ -965,7 +965,7 @@ namespace winrt::Mayasaba::implementation
             entry.state = mayasaba::ui::EntryState::Waiting;
             entry.title = "Saved only · agent replies are unavailable in this build";
             entry.consequence = "Each message above is durably saved. No three-CLI reply, peer review, work authorization or completion is claimed.";
-            entry.operation = "owner interfaces not implemented · MCF-v2 dispatch, Agent Gateway adapters, three-agent turn finalization";
+            entry.operation = "owner interfaces not implemented · MCF-v2 dispatch, CLI adapters, three-agent turn finalization";
             entry.nextAction = "Send, drafts, history and project switching remain available.";
         }
 
@@ -973,9 +973,12 @@ namespace winrt::Mayasaba::implementation
         entry.details =
             "### What exists\n"
             "- The contribution is durably saved under its immutable submission identity.\n"
-            "- Project identity, drafts, closure state and history are persisted locally.\n\n"
+            "- Project identity, drafts, closure state and history are persisted locally.\n"
+            "- CLI detection: each of the three CLIs is discovered on this PC, identified by\n"
+            "  canonical path, stable file identity, SHA-256 and signer observation, and asked\n"
+            "  one bounded `--version` question through the controller-owned kernel.\n\n"
             "### What does not exist in this build\n"
-            "- Native Hermes Agent CLI, Kilo Code CLI and Claude Code CLI probes and adapters.\n"
+            "- Any CLI adapter: no native protocol is translated, so no session exists.\n"
             "- Safe session admission, per-operation confinement and effect cessation proof.\n"
             "- Three independent responses, the rotating writer, both peer reviews and turn finalization.\n"
             "- Work authorization, task leasing, validation and publication.\n\n"
@@ -1134,30 +1137,107 @@ namespace winrt::Mayasaba::implementation
         // card's height, so this converges instead of chasing its own output.
         double const chatHeight = ChatScreen().ActualHeight();
         double const headerHeight = ChatHeaderGrid().ActualHeight();
+
+        // THE ACTION CENTER CARD AND THE CLI CARDS SHARE ONE HEIGHT POOL, AND THE
+        // POOL IS COMPUTED ONCE.
+        //
+        // Each card used to bound itself against "the rest of the header" and
+        // treat the other card as part of that rest. That is correct only while
+        // the other card is absent. Once both are present they take the same
+        // budget twice: measured at 1440x740 with a D-11 tie, the decision card
+        // occupied 143px of the header and the Action Center card computed to
+        // MaxHeight(0) -- so 50 seeded obligations were loaded, the status line
+        // truthfully read "50 item(s) loaded (more available).", and the entire
+        // card, its list and its Load more action were 0x0 and offscreen.
+        //
+        // Serving one card first and collapsing the other is not a fix, it only
+        // moves the defect: measured after giving the Action Center priority, the
+        // decision card became 0x0 and the user lost the only control that can
+        // resolve a D-11 tie. BOTH cards are user-actionable -- the Action Center
+        // carries obligations that block work, and a D-11 card is the sole route
+        // to choosing between two verified CLIs -- so neither may be silently
+        // collapsed to keep the other alive.
+        //
+        // The pool is divided, not contested. The CLI cards' floor is reserved
+        // first (they are the informational projection and take only their floor
+        // while the pool is tight), and the Action Center -- which blocks work and
+        // therefore gets first claim on anything above the floors -- takes what
+        // remains up to its own cap. If the pool cannot hold both floors, the
+        // Action Center keeps its chrome and the informational card is the one
+        // that collapses, because a readiness card gates nothing (readiness never
+        // gates Chat, Send, folder selection, drafts, history or navigation).
+        //
+        // The pool is `chatHeight` minus the header's non-card chrome and the
+        // composer. The two card heights cancel out of that subtraction because
+        // the header is auto-sized, so the pool does not depend on how it is
+        // then divided and cannot chase its own output.
+        double const actionCenterActual = ActionCenterPanel().Visibility() == Visibility::Visible
+            ? ActionCenterPanel().ActualHeight() : 0.0;
+        double const cardsActual = ChatProblemCardsScroller()
+            && ChatProblemCardsScroller().Visibility() == Visibility::Visible
+            ? ChatProblemCardsScroller().ActualHeight() : 0.0;
+
+        // Enough for a card's heading and cause; below that it would show a title
+        // with no explanation, which is worse than showing it collapsed.
+        double const cardChrome = 88.0;
+        double const cardsFloor = 72.0;
+
         if (chatHeight > 0 && headerHeight > 0)
         {
-            double const cardHeight = ActionCenterPanel().Visibility() == Visibility::Visible
-                ? ActionCenterPanel().ActualHeight() : 0.0;
-            double const nonCardHeader = headerHeight - cardHeight;
-            double const composerReserve = ComposerHost().ActualHeight();
-            double const available = chatHeight - nonCardHeader - composerReserve - 24.0;
-            // The card's chrome is the floor: its title, status, padding and
-            // spacing are what it needs to say anything at all, and the item list
-            // is the part that gives way. A short window therefore reduces the
-            // card to its chrome, and the card's status line still states what it
-            // found.
+            // THE COMPOSER'S RESERVE IS ITS CONTENT HEIGHT, NOT ITS HOST'S.
             //
-            // When even the chrome does not fit, the card is bound to zero rather
-            // than clipped: a clipped card would hide the very obligations it
-            // exists to surface, while a collapsed one hides nothing that the
-            // card's own summary did not already say. The bound returns as soon
-            // as the window has the room again.
-            double const cardChrome = 88.0;
-            double const cardCap = std::clamp(available, 0.0, 300.0);
-            double const wanted = cardCap < cardChrome ? 0.0 : cardCap;
-            if (ActionCenterPanel().MaxHeight() != wanted)
+            // `ComposerHost` is a StackPanel in the Chat screen's star row, so on
+            // an empty conversation (where the composer is centred in the
+            // conversation area, per the UI contract) its ActualHeight is the
+            // *leftover* after the header, not its own requirement. Measured at
+            // 1440x740: chatScreen 448.8 = header 236.8 + composer 188.0 + 24.
+            // Subtracting that 188 as a "reserve" makes the pool equal whatever
+            // the cards currently occupy, so the bound can never change -- a
+            // self-fulfilling measurement that silently pinned the Action Center
+            // at 120.8 and starved the CLI cards to 0x0 no matter how the pool was
+            // divided.
+            //
+            // `ComposerStack` is the Auto-sized content inside that stretched
+            // host, so its ActualHeight is what the composer needs and does not
+            // depend on how much space is left over. Because the figure is
+            // content-driven rather than a measurement of the row the header's
+            // height feeds, the pass cannot chase its own output.
+            double const composerReserve = ComposerStack()
+                ? ComposerStack().ActualHeight() : 0.0;
+            double const nonCardHeader = headerHeight - actionCenterActual - cardsActual;
+            double const pool = std::max(0.0, chatHeight - nonCardHeader - composerReserve - 24.0);
+
+            bool const cardsPresent = ChatProblemCardsScroller()
+                && ChatProblemCardsScroller().Visibility() == Visibility::Visible;
+
+            // Divide the pool in one place so the two bounds cannot disagree. The
+            // precedence is explicit rather than emergent: both floors are served
+            // when the pool holds them, otherwise the blocking card keeps its
+            // chrome and the informational card gives way, and below the blocking
+            // card's own chrome the pool is too small to show either.
+            double actionCenterWanted = 0.0;
+            double cardsWanted = 0.0;
+            if (cardsPresent && pool >= cardChrome + cardsFloor)
             {
-                ActionCenterPanel().MaxHeight(wanted);
+                actionCenterWanted = std::clamp(pool - cardsFloor, 0.0, 300.0);
+                cardsWanted = std::clamp(pool - actionCenterWanted, 0.0, 300.0);
+            }
+            else if (pool >= cardChrome)
+            {
+                actionCenterWanted = std::clamp(pool, 0.0, 300.0);
+            }
+
+            headerCardPool_ = pool;
+            headerCardsPresent_ = cardsPresent;
+
+            if (ActionCenterPanel().MaxHeight() != actionCenterWanted)
+            {
+                ActionCenterPanel().MaxHeight(actionCenterWanted);
+            }
+            if (ChatProblemCardsScroller()
+                && ChatProblemCardsScroller().MaxHeight() != cardsWanted)
+            {
+                ChatProblemCardsScroller().MaxHeight(cardsWanted);
             }
         }
 
@@ -1575,20 +1655,40 @@ namespace winrt::Mayasaba::implementation
         // One card per affected CLI, built imperatively so its buttons can carry
         // their own CLI index. A healthy CLI produces nothing at all: no card, no
         // setup banner, no empty container left behind.
-        std::array<StackPanel, 2> hosts{ WelcomeProblemCards(), ChatProblemCards() };
+        //
+        // Each host is a pair: the panel the cards are appended to, and the element
+        // whose visibility hides the whole surface. They differ in Chat, where the
+        // cards live inside a bounded scroller -- hiding the inner panel there
+        // would leave an empty scroller occupying header height.
+        struct CardHost
+        {
+            StackPanel panel{nullptr};
+            FrameworkElement surface{nullptr};
+        };
+        std::array<CardHost, 2> hosts{ CardHost{ WelcomeProblemCards(), WelcomeProblemCards() },
+                                       CardHost{ ChatProblemCards(), ChatProblemCardsScroller() } };
         bool anyCard = false;
 
         for (auto& host : hosts)
         {
-            if (!host) continue;
-            host.Children().Clear();
+            if (!host.panel) continue;
+            host.panel.Children().Clear();
         }
 
         for (int i = 0; i < mayasaba::gateway::kCliCount; ++i)
         {
             auto const& detection = readiness_[static_cast<std::size_t>(i)];
             if (!detection) continue;
-            if (!mayasaba::gateway::NeedsProblemCard(detection->readiness)) continue;
+
+            // Two conditions produce a card, and they are not the same condition:
+            // a problem state, or a D-11 tie that owes the user a decision. The
+            // predicate lives in the gateway so it is testable without a window;
+            // gating only on NeedsProblemCard made the tie permanently
+            // unresolvable, because CHECKING is deliberately excluded there.
+            bool const tieNeedsDecision = mayasaba::gateway::NeedsDecisionCard(
+                detection->readiness, detection->requiresSelection);
+            if (!mayasaba::gateway::NeedsProblemCard(detection->readiness) && !tieNeedsDecision)
+                continue;
             anyCard = true;
 
             auto const cli = static_cast<mayasaba::gateway::Cli>(i);
@@ -1597,16 +1697,22 @@ namespace winrt::Mayasaba::implementation
 
             for (auto& host : hosts)
             {
-                if (!host) continue;
+                if (!host.panel) continue;
 
                 Border card{};
                 card.CornerRadius(CornerRadius{10});
                 card.Padding(Thickness{12, 10, 12, 10});
                 card.Background(Token(L"MayasabaSecondaryBrush"));
-                card.BorderBrush(Token(L"MayasabaDangerBrush"));
+                // A tie is not a failure, so it must not be painted like one. The
+                // danger edge belongs to MISSING/UNSUPPORTED/PROBE_FAILED; a tie
+                // uses the amber the CHECKING dot already uses, so the card and
+                // the entry agree about what kind of condition this is.
+                card.BorderBrush(Token(tieNeedsDecision ? L"MayasabaAmberBrush" : L"MayasabaDangerBrush"));
                 card.BorderThickness(Thickness{1});
                 card.SetValue(Automation::AutomationProperties::NameProperty(),
-                    winrt::box_value(hstring{name + L" problem: " + stateText}));
+                    winrt::box_value(hstring{ tieNeedsDecision
+                        ? name + L" needs a decision: " + stateText
+                        : name + L" problem: " + stateText }));
 
                 StackPanel body{};
                 body.Spacing(5);
@@ -1619,7 +1725,7 @@ namespace winrt::Mayasaba::implementation
                 dot.Width(8);
                 dot.Height(8);
                 dot.VerticalAlignment(VerticalAlignment::Center);
-                dot.Fill(Token(L"MayasabaDangerBrush"));
+                dot.Fill(Token(tieNeedsDecision ? L"MayasabaAmberBrush" : L"MayasabaDangerBrush"));
                 heading.Children().Append(dot);
 
                 TextBlock title{};
@@ -1641,8 +1747,12 @@ namespace winrt::Mayasaba::implementation
                 body.Children().Append(cause);
 
                 TextBlock impact{};
-                impact.Text(L"Chat, folder selection and every existing project are unaffected. "
-                            L"Operations that need this CLI stay unavailable until it is resolved.");
+                impact.Text(tieNeedsDecision
+                    ? L"Chat, folder selection and every existing project are unaffected. "
+                      L"Mayasaba will not pick between installations for you, and no candidate is "
+                      L"preferred by path order, discovery time or version."
+                    : L"Chat, folder selection and every existing project are unaffected. "
+                      L"Operations that need this CLI stay unavailable until it is resolved.");
                 impact.FontSize(12);
                 impact.TextWrapping(TextWrapping::Wrap);
                 impact.Foreground(Token(L"MayasabaSoftBrush"));
@@ -1681,13 +1791,13 @@ namespace winrt::Mayasaba::implementation
 
                 body.Children().Append(actions);
                 card.Child(body);
-                host.Children().Append(card);
+                host.panel.Children().Append(card);
             }
         }
 
         for (auto& host : hosts)
         {
-            if (host) SetVisible(host, anyCard);
+            if (host.surface) SetVisible(host.surface, anyCard);
         }
     }
 
@@ -1702,7 +1812,10 @@ namespace winrt::Mayasaba::implementation
         std::array<std::optional<mayasaba::gateway::Detection>, mayasaba::gateway::kCliCount> observed{};
         std::array<std::wstring, mayasaba::gateway::kCliCount> pinned = readinessPinnedPath_;
 
-        co_await selectorQueue_.Background();
+        // Its own lane, not the store lane: see the readinessQueue_ comment in the
+        // header. Detection reads no store state, and holding the store lane for
+        // three cold probes made unrelated Screen 2 queries wait seconds.
+        co_await readinessQueue_.Background();
 
         for (int i = 0; i < mayasaba::gateway::kCliCount; ++i)
         {
@@ -3371,7 +3484,7 @@ namespace winrt::Mayasaba::implementation
         if(result.transferred && legacyDraftPresent_)
             ShowNotice(L"A draft preserved from an earlier version was carried into this project's draft. Nothing was sent. Review it in the composer before sending.");
         else
-            ShowNotice(L"Project selected. CLI readiness: unsupported because native probes are not implemented. No CLI session was started.");
+            ShowNotice(hstring{ ReadinessSummaryLine() + L" No CLI session was started." });
         legacyDraftPresent_ = false;
     }
 
@@ -3868,16 +3981,47 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::OnStart(IInspectable const&, RoutedEventArgs const&)
     {
-        // Start still does not launch working sessions: three native CLI adapters,
-        // independent applied context and a pre-effect confinement proof do not
-        // exist yet, and a READY readiness entry is not any of those. It would be
-        // easy to read a measured READY as permission to start; it is not.
-        ShowNotice(L"START BLOCKED: three native CLI adapters, independent applied context and pre-effect confinement proof are not implemented. No processes launched. CLI readiness in the header is an executable-detection result and does not authorize a session.", true);
+        // Start still does not launch working sessions, and the remaining blockers
+        // are named precisely. The previous text said "three native CLI adapters
+        // ... are not implemented", which stopped being true when the Agent Gateway
+        // landed: detection exists. What does not exist is the part that would
+        // make a session safe and useful -- an adapter that translates a native CLI
+        // protocol, session admission, applied context, and a pre-effect
+        // confinement proof. A blocker list that names a missing layer that is
+        // present is the same defect class as a false pass: it cannot be right.
+        ShowNotice(L"START BLOCKED: no CLI adapter translates a native protocol yet, no session "
+                   L"admission or applied context exists, and no pre-effect confinement proof exists. "
+                   L"No processes launched. CLI readiness in the header is an executable-detection "
+                   L"result and does not authorize a session.", true);
     }
     void MainWindow::OnPause(IInspectable const&, RoutedEventArgs const&)
     { ShowNotice(L"No working CLI sessions were started. No external Pause is claimed."); }
     void MainWindow::OnStop(IInspectable const&, RoutedEventArgs const&)
     { ShowNotice(L"No working CLI sessions were started; no external effects are claimed ceased."); }
+    // A one-line measured summary of the readiness projection, for the notices
+    // that previously asserted the probes did not exist. The statement it
+    // replaces ("unsupported because native probes are not implemented") was
+    // true of the build it shipped in and became false the moment the gateway
+    // landed; a notice on the project-selection path cannot carry a claim about
+    // the build, so it carries the observation instead.
+    std::wstring MainWindow::ReadinessSummaryLine() const
+    {
+        std::wstring line = L"Project selected. CLI readiness:";
+        for (int i = 0; i < mayasaba::gateway::kCliCount; ++i)
+        {
+            auto const cli = static_cast<mayasaba::gateway::Cli>(i);
+            auto const& detection = readiness_[static_cast<std::size_t>(i)];
+            line += L" ";
+            line += mayasaba::gateway::CliDisplayName(cli);
+            line += L" ";
+            line += detection
+                ? mayasaba::gateway::ReadinessText(detection->readiness)
+                : mayasaba::gateway::ReadinessText(mayasaba::gateway::Readiness::Checking);
+            line += (i + 1 < mayasaba::gateway::kCliCount) ? L";" : L".";
+        }
+        return line;
+    }
+
     void MainWindow::OnDiagnostics(IInspectable const&, RoutedEventArgs const&)
     {
         // The observed projection, not a constant. Each line names the CLI, its
@@ -4207,17 +4351,38 @@ namespace winrt::Mayasaba::implementation
         // height: the rows are auto-sized and do not change with the bound, so the
         // measurement cannot chase its own output.
         double chrome = 2.0 * padding + 4.0 * spacing;
+        double pagingHeight = 0.0;
         double const header = SearchHeaderRow().ActualHeight();
         double const query = SearchQueryRow().ActualHeight();
         if (header > 0.0 && query > 0.0)
         {
             chrome += header + query + SearchStatusText().ActualHeight();
-            // The paging action is collapsed until there is a continuation. Its
-            // row is auto sized, so a collapsed action needs no room at all and
-            // reserving room for it would take that space away from the results
-            // on a window that cannot afford it.
-            chrome += SearchLoadMoreButton().Visibility() == Visibility::Visible
-                ? SearchLoadMoreButton().ActualHeight() : 0.0;
+            // The paging action is collapsed until there is a continuation, so a
+            // collapsed action needs no room at all and reserving room for it would
+            // take that space away from the results on a window that cannot afford
+            // it.
+            //
+            // A *visible* action needs its whole height, and `ActualHeight()` is not
+            // a usable measurement on the pass that first shows it: it was collapsed
+            // when the previous pass measured it, so it still reads 0. Budgeting
+            // that 0 undercounts the chrome by the action's entire height, the
+            // surface is then sized without room for it, and the row is laid out at
+            // zero bounds while remaining operable. Measured at 640x480: the paging
+            // row was 0x0 and UIA reported it not visible, yet invoking it still
+            // paged 20 of 50 to 40 of 50. Because a starved row keeps measuring 0,
+            // the undercount then reproduces itself on every later pass and a
+            // 1px resize does not recover it.
+            //
+            // The nominal is used only when the real height is not yet available, so
+            // a measured row still reports its own size. It is not a layout constant
+            // for the control: the XAML owns that, and this value only has to be
+            // large enough to reserve the row.
+            if (SearchLoadMoreButton().Visibility() == Visibility::Visible)
+            {
+                double const paging = SearchLoadMoreButton().ActualHeight();
+                pagingHeight = paging > 0.0 ? paging : kPagingActionNominalHeight;
+                chrome += pagingHeight;
+            }
         }
         else
         {
@@ -4278,6 +4443,22 @@ namespace winrt::Mayasaba::implementation
             L";cap=" + to_hstring(cap) +
             L";floor=" + to_hstring(minimum) +
             L";list=" + to_hstring(listHeight) +
+            // The paging row's contribution to the chrome, and what the row itself
+            // measured. A zero here beside a Visible action is the starvation this
+            // pass is meant to prevent, and recording it makes the difference
+            // between a bounded surface and a starved row visible in the run log
+            // instead of inferable only from a zero-sized control.
+            L";paging=" + to_hstring(pagingHeight) +
+            L";pagingVisible=" + std::wstring(
+                SearchLoadMoreButton().Visibility() == Visibility::Visible ? L"1" : L"0") +
+            L";pagingActual=" + to_hstring(SearchLoadMoreButton().ActualHeight()) +
+            // The rows the chrome was computed FROM, beside what they actually
+            // measured. A row that is larger here than in `chrome` is the row that
+            // took the space the paging action needed.
+            L";headerActual=" + to_hstring(SearchHeaderRow().ActualHeight()) +
+            L";queryActual=" + to_hstring(SearchQueryRow().ActualHeight()) +
+            L";statusActual=" + to_hstring(SearchStatusText().ActualHeight()) +
+            L";listActual=" + to_hstring(SearchResultsList().ActualHeight()) +
             L";compact=" + std::wstring(compact ? L"1" : L"0") +
             PublishChatLayoutMetrics();
         PublishSearchOverlayPresentation(searchOverlayState_);
@@ -4293,6 +4474,13 @@ namespace winrt::Mayasaba::implementation
             if (!element) return std::wstring(L"none");
             return std::wstring(to_hstring(element.ActualHeight()));
         };
+        std::wstring cardsCap = L"none";
+        std::wstring cardsActual = L"none";
+        if (ChatProblemCardsScroller())
+        {
+            cardsCap = to_hstring(ChatProblemCardsScroller().MaxHeight()).c_str();
+            cardsActual = sizeOf(ChatProblemCardsScroller());
+        }
         metrics = L";root=" + sizeOf(RootLayout()) +
             L";chatScreen=" + sizeOf(ChatScreen()) +
             L";header=" + sizeOf(ChatHeaderGrid()) +
@@ -4304,7 +4492,20 @@ namespace winrt::Mayasaba::implementation
             L";fileMenu=" + sizeOf(NativeFileMenu()) +
             L";notice=" + sizeOf(Notice()) +
             L";noticeOpen=" + (Notice().IsOpen() ? L"1" : L"0") +
-            L";readiness=" + sizeOf(ChatReadinessPanel());
+            L";readiness=" + sizeOf(ChatReadinessPanel()) +
+            // The shared header-card pool and its division. Published because a
+            // card that computes to zero is otherwise indistinguishable from one
+            // that was never asked to show: the status line reports the data while
+            // the geometry reports nothing, and only these figures say which card
+            // claimed the budget.
+            L";cardsCap=" + cardsCap +
+            L";cardsActual=" + cardsActual +
+            L";headerPool=" + to_hstring(headerCardPool_) +
+            L";cardsPresent=" + std::wstring(headerCardsPresent_ ? L"1" : L"0") +
+            L";chatHeight=" + sizeOf(ChatScreen()) +
+            L";headerHeight=" + sizeOf(ChatHeaderGrid()) +
+            L";composerHeight=" + sizeOf(ComposerHost()) +
+            L";composerStack=" + sizeOf(ComposerStack());
         return metrics;
     }
 

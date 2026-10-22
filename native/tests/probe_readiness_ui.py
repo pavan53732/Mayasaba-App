@@ -99,19 +99,89 @@ def advance_to_folder(win):
 
     Next is the documented first-run transition; it does not bind a project, so
     nothing is created or changed by taking it.
+
+    Screen 2 is also the *startup* screen once a project has been bound, and in
+    that state there is no Next button at all. Treating a missing Next as failure
+    made the Screen 2 leg report INCONCLUSIVE on exactly the runs where it was
+    already there, so check for the destination first.
+
+    The button is pressed through UIA's Invoke pattern rather than
+    `click_input()`. A synthetic pointer click requires the window to be the
+    foreground window, and this probe is deliberately read-only and never takes
+    the foreground; when the window is not foreground the click lands nowhere and
+    the transition silently does not happen. Invoke needs no pointer.
     """
-    from pywinauto.controls.uia_controls import ButtonWrapper
+    if find_by_aid(win, "FolderHermesStatus") is not None:
+        return True
 
     button = find_by_aid(win, "NextButton")
     if button is None:
+        print("  advance_to_folder: NextButton not found")
         return False
-    button.click_input()
+
+    pressed = False
+    try:
+        button.invoke()
+        pressed = True
+    except Exception as exc:
+        print(f"  advance_to_folder: invoke failed ({type(exc).__name__}: {exc}); trying click_input")
+        try:
+            button.click_input()
+            pressed = True
+        except Exception as exc2:
+            print(f"  advance_to_folder: click_input failed ({type(exc2).__name__}: {exc2})")
+
+    if not pressed:
+        return False
+
     deadline = time.monotonic() + 20.0
     while time.monotonic() < deadline:
         if find_by_aid(win, "FolderHermesStatus") is not None:
             return True
         time.sleep(0.5)
+    print("  advance_to_folder: pressed Next but Screen 2 never appeared")
     return False
+
+
+def read_cards(win):
+    """Read the readiness problem/decision cards as the user would see them.
+
+    A card is a Border carrying an AutomationProperties.Name that names the CLI
+    and the condition. The two actions are buttons whose accessible names begin
+    with the verb, so they are found the same way a screen reader would find
+    them rather than by element order.
+    """
+    cards = []
+    try:
+        for d in win.descendants():
+            try:
+                name = d.element_info.name or ""
+            except Exception:
+                continue
+            if (" problem: " in name) or (" needs a decision: " in name):
+                cards.append(name)
+    except Exception:
+        return None
+
+    def find_button(prefix):
+        try:
+            for d in win.descendants():
+                try:
+                    n = d.element_info.name or ""
+                except Exception:
+                    continue
+                if n.startswith(prefix):
+                    return n
+        except Exception:
+            return None
+        return None
+
+    return {
+        "cards": sorted(cards),
+        "choose_executable": find_button("Choose the executable for "),
+        "locate_executable": find_button("Locate the executable for "),
+        "recheck": find_button("Recheck "),
+    }
 
 
 def parse_state(text):
@@ -184,6 +254,13 @@ def main():
             "left_checking": sorted(k for k, s in settled.items() if s != "CHECKING"),
         }
 
+        # The card surface is read *before* leaving Welcome, because the cards are
+        # built into the Welcome host and that screen is collapsed once Next is
+        # taken. A scan after the transition reads an empty tree and reports
+        # "no card", which is a statement about the probe's ordering rather than
+        # about the product.
+        welcome_cards = read_cards(win)
+
         # Screen 2 carries its own entries. Read them after the Welcome pass so the
         # evidence covers both preludes rather than only the first one the probe
         # happened to land on.
@@ -197,6 +274,69 @@ def main():
             result["folder_entries"] = None
             result["folder_states"] = None
 
+        # Screen 2's own card host, recorded separately. It has none today, which
+        # is a reachability gap worth stating rather than folding into the
+        # Welcome result: after the first binding, Screen 2 is the startup screen
+        # and Welcome is never shown again, so the tie card is reachable only from
+        # Chat.
+        folder_cards = read_cards(win) if folder_states else None
+
+        # ------------------------------------------------------------------
+        # The card surface. This is AC-11, which was INCONCLUSIVE only because
+        # no CLI happened to be in a card-producing state. It is not: a D-11 tie
+        # is a card-producing state, and this machine has one. Reading the card
+        # is what turns that from an unverified claim into an observation.
+        #
+        # Both conditions are checked, and the expected one is derived from the
+        # states actually read above rather than assumed:
+        #   * a tie (CHECKING + requires selection) must offer Choose executable
+        #   * a problem state must offer Locate executable
+        # and every card must offer Recheck. A card with no action would be the
+        # same dead end the tie itself used to be.
+        # ------------------------------------------------------------------
+        cards = welcome_cards
+        result["cards"] = cards
+        result["folder_cards"] = folder_cards
+        all_states = dict(settled)
+        if folder_states:
+            all_states.update(folder_states)
+
+        card_verdict = "INCONCLUSIVE"
+        card_reason = "no CLI reached a card-producing state in this run"
+        if cards is None:
+            card_reason = "the UIA card scan could not complete"
+        elif cards["cards"]:
+            expects_choose = "CHECKING" in all_states.values()
+            has_action = cards["choose_executable"] or cards["locate_executable"]
+            if has_action and cards["recheck"]:
+                if expects_choose and not cards["choose_executable"]:
+                    card_verdict = "FAIL"
+                    card_reason = ("a tie is present but no Choose executable action was found; "
+                                   "the tie is unresolvable from the UI")
+                else:
+                    card_verdict = "PASS"
+                    card_reason = (f"{len(cards['cards'])} card(s) with an executable action "
+                                   f"and Recheck")
+            else:
+                card_verdict = "FAIL"
+                card_reason = ("a card is present but does not offer both an executable "
+                               "action and Recheck")
+        elif any(s == "CHECKING" for s in settled.values()):
+            # A *settled* CHECKING entry is not "still asking". The states above
+            # were confirmed by two agreeing reads, and every path `Select` has to
+            # a settled CHECKING -- a D-11 tie, a vanished pin, a changed digest --
+            # requires the user to act. So a settled CHECKING with no card is the
+            # dead end this criterion exists to catch, not an absence of evidence.
+            #
+            # Without this branch the mutation that suppresses the card reported
+            # INCONCLUSIVE, which is the wrong verdict for a measured absence of a
+            # control the state demands.
+            card_verdict = "FAIL"
+            card_reason = ("a settled CHECKING entry is present but no card offers the "
+                           "decision it requires")
+        result["card_verdict"] = card_verdict
+        result["card_reason"] = card_reason
+
         OUT.parent.mkdir(parents=True, exist_ok=True)
         OUT.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
@@ -209,13 +349,17 @@ def main():
             folder_left = sorted(k for k, s in folder_states.items() if s != "CHECKING")
             print(f"PASS: {len(folder_left)} of {len(folder_states)} Screen 2 entries left CHECKING "
                   f"({', '.join(folder_left)}); states {sorted(set(folder_states.values()))}")
+            if folder_cards is not None and not folder_cards["cards"]:
+                print("  OPEN FINDING: Screen 2 has no card host, so a tie is not "
+                      "actionable there; it is reachable from Welcome and Chat only.")
         else:
             print("INCONCLUSIVE: Screen 2 was not reached, so its entries were not observed")
+        print(f"{card_verdict}: readiness card surface — {card_reason}")
         print(f"  evidence: {OUT}")
         print()
         print("NOTE: this observes the readiness projection only. It is not a working")
         print("      session, not containment, and not gate I3.")
-        return 0
+        return 1 if card_verdict == "FAIL" else 0
     finally:
         try:
             proc.terminate()

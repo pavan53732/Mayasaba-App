@@ -82,8 +82,24 @@ namespace mayasaba::gateway
     char const* ReadinessDotToken(Readiness) noexcept;
     // True for the three states that require a problem card with
     // **Locate executable** and **Recheck** (UI-UX §6.1). READY generates no
-    // card, and neither does CHECKING.
+    // card, and neither does CHECKING on its own.
     bool NeedsProblemCard(Readiness) noexcept;
+
+    // True when the entry must show a card because a *decision* is owed rather
+    // than because something failed.
+    //
+    // This is a second, independent condition and it is not a problem state. A
+    // D-11 tie is reported as CHECKING, which `NeedsProblemCard` deliberately
+    // excludes -- the question is not open, it is unanswerable without the user,
+    // and nothing in this module will ever answer it. Gating the card builder on
+    // `NeedsProblemCard` alone therefore produced a permanently stuck entry: the
+    // rule correctly refused to choose and no control existed to offer the choice
+    // it was waiting for.
+    //
+    // Kept here rather than in the window so it is testable without a UI, per the
+    // same reasoning that put the navigation-recovery classification in a pure
+    // header. It is not a sixth readiness state and adds no state machine.
+    bool NeedsDecisionCard(Readiness readiness, bool requiresSelection) noexcept;
 
     // ----------------------------------------------------------------------
     // Identity

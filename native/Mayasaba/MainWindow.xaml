@@ -733,12 +733,27 @@
                                                                 </StackPanel>
                                                             </StackPanel>
 
-                                                            <!-- Problem cards for MISSING, UNSUPPORTED and PROBE_FAILED.
+                                                            <!-- Problem cards for MISSING, UNSUPPORTED and PROBE_FAILED,
+                                                                 and for a D-11 tie that owes the user a decision.
                                                                  Row 3 is the header grid's own content row, so a card adds
                                                                  height to the header instead of being clipped. A healthy CLI
-                                                                 adds nothing, and the panel stays collapsed. -->
-                                                            <StackPanel x:Name="ChatProblemCards" Grid.Row="3" Grid.ColumnSpan="2"
-                                                                        Spacing="8" Visibility="Collapsed"/>
+                                                                 adds nothing, and the panel stays collapsed.
+
+                                                                 The host is BOUNDED and scrolls. An unbounded card made the
+                                                                 header taller than a short window's Chat area, which starved
+                                                                 every row below it: at 640x480 the saved-message overlay's
+                                                                 paging action measured 0x0 and UIA reported it not visible,
+                                                                 while invoking it still paged 20 of 50 to 40 of 50. The bound
+                                                                 is applied by ApplyResponsiveLayout from the space the header
+                                                                 can actually spare; the scroll keeps a tall card's actions
+                                                                 reachable inside that bound instead of clipped out of it. -->
+                                                            <ScrollViewer x:Name="ChatProblemCardsScroller" Grid.Row="3" Grid.ColumnSpan="2"
+                                                                          VerticalScrollBarVisibility="Auto"
+                                                                          VerticalScrollMode="Auto"
+                                                                          HorizontalScrollMode="Disabled"
+                                                                          Visibility="Collapsed">
+                                                                <StackPanel x:Name="ChatProblemCards" Spacing="8"/>
+                                                            </ScrollViewer>
                                                         </Grid>
                         </Border>
 
@@ -945,7 +960,7 @@
                                    Foreground="{ThemeResource MayasabaInkBrush}"
                                    AutomationProperties.HeadingLevel="Level2"/>
                         <TextBlock x:Name="EmptyChatHint"
-                                   Text="Every saved message is independent of CLI readiness. Agent replies are unavailable in this build because no native adapter is implemented."
+                                   Text="Every saved message is independent of CLI readiness. Agent replies are unavailable in this build because no CLI adapter is implemented; CLI detection itself runs and is shown in the header."
                                    TextAlignment="Center" TextWrapping="Wrap" MaxWidth="560"
                                    Foreground="{ThemeResource MayasabaMutedBrush}" FontSize="13"/>
                     </StackPanel>

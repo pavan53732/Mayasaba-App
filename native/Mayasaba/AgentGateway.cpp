@@ -327,6 +327,15 @@ namespace mayasaba::gateway
             || readiness == Readiness::ProbeFailed;
     }
 
+    bool NeedsDecisionCard(Readiness readiness, bool requiresSelection) noexcept
+    {
+        // Only a tie reported as CHECKING needs a decision card. A selection that
+        // is required while some other state is projected would be contradictory,
+        // and is left to the problem-card path rather than given a second meaning
+        // here.
+        return requiresSelection && readiness == Readiness::Checking;
+    }
+
     DiscoveryResult Discover(Cli cli, std::wstring const& userSelectedPath)
     {
         DiscoveryResult result;

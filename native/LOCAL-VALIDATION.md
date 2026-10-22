@@ -3193,12 +3193,12 @@ Screen 2: Hermes READY · Kilo Code READY · Claude Code CHECKING
 | AC-08 | The probe is bounded, non-mutating and reports its own timeout | C-9 `elapsed=715ms` against a 700 ms bound; C-8; C-10 | **PASS** |
 | AC-09 | The five readiness states are complete and distinct | C-11 | **PASS** |
 | AC-10 | The product prints an observed state, not a constant | UI probe: 2 of 3 entries left CHECKING on Welcome **and** Screen 2; mutation M7 fails the probe | **PASS** |
-| AC-11 | A healthy CLI produces no problem card; an affected one names its cause and offers both actions | Source inspection of `RebuildProblemCards`; **not exercised at runtime** — this machine has no MISSING/PROBE_FAILED CLI to render one | **INCONCLUSIVE** |
-| AC-12 | The projection gates nothing | Source: no readiness read in the Send, folder-selection, draft, history or navigation paths | **PASS** (by inspection only) |
+| AC-11 | A healthy CLI produces no problem card; an affected one names its cause and offers both actions | Fault injection by PATH stripping: Hermes reads MISSING, its card offers Locate and Recheck, both actions exercised; mutation M-AC11 fails the Recheck assertion. See §29.3 | **PASS** |
+| AC-12 | The projection gates nothing | Source: no readiness read in the Send, folder-selection, draft, history or navigation paths. **Amended by §29.4:** it did not gate anything, but it shared the single-worker store lane and delayed unrelated queries by up to 7.88 s. Fixed; re-measured at 0.19 s | **PASS** |
 | AC-13 | Readiness is never colour-only | Each entry prints the state as text beside the dot, with a per-CLI accessible name | **PASS** |
 | AC-14 | Start still refuses and says why | `OnStart` notice text; behaviour unchanged | **PASS** |
 
-AC-11 stays **INCONCLUSIVE**. The card builder compiles and is reachable, but no CLI on this machine is in a card-producing state, so the rendered card, its buttons and their handlers were not observed. It must not be recorded as PASS on the strength of the source alone.
+AC-11 is now **PASS**, on runtime observation rather than source reading. The premise of the earlier INCONCLUSIVE — "this machine has no MISSING/PROBE_FAILED CLI to render one" — was true of the machine as configured but not of the application: `AgentGateway::Discover` resolves each CLI against the **process** PATH, so launching the application with one directory removed makes exactly that CLI genuinely MISSING while the other two are untouched. §29.3 records the injection and both corrections its oracles needed.
 
 ### 28.9 What this record does not claim
 
@@ -3206,7 +3206,7 @@ AC-11 stays **INCONCLUSIVE**. The card builder compiles and is reachable, but no
 2. **It does not claim a passing I3.** Gate I3 requires a proven pre-effect mediation or a tested effective operating-system access boundary for every prohibited effect, including stale writes. Neither layer implements or tests that.
 3. **It does not claim a working agent session.** No session was launched. Start remains blocked, and `OnStart` now says explicitly that a READY entry is a detection result and does not authorize one.
 4. **It does not claim provider compatibility.** A READY means one `--version` question was answered inside its bound. It says nothing about models, providers, authentication, account state or the user's settings, none of which were read or changed.
-5. **It does not claim the problem-card path works.** AC-11 is INCONCLUSIVE for the reason given there.
+5. **It does not claim the problem-card path was untested.** AC-11 is now PASS by runtime injection (§29.3), which supersedes the earlier "not exercised" statement. The D-11 decision card and the problem card remain distinct surfaces and were exercised separately.
 6. **It does not claim the launch path is used by anything but the probe.** The kernel is exercised by its oracle and by the readiness probe. No other product path launches a process.
 7. **It does not re-open** any finding in §24.4, §25.8, §26.7 or §27.9.
 
@@ -3221,3 +3221,145 @@ AC-11 stays **INCONCLUSIVE**. The card builder compiles and is reachable, but no
 **The one thing most likely to be misread.** A green `execution_tests.exe` and a green `gateway_tests.exe` look like progress toward I3, and they are not. They are progress toward prototype 2 and toward an honest status line. I3 needs the confinement proof that neither of these produces.
 
 **Next coherent step.** The containment prototype (§14 item 3), which is the gate both of these currently sit behind. It is not started.
+
+---
+
+## 29. Closing the A+C milestone: the string sweep, criterion 21, AC-11 and the readiness lane
+
+Date: 2026-10-22. Artifact under test throughout: `d7e062c3cbb1a54e7c56b90779dfaf18f3e1b5478c7f1281509386dc6d539edb` (executable), `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a` (compiled XAML). The XBF hash is unchanged from §28 because only C++ moved in this milestone; every XAML-only change would have moved it instead.
+
+### 29.1 The stale-claim sweep
+
+Three user-visible strings still declared a layer that now exists. All three were corrected before this session's runs and are verified here rather than assumed:
+
+| Site | Was | Now |
+|---|---|---|
+| `MainWindow.xaml.cpp:968` | "owner interfaces not implemented · MCF-v2 dispatch, Agent Gateway adapters, …" | "owner interfaces not implemented · MCF-v2 dispatch, CLI adapters, three-agent turn finalization" — the Agent Gateway adapter layer is implemented and no longer named as absent |
+| `MainWindow.xaml.cpp:3481` (project selection) | "CLI readiness: unsupported because native probes are not implemented" | `ReadinessSummaryLine()`, which reports the **measured** projection, plus "No CLI session was started." |
+| `MainWindow.xaml.cpp:3875` (`OnStart`) | "START BLOCKED: three native CLI adapters … are not implemented" | names the real remaining blockers; explicitly states that a READY entry is a detection result and does not authorize a session |
+
+The sweep beyond those three found no further user-visible claim that a layer is absent. The remaining matches for "not implemented" are historical code comments describing what a function does not do, which are accurate and are not surfaced to the user. `ReadinessSummaryLine()` was added in this milestone so the readiness sentence is derived from `readiness_` rather than written as prose that can drift from the observation.
+
+### 29.2 Criterion 21: the readiness projection and its non-gating
+
+Criterion 21 asserts, against the running product rather than against the source:
+
+1. one entry per required CLI, carrying its name, a state drawn from the five registered values, and a dot;
+2. Welcome/Screen 2 and the Chat header agree;
+3. the projection gates nothing — a draft is typed, a project selected, and Send's enabled state is a function of text and attachments only;
+4. a problem card names its cause and offers **Locate executable** and **Recheck**, while a READY CLI has no card.
+
+The phase opens with a Chat-open precondition **before** its 60 s poll, and reports `BLOCKED` rather than `FAIL` if Chat is not open: a closed Chat means the projection was never observable, and burning the budget first would then blame the projection for a precondition.
+
+Its only markup-unsatisfiable postcondition is "at least one entry reads something other than `CHECKING`", confirmed by two consecutive agreeing reads. This matters because `CHECKING` is a registered state **and** the value the XAML ships with, so an assertion that merely checks "every entry is one of the five" passes before any detection has run. That exact false pass was made once in this repository (§17.7) and is the reason the postcondition is written this way.
+
+**Controlling mutation (M-C21).** Commenting out `ApplyReadinessProjection()` in `DetectReadinessAsync` left all three entries at their markup value `CHECKING` and criterion 21 failed at exactly the assertion encoding the defect, with no other criterion failing. The source was restored byte-identically (`84e17309…`) and the restore verified by hash.
+
+### 29.3 AC-11: fault injection, and two blind oracles it exposed
+
+AC-11 had been INCONCLUSIVE since it was written because no CLI on this machine was in a card-producing state. That was a statement about the machine, not about the application: `AgentGateway::Discover` resolves `hermes` / `kilo` / `claude` against the **process** PATH (`AgentGateway.cpp:365-373`), so launching the application with one directory removed makes exactly that CLI resolve to nothing and report MISSING, while the other two are untouched. The injection removes one named directory from the child's environment, logs which, and modifies nothing on disk or in the machine's PATH.
+
+Measured with `C:\Users\pavan\AppData\Local\hermes\bin` removed:
+
+```
+Hermes Agent CLI · MISSING     Kilo Code CLI · READY     Claude Code CLI · CHECKING
+cards:   ["Hermes Agent CLI problem: MISSING", "Claude Code CLI needs a decision: CHECKING"]
+actions: locate ["Locate the executable for Hermes Agent CLI"]
+         recheck ["Recheck Hermes Agent CLI", "Recheck Claude Code CLI"]
+```
+
+Two oracles in the probe produced readings about the probe and were corrected. Both corrections are load-bearing:
+
+1. **The picker oracle was blind twice over.** It counted *visible* top-level windows of *the application's own pid*. A WinRT `FileOpenPicker` is hosted by `C:\Windows\System32\PickerHost.exe` — a different process — and is created invisible and shown roughly half a second later. Measured with `EnumWindows` over every top-level window including invisible and cross-process ones: at t+0.52 s the `#32770` "Open" dialog exists and is invisible; at t+1.03 s it is visible, with no intervention. The corrected oracle polls for a new common-dialog window anywhere on the desktop and follows its visibility over time, and it **does not** force the window shown — forcing it would make the observation a statement about the probe.
+2. **A transient `CHECKING` during Recheck does not exist and never did.** `DetectReadinessAsync` writes `readiness_` exactly once, after the pass completes (`MainWindow.xaml.cpp:1846-1847`). Sampling densely for a transition the code does not produce was an oracle-adequacy failure, not a product finding. The real discriminator is a state that **changes**, so the probe places an empty directory ahead of the stripped one on the child PATH and writes a working shim into it; Recheck must then observe the CLI appear.
+
+**Measured transition.** After the shim was written, Recheck reported `Hermes Agent CLI · MISSING` → `Hermes Agent CLI · READY`.
+
+**Controlling mutation (M-AC11).** `RecheckCli` was changed to `co_return` before its `co_await DetectReadinessAsync()`, making the handler a deterministic no-op. Re-run: the four other checks still passed and the run failed at exactly the transition assertion —
+
+```
+FAIL: Recheck did not observe the CLI appearing; the entry still reads
+'Hermes Agent CLI · MISSING' after the shim was written and Recheck invoked.
+A handler that re-ran detection would have found it.
+```
+
+Restored byte-identically and verified by hash. The mutation proves the assertion discriminates *that* failure; it is not a reproduction of a race.
+
+One sequencing error was found and corrected in the probe itself: the appear-transition ran before Locate, so making the CLI healthy correctly withdrew its card and Locate was then absent. The transition now runs last, because it destroys the setup it depends on.
+
+### 29.4 A measured defect this work found: the readiness pass held the store lane
+
+Not a gating defect — the projection was never consulted by Send, folder selection, drafts, history or navigation, and AC-12's source finding stands. The defect was resource sharing: `DetectReadinessAsync` ran on `selectorQueue_.Background()`, the application's **single-worker** serial lane, and blocks inside `process.wait()` for each of three cold CLI probes. Every store query submitted behind it waited for all three.
+
+Measured with a probe that types into the Screen 2 filter twice — once while detection is running, once after it has settled:
+
+| Condition | Filter applied after |
+|---|---|
+| Typed at t+2.45 s, detection still running | **7.88 s** |
+| Typed at t+11.1 s, detection settled | **0.10 s** |
+
+This also explains an intermittent Phase 1 failure: the harness polls the count label for 8 s, and a refresh queued behind detection can exceed that. The harness's poll was not the defect, and neither was the filter — both were measured correct once the lane was free.
+
+**Correction.** Detection now runs on its own `readinessQueue_`. It reads no store state, so it has nothing to order against; the comment on the member states why. Re-measured: **0.19 s** while detection was still running, down from 7.88 s. Criterion 1 has passed on every run since.
+
+This is recorded as a real finding rather than a tuning change because the earlier reading of the same behaviour — "the filter is slow" — would have been the wrong diagnosis. The lane was the cause, and the measurement that separated the two conditions is what established it.
+
+### 29.5 The D-11 live case: two Claude Code installations behind identical shims
+
+This machine has two reachable Claude Code installations. Both are exposed through `claude.cmd` shims that are **byte-identical** — same SHA-256 `7999fba95dbffe167d9e0a043f29057979a0518ebe89b60c4fcfc6401ea8c424`, same 160 bytes — because both shims are the standard npm launcher and differ only in `%dp0%`:
+
+| Shim directory | Resolves to | Bytes | SHA-256 |
+|---|---|---|---|
+| `C:\nvm4w\nodejs` | `…\node_modules\@anthropic-ai\claude-code\bin\claude.exe` | 270,863,520 | `56810a11…` |
+| `C:\Users\pavan\AppData\Local\hermes\node` | `…\node_modules\@anthropic-ai\claude-code\bin\claude.exe` | 260,489,376 | `76de74f7…` |
+
+Two genuinely distinct builds. D-11 says that without a user-selected pin, two or more verified candidates require an explicit **Choose executable**, and that PATH order, discovery time, filename or version label never break the tie. The application therefore reports Claude Code as `CHECKING` and renders a decision card offering **Choose the executable for Claude Code CLI**. That is correct behaviour, not a failure:
+
+- `CHECKING` here means "the question is open because the answer is the user's to give", and both the record and the harness treat it as a legitimate settled state. Criterion 21's poll requires *at least one* entry to leave `CHECKING`; it does not require all three, precisely so a D-11 tie is not scored as a defect.
+- The application must not prefer a candidate. It presents both and waits.
+- The desktop Claude app is not a candidate at all: it is a GUI-subsystem MSIX package whose manifest declares only `claude-ssh-askpass.exe` and `claude-ssh-proxy.exe` as execution aliases, never `claude`, and `Discover` resolves against PATH only.
+
+### 29.6 Acceptance results for this milestone
+
+Full suite, `C:\Users\pavan\PROJECTS\_ui-verify\ev-20261022-g`, against `d7e062c3…` / `8db43c7e…`:
+
+| ID | Criterion | Verdict |
+|---|---|---|
+| 1 | Recent Projects & Startup Filtering | **PASS** |
+| 2 | Message Search Pagination & Continuation | **PASS** |
+| 3 | Older Message Navigation & Selection | **PASS** |
+| 4 | Search Mode Project Switch Safety | **PASS** |
+| 5 | Narrow 520px Responsive Layout | **PASS** |
+| 6 | Rapid Hover Sweeps & Animation Stability | **PASS** |
+| 7 | Display DPI Scaling Simulation | **PASS** |
+| 8 | Action Center Pagination & Resumption | **PASS** |
+| 9 | Action Center Stale Invalidation & Refresh | **PASS** |
+| 10 | Action Center Panel Dismissal Stability | **PASS** |
+| 11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** — unchanged stimulus limit, §24.4 |
+| 12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** — unchanged stimulus limit, §24.4 |
+| 13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** |
+| 14 | Strict Non-English Prose Preview Withholding | **PASS** |
+| 15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** |
+| 16 | Search Overlay Flat Resting Orientation | **PASS** |
+| 17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **PASS** |
+| 18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** |
+| 19 | Empty-Chat Hero Perspective Preserved | **PASS** |
+| 20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** |
+| 21 | CLI Readiness Projection & Non-Gating | **PASS** |
+
+**19 PASS, 2 INCONCLUSIVE, 0 FAIL, 0 BLOCKED, 0 NOT_RUN.**
+
+Criteria 11 and 12 are INCONCLUSIVE for the reason recorded in §24.4: the synthetic-input helper fails identically against a control target that certainly accepts the operation, which establishes the stimulus as broken and says nothing about the application. Per §13 that verdict is permanent until the stimulus changes, and re-running them under the same launcher produces no new information.
+
+UI-thread sampler for this run: 2,366 samples, 2,318 answered, p50 0.11 ms, p95 1.33 ms, p99 26.38 ms, max 437.33 ms; 14 samples over 250 ms, of which 13 fell inside a harness UIA walk and 1 outside. The single outside-walk sample is recorded rather than explained away; it is 437 ms and coincides with no harness write.
+
+### 29.7 What this section does not claim
+
+1. **Not containment, not I3, not a deployable architecture.** Unchanged from §28.9. The Job Object bounds which processes exist and when they die, and bounds nothing they read, write or send.
+2. **Not a working agent session.** Start remains blocked; no session was launched.
+3. **Not provider compatibility.** A READY is one answered `--version` question inside its bound.
+4. **Not that the D-11 tie is resolved.** It is the user's to resolve; the application presents it and must not choose.
+5. **Not that criteria 11 and 12 were measured.** They were not, and their INCONCLUSIVE stands.
+6. **Not a reproducible build.** MSBuild is not reproducible here: restoring the mutation byte-identically and rebuilding produced `51c466fa…` where the pre-mutation build was `cd1aa288…`, with the XBF unchanged. Every figure in this section is scoped to the artifact named at its head.
+
+**Next gate.** §14 prototype 3 — containment — which nothing in this milestone advances.
