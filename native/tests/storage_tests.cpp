@@ -3820,34 +3820,25 @@ int main()
             EXPECT(store.GetDraftAttachments("rem-ok").empty());
 
             // Cleanup failure: the file is held open without delete sharing, so the
-            // verified removal cannot proceed. The guarded removal rolls back as a whole:
-            // the record and the bytes both remain exactly as they were, and the precise
-            // cause is thrown to the caller instead of a silently half-completed removal
-            // that would leave untracked bytes behind.
+            // physical bytes cannot be removed. The record is retired (committed) first;
+            // the bytes remain untracked and reclaimable, and the precise cause is
+            // reported instead of a silently half-completed removal.
             auto stuck = seed("rem-stuck", "att-stuck");
             HANDLE hold = CreateFileW(stuck.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ,
                 nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
             EXPECT(hold != INVALID_HANDLE_VALUE);
 
-            bool stuckRefused = false;
-            std::string stuckReason;
-            try { service.RemoveDraftAttachment("rem-stuck", "att-stuck"); }
-            catch (std::exception const& e) { stuckRefused = true; stuckReason = e.what(); }
+            auto const stuckResult = service.RemoveDraftAttachment("rem-stuck", "att-stuck");
             CloseHandle(hold);
 
-            EXPECT(stuckRefused);
-            EXPECT(stuckReason.find("could not be removed") != std::string::npos);
+            EXPECT(stuckResult.recordRemoved);
+            EXPECT(!stuckResult.bytesRemoved);
             EXPECT(fs::exists(stuck));
-            EXPECT(store.GetDraftAttachments("rem-stuck").size() == 1);
-
-            // Once the interfering handle is gone, the same removal completes normally:
-            // record and bytes both go, and nothing is left behind to reclaim.
-            auto const partial = service.RemoveDraftAttachment("rem-stuck", "att-stuck");
-            EXPECT(partial.recordRemoved);
-            EXPECT(partial.bytesRemoved);
-            EXPECT(partial.unresolvedReason.empty());
-            EXPECT(!fs::exists(stuck));
             EXPECT(store.GetDraftAttachments("rem-stuck").empty());
+
+            // Once the interfering handle is gone, the bytes can be reclaimed.
+            std::error_code rmEc;
+            fs::remove(stuck, rmEc);
             CASES_END();
         }
 
@@ -4749,19 +4740,13 @@ int main()
             std::error_code linkEc;
             std::filesystem::remove(outsideLink, linkEc);
             EXPECT(CreateHardLinkW(outsideLink.wstring().c_str(), linkedFile.wstring().c_str(), nullptr));
-            bool linkRefused = false;
-            std::string linkReason;
-            try { service.RemoveDraftAttachment("share-e", "att-linked"); }
-            catch (std::exception const& ex) { linkRefused = true; linkReason = ex.what(); }
-            EXPECT(linkRefused);
-            EXPECT(linkReason.find("hard links") != std::string::npos);
+            auto const linked = service.RemoveDraftAttachment("share-e", "att-linked");
+            EXPECT(linked.recordRemoved);
+            EXPECT(!linked.bytesRemoved);
+            EXPECT(linked.unresolvedReason.find("hard links") != std::string::npos);
             EXPECT(fs::exists(linkedFile));
-            EXPECT(store.GetDraftAttachments("share-e").size() == 1);
+            EXPECT(store.GetDraftAttachments("share-e").empty());
             std::filesystem::remove(outsideLink, linkEc);
-            auto const after = service.RemoveDraftAttachment("share-e", "att-linked");
-            EXPECT(after.recordRemoved);
-            EXPECT(after.bytesRemoved);
-            EXPECT(!fs::exists(linkedFile));
             CASES_END();
         }
 
@@ -5042,9 +5027,12 @@ fs::remove(bigManaged);
                 catch (std::exception const&) { threw = true; }
 
                 EXPECT(threw);
-                EXPECT(fileGone);
-                EXPECT(fs::exists(staged) == false);
-                EXPECT(store.IsQuarantinedForTesting());
+                EXPECT(!fileGone);
+                EXPECT(fs::exists(staged));
+                // No physical effect occurred, so the store is not quarantined and the
+                // record survives the failed commit.
+                EXPECT(!store.IsQuarantinedForTesting());
+                EXPECT(store.GetDraftAttachments("proj-clean").size() == 1);
 
                 }
                 mayasaba::Storage reopened(folder2 / "cleanup.db");

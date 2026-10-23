@@ -889,10 +889,13 @@ namespace mayasaba
             return outcome;
         }
 
-        // The deleter never ran to completion (for example a handle-identity refusal that
-        // Storage converted into a rollback-then-throw): the throw has already propagated.
-        // Reaching this point with a non-removed, non-shared path is an internal fault.
-        throw std::runtime_error("The staged copy was neither removed nor retained by reference; the removal did not complete.");
+        // Physical deletion failed after the committed retirement: the bytes are
+        // untracked and reclaimable. Report the reason instead of treating it as
+        // an internal fault.
+        outcome.unresolvedReason = removal.reasonEn.empty()
+            ? std::string("The staged copy could not be removed; its bytes are now untracked and reclaimable by reconciliation.")
+            : removal.reasonEn;
+        return outcome;
     }
 
     AttachmentService::DraftRemovalOutcome AttachmentService::ClearDraftAttachments(std::string const& projectId)

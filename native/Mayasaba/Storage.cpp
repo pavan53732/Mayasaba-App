@@ -3515,19 +3515,20 @@ namespace mayasaba
     {
         std::lock_guard lock(mutex_);
         DraftAttachmentRemoval outcome;
-        bool physicalEffectOccurred = false;
 
-        // Authorization, retirement, shared-reference accounting and byte cleanup are one
-        // serialized step inside a single write transaction. Eligibility established here
-        // cannot race with the admission of a new protected reference: SaveDraftAttachments
-        // needs the same mutex and the same write lock this transaction holds, so a
-        // reference is either counted here or admitted after the cleanup committed.
+        std::optional<std::string> staged;
+        bool shared = false;
+        int otherRefs = 0;
+
+        // Authorization, retirement and shared-reference accounting happen inside a
+        // single write transaction. Physical bytes are deleted only after that
+        // transaction commits, so a failed COMMIT can never leave a retained record
+        // pointing at bytes that were already removed.
         Exec("BEGIN IMMEDIATE;");
         try
         {
             RefusePendingManifestDeletion_locked(projectId, attachmentId);
 
-            std::optional<std::string> staged;
             {
                 Statement q(db_, "SELECT staged_path FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
                 Bind(q.value, 1, projectId);
@@ -3538,7 +3539,6 @@ namespace mayasaba
             }
             if (!staged)
             {
-                // No such record existed, so this operation owned no bytes.
                 Exec("COMMIT;");
                 return outcome;
             }
@@ -3554,46 +3554,55 @@ namespace mayasaba
 
             if (!staged->empty())
             {
-                int const otherRefs = CountOtherProtectedReferences_locked(*staged, projectId, attachmentId);
+                otherRefs = CountOtherProtectedReferences_locked(*staged, projectId, attachmentId);
                 if (otherRefs > 0)
                 {
-                    // Another protected record still names these bytes, so the bytes stay.
-                    // Only the retiring record goes.
-                    outcome.bytesShared = true;
-                    outcome.recordRemoved = true;
-                    outcome.reasonEn = "The staged copy is still referenced by " + std::to_string(otherRefs) +
-                        " other protected attachment record(s), so its bytes were retained.";
-                    Exec("COMMIT;");
-                    return outcome;
-                }
-                if (deleteBytes)
-                {
-                    std::string deletionReason;
-                    if (!deleteBytes(*staged, &deletionReason))
-                    {
-                        // The row is rolled back with the transaction, so the record and
-                        // the bytes both remain exactly as they were: a failed cleanup is a
-                        // refusal, not a silent half-removal.
-                        throw std::runtime_error("The staged copy could not be removed (" + deletionReason +
-                            "); the removal was rolled back and nothing was changed.");
-                    }
-                     outcome.bytesRemoved = true;
-                     physicalEffectOccurred = true;
+                    shared = true;
                 }
             }
+
+            if (shared)
+            {
+                outcome.bytesShared = true;
+                outcome.recordRemoved = true;
+                outcome.reasonEn = "The staged copy is still referenced by " + std::to_string(otherRefs) +
+                    " other protected attachment record(s), so its bytes were retained.";
+                Exec("COMMIT;");
+                return outcome;
+            }
+
             outcome.recordRemoved = true;
             Exec("COMMIT;");
-            return outcome;
         }
         catch (...)
         {
-            if (physicalEffectOccurred) poisoned_ = true;
             RollbackAfterFailure_locked();
-            if (physicalEffectOccurred) poisoned_ = true;
             throw;
         }
-    }
 
+        // Physical cleanup follows the committed retirement. A failure here leaves
+        // the bytes untracked and reclaimable by reconciliation; it never restores
+        // a record or deletes a different object.
+        if (staged && !staged->empty() && deleteBytes)
+        {
+            std::string deletionReason;
+            if (deleteBytes(*staged, &deletionReason))
+            {
+                outcome.bytesRemoved = true;
+            }
+            else
+            {
+                outcome.reasonEn = "The staged copy could not be removed (" + deletionReason +
+                    "); its bytes are now untracked and reclaimable by reconciliation.";
+            }
+        }
+        else if (staged && !staged->empty())
+        {
+            outcome.bytesRemoved = false;
+        }
+
+        return outcome;
+    }
     std::optional<std::string> Storage::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
     {
         // Record-only wrapper kept for callers that do not delete bytes through Storage:
@@ -3610,18 +3619,17 @@ namespace mayasaba
     {
         std::lock_guard lock(mutex_);
         DraftAttachmentClear outcome;
-        bool physicalEffectOccurred = false;
 
-        // One serialized transaction covers the pending-submission guard, the row
-        // retirement, the shared-reference accounting and (through `deleteBytes`) the
-        // physical cleanup, so a newly admitted protected reference can never race
-        // between eligibility and deletion (R03): admission needs the same mutex and
-        // write lock this transaction holds.
+        std::vector<std::string> staged;
+        std::vector<std::string> toDelete;
+
+        // Pending-submission guard, row retirement and shared-reference accounting
+        // happen inside a single write transaction. Physical bytes are deleted only
+        // after that transaction commits.
         Exec("BEGIN IMMEDIATE;");
         try
         {
             {
-                // Clearing the set would delete rows a locked submission's manifest covers.
                 Statement pending(db_, "SELECT count(*) FROM pending_submissions WHERE project_id=?1;");
                 Bind(pending.value, 1, projectId);
                 if (sqlite3_step(pending.value) == SQLITE_ROW && sqlite3_column_int(pending.value, 0) > 0)
@@ -3638,7 +3646,6 @@ namespace mayasaba
                 }
             }
 
-            std::vector<std::string> staged;
             {
                 Statement q(db_, "SELECT staged_path FROM draft_attachments WHERE project_id=?1;");
                 Bind(q.value, 1, projectId);
@@ -3655,55 +3662,55 @@ namespace mayasaba
             Bind(q.value, 1, projectId);
             Check(sqlite3_step(q.value), db_);
 
-            std::string firstFailure;
             for (auto const& path : staged)
             {
-                // Counted after this project's rows are gone: only references outside the
-                // cleared set (other projects' drafts, committed attachments) can remain.
                 if (CountOtherProtectedReferences_locked(path, projectId, "") > 0)
                 {
                     outcome.sharedPaths.push_back(path);
-                    continue;
-                }
-                if (deleteBytes)
-                {
-                    std::string deletionReason;
-                     if (deleteBytes(path, &deletionReason))
-                     {
-                         outcome.stagedPaths.push_back(path);
-                         physicalEffectOccurred = true;
-                     }
-                    else
-                    {
-                        // The row retirement stands (as before, the leftover bytes become
-                        // untracked and reclaimable by reconciliation); the failure is
-                        // reported, never hidden.
-                        if (firstFailure.empty()) firstFailure = deletionReason;
-                    }
                 }
                 else
                 {
-                    outcome.stagedPaths.push_back(path);
+                    toDelete.push_back(path);
                 }
-            }
-            if (!firstFailure.empty())
-            {
-                outcome.reasonEn = "One or more staged copies could not be deleted (" + firstFailure +
-                    "); their bytes are now untracked and reclaimable by reconciliation.";
             }
 
             Exec("COMMIT;");
-            return outcome;
         }
         catch (...)
         {
-            if (physicalEffectOccurred) poisoned_ = true;
             RollbackAfterFailure_locked();
-            if (physicalEffectOccurred) poisoned_ = true;
             throw;
         }
-    }
 
+        // Physical cleanup follows the committed retirement.
+        std::string firstFailure;
+        for (auto const& path : toDelete)
+        {
+            if (deleteBytes)
+            {
+                std::string deletionReason;
+                if (deleteBytes(path, &deletionReason))
+                {
+                    outcome.stagedPaths.push_back(path);
+                }
+                else
+                {
+                    if (firstFailure.empty()) firstFailure = deletionReason;
+                }
+            }
+            else
+            {
+                outcome.stagedPaths.push_back(path);
+            }
+        }
+        if (!firstFailure.empty())
+        {
+            outcome.reasonEn = "One or more staged copies could not be deleted (" + firstFailure +
+                "); their bytes are now untracked and reclaimable by reconciliation.";
+        }
+
+        return outcome;
+    }
     std::vector<std::string> Storage::ClearDraftAttachments(std::string const& projectId)
     {
         // Record-only wrapper: returns only paths that no other protected record still
