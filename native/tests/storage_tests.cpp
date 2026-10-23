@@ -4362,6 +4362,236 @@ int main()
             CASES_END();
         }
 
+        // 46. StageSubmission owns its transaction to the end (R01). Its catch path
+        // used an unchecked ROLLBACK, so a refused rollback left the connection inside
+        // an unresolved transaction and a later TrySaveDraft reported durable success
+        // for a write the eventual rollback erased. Cleanup must be proven.
+        {
+            CASES_BEGIN("46. StageSubmission cleanup is proven; unresolved transaction quarantines");
+            {
+                mayasaba::Storage store(folder / "stage_leak.db");
+                store.BindProject("proj-s1", "S1", "C:/S1");
+                EXPECT(store.TrySaveDraft("proj-s1", "before"));
+
+                // Failure before the transaction is acquired leaves no state to clean.
+                bool threw = false;
+                try { store.StageSubmission("", "op-empty", "body"); }
+                catch (std::exception const&) { threw = true; }
+                EXPECT(threw);
+                EXPECT(!store.IsQuarantinedForTesting());
+                EXPECT(store.Project("proj-s1")->draft == "before");
+
+                // A refusal inside the transaction rolls back proven; the store stays usable.
+                int const version = store.Project("proj-s1")->version;
+                store.SetClosure("proj-s1", version, true);
+                threw = false;
+                std::string reason;
+                try { store.StageSubmission("proj-s1", "op-closed", "closed body"); }
+                catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+                EXPECT(threw);
+                EXPECT(reason.find("Closed project") != std::string::npos);
+                EXPECT(!store.IsQuarantinedForTesting());
+                EXPECT(store.TrySaveDraft("proj-s1", "before"));
+                EXPECT(store.Project("proj-s1")->draft == "before");
+
+                // The discriminating failure (R01): a refused rollback after the same
+                // mid-transaction refusal used to leak the open transaction, and a later
+                // TrySaveDraft returned true for a write the eventual rollback erased.
+                store.SetForceRollbackFailureForTesting(true);
+                threw = false;
+                try { store.StageSubmission("proj-s1", "op-leak", "leak body"); }
+                catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+                EXPECT(threw);
+                EXPECT(reason.find("Closed project") != std::string::npos);
+                EXPECT(store.IsQuarantinedForTesting());
+                // A later draft write must never report durable success while trapped
+                // inside an unresolved earlier transaction: it refuses with the reason.
+                threw = false;
+                std::string draftReason;
+                try { store.TrySaveDraft("proj-s1", "after"); }
+                catch (std::exception const& ex) { threw = true; draftReason = ex.what(); }
+                EXPECT(threw);
+                EXPECT(draftReason.find("quarantined") != std::string::npos);
+                // Reads stay available for inspection and recovery.
+                EXPECT(store.Project("proj-s1").has_value());
+                EXPECT(store.Project("proj-s1")->draft == "before");
+            }
+
+            // Reopening clears the quarantine: the unknown transaction died with the
+            // connection, so reconciliation can proceed on the reopened store.
+            mayasaba::Storage reopened(folder / "stage_leak.db");
+            EXPECT(!reopened.IsQuarantinedForTesting());
+            EXPECT(reopened.Project("proj-s1")->draft == "before");
+            int const reopenVersion = reopened.Project("proj-s1")->version;
+            reopened.SetClosure("proj-s1", reopenVersion, false);
+            EXPECT(reopened.StageSubmission("proj-s1", "op-recovered", "recovered body") == "op-recovered");
+
+            // A COMMIT failure rolls back proven: the store stays usable and the staged
+            // submission is not half-recorded. The re-stage uses the same payload, which
+            // the pending submission accepts as an identical re-submission.
+            reopened.SetForceCommitFailureForTesting(true);
+            bool commitThrew = false;
+            try { reopened.StageSubmission("proj-s1", "op-commit2", "recovered body"); }
+            catch (std::exception const&) { commitThrew = true; }
+            EXPECT(commitThrew);
+            EXPECT(!reopened.IsQuarantinedForTesting());
+            EXPECT(reopened.Pending("proj-s1").has_value());
+            EXPECT(reopened.Pending("proj-s1")->id == "op-recovered");
+            // The retry succeeds and the earlier staged identity is preserved.
+            EXPECT(reopened.StageSubmission("proj-s1", "op-commit2", "recovered body") == "op-recovered");
+            CASES_END();
+        }
+
+        // 47. CommitSelection owns its transaction to the end (R02). Its catch path
+        // used an unchecked ROLLBACK, so a refused rollback after a mid-transaction
+        // identity refusal leaked an open transaction that a later draft write
+        // silently joined and lost.
+        {
+            CASES_BEGIN("47. CommitSelection cleanup is proven; unresolved transaction quarantines");
+            auto const uuid = [](char const* seed) -> std::string
+            {
+                // Same deterministic UUIDv4-shaped identity as group 45.
+                unsigned long long h = 1469598103934665603ull;
+                for (char const* p = seed; *p; ++p) { h ^= static_cast<unsigned char>(*p); h *= 1099511628211ull; }
+                char buf[37];
+                unsigned long long a = h, b = h * 6364136223846793005ull + 1442695040888963407ull;
+                std::snprintf(buf, sizeof buf, "%08llx-%04llx-4%03llx-a%03llx-%012llx",
+                              a & 0xFFFFFFFFull,
+                              (a >> 32) & 0xFFFFull,
+                              (a >> 48) & 0x0FFFull,
+                              (b >> 8) & 0x0FFFull,
+                              b & 0xFFFFFFFFFFFFull);
+                return std::string(buf);
+            };
+            {
+                mayasaba::Storage store(folder / "selection_leak.db");
+                mayasaba::SelectionCommit commit;
+                commit.operationId = uuid("sel-op");
+                commit.proposedId = uuid("sel-proj");
+                commit.requestBytes = "request one";
+                commit.name = "Sel";
+                commit.path = "C:/Sel";
+                commit.filesystemIdentity = "fid-sel-1";
+                EXPECT(store.CommitSelection(commit).project.id == commit.proposedId);
+
+                // Replaying the identity with changed input is refused inside the
+                // transaction; the proven rollback leaves the store usable.
+                bool threw = false;
+                try
+                {
+                    mayasaba::SelectionCommit replay = commit;
+                    replay.requestBytes = "changed input";
+                    store.CommitSelection(replay);
+                }
+                catch (std::exception const&) { threw = true; }
+                EXPECT(threw);
+                EXPECT(!store.IsQuarantinedForTesting());
+                EXPECT(store.CommitSelection(commit).duplicate);
+
+                // The same refusal with a refused rollback used to leak the transaction
+                // (R02): a later TrySaveDraft reported success and its write was lost.
+                store.SetForceRollbackFailureForTesting(true);
+                threw = false;
+                try
+                {
+                    mayasaba::SelectionCommit replay = commit;
+                    replay.requestBytes = "changed input again";
+                    store.CommitSelection(replay);
+                }
+                catch (std::exception const&) { threw = true; }
+                EXPECT(threw);
+                EXPECT(store.IsQuarantinedForTesting());
+                threw = false;
+                std::string draftReason;
+                try { store.TrySaveDraft(commit.proposedId, "unwritten"); }
+                catch (std::exception const& ex) { threw = true; draftReason = ex.what(); }
+                EXPECT(threw);
+                EXPECT(draftReason.find("quarantined") != std::string::npos);
+                EXPECT(store.Project(commit.proposedId).has_value());
+            }
+
+            mayasaba::Storage reopened(folder / "selection_leak.db");
+            EXPECT(!reopened.IsQuarantinedForTesting());
+            mayasaba::SelectionCommit commit;
+            commit.operationId = uuid("sel-op");
+            commit.proposedId = uuid("sel-proj");
+            commit.requestBytes = "request one";
+            commit.name = "Sel";
+            commit.path = "C:/Sel";
+            commit.filesystemIdentity = "fid-sel-1";
+            EXPECT(reopened.CommitSelection(commit).duplicate);
+
+            // A COMMIT failure rolls back proven and stays usable; the replay still
+            // resolves to the same durable receipt afterwards.
+            reopened.SetForceCommitFailureForTesting(true);
+            bool threw = false;
+            try { reopened.CommitSelection(commit); }
+            catch (std::exception const&) { threw = true; }
+            EXPECT(threw);
+            EXPECT(!reopened.IsQuarantinedForTesting());
+            EXPECT(reopened.CommitSelection(commit).duplicate);
+            CASES_END();
+        }
+
+        // 48. The Action Center read-transaction guard cleans up with proof (A01).
+        // The destructor used to execute an unchecked ROLLBACK, so an exception inside
+        // the read transaction with a refused rollback left the connection inside the
+        // unresolved transaction and a later TrySaveDraft reported success for a write
+        // the eventual rollback erased. The destructor is non-throwing, but its cleanup
+        // outcome must still quarantine the store when it cannot be confirmed.
+        {
+            CASES_BEGIN("48. Action Center read-guard destructor cleanup is proven");
+            {
+                mayasaba::Storage store(folder / "ac_leak.db");
+                store.BindProject("proj-ac1", "AC", "C:/AC1");
+                EXPECT(store.TrySaveDraft("proj-ac1", "before"));
+
+                // A failure inside the read transaction: the destructor rolls the read
+                // transaction back and the store stays usable.
+                store.SetQueryActionCenterSnapshotHookForTesting(
+                    []() { throw std::runtime_error("Injected snapshot failure"); });
+                mayasaba::ActionCenterQuery q{ "proj-ac1", 50 };
+                auto failed = store.QueryActionCenter(q);
+                EXPECT(!failed.isComplete);
+                EXPECT(failed.errorMessage.find("Injected snapshot failure") != std::string::npos);
+                EXPECT(!store.IsQuarantinedForTesting());
+                EXPECT(store.TrySaveDraft("proj-ac1", "before"));
+
+                // The same in-transaction failure with a refused rollback (A01): the
+                // unconfirmed destructor cleanup now quarantines the store.
+                store.SetForceRollbackFailureForTesting(true);
+                auto leaked = store.QueryActionCenter(q);
+                EXPECT(!leaked.isComplete);
+                EXPECT(leaked.errorMessage.find("Injected snapshot failure") != std::string::npos);
+                EXPECT(store.IsQuarantinedForTesting());
+                store.SetQueryActionCenterSnapshotHookForTesting(nullptr);
+                bool threw = false;
+                std::string draftReason;
+                try { store.TrySaveDraft("proj-ac1", "after"); }
+                catch (std::exception const& ex) { threw = true; draftReason = ex.what(); }
+                EXPECT(threw);
+                EXPECT(draftReason.find("quarantined") != std::string::npos);
+                // Reads stay available for inspection and recovery.
+                EXPECT(store.Project("proj-ac1").has_value());
+                EXPECT(store.Project("proj-ac1")->draft == "before");
+                // The Action Center query reports truthfully rather than pretending to
+                // read: its own read snapshot cannot begin while the connection is
+                // still physically inside the unresolved transaction. That reported
+                // failure is what the quarantine exists to explain.
+                auto inspected = store.QueryActionCenter({"proj-ac1", 50});
+                EXPECT(!inspected.isComplete);
+                EXPECT(inspected.errorMessage.find("transaction") != std::string::npos);
+            }
+
+            // Reopening clears the quarantine and the draft survives reconciliation.
+            mayasaba::Storage reopened(folder / "ac_leak.db");
+            EXPECT(!reopened.IsQuarantinedForTesting());
+            EXPECT(reopened.Project("proj-ac1")->draft == "before");
+            reopened.SaveDraft("proj-ac1", "after reopen");
+            EXPECT(reopened.Project("proj-ac1")->draft == "after reopen");
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // The summary is derived from the groups that actually ran. It is not a fixed
         // claim: the count and the names come from execution, and any group that threw

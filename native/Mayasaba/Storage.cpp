@@ -906,6 +906,15 @@ namespace mayasaba
         {
             AdmitWrite_locked();
         }
+        if (forceCommitFailureForTesting_ && std::string_view(sql).starts_with("COMMIT"))
+        {
+            // One-shot injected COMMIT failure for deterministic fault-injection tests:
+            // the statement is deliberately not executed, so the transaction provably
+            // remains open and every owner's catch path must re-establish the physical
+            // state. Real COMMIT failures (I/O, lock, disk) present the same way.
+            forceCommitFailureForTesting_ = false;
+            throw std::runtime_error("Injected COMMIT failure for testing");
+        }
         char* error = nullptr;
         auto const rc = sqlite3_exec(db_, sql, nullptr, nullptr, &error);
         if (rc != SQLITE_OK)
@@ -971,10 +980,24 @@ namespace mayasaba
 
     // Establishes the physical transaction state after a failed mutation instead of
     // assuming the rollback worked. A connection still inside a transaction cannot be
-    // trusted, so it is quarantined rather than presented as usable.
+    // trusted, so it is quarantined rather than presented as usable. This is the single
+    // shared cleanup for every catch path that owned a transaction: an unchecked
+    // "assume the rollback happened" here is exactly how R01/R02/A01 leaked an open
+    // transaction that a later write silently joined. The one-shot test hook produces
+    // the same observable failure mode SaveContribution injects, so every owner of a
+    // transaction can exercise the refused-rollback branch.
     void Storage::RollbackAfterFailure_locked() noexcept
     {
-        sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+        if (forceRollbackFailureForTesting_)
+        {
+            // Inject only the failure: the ROLLBACK is deliberately not executed, so the
+            // connection provably remains inside the transaction.
+            forceRollbackFailureForTesting_ = false;
+        }
+        else
+        {
+            sqlite3_exec(db_, "ROLLBACK;", nullptr, nullptr, nullptr);
+        }
         if (sqlite3_get_autocommit(db_) == 0)
         {
             poisoned_ = true;
@@ -1724,7 +1747,15 @@ namespace mayasaba
             Exec("COMMIT;");
             return result;
         }
-        catch (...) { sqlite3_exec(db_,"ROLLBACK;",nullptr,nullptr,nullptr); throw; }
+        catch (...)
+        {
+            // Checked cleanup: assume nothing about the physical transaction state. A
+            // rollback that cannot be proven leaves the connection quarantined (R02),
+            // so a later write refuses instead of silently joining the unresolved
+            // transaction and vanishing with it.
+            RollbackAfterFailure_locked();
+            throw;
+        }
     }
 
     // ----------------------------------------------------------------------
@@ -2474,7 +2505,10 @@ namespace mayasaba
         }
         catch(...)
         {
-            sqlite3_exec(db_,"ROLLBACK;",nullptr,nullptr,nullptr);
+            // Checked cleanup, shared with every other transaction owner (R01): an
+            // unconfirmed rollback quarantines the connection so the next write refuses
+            // with a precise reason rather than reporting success on an unknown state.
+            RollbackAfterFailure_locked();
             throw;
         }
     }
@@ -3574,10 +3608,12 @@ namespace mayasaba
                 sqlite3* db;
                 bool* quarantined;
                 bool forceCommitFailure;
+                bool* forceRollbackFailure;
                 bool active{true};
 
-                ReadTxGuard(sqlite3* d, bool* quarantinedFlag, bool forceFailure)
-                    : db(d), quarantined(quarantinedFlag), forceCommitFailure(forceFailure)
+                ReadTxGuard(sqlite3* d, bool* quarantinedFlag, bool forceFailure, bool* rollbackRefusal)
+                    : db(d), quarantined(quarantinedFlag), forceCommitFailure(forceFailure),
+                      forceRollbackFailure(rollbackRefusal)
                 {
                     char* err = nullptr;
                     int rc = sqlite3_exec(db, "BEGIN DEFERRED;", nullptr, nullptr, &err);
@@ -3592,7 +3628,23 @@ namespace mayasaba
                 {
                     if (active && db)
                     {
-                        sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                        // Destructor cleanup must be non-throwing AND proven. A ROLLBACK whose
+                        // outcome cannot be confirmed (A01) must not be silently assumed: an
+                        // unconfirmed cleanup quarantines the store through the same poisoned
+                        // pointer the write paths use, so a later write refuses instead of
+                        // reporting success while trapped inside this unresolved transaction.
+                        if (forceRollbackFailure && *forceRollbackFailure)
+                        {
+                            *forceRollbackFailure = false;
+                        }
+                        else
+                        {
+                            sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
+                        }
+                        if (sqlite3_get_autocommit(db) == 0 && quarantined)
+                        {
+                            *quarantined = true;
+                        }
                     }
                 }
                 void Commit()
@@ -3646,7 +3698,7 @@ namespace mayasaba
                     }
                     throw std::runtime_error(msg);
                 }
-            } tx(db_, &poisoned_, forceActionCenterCommitFailureForTesting_);
+            } tx(db_, &poisoned_, forceActionCenterCommitFailureForTesting_, &forceRollbackFailureForTesting_);
 
             std::string consistencyDigestInput;
             consistencyDigestInput.reserve(512);

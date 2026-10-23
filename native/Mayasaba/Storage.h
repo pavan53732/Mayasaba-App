@@ -436,8 +436,15 @@ namespace mayasaba
         void SetForceHashFailureForTesting(bool force) noexcept { forceHashFailureForTesting_ = force; }
         // Injects a rollback failure so callers can prove that an unconfirmed rollback is
         // reported as an UNKNOWN physical outcome and quarantines the store, instead of
-        // being claimed as a definite rollback. Test-only.
+        // being claimed as a definite rollback. Test-only. One shot: it fires once at the
+        // next rollback owned by any transaction (SaveContribution, StageSubmission,
+        // CommitSelection, the Action Center read guard) and then clears itself, so a
+        // refused cleanup and a later mutation can be exercised on the same connection.
         void SetForceRollbackFailureForTesting(bool force) noexcept { forceRollbackFailureForTesting_ = force; }
+        // Simulates a COMMIT that fails while the transaction is still open, so the
+        // transaction-owner catch paths can be exercised at COMMIT (not only at a
+        // statement or at ROLLBACK). One shot. Test-only.
+        void SetForceCommitFailureForTesting(bool force) noexcept { forceCommitFailureForTesting_ = force; }
         // Simulates a seal that did not take effect on the Nth verified attachment, so the
         // partial-sealing compensation path can be executed deterministically.
         void SetSealFailureIndexForTesting(std::size_t index) noexcept { sealFailureIndexForTesting_ = index; }
@@ -457,6 +464,7 @@ namespace mayasaba
         std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
         bool forceHashFailureForTesting_{false};
         bool forceRollbackFailureForTesting_{false};
+        bool forceCommitFailureForTesting_{false};
         std::size_t sealFailureIndexForTesting_{ static_cast<std::size_t>(-1) };
         bool forceActionCenterCommitFailureForTesting_{false};
         // Set when a transaction could not be returned to a known state. While set, write

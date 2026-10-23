@@ -3504,3 +3504,69 @@ historical and is not relabeled with this artifact's hash.
   the two desktop OLE drop criteria retain their prior incomplete/inconclusive
   dispositions. This work does not close containment, agent-session or orchestration
   gates and does not certify the complete product.
+
+### 30.5 M1 correction: every transaction-cleanup path is checked and quarantined (2026-10-23)
+
+Findings resolved: R01, R02, A01 (three unchecked failure paths left the connection
+inside a transaction without quarantine under injected rollback refusal; a later
+`TrySaveDraft` then reported success while its write would vanish with the unresolved
+transaction).
+
+Production changes (`native/Mayasaba/Storage.cpp`, `native/Mayasaba/Storage.h`):
+
+- `Storage.cpp:1168` added `RollbackAfterFailure_locked`, a shared checked cleanup:
+  `ROLLBACK` is attempted, `sqlite3_get_autocommit` proves the outcome, and a
+  connection still inside a transaction sets `poisoned_` (quarantine). Every failure
+  path — statement error, exception, refused rollback — routes through it; the
+  original failure is preserved and the quarantine reason is a separate, precise
+  English diagnostic.
+- `StageSubmission` and `CommitSelection` catches now call the checked cleanup;
+  the `ReadTxGuard` destructor is non-throwing and uses it (throws in a destructor
+  path would terminate). On exception during rollback it also quarantines.
+- New test hooks in `Storage.h`, test-only and one-shot: `SetForceRollbackFailureForTesting` (the pre-existing hook, now fires at the next rollback owned by any transaction, including without a write in flight), `SetForceCommitFailureForTesting` (simulates a COMMIT failure with the transaction still open), and `IsQuarantinedForTesting` (quarantine observation).
+- `Exec("BEGIN IMMEDIATE")` remains the single admission point
+  (`AdmitWrite_locked` runs before any statement is prepared). No new entry point
+  was added; SQLite Storage keeps sole persistence authority.
+
+Deterministic regressions (`native/tests/storage_tests.cpp`, suite rebuilt against
+the production sources; 48 groups, all PASS, exit 0):
+
+- Group 46 (StageSubmission): rollback-refused intermediate failure quarantines the
+  connection; the next direct mutation is refused with the quarantine reason; the
+  pre-failure committed draft remains readable after reopening the store.
+- Group 47 (CommitSelection, also covers R13 injection): COMMIT refused mid-write
+  yields `poisoned_`, a quarantined connection, a refusal message for the next
+  mutation, and the pending submission still awaiting recovery after reopen.
+- Group 48 (ReadTxGuard/QueryActionCenter): refused rollback inside the read-guard
+  destructor quarantines; `QueryActionCenter` surfaces the quarantine reason as
+  `errorMessage`, exactly the truthful outcome, and reopening restores reads.
+- Group 45 (SaveContribution) retains its pre-existing coverage of the same hook
+  path.
+
+Mutant discrimination (`evidence/m1-run/apply_mutant.py` against an isolated copy
+under `native/tests/evidence/m1-run/mutation`, gitignored): removing the three
+guards (the `poisoned_` block in `RollbackAfterFailure_locked`, the catch-body
+calls in `StageSubmission`/`CommitSelection`, the destructor call) rebuilt and run
+against a fresh store. Result: the pre-existing 45 groups still PASS (they do not
+exercise refusal on these paths), group 46 FAILS at the discriminating assertion
+(`expected quarantined connection` at `storage_tests.cpp:4406`), groups 47/48 fail
+equivalently — the new tests fail exactly when the production protection is
+removed and pass when it is present. Mutant objects were discarded; the production
+tree was verified clean of mutant sources before the final rebuild
+(`git status` shows only `Storage.cpp`, `Storage.h`, `storage_tests.cpp`,
+`LOCAL-VALIDATION.md`).
+
+Artifact identity: `bin/storage_tests.exe` SHA-256
+`e4bf0b93e1e1f87686f6ec2f8153e9d6445d9867ff9a6b4f11bc6139f22b7d6a`; mutant-suite
+binary `9bc878c8...d2c7af3` retained under `evidence/m1-run/mutation/native/tests/bin/`.
+Stores used were disposable per-run paths under `evidence/m1-run/stores/`.
+
+Production-data protection: the production database was hashed with PowerShell
+`Get-FileHash` (no test code opened it) and matches the audit-recorded value
+(`23E3ED87...`). Test runs used only isolated disposable stores.
+
+Remaining limits for R01/R02/A01: coverage is at the Storage layer with injected
+faults; a live OS-level denial (e.g. disk-full during ROLLBACK) is not separately
+reproduced here — the injected hook exercises the same branch the OS error would
+take. M2 (attachment ownership/finalization), M3 (capacity/refusal separation),
+M4 (layout repairs) and M5 (strict certification) remain open with their own gates.
