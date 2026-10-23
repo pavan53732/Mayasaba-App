@@ -941,7 +941,9 @@ namespace mayasaba
                 "The store is quarantined after an unconfirmed transaction rollback, so no change can be "
                 "recorded. Reopen the project store and reconcile the unresolved submission before retrying.");
         }
-        CheckWriteCapacity();
+        // Capacity is suppressed only during the constructor's scoped schema/recovery
+        // phase (R05); quarantine is never suppressed.
+        if (!openSchemaPhase_) CheckWriteCapacity();
     }
 
     int Storage::WriteAdmissionAuthorizer(void* userData, int action, char const*, char const*,
@@ -1073,14 +1075,58 @@ namespace mayasaba
 
     void Storage::CheckWriteCapacity()
     {
-        auto space=std::filesystem::space(file_.parent_path());
-        if(space.available < 5ull*1024*1024*1024)
-            throw std::runtime_error("Local storage free-space reserve is below 5 GiB; protected data was retained");
-        uintmax_t size=0;
-        for(auto const& suffix:{L"",L"-wal",L"-shm"})
-        {auto path=file_.wstring()+suffix;std::error_code ec;auto bytes=std::filesystem::file_size(path,ec);if(!ec)size+=bytes;}
-        if(size>=10ull*1024*1024*1024)
-            throw std::runtime_error("Local project store reached its 10 GiB ceiling; protected data was retained");
+        // Normal-write admission only (R05). Opening an existing store is never gated
+        // here: inspection and recovery must stay possible when the store is at its
+        // ceiling or the volume is low on space, so the constructor no longer calls
+        // this before SQLite opens - only the creation of a brand-new store does, as
+        // ordinary write admission. The observation covers the whole Mayasaba-managed
+        // scope - database, WAL, SHM and every regular file under the managed
+        // attachment tree - not only the database files, and the two refusals name
+        // their distinct causes precisely. Nothing here deletes data: recovery and
+        // eligible cleanup belong to their owning layers, and a refusal retains every
+        // protected byte and record.
+        CapacityObservation observed{};
+        if (capacityProbeForTesting_)
+        {
+            observed = capacityProbeForTesting_();
+        }
+        else
+        {
+            observed.freeBytes = std::filesystem::space(file_.parent_path()).available;
+            uintmax_t managed = 0;
+            for (auto const& suffix : { L"", L"-wal", L"-shm" })
+            {
+                auto path = file_.wstring() + suffix;
+                std::error_code ec;
+                auto bytes = std::filesystem::file_size(path, ec);
+                if (!ec) managed += bytes;
+            }
+            auto attachmentsRoot = ManagedAttachmentRoot();
+            std::error_code walkEc;
+            for (std::filesystem::recursive_directory_iterator it(attachmentsRoot,
+                     std::filesystem::directory_options::skip_permission_denied, walkEc), end;
+                 it != end && !walkEc; it.increment(walkEc))
+            {
+                std::error_code entryEc;
+                if (it->is_regular_file(entryEc) && !entryEc)
+                {
+                    auto bytes = it->file_size(entryEc);
+                    if (!entryEc) managed += bytes;
+                }
+            }
+            observed.managedBytes = managed;
+        }
+        constexpr uintmax_t ceiling = 10ull * 1024 * 1024 * 1024;
+        constexpr uintmax_t reserve = 5ull * 1024 * 1024 * 1024;
+        if (observed.managedBytes >= ceiling)
+            throw std::runtime_error(
+                "Local project store reached its 10 GiB ceiling of Mayasaba-managed bytes (database and attachments); "
+                "protected data was retained and nothing was deleted. Reclaim eligible data or relocate the store "
+                "before writing again.");
+        if (observed.freeBytes < reserve)
+            throw std::runtime_error(
+                "Local storage free-space reserve is below 5 GiB; protected data was retained and nothing was "
+                "deleted. Free space on the store's volume before writing again.");
     }
     void Storage::Bind(sqlite3_stmt* statement, int index, std::string const& value)
     {
@@ -1127,7 +1173,14 @@ namespace mayasaba
         try
         {
             std::filesystem::create_directories(file.parent_path());
-            CheckWriteCapacity();
+            // Capacity admission at open applies only to creating a brand-new store
+            // (R05): that is ordinary write admission. An existing store always opens,
+            // so inspection and recovery stay possible at the ceiling or on a low
+            // volume; its mutations remain gated by AdmitWrite_locked as before.
+            std::error_code existingEc;
+            bool const existingStore = std::filesystem::exists(file, existingEc) &&
+                std::filesystem::file_size(file, existingEc) > 0;
+            if (!existingStore) CheckWriteCapacity();
 #ifdef _WIN32
             // Lock the actual file identity, independent of environment, case,
             // hard links or path aliases. Hold it against rename for this lifetime.
@@ -3460,6 +3513,7 @@ namespace mayasaba
     {
         std::lock_guard lock(mutex_);
         DraftAttachmentRemoval outcome;
+        bool physicalEffectOccurred = false;
 
         // Authorization, retirement, shared-reference accounting and byte cleanup are one
         // serialized step inside a single write transaction. Eligibility established here
@@ -3521,7 +3575,8 @@ namespace mayasaba
                         throw std::runtime_error("The staged copy could not be removed (" + deletionReason +
                             "); the removal was rolled back and nothing was changed.");
                     }
-                    outcome.bytesRemoved = true;
+                     outcome.bytesRemoved = true;
+                     physicalEffectOccurred = true;
                 }
             }
             outcome.recordRemoved = true;
@@ -3530,7 +3585,9 @@ namespace mayasaba
         }
         catch (...)
         {
+            if (physicalEffectOccurred) poisoned_ = true;
             RollbackAfterFailure_locked();
+            if (physicalEffectOccurred) poisoned_ = true;
             throw;
         }
     }
@@ -3551,6 +3608,7 @@ namespace mayasaba
     {
         std::lock_guard lock(mutex_);
         DraftAttachmentClear outcome;
+        bool physicalEffectOccurred = false;
 
         // One serialized transaction covers the pending-submission guard, the row
         // retirement, the shared-reference accounting and (through `deleteBytes`) the
@@ -3608,10 +3666,11 @@ namespace mayasaba
                 if (deleteBytes)
                 {
                     std::string deletionReason;
-                    if (deleteBytes(path, &deletionReason))
-                    {
-                        outcome.stagedPaths.push_back(path);
-                    }
+                     if (deleteBytes(path, &deletionReason))
+                     {
+                         outcome.stagedPaths.push_back(path);
+                         physicalEffectOccurred = true;
+                     }
                     else
                     {
                         // The row retirement stands (as before, the leftover bytes become
@@ -3636,7 +3695,9 @@ namespace mayasaba
         }
         catch (...)
         {
+            if (physicalEffectOccurred) poisoned_ = true;
             RollbackAfterFailure_locked();
+            if (physicalEffectOccurred) poisoned_ = true;
             throw;
         }
     }

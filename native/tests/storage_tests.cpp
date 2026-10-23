@@ -4872,6 +4872,129 @@ int main()
             CASES_END();
         }
 
+            CASES_BEGIN("51. Capacity refuses writes, never opening; managed scope fully counted (R05)");
+            {
+                // A sparse logical extension reproduces the audit's exact ceiling branch
+                // without allocating real disk. The corrected constructor must still open
+                // this existing store for inspection and recovery; only writes are
+                // refused, with a precise reason.
+                auto capFolder = folder / "cap-audit";
+                fs::create_directories(capFolder);
+                bool threw = false;
+                std::string reason;
+auto const capDb = capFolder / "cap.db";
+                {
+                    mayasaba::Storage seedStore(capDb);
+                    seedStore.BindProject("proj-cap", "Cap", "C:/CAP1");
+                    EXPECT(seedStore.TrySaveDraft("proj-cap", "seed"));
+                }
+                {
+                    HANDLE h = CreateFileW(capDb.wstring().c_str(), GENERIC_WRITE, 0, nullptr,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    EXPECT(h != INVALID_HANDLE_VALUE);
+                    if (h != INVALID_HANDLE_VALUE)
+                    {
+                        DWORD sparseBytes = 0;
+                        EXPECT(DeviceIoControl(h, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &sparseBytes, nullptr));
+                        LARGE_INTEGER end{};
+                        end.QuadPart = static_cast<LONGLONG>(11ull << 30);
+                        EXPECT(SetFilePointerEx(h, end, nullptr, FILE_BEGIN));
+                        EXPECT(SetEndOfFile(h));
+                        CloseHandle(h);
+                    }
+                }
+                {
+                    // Reopening at the ceiling succeeds: eligible inspection and recovery
+                    // access is not capacity-gated.
+                    mayasaba::Storage atCeiling(capDb);
+                    
+                    EXPECT(!atCeiling.IsQuarantinedForTesting());
+                    EXPECT(atCeiling.Project("proj-cap").has_value());
+                    EXPECT(atCeiling.Project("proj-cap")->draft == "seed");
+                    EXPECT(atCeiling.GetDraftAttachments("proj-cap").empty());
+                    threw = false; reason.clear();
+                    try { atCeiling.TrySaveDraft("proj-cap", "blocked"); }
+                    catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+                    EXPECT(threw);
+                    EXPECT(reason.find("10 GiB ceiling") != std::string::npos);
+                    EXPECT(reason.find("nothing was deleted") != std::string::npos);
+                    // Reads still work after the refusal, and the store is not quarantined:
+                    // a capacity refusal is a separate, non-poisoning gate.
+                    EXPECT(atCeiling.Project("proj-cap")->draft == "seed");
+                    EXPECT(!atCeiling.IsQuarantinedForTesting());
+                }
+
+                // Injectable observation (R05): the two refusal branches are forced
+                // without a filled disk, and a capacity refusal never poisons the store.
+mayasaba::Storage probeStore(folder / "cap-probe.db");
+                probeStore.BindProject("proj-cap2", "Cap2", "C:/CAP2");
+                EXPECT(probeStore.TrySaveDraft("proj-cap2", "baseline"));
+                probeStore.SetCapacityProbeForTesting(
+                    [] { return mayasaba::Storage::CapacityObservation{ 11ull << 30, 100ull << 30 }; });
+                threw = false; reason.clear();
+                try { probeStore.TrySaveDraft("proj-cap2", "over ceiling"); }
+                catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+                EXPECT(threw);
+                EXPECT(reason.find("10 GiB ceiling") != std::string::npos);
+                EXPECT(probeStore.Project("proj-cap2")->draft == "baseline");
+                EXPECT(!probeStore.IsQuarantinedForTesting());
+
+                probeStore.SetCapacityProbeForTesting(
+                    [] { return mayasaba::Storage::CapacityObservation{ 1024, 1ull << 30 }; });
+                threw = false; reason.clear();
+                try { probeStore.TrySaveDraft("proj-cap2", "low reserve"); }
+                catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+                EXPECT(threw);
+                EXPECT(reason.find("5 GiB") != std::string::npos);
+                EXPECT(reason.find("10 GiB ceiling") == std::string::npos);
+                EXPECT(probeStore.Project("proj-cap2")->draft == "baseline");
+
+                probeStore.SetCapacityProbeForTesting(mayasaba::Storage::CapacityProbe{});
+                EXPECT(probeStore.TrySaveDraft("proj-cap2", "recovered"));
+                EXPECT(probeStore.Project("proj-cap2")->draft == "recovered");
+                EXPECT(!probeStore.IsQuarantinedForTesting());
+
+                // Real managed-scope accounting: a sparse file inside the managed
+                // attachment tree alone exceeds the ceiling, with the database tiny.
+auto const capDir2 = folder / "cap-scope";
+                fs::create_directories(capDir2);
+                mayasaba::Storage scopeStore(capDir2 / "scope.db");
+                scopeStore.BindProject("proj-cap3", "Cap3", "C:/CAP3");
+                EXPECT(scopeStore.TrySaveDraft("proj-cap3", "baseline"));
+                auto const attachmentsRoot = capDir2 / "attachments";
+                fs::create_directories(attachmentsRoot);
+auto const bigManaged = attachmentsRoot / "managed-bytes.bin";
+                {
+                    HANDLE h = CreateFileW(bigManaged.wstring().c_str(), GENERIC_WRITE, 0, nullptr,
+                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                    EXPECT(h != INVALID_HANDLE_VALUE);
+                    if (h != INVALID_HANDLE_VALUE)
+                    {
+                        DWORD sparseBytes = 0;
+                        EXPECT(DeviceIoControl(h, FSCTL_SET_SPARSE, nullptr, 0, nullptr, 0, &sparseBytes, nullptr));
+                        LARGE_INTEGER end{};
+                        end.QuadPart = static_cast<LONGLONG>(11ull << 30);
+                        EXPECT(SetFilePointerEx(h, end, nullptr, FILE_BEGIN));
+                        EXPECT(SetEndOfFile(h));
+                        CloseHandle(h);
+                    }
+                }
+                threw = false; reason.clear();
+                try { scopeStore.TrySaveDraft("proj-cap3", "attachment bytes count"); }
+                catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+                EXPECT(threw);
+                EXPECT(reason.find("10 GiB ceiling") != std::string::npos);
+                // Removing the managed attachment bytes restores ordinary admission:
+                // the observation is recomputed, never cached across the change.
+fs::remove(bigManaged);
+                EXPECT(scopeStore.TrySaveDraft("proj-cap3", "recovered"));
+                EXPECT(!scopeStore.IsQuarantinedForTesting());
+
+                fs::remove_all(capFolder);
+                fs::remove_all(capDir2);
+                CASES_END();
+            }
+
         fs::remove_all(folder);
         // The summary is derived from the groups that actually ran. It is not a fixed
         // claim: the count and the names come from execution, and any group that threw

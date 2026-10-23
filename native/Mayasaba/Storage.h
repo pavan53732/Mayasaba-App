@@ -490,6 +490,19 @@ namespace mayasaba
         // open - the state the previous bookkeeping silently forgot.
         void SetForceActionCenterCommitFailureForTesting(bool force) noexcept { forceActionCenterCommitFailureForTesting_ = force; }
         bool IsQuarantinedForTesting() const noexcept { return poisoned_; }
+        // Replaces the real managed-capacity observation (R05) so tests can force the
+        // store-ceiling and free-space-reserve branches without sparse-file tricks or a
+        // filled disk. The probe supplies exactly what the real observation would: every
+        // Mayasaba-managed byte (database, WAL, SHM and the whole managed attachment
+        // tree) and the free bytes on the store's volume. A null probe restores the real
+        // observation. Test-only.
+        struct CapacityObservation
+        {
+            std::uint64_t managedBytes{0};
+            std::uint64_t freeBytes{0};
+        };
+        using CapacityProbe = std::function<CapacityObservation()>;
+        void SetCapacityProbeForTesting(CapacityProbe probe) { capacityProbeForTesting_ = std::move(probe); }
 
     private:
         sqlite3* db_{nullptr};
@@ -500,6 +513,13 @@ namespace mayasaba
         std::function<void()> inspectionFileHashedHook_;
         std::function<void()> queryActionCenterSnapshotHook_;
         std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
+        CapacityProbe capacityProbeForTesting_;
+        // True only while the constructor runs its idempotent schema DDL and crash
+        // reconciliation (R05): these writes are part of opening, and opening an
+        // existing store must never be capacity-gated, so the capacity check - only
+        // the capacity check; the quarantine check still applies - is suppressed for
+        // exactly this phase. Every post-open mutation is capacity-gated as before.
+        bool openSchemaPhase_{false};
         bool forceHashFailureForTesting_{false};
         bool forceRollbackFailureForTesting_{false};
         bool forceCommitFailureForTesting_{false};
