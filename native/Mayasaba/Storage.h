@@ -357,9 +357,47 @@ namespace mayasaba
         // so no pending submission can appear between "allowed" and "gone". That is what
         // lets a caller treat a successful return as permission to delete the bytes.
         std::optional<std::string> RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
+
+        // Retires a draft attachment record with reference-accounted, serialized byte
+        // cleanup (R03/R15). The row removal, the shared-reference accounting and the
+        // physical byte removal (through `deleteBytes`, when provided) all happen inside
+        // one BEGIN IMMEDIATE transaction under the store mutex, so admission of a new
+        // protected reference cannot race with cleanup eligibility: a reference that
+        // exists before the transaction is counted, and one admitted afterwards needs the
+        // same mutex this operation holds. When other protected records (draft rows of any
+        // project, committed attachments) still reference the same recorded staged path,
+        // the row is removed but `bytesShared` is reported and the bytes are retained;
+        // hash or size equality is never used as ownership proof - only the exact
+        // recorded path. A failed deletion rolls the whole removal back, so the record and
+        // the bytes stay recoverable, and the English reason names the cause.
+        struct DraftAttachmentRemoval
+        {
+            bool recordFound{false};
+            bool recordRemoved{false};
+            std::string stagedPath;
+            bool bytesShared{false};
+            bool bytesRemoved{false};
+            std::string reasonEn;
+        };
+        using StagedBytesDeleter = std::function<bool(std::string const& stagedPath, std::string* reasonEn)>;
+        DraftAttachmentRemoval RemoveDraftAttachmentGuarded(std::string const& projectId, std::string const& attachmentId, StagedBytesDeleter const& deleteBytes);
         // Removes every draft attachment record of the project and returns the staged paths
         // they owned, under the same authorization rule and the same serialization.
         std::vector<std::string> ClearDraftAttachments(std::string const& projectId);
+
+        // Result of the guarded whole-set clear: `stagedPaths` lists exactly the paths
+        // whose bytes this operation removed, `sharedPaths` lists paths retained because
+        // other protected records still reference them, and `reasonEn` carries a precise
+        // English diagnostic when a deletion failed (the rows are still retired, the
+        // leftover bytes stay untracked and reclaimable by reconciliation, exactly like
+        // the non-guarded clear).
+        struct DraftAttachmentClear
+        {
+            std::vector<std::string> stagedPaths;
+            std::vector<std::string> sharedPaths;
+            std::string reasonEn;
+        };
+        DraftAttachmentClear ClearDraftAttachmentsGuarded(std::string const& projectId, StagedBytesDeleter const& deleteBytes);
         std::vector<AttachmentRecord> GetDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);
         std::vector<AttachmentRecord> GetCommittedAttachmentsForProject(std::string const& projectId);
@@ -484,6 +522,11 @@ namespace mayasaba
         // Refuses an attachment identity that another project already owns, checked inside
         // the same transaction as the write it guards.
         void RefuseForeignAttachmentIdentity_locked(std::string const& projectId, std::string const& attachmentId);
+        // Number of protected references other than (projectId, attachmentId) that still
+        // point at the same recorded staged path: draft rows of any project and committed
+        // attachment rows. Must be called inside the same write transaction that
+        // established eligibility.
+        int CountOtherProtectedReferences_locked(std::string const& stagedPath, std::string const& projectId, std::string const& attachmentId);
         // Establishes the transaction state after a failed mutation; quarantines the store
         // when the rollback cannot be proven.
         void RollbackAfterFailure_locked() noexcept;

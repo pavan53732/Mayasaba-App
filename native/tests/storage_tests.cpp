@@ -795,7 +795,10 @@ int main()
         {
             CASES_BEGIN("19. Attachment service: selection, validation, 50-file limits, byte boundaries,");
             auto attDb = folder / "attachment_test.db";
-            auto attStaging = folder / "att_staging";
+            // Production wires the default staging root (the store's managed attachment
+            // directory), and finalization now verifies that admitted bytes are inside
+            // that boundary; a test that stages a real file must stage it the same way.
+            auto attStaging = folder / "attachments";
             fs::create_directories(attStaging);
             mayasaba::Storage store(attDb);
             mayasaba::AttachmentService attService(store, attStaging);
@@ -2877,7 +2880,11 @@ int main()
             timelineStore.BindProject("proj-tl", "Timeline", "C:/Timeline");
 
             // A real staged attachment is required, so the save path validates it.
-            auto const staged = folder / "timeline_attachment.txt";
+            // Stage it inside the store's managed attachment boundary, the way the
+            // production preparation path does.
+            auto const stagedDir = folder / "attachments" / "staging" / "proj-tl";
+            fs::create_directories(stagedDir);
+            auto const staged = stagedDir / "timeline_attachment.txt";
             {
                 std::ofstream out(staged, std::ios::binary);
                 out << "attachment bytes";
@@ -3812,26 +3819,35 @@ int main()
             EXPECT(!fs::exists(second));
             EXPECT(store.GetDraftAttachments("rem-ok").empty());
 
-            // Partial cleanup failure: the file is held open without delete sharing, so the
-            // record can be removed but the bytes cannot. That must be reported, not hidden,
-            // and must remain reclaimable.
+            // Cleanup failure: the file is held open without delete sharing, so the
+            // verified removal cannot proceed. The guarded removal rolls back as a whole:
+            // the record and the bytes both remain exactly as they were, and the precise
+            // cause is thrown to the caller instead of a silently half-completed removal
+            // that would leave untracked bytes behind.
             auto stuck = seed("rem-stuck", "att-stuck");
             HANDLE hold = CreateFileW(stuck.wstring().c_str(), GENERIC_READ, FILE_SHARE_READ,
                 nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
             EXPECT(hold != INVALID_HANDLE_VALUE);
 
-            auto const partial = service.RemoveDraftAttachment("rem-stuck", "att-stuck");
+            bool stuckRefused = false;
+            std::string stuckReason;
+            try { service.RemoveDraftAttachment("rem-stuck", "att-stuck"); }
+            catch (std::exception const& e) { stuckRefused = true; stuckReason = e.what(); }
             CloseHandle(hold);
 
-            EXPECT(partial.recordRemoved);
-            EXPECT(!partial.bytesRemoved);
-            EXPECT(!partial.unresolvedReason.empty());
+            EXPECT(stuckRefused);
+            EXPECT(stuckReason.find("could not be removed") != std::string::npos);
             EXPECT(fs::exists(stuck));
-            EXPECT(store.GetDraftAttachments("rem-stuck").empty());
+            EXPECT(store.GetDraftAttachments("rem-stuck").size() == 1);
 
-            // The record is gone, so the file is untracked; reconciliation reclaims it.
-            service.ReclaimInterruptedPreparation("rem-stuck");
+            // Once the interfering handle is gone, the same removal completes normally:
+            // record and bytes both go, and nothing is left behind to reclaim.
+            auto const partial = service.RemoveDraftAttachment("rem-stuck", "att-stuck");
+            EXPECT(partial.recordRemoved);
+            EXPECT(partial.bytesRemoved);
+            EXPECT(partial.unresolvedReason.empty());
             EXPECT(!fs::exists(stuck));
+            EXPECT(store.GetDraftAttachments("rem-stuck").empty());
             CASES_END();
         }
 
@@ -4589,6 +4605,270 @@ int main()
             EXPECT(reopened.Project("proj-ac1")->draft == "before");
             reopened.SaveDraft("proj-ac1", "after reopen");
             EXPECT(reopened.Project("proj-ac1")->draft == "after reopen");
+            CASES_END();
+        }
+
+        // ------------------------------------------------------------------
+        // M2: physical attachment ownership and finalization (R03, R14, R04, R15).
+        // ------------------------------------------------------------------
+
+        // 49. Retiring one record never deletes bytes another protected record still
+        // references, and the physical deletion is verified against the same object the
+        // record named - not against a substituted or shared path.
+        {
+            CASES_BEGIN("49. Shared staged bytes survive the retirement of one referencing record");
+            mayasaba::Storage store(folder / "shared-bytes.db");
+            // Production stages inside the store's managed attachment directory; the
+            // finalization boundary check (group 50) requires exactly that.
+            auto staging = folder / "attachments";
+            fs::create_directories(staging);
+            mayasaba::AttachmentService service(store, staging);
+
+            auto seed = [&](std::string const& projectId, std::string const& id)
+            {
+                store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+                auto dir = staging / "staging" / projectId;
+                fs::create_directories(dir);
+                auto path = dir / (id + ".txt");
+                {
+                    std::ofstream of(path, std::ios::binary);
+                    of.write("shared bytes", 12);
+                }
+                mayasaba::AttachmentCandidate c;
+                c.id = id;
+                c.fileName = id + ".txt";
+                c.fileSize = 12;
+                c.detectedType = "text/plain";
+                c.originalPath = L"C:/source/" + std::wstring(id.begin(), id.end()) + L".txt";
+                c.stagedPath = path.wstring();
+                c.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+                c.status = mayasaba::AttachmentStatus::Ready;
+                service.SaveDraftAttachments(projectId, { c });
+                return path;
+            };
+
+            // (a) Two draft identities, one staged path, one project. Removing one must
+            // remove only that record; the other record still protects the bytes.
+            auto sharedFile = seed("share-a", "att-first");
+            mayasaba::AttachmentRecord alias;
+            alias.id = "att-second";
+            alias.projectId = "share-a";
+            alias.fileName = "att-first.txt";
+            alias.fileSize = 12;
+            alias.sha256 = ComputeSha256ForTestFile(WideToUtf8(sharedFile.wstring()));
+            alias.detectedType = "text/plain";
+            alias.storagePath = WideToUtf8(sharedFile.wstring());
+            alias.sourcePath = "C:/source/alias.txt";
+            alias.status = "READY";
+            store.SaveDraftAttachment("share-a", alias);
+
+            auto const first = store.RemoveDraftAttachmentGuarded("share-a", "att-first", nullptr);
+            EXPECT(first.recordRemoved);
+            EXPECT(first.bytesShared);
+            EXPECT(!first.bytesRemoved);
+            EXPECT(first.reasonEn.find("referenced by 1") != std::string::npos);
+            EXPECT(fs::exists(sharedFile));
+            EXPECT(store.GetDraftAttachments("share-a").size() == 1);
+            EXPECT(store.GetDraftAttachments("share-a")[0].id == "att-second");
+
+            // Removing the last referencing record does remove the bytes.
+            auto const last = service.RemoveDraftAttachment("share-a", "att-second");
+            EXPECT(last.recordRemoved);
+            EXPECT(last.bytesRemoved);
+            EXPECT(!fs::exists(sharedFile));
+            EXPECT(store.GetDraftAttachments("share-a").empty());
+
+            // (b) A draft alias of a committed attachment: removing the draft retires only
+            // the draft row. The committed record keeps its sealed bytes, and inspection
+            // still integrity-verifies them.
+            auto committedFile = seed("share-b", "att-committed-src");
+            store.StageSubmission("share-b", "sub-share-b", "body");
+            mayasaba::AttachmentRecord committedRec;
+            committedRec.id = "att-committed-src";
+            committedRec.projectId = "share-b";
+            committedRec.submissionId = "sub-share-b";
+            committedRec.fileName = "att-committed-src.txt";
+            committedRec.fileSize = 12;
+            committedRec.sha256 = ComputeSha256ForTestFile(WideToUtf8(committedFile.wstring()));
+            committedRec.detectedType = "text/plain";
+            committedRec.storagePath = WideToUtf8(committedFile.wstring());
+            committedRec.sourcePath = "C:/source/committed-src.txt";
+            committedRec.status = "COMMITTED";
+            EXPECT(store.SaveContribution("share-b", "sub-share-b", "body", { committedRec })
+                == mayasaba::SaveDisposition::Saved);
+            EXPECT(store.GetDraftAttachments("share-b").empty());
+
+            mayasaba::AttachmentRecord draftAlias;
+            draftAlias.id = "att-draft-alias";
+            draftAlias.projectId = "share-b";
+            draftAlias.fileName = "alias-of-committed.txt";
+            draftAlias.fileSize = 12;
+            draftAlias.sha256 = committedRec.sha256;
+            draftAlias.detectedType = "text/plain";
+            draftAlias.storagePath = committedRec.storagePath;
+            draftAlias.sourcePath = "C:/source/alias-of-committed.txt";
+            draftAlias.status = "READY";
+            store.SaveDraftAttachment("share-b", draftAlias);
+
+            auto const aliasRemoval = service.RemoveDraftAttachment("share-b", "att-draft-alias");
+            EXPECT(aliasRemoval.recordRemoved);
+            EXPECT(fs::exists(committedFile));
+            EXPECT(store.GetAttachmentsForContribution("sub-share-b").size() == 1);
+            auto committedInsp = store.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "share-b", "att-committed-src" });
+            EXPECT(committedInsp.found);
+            EXPECT(committedInsp.inspection.isManaged);
+            EXPECT(committedInsp.inspection.integrityVerified);
+
+            // (c) A physical alias across projects: one project's draft naming another
+            // project's staged copy. Either record's retirement leaves the bytes in place.
+            auto crossFile = seed("share-c", "att-cross");
+            store.BindProject("share-d", "D", "C:/D");
+            mayasaba::AttachmentRecord crossAlias;
+            crossAlias.id = "att-in-d";
+            crossAlias.projectId = "share-d";
+            crossAlias.fileName = "alias.txt";
+            crossAlias.fileSize = 12;
+            crossAlias.sha256 = ComputeSha256ForTestFile(WideToUtf8(crossFile.wstring()));
+            crossAlias.detectedType = "text/plain";
+            crossAlias.storagePath = WideToUtf8(crossFile.wstring());
+            crossAlias.sourcePath = "C:/source/in-d.txt";
+            crossAlias.status = "READY";
+            store.SaveDraftAttachment("share-d", crossAlias);
+
+            auto const cross = store.RemoveDraftAttachmentGuarded("share-c", "att-cross", nullptr);
+            EXPECT(cross.recordRemoved);
+            EXPECT(cross.bytesShared);
+            EXPECT(fs::exists(crossFile));
+            EXPECT(store.GetDraftAttachments("share-d").size() == 1);
+
+            // (d) R15 hardening: a staged copy that shares its bytes with an outside hard
+            // link is refused for removal - neither the bytes nor the record is touched -
+            // and the same removal succeeds once the outside link is gone.
+            auto linkedFile = seed("share-e", "att-linked");
+            auto outsideLink = folder / "hardlink-outside.txt";
+            std::error_code linkEc;
+            std::filesystem::remove(outsideLink, linkEc);
+            EXPECT(CreateHardLinkW(outsideLink.wstring().c_str(), linkedFile.wstring().c_str(), nullptr));
+            bool linkRefused = false;
+            std::string linkReason;
+            try { service.RemoveDraftAttachment("share-e", "att-linked"); }
+            catch (std::exception const& ex) { linkRefused = true; linkReason = ex.what(); }
+            EXPECT(linkRefused);
+            EXPECT(linkReason.find("hard links") != std::string::npos);
+            EXPECT(fs::exists(linkedFile));
+            EXPECT(store.GetDraftAttachments("share-e").size() == 1);
+            std::filesystem::remove(outsideLink, linkEc);
+            auto const after = service.RemoveDraftAttachment("share-e", "att-linked");
+            EXPECT(after.recordRemoved);
+            EXPECT(after.bytesRemoved);
+            EXPECT(!fs::exists(linkedFile));
+            CASES_END();
+        }
+
+        // 50. A committed identity is retired for its project (R14), and finalization
+        // verifies the managed boundary on the open object instead of trusting matching
+        // metadata (R04).
+        {
+            CASES_BEGIN("50. Committed identity is retired and finalization verifies the managed boundary");
+            mayasaba::Storage store(folder / "identity-boundary.db");
+            auto staging = folder / "attachments";
+            fs::create_directories(staging);
+            mayasaba::AttachmentService service(store, staging);
+
+            auto seed = [&](std::string const& projectId, std::string const& id)
+            {
+                store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+                auto dir = staging / "staging" / projectId;
+                fs::create_directories(dir);
+                auto path = dir / (id + ".txt");
+                {
+                    std::ofstream of(path, std::ios::binary);
+                    of.write("boundary bytes", 14);
+                }
+                mayasaba::AttachmentCandidate c;
+                c.id = id;
+                c.fileName = id + ".txt";
+                c.fileSize = 14;
+                c.detectedType = "text/plain";
+                c.originalPath = L"C:/source/" + std::wstring(id.begin(), id.end()) + L".txt";
+                c.stagedPath = path.wstring();
+                c.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+                c.status = mayasaba::AttachmentStatus::Ready;
+                service.SaveDraftAttachments(projectId, { c });
+                return path;
+            };
+
+            // R14: after the commit, the identity belongs to the committed attachment and
+            // is retired for this project; a draft record may not reuse it.
+            auto committedFile = seed("ident-a", "att-retired");
+            store.StageSubmission("ident-a", "sub-ident-a", "body");
+            mayasaba::AttachmentRecord committedRec;
+            committedRec.id = "att-retired";
+            committedRec.projectId = "ident-a";
+            committedRec.submissionId = "sub-ident-a";
+            committedRec.fileName = "att-retired.txt";
+            committedRec.fileSize = 14;
+            committedRec.sha256 = ComputeSha256ForTestFile(WideToUtf8(committedFile.wstring()));
+            committedRec.detectedType = "text/plain";
+            committedRec.storagePath = WideToUtf8(committedFile.wstring());
+            committedRec.sourcePath = "C:/source/retired.txt";
+            committedRec.status = "COMMITTED";
+            EXPECT(store.SaveContribution("ident-a", "sub-ident-a", "body", { committedRec })
+                == mayasaba::SaveDisposition::Saved);
+            EXPECT(store.GetDraftAttachments("ident-a").empty());
+
+            mayasaba::AttachmentRecord reused = committedRec;
+            reused.status = "READY";
+            reused.errorMessage.clear();
+            bool identityRefused = false;
+            std::string identityReason;
+            try { store.SaveDraftAttachment("ident-a", reused); }
+            catch (std::exception const& ex) { identityRefused = true; identityReason = ex.what(); }
+            EXPECT(identityRefused);
+            EXPECT(identityReason.find("committed attachment of this project") != std::string::npos);
+            EXPECT(store.GetDraftAttachments("ident-a").empty());
+
+            // The committed record is the one the identity names, unambiguously.
+            auto committedInsp = store.InspectAttachment(mayasaba::AttachmentInspectionQuery{ "ident-a", "att-retired" });
+            EXPECT(committedInsp.found);
+            EXPECT(committedInsp.inspection.integrityVerified);
+
+            // R04: an outside file whose size and digest match the supplied metadata is
+            // refused at finalization. Matching bytes are not managed ownership.
+            store.BindProject("ident-b", "B", "C:/B");
+            auto outside = folder / "outside-root.txt";
+            {
+                std::ofstream of(outside, std::ios::binary);
+                of << "outside the managed boundary";
+            }
+            mayasaba::AttachmentRecord forged;
+            forged.id = "att-forged";
+            forged.projectId = "ident-b";
+            forged.fileName = "outside-root.txt";
+            forged.fileSize = static_cast<uint64_t>(fs::file_size(outside));
+            forged.sha256 = ComputeSha256ForTestFile(WideToUtf8(outside.wstring()));
+            forged.detectedType = "text/plain";
+            forged.storagePath = WideToUtf8(outside.wstring());
+            forged.sourcePath = "C:/source/outside-root.txt";
+            forged.status = "READY";
+            store.SaveDraftAttachment("ident-b", forged);
+            store.StageSubmission("ident-b", "sub-forged", "forged body");
+            mayasaba::AttachmentRecord forgedRec = forged;
+            forgedRec.submissionId = "sub-forged";
+            forgedRec.status = "COMMITTED";
+
+            mayasaba::SaveContributionDetail forgedDetail;
+            auto const forgedDisp = store.SaveContribution("ident-b", "sub-forged", "forged body", { forgedRec }, forgedDetail);
+            EXPECT(forgedDisp == mayasaba::SaveDisposition::Conflict);
+            EXPECT(forgedDetail.reasonEn.find("managed attachment storage boundary") != std::string::npos);
+
+            // Nothing was sealed, nothing was committed, and the outside file is untouched.
+            DWORD const forgedAttrs = GetFileAttributesW(outside.wstring().c_str());
+            EXPECT(forgedAttrs != INVALID_FILE_ATTRIBUTES);
+            EXPECT((forgedAttrs & FILE_ATTRIBUTE_READONLY) == 0);
+            EXPECT(store.Contributions("ident-b").empty());
+            EXPECT(store.GetAttachmentsForContribution("sub-forged").empty());
+            EXPECT(fs::exists(outside));
             CASES_END();
         }
 

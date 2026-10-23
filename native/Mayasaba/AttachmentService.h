@@ -126,7 +126,10 @@ namespace mayasaba
 
         // Removes one draft attachment. THROWS when the removal is refused - a locked
         // pending submission covers the record - and in that case neither the record nor
-        // any byte is touched.
+        // any byte is touched. The record retirement, shared-reference accounting and
+        // byte deletion happen inside one serialized Storage transaction (R03), and the
+        // deletion runs on an exclusive same-object handle so the object deleted is the
+        // object the record named (R15).
         DraftRemovalOutcome RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId);
         // Removes every draft attachment of the project, under the same rule.
         DraftRemovalOutcome ClearDraftAttachments(std::string const& projectId);
@@ -177,6 +180,17 @@ namespace mayasaba
             std::string const& storagePath,
             std::string* reason) const;
 
+        // Deletes a staged file through a same-object handle: the file is opened with
+        // DELETE access against the recorded path, the open handle's canonical final path
+        // is proven inside the project's managed staging subtree and the object is proven
+        // to be a regular, non-reparse, singly-linked file, and only then are the
+        // attributes normalized and the delete disposition set - on that same handle. The
+        // object removed is therefore provably the object whose containment was verified,
+        // even if the recorded path is substituted between eligibility and deletion (R15).
+        bool DeleteStagedFileWithHandleIdentity(
+            std::string const& projectId,
+            std::string const& storagePath,
+            std::string* reason) const;
         // Deletes a staged copy only after containment is proven. An unprovable path is
         // left in place and reported, because an unresolved cleanup obligation is always
         // safer than a deletion that cannot be justified.

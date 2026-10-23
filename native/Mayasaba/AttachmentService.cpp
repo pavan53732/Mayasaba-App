@@ -740,21 +740,133 @@ namespace mayasaba
         return true;
     }
 
+    bool AttachmentService::DeleteStagedFileWithHandleIdentity(
+        std::string const& projectId,
+        std::string const& storagePath,
+        std::string* reason) const
+    {
+        auto refuse = [reason](std::string why)
+        {
+            if (reason) *reason = why;
+            return false;
+        };
+
+        if (projectId.empty()) return refuse("the project identity is empty");
+        if (storagePath.empty()) return refuse("the recorded staged path is empty");
+        std::wstring const target = Utf8ToUtf16(storagePath);
+
+#ifdef _WIN32
+        // Open the recorded path itself with DELETE access. Whatever object this handle
+        // names is the only object this operation can remove: a substitution of the path
+        // after eligibility was established cannot retarget the removal onto a different
+        // object, because eligibility and deletion run on the same open handle (R15).
+        HANDLE h = CreateFileW(target.c_str(), DELETE | FILE_WRITE_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE)
+        {
+            return refuse("the staged copy could not be opened for verified removal (Win32 error " +
+                std::to_string(GetLastError()) + ");");
+        }
+
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (!GetFileInformationByHandle(h, &info) ||
+            (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+            (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            CloseHandle(h);
+            return refuse("the staged copy is not a regular non-reparse file");
+        }
+        if (info.nNumberOfLinks > 1)
+        {
+            CloseHandle(h);
+            return refuse("the staged copy shares its bytes with other hard links, so its removal was refused");
+        }
+
+        // The handle's own canonical final path must be inside the project's managed
+        // staging subtree. This is the same containment proof as
+        // ProveContainedStagedFile, but made on the object that will actually be
+        // removed, so a substituted name cannot pass by pointing elsewhere.
+        std::wstring const projectW = Utf8ToUtf16(projectId);
+        std::error_code rootEc;
+        auto const root = std::filesystem::weakly_canonical(stagingRoot_ / L"staging" / projectW, rootEc);
+        if (rootEc)
+        {
+            CloseHandle(h);
+            return refuse("the project staging directory could not be resolved");
+        }
+
+        std::vector<wchar_t> buffer(MAX_PATH);
+        DWORD len = GetFinalPathNameByHandleW(h, buffer.data(), static_cast<DWORD>(buffer.size()),
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        if (len >= buffer.size())
+        {
+            buffer.resize(static_cast<size_t>(len) + 1);
+            len = GetFinalPathNameByHandleW(h, buffer.data(), static_cast<DWORD>(buffer.size()),
+                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+        }
+        if (len == 0)
+        {
+            CloseHandle(h);
+            return refuse("the staged copy's final path could not be read");
+        }
+        std::wstring finalPath(buffer.data(), len);
+        if (finalPath.rfind(L"\\\\?\\", 0) == 0) finalPath = finalPath.substr(4);
+
+        std::error_code finalEc;
+        auto const finalCanonical = std::filesystem::weakly_canonical(finalPath, finalEc);
+        if (finalEc || finalCanonical.parent_path() != root)
+        {
+            CloseHandle(h);
+            return refuse("the staged copy's open object is outside this project's managed staging directory");
+        }
+
+        // Normalize attributes on the verified object itself - a read-only sealed copy
+        // cannot take a delete disposition - and then mark that same object for
+        // deletion. Both steps run on the open handle, not on the path.
+        FILE_BASIC_INFO basic{};
+        basic.FileAttributes = FILE_ATTRIBUTE_NORMAL;
+        if (!SetFileInformationByHandle(h, FileBasicInfo, &basic, sizeof(basic)))
+        {
+            CloseHandle(h);
+            return refuse("the staged copy's attributes could not be normalized on the verified object");
+        }
+        FILE_DISPOSITION_INFO disposition{};
+        disposition.DeleteFile = TRUE;
+        if (!SetFileInformationByHandle(h, FileDispositionInfo, &disposition, sizeof(disposition)))
+        {
+            CloseHandle(h);
+            return refuse("the staged copy could not be marked for deletion");
+        }
+        CloseHandle(h);
+        return true;
+#else
+        std::error_code ec;
+        std::filesystem::remove(target, ec);
+        if (ec) return refuse("the staged copy could not be removed");
+        return true;
+#endif
+    }
+
     AttachmentService::DraftRemovalOutcome AttachmentService::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
     {
         DraftRemovalOutcome outcome;
 
-        // AUTHORIZATION FIRST, and the record removal is the authorization.
-        //
-        // The previous order was delete-bytes-then-ask-Storage: the staged copy was removed
-        // before the authoritative layer was consulted, so a refusal arrived after the
-        // damage and a pending submission's protected bytes were already gone. Storage now
-        // decides and removes the row in one serialized step, returning the exact staged
-        // path it authorized. If it refuses, this throws and no byte has been touched.
-        std::optional<std::string> const authorizedPath =
-            storage_.RemoveDraftAttachment(projectId, attachmentId);
+        // AUTHORIZATION, retirement, shared-reference accounting and byte cleanup are one
+        // serialized Storage transaction. The previous order was
+        // delete-bytes-then-ask-Storage, and later shapes still deleted bytes after the
+        // record retired, so shared bytes could be deleted out from under another record
+        // (R03) and the path could be substituted between eligibility and deletion (R15).
+        // Storage now decides, retires, reference-accounts and invokes the verified
+        // same-object deleter inside one transaction. If it refuses, this throws and no
+        // byte has been touched.
+        auto deleteBytes = [this, &projectId](std::string const& path, std::string* why)
+        {
+            return this->DeleteStagedFileWithHandleIdentity(projectId, path, why);
+        };
+        auto const removal = storage_.RemoveDraftAttachmentGuarded(projectId, attachmentId, deleteBytes);
 
-        if (!authorizedPath)
+        if (!removal.recordFound)
         {
             // No such record existed, so this operation owned no bytes.
             return outcome;
@@ -762,62 +874,44 @@ namespace mayasaba
 
         outcome.recordRemoved = true;
 
-        if (authorizedPath->empty())
+        if (removal.bytesShared || removal.stagedPath.empty())
         {
-            // A record that owned no staged copy has nothing left to clean up.
+            // The bytes are still protected by another record (or the record owned no
+            // staged copy): retention here is the policy, not a failure, so the removal
+            // is complete and nothing is unresolved.
             outcome.bytesRemoved = true;
             return outcome;
         }
 
-        std::string reason;
-        if (RemoveContainedStagedFile(projectId, *authorizedPath, &reason))
+        if (removal.bytesRemoved)
         {
             outcome.bytesRemoved = true;
+            return outcome;
         }
-        else
-        {
-            // The record is gone, so these bytes are now untracked inside the managed
-            // staging directory. Reconciliation reclaims untracked files there, so the
-            // cleanup is recoverable rather than lost - but it is reported, never presented
-            // as a clean removal.
-            outcome.unresolvedReason =
-                "the attachment record was removed but its staged copy could not be deleted: " + reason;
-        }
-        return outcome;
+
+        // The deleter never ran to completion (for example a handle-identity refusal that
+        // Storage converted into a rollback-then-throw): the throw has already propagated.
+        // Reaching this point with a non-removed, non-shared path is an internal fault.
+        throw std::runtime_error("The staged copy was neither removed nor retained by reference; the removal did not complete.");
     }
 
     AttachmentService::DraftRemovalOutcome AttachmentService::ClearDraftAttachments(std::string const& projectId)
     {
         DraftRemovalOutcome outcome;
 
-        // Same rule: Storage authorizes and removes in one step, and only the paths it
-        // actually removed are candidates for deletion.
-        std::vector<std::string> const authorizedPaths = storage_.ClearDraftAttachments(projectId);
+        // Same rule, one serialized step: Storage authorizes, retires, reference-accounts
+        // and deletes inside a single transaction, so shared bytes are retained by policy
+        // and only unreferenced paths are ever deleted.
+        auto deleteBytes = [this, &projectId](std::string const& path, std::string* why)
+        {
+            return this->DeleteStagedFileWithHandleIdentity(projectId, path, why);
+        };
+        auto const cleared = storage_.ClearDraftAttachmentsGuarded(projectId, deleteBytes);
         outcome.recordRemoved = true;
-
-        if (authorizedPaths.empty())
+        outcome.bytesRemoved = cleared.reasonEn.empty();
+        if (!cleared.reasonEn.empty())
         {
-            outcome.bytesRemoved = true;
-            return outcome;
-        }
-
-        size_t failed = 0;
-        std::string firstReason;
-        for (auto const& path : authorizedPaths)
-        {
-            std::string reason;
-            if (!RemoveContainedStagedFile(projectId, path, &reason))
-            {
-                ++failed;
-                if (firstReason.empty()) firstReason = reason;
-            }
-        }
-
-        outcome.bytesRemoved = (failed == 0);
-        if (failed != 0)
-        {
-            outcome.unresolvedReason = std::to_string(failed) + " staged copy(ies) could not be deleted (" +
-                firstReason + "); reconciliation reclaims them on a later pass";
+            outcome.unresolvedReason = cleared.reasonEn;
         }
         return outcome;
     }

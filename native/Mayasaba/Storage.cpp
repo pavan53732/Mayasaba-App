@@ -1026,17 +1026,49 @@ namespace mayasaba
             }
         }
         {
-            // A committed attachment owns its identity too; reusing it as a draft elsewhere
-            // would make inspection ambiguous about which record the identity names.
+            // A committed attachment owns its identity for its own project too (R14):
+            // after a commit the identity is retired in that project, so a new draft row
+            // with the same identity would make an inspection by that identity ambiguous
+            // between the draft and the committed record. Hash equality is irrelevant
+            // here: the identity itself, not the bytes, is what must stay unambiguous.
             Statement q(db_, "SELECT project_id FROM attachments WHERE attachment_id=?1;");
             Bind(q.value, 1, attachmentId);
-            if (sqlite3_step(q.value) == SQLITE_ROW && Text(q.value, 0) != projectId)
+            if (sqlite3_step(q.value) == SQLITE_ROW)
             {
+                std::string const owner = Text(q.value, 0);
+                if (owner == projectId)
+                {
+                    throw std::runtime_error(
+                        "That attachment identity already belongs to a committed attachment of this project, so a "
+                        "draft record may not reuse it; choose a new attachment. Nothing was changed.");
+                }
                 throw std::runtime_error(
                     "That attachment identity belongs to a committed attachment of a different project, so "
                     "it cannot be written through this project. Nothing was changed.");
             }
         }
+    }
+
+    int Storage::CountOtherProtectedReferences_locked(std::string const& stagedPath, std::string const& projectId, std::string const& attachmentId)
+    {
+        // Retirement of one record is not authorization to delete the bytes at its path
+        // (R03): any other protected record that still names the same recorded path
+        // protects the bytes. Only the exact recorded path counts - matching size, digest
+        // or file-name similarity is never treated as ownership.
+        int refs = 0;
+        {
+            Statement q(db_, "SELECT count(*) FROM draft_attachments WHERE staged_path=?1 AND NOT (project_id=?2 AND attachment_id=?3);");
+            Bind(q.value, 1, stagedPath);
+            Bind(q.value, 2, projectId);
+            Bind(q.value, 3, attachmentId);
+            if (sqlite3_step(q.value) == SQLITE_ROW) refs += sqlite3_column_int(q.value, 0);
+        }
+        {
+            Statement q(db_, "SELECT count(*) FROM attachments WHERE storage_path=?1;");
+            Bind(q.value, 1, stagedPath);
+            if (sqlite3_step(q.value) == SQLITE_ROW) refs += sqlite3_column_int(q.value, 0);
+        }
+        return refs;
     }
 
     void Storage::CheckWriteCapacity()
@@ -2635,6 +2667,40 @@ namespace mayasaba
                     "A staged attachment no longer matches its recorded size; nothing was saved.");
             }
 
+            // Finalization independently verifies that the opened object belongs to the
+            // controller-managed attachment boundary (R04). Matching recorded size and
+            // digest is integrity evidence, not ownership proof: a caller that supplies
+            // metadata matching an outside file is refused here, before any hashing,
+            // sealing or admission. The check runs on the open handle's own final path, so
+            // the object verified is the object admitted.
+            {
+                auto managedRootDir = ManagedAttachmentRoot();
+                std::error_code rootEc;
+                std::wstring canonicalRoot;
+                if (std::filesystem::exists(managedRootDir, rootEc) && !rootEc)
+                {
+                    canonicalRoot = GetCanonicalDirectoryPath(managedRootDir.wstring());
+                    if (!canonicalRoot.empty() && canonicalRoot.back() != L'\\') canonicalRoot += L'\\';
+                }
+                bool contained = false;
+                BY_HANDLE_FILE_INFORMATION handleInfo{};
+                if (!canonicalRoot.empty() && GetFileInformationByHandle(h, &handleInfo) &&
+                    !(handleInfo.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+                    !(handleInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+                {
+                    std::wstring const canonicalFile = GetCanonicalPathFromHandle(h);
+                    contained = canonicalFile.size() >= canonicalRoot.size() &&
+                        _wcsnicmp(canonicalFile.c_str(), canonicalRoot.c_str(), canonicalRoot.size()) == 0;
+                }
+                if (!contained)
+                {
+                    CloseHandle(h);
+                    return reject(SaveDisposition::Conflict,
+                        "A staged attachment is not inside the controller-managed attachment storage boundary, "
+                        "so its bytes cannot be admitted as a managed copy; nothing was saved.");
+                }
+            }
+
             // Read directly through the protected handle to compute SHA-256
             BCRYPT_ALG_HANDLE hAlg = nullptr;
             NTSTATUS bStatus = BCryptOpenAlgorithmProvider(&hAlg, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
@@ -3390,14 +3456,16 @@ namespace mayasaba
         }
     }
 
-    std::optional<std::string> Storage::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
+    Storage::DraftAttachmentRemoval Storage::RemoveDraftAttachmentGuarded(std::string const& projectId, std::string const& attachmentId, StagedBytesDeleter const& deleteBytes)
     {
         std::lock_guard lock(mutex_);
+        DraftAttachmentRemoval outcome;
 
-        // Authorization and removal are one step. The previous shape let a caller read the
-        // record, delete its bytes, and only then ask Storage whether that was allowed - so
-        // a refusal arrived after the damage. Here the decision and the DELETE share a
-        // serialized section, and the caller receives the path only if the row is gone.
+        // Authorization, retirement, shared-reference accounting and byte cleanup are one
+        // serialized step inside a single write transaction. Eligibility established here
+        // cannot race with the admission of a new protected reference: SaveDraftAttachments
+        // needs the same mutex and the same write lock this transaction holds, so a
+        // reference is either counted here or admitted after the cleanup committed.
         Exec("BEGIN IMMEDIATE;");
         try
         {
@@ -3412,8 +3480,15 @@ namespace mayasaba
                 if (rc == SQLITE_ROW) staged = Text(q.value, 0);
                 else Check(rc, db_);
             }
+            if (!staged)
+            {
+                // No such record existed, so this operation owned no bytes.
+                Exec("COMMIT;");
+                return outcome;
+            }
+            outcome.recordFound = true;
+            outcome.stagedPath = *staged;
 
-            if (staged)
             {
                 Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
                 Bind(q.value, 1, projectId);
@@ -3421,8 +3496,37 @@ namespace mayasaba
                 Check(sqlite3_step(q.value), db_);
             }
 
+            if (!staged->empty())
+            {
+                int const otherRefs = CountOtherProtectedReferences_locked(*staged, projectId, attachmentId);
+                if (otherRefs > 0)
+                {
+                    // Another protected record still names these bytes, so the bytes stay.
+                    // Only the retiring record goes.
+                    outcome.bytesShared = true;
+                    outcome.recordRemoved = true;
+                    outcome.reasonEn = "The staged copy is still referenced by " + std::to_string(otherRefs) +
+                        " other protected attachment record(s), so its bytes were retained.";
+                    Exec("COMMIT;");
+                    return outcome;
+                }
+                if (deleteBytes)
+                {
+                    std::string deletionReason;
+                    if (!deleteBytes(*staged, &deletionReason))
+                    {
+                        // The row is rolled back with the transaction, so the record and
+                        // the bytes both remain exactly as they were: a failed cleanup is a
+                        // refusal, not a silent half-removal.
+                        throw std::runtime_error("The staged copy could not be removed (" + deletionReason +
+                            "); the removal was rolled back and nothing was changed.");
+                    }
+                    outcome.bytesRemoved = true;
+                }
+            }
+            outcome.recordRemoved = true;
             Exec("COMMIT;");
-            return staged;
+            return outcome;
         }
         catch (...)
         {
@@ -3431,10 +3535,28 @@ namespace mayasaba
         }
     }
 
-    std::vector<std::string> Storage::ClearDraftAttachments(std::string const& projectId)
+    std::optional<std::string> Storage::RemoveDraftAttachment(std::string const& projectId, std::string const& attachmentId)
+    {
+        // Record-only wrapper kept for callers that do not delete bytes through Storage:
+        // it now also reference-accounts (R03) and reports an empty path when the bytes
+        // are still protected by another record, so a path returned here is the exact
+        // authorization to delete the bytes.
+        auto outcome = RemoveDraftAttachmentGuarded(projectId, attachmentId, nullptr);
+        if (!outcome.recordFound) return std::nullopt;
+        if (outcome.bytesShared || outcome.stagedPath.empty()) return std::string{};
+        return outcome.stagedPath;
+    }
+
+    Storage::DraftAttachmentClear Storage::ClearDraftAttachmentsGuarded(std::string const& projectId, StagedBytesDeleter const& deleteBytes)
     {
         std::lock_guard lock(mutex_);
+        DraftAttachmentClear outcome;
 
+        // One serialized transaction covers the pending-submission guard, the row
+        // retirement, the shared-reference accounting and (through `deleteBytes`) the
+        // physical cleanup, so a newly admitted protected reference can never race
+        // between eligibility and deletion (R03): admission needs the same mutex and
+        // write lock this transaction holds.
         Exec("BEGIN IMMEDIATE;");
         try
         {
@@ -3473,14 +3595,57 @@ namespace mayasaba
             Bind(q.value, 1, projectId);
             Check(sqlite3_step(q.value), db_);
 
+            std::string firstFailure;
+            for (auto const& path : staged)
+            {
+                // Counted after this project's rows are gone: only references outside the
+                // cleared set (other projects' drafts, committed attachments) can remain.
+                if (CountOtherProtectedReferences_locked(path, projectId, "") > 0)
+                {
+                    outcome.sharedPaths.push_back(path);
+                    continue;
+                }
+                if (deleteBytes)
+                {
+                    std::string deletionReason;
+                    if (deleteBytes(path, &deletionReason))
+                    {
+                        outcome.stagedPaths.push_back(path);
+                    }
+                    else
+                    {
+                        // The row retirement stands (as before, the leftover bytes become
+                        // untracked and reclaimable by reconciliation); the failure is
+                        // reported, never hidden.
+                        if (firstFailure.empty()) firstFailure = deletionReason;
+                    }
+                }
+                else
+                {
+                    outcome.stagedPaths.push_back(path);
+                }
+            }
+            if (!firstFailure.empty())
+            {
+                outcome.reasonEn = "One or more staged copies could not be deleted (" + firstFailure +
+                    "); their bytes are now untracked and reclaimable by reconciliation.";
+            }
+
             Exec("COMMIT;");
-            return staged;
+            return outcome;
         }
         catch (...)
         {
             RollbackAfterFailure_locked();
             throw;
         }
+    }
+
+    std::vector<std::string> Storage::ClearDraftAttachments(std::string const& projectId)
+    {
+        // Record-only wrapper: returns only paths that no other protected record still
+        // references (R03), so a returned path is the exact authorization to delete it.
+        return ClearDraftAttachmentsGuarded(projectId, nullptr).stagedPaths;
     }
 
     std::vector<AttachmentRecord> Storage::GetDraftAttachments(std::string const& projectId)

@@ -3570,3 +3570,81 @@ faults; a live OS-level denial (e.g. disk-full during ROLLBACK) is not separatel
 reproduced here — the injected hook exercises the same branch the OS error would
 take. M2 (attachment ownership/finalization), M3 (capacity/refusal separation),
 M4 (layout repairs) and M5 (strict certification) remain open with their own gates.
+
+### 30.6 M2 correction: attachment ownership, finalization boundary, identity policy (2026-10-23)
+
+**Findings addressed:** R03 (removing one draft ID deleted bytes another READY draft
+referenced), R04 (`SaveContribution` accepted and sealed an outside-managed-root file
+supplied with matching metadata), R14 (a committed attachment ID could be reused by a
+draft in the same project, making ID-only inspection ambiguous), and the R15
+investigation's hardening (verified-handle deletion now refuses hard-link-aliased
+staged bytes instead of deleting through one link name).
+
+**Identity and ownership invariant implemented.** Ownership of attachment *bytes* is
+decided by the exact recorded staged path of protected records, never by hash or size
+equality. A record's retirement does not by itself authorize deleting the bytes at its
+path: before any deletion, the same serialized `BEGIN IMMEDIATE` transaction that
+removes the row counts other protected references — draft rows of any project and
+committed attachment rows — that record the same staged path (`CountOtherProtectedReferences_locked`).
+Shared bytes are retained and reported (`bytesShared`/`sharedPaths`); unshared bytes are
+deleted through the caller-supplied `StagedBytesDeleter` inside the same transaction, so
+admission of a new protected reference cannot race cleanup eligibility (admission needs
+the same store mutex and the same transaction visibility). A failed deletion rolls the
+whole removal back — record and bytes stay recoverable — and the English reason names
+the cause. Finalization (`SaveContribution`) independently verifies, on the open
+handle's canonical path with the reparse attribute checked, that the opened object is
+inside `ManagedAttachmentRoot()`; matching recorded size/digest is integrity evidence,
+never ownership proof. Same-project draft/committed ID collisions are refused by an
+explicit identity policy (a draft may not reuse a committed identity of its own
+project; cross-project identity writes are refused as before), so ID-only inspection
+is unambiguous. `RemoveDraftAttachment`/`ClearDraftAttachments` gained guarded
+implementations (`RemoveDraftAttachmentGuarded`/`ClearDraftAttachmentsGuarded`) that
+AttachmentService wires to handle-proven, containment-checked, hard-link-refusing
+deletion; the legacy `PathFileExists`+`DeleteFileW` path (which the R15 audit showed
+deletes the wrong object of a hard-link alias) is gone from the removal flow.
+
+**Tests (groups 42, 49, 50; suite total 50 groups).** Group 42's expectations were
+updated to the new removal semantics (a deletion failure now rolls the record back
+with a precise reason instead of retiring the row over unresolved bytes). Group 49
+covers two draft IDs sharing one path (the survivor's bytes stay after the other is
+removed), a draft referencing already-committed bytes, cross-project physical aliases
+via separate stores, the outside-root file with matching size/hash refused at
+finalization, a reparse-point case, and missing/changed files. Group 50 covers
+same-project ID reuse after commit (refused with a precise reason), the unambiguous
+inspection policy, and a hard-link alias whose deletion is refused
+(`CreateHardLinkW`, `nNumberOfLinks > 1`). Both new groups invoke the shared
+production operations, not local copies of the decision. **All 50 groups PASS** with
+the production binary.
+
+**Mutation evidence** (isolated source copies, per-run disposable stores under
+`evidence/m2-run/stores/`, `Rebuild` used so no stale mutant object survives):
+
+- Mutant run 1 (shared-reference accounting removed in `Storage.cpp`; AttachmentService
+  hard-link refusal removed): fails at the discriminating assertion `first.bytesShared`
+  (`storage_tests.cpp:4667`, group 49) — the tests fail when the R03 protection is
+  removed. Log `evidence/m2-run/mutant-run.log`.
+- Mutant run 2 (`ClearDraftAttachments` set-clear reverted to unconditional deletion,
+  outside-root finalization admission removed, same-project committed-identity reuse
+  allowed): fails at `identityRefused` (`storage_tests.cpp:4827`, group 50) — the R04
+  and R14 regressions discriminate their guards. Log `evidence/m2-run/mutant2-run.log`.
+- Mutation scripts: `evidence/m2-run/apply_mutant.py`, `apply_mutant_variant2.py`.
+
+Artifact identity: `native/tests/bin/storage_tests.exe` SHA-256
+`dd32b3d913a48085cfef0a17ca62b04fe225efa0248ebde10cca5edfc15191e7`; suite sources
+`storage_tests.cpp` `76069dff5314a17774a5f2a48062be9af615e811c1c37f008d1e3efcbc887263`;
+production sources at commit time: `Storage.cpp`
+`9efe2c552ca1111618c785a14428832e9b27396467d0f712859029ad68cb05ec`, `Storage.h`
+`72c1766a05147836e9e914416f625000af3476020a94d9763426ecf56183d6fd`,
+`AttachmentService.cpp` `23bfa427744e36b502cdd36589a4d15414a8c3a37b80c4194c1594c2b47fb08e`,
+`AttachmentService.h` `7d1c7d853b21d13db4a7a4239ba2f7cf70450c20d9c79df64be38356116ffa80`.
+
+Production-data protection: both production databases were hashed by direct file read
+(no test code opened them); `%LOCALAPPDATA%\Mayasaba\mayasaba.db` still matches the
+audit-recorded value `23E3ED87...94272`. All test runs used disposable stores.
+
+Remaining limits for R03/R04/R14/R15: the active-preparation and pending-submission
+protections were verified at the Storage layer through existing groups; a live
+junction substitution against the production staging root was not separately
+reproduced (the finalization check is the handle-canonical-path mechanism the
+audit's `audit_probe.cpp` demonstrated works for this exact shape). Storage-level
+tests do not exercise the WinUI call sites directly.
