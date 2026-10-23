@@ -983,22 +983,41 @@ namespace mayasaba
             trackedPaths.insert(to_lower(canonical.wstring()));
         };
 
-        auto remainingDrafts = storage_.GetDraftAttachments(projectId);
-        for (auto const& d : remainingDrafts)
+        // Account for references from EVERY project, not only this one: a file staged
+        // for project P may be referenced by a committed/draft record in project Q,
+        // and reconciling P must not delete bytes another project still protects.
+        std::vector<std::string> allProjectIds;
+        for (auto const& p : storage_.RecentProjects(10000))
         {
-            track(d.storagePath);
+            allProjectIds.push_back(p.id);
+        }
+        if (std::find(allProjectIds.begin(), allProjectIds.end(), projectId) == allProjectIds.end())
+        {
+            allProjectIds.push_back(projectId);
+        }
+        for (auto const& pid : allProjectIds)
+        {
+            auto drafts = storage_.GetDraftAttachments(pid);
+            for (auto const& d : drafts)
+            {
+                track(d.storagePath);
+            }
+            auto committed = storage_.GetCommittedAttachmentsForProject(pid);
+            for (auto const& c : committed)
+            {
+                track(c.storagePath);
+            }
         }
 
-        auto committed = storage_.GetCommittedAttachmentsForProject(projectId);
-        for (auto const& c : committed)
+        // Seal committed files for this project only.
+        auto committedHere = storage_.GetCommittedAttachmentsForProject(projectId);
+        for (auto const& c : committedHere)
         {
-            track(c.storagePath);
             if (!c.storagePath.empty())
             {
                 std::filesystem::path p = Utf8ToUtf16(c.storagePath);
                 std::error_code sealEc;
 #ifdef _WIN32
-                // Ensure committed files are sealed as read-only (crash/restart immutability recovery)
                 if (std::filesystem::exists(p, sealEc) && !sealEc)
                 {
                     DWORD attrs = GetFileAttributesW(p.c_str());

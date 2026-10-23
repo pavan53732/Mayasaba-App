@@ -1059,14 +1059,14 @@ namespace mayasaba
         // or file-name similarity is never treated as ownership.
         int refs = 0;
         {
-            Statement q(db_, "SELECT count(*) FROM draft_attachments WHERE staged_path=?1 AND NOT (project_id=?2 AND attachment_id=?3);");
+            Statement q(db_, "SELECT count(*) FROM draft_attachments WHERE LOWER(staged_path)=LOWER(?1) AND NOT (project_id=?2 AND attachment_id=?3);");
             Bind(q.value, 1, stagedPath);
             Bind(q.value, 2, projectId);
             Bind(q.value, 3, attachmentId);
             if (sqlite3_step(q.value) == SQLITE_ROW) refs += sqlite3_column_int(q.value, 0);
         }
         {
-            Statement q(db_, "SELECT count(*) FROM attachments WHERE storage_path=?1;");
+            Statement q(db_, "SELECT count(*) FROM attachments WHERE LOWER(storage_path)=LOWER(?1);");
             Bind(q.value, 1, stagedPath);
             if (sqlite3_step(q.value) == SQLITE_ROW) refs += sqlite3_column_int(q.value, 0);
         }
