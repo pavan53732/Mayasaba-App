@@ -4906,7 +4906,9 @@ auto const capDb = capFolder / "cap.db";
                 {
                     // Reopening at the ceiling succeeds: eligible inspection and recovery
                     // access is not capacity-gated.
-                    mayasaba::Storage atCeiling(capDb);
+                    std::cerr << "DBG before atCeiling size=" << std::filesystem::file_size(capDb) << " exists=" << std::filesystem::exists(capDb) << std::endl;
+std::cerr << "DBG A" << std::endl;
+mayasaba::Storage atCeiling(capDb);
                     
                     EXPECT(!atCeiling.IsQuarantinedForTesting());
                     EXPECT(atCeiling.Project("proj-cap").has_value());
@@ -4990,8 +4992,9 @@ fs::remove(bigManaged);
                 EXPECT(scopeStore.TrySaveDraft("proj-cap3", "recovered"));
                 EXPECT(!scopeStore.IsQuarantinedForTesting());
 
-                fs::remove_all(capFolder);
-                fs::remove_all(capDir2);
+                std::error_code rmEc;
+                fs::remove_all(capFolder, rmEc);
+                fs::remove_all(capDir2, rmEc);
                 CASES_END();
             }
 

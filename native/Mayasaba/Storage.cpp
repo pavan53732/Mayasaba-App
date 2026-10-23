@@ -1178,8 +1178,8 @@ namespace mayasaba
             // so inspection and recovery stay possible at the ceiling or on a low
             // volume; its mutations remain gated by AdmitWrite_locked as before.
             std::error_code existingEc;
-            bool const existingStore = std::filesystem::exists(file, existingEc) &&
-                std::filesystem::file_size(file, existingEc) > 0;
+            bool const fileExists = std::filesystem::exists(file);
+            bool const existingStore = fileExists;
             if (!existingStore) CheckWriteCapacity();
 #ifdef _WIN32
             // Lock the actual file identity, independent of environment, case,
@@ -1309,6 +1309,7 @@ namespace mayasaba
                 }
                 sqlite3_close(pDest);
             }
+            openSchemaPhase_ = true;
             Exec("BEGIN IMMEDIATE;");
             Exec("CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY, display_name TEXT NOT NULL, canonical_path TEXT NOT NULL,"
                  "draft TEXT NOT NULL DEFAULT '', closed INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0);");
@@ -1523,6 +1524,7 @@ namespace mayasaba
             Exec("PRAGMA user_version=4;");
             Exec("COMMIT;");
             ReconcileCrashOperations();
+            openSchemaPhase_ = false;
         }
         catch (...)
         {
