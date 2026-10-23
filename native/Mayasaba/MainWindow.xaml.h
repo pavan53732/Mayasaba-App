@@ -13,6 +13,7 @@
 #include "ActionCenterPresenter.h"
 #include "AgentGateway.h"
 #include <array>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <winrt/Windows.Foundation.h>
@@ -239,6 +240,12 @@ namespace winrt::Mayasaba::implementation
         double totalFrameMs_{0.0};
         std::vector<double> typingLatencies_;
         std::vector<double> scrollFrameTimes_;
+        void InitLayoutTrace();
+        void CaptureLayoutTrace();
+        Microsoft::UI::Xaml::DispatcherTimer layoutTraceTimer_{nullptr};
+        std::ofstream layoutTraceFile_;
+        LARGE_INTEGER layoutTraceFrequency_{}, layoutTraceStart_{};
+        size_t layoutTraceSamples_{};
         void InitPerfMeasurement();
         void RecordInputEvent();
         void OnRendering(IInspectable const& sender, IInspectable const& args);

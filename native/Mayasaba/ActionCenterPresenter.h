@@ -142,8 +142,12 @@ namespace mayasaba
             }
             else if (result.items.empty())
             {
-                viewState_.statusText = L"No unresolved owner obligations need your attention.";
-                viewState_.isVisible = true;
+                bool const confirmedEmpty = result.isComplete && !result.ownerUnavailable
+                    && result.continuationToken.empty();
+                viewState_.statusText = confirmedEmpty
+                    ? L"No unresolved owner obligations need your attention."
+                    : L"Obligation status is incomplete. Recheck before treating this project as clear.";
+                viewState_.isVisible = !confirmedEmpty;
                 viewState_.showDetailsVisible = false;
                 viewState_.moreItemsVisible = false;
             }

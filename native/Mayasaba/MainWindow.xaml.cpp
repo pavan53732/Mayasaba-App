@@ -3,6 +3,7 @@
 #include "Fixtures.h"
 #include "ThemeBrushes.h"
 #include "NavigationRecovery.h"
+#include "HeaderLayoutBudget.h"
 #if __has_include("MainWindow.g.cpp")
 #include "MainWindow.g.cpp"
 #endif
@@ -254,10 +255,12 @@ namespace winrt::Mayasaba::implementation
 
         InitializeStoreAsync();
         InitPerfMeasurement();
+        InitLayoutTrace();
     }
 
     MainWindow::~MainWindow()
     {
+        if (layoutTraceTimer_) layoutTraceTimer_.Stop();
         if (highlightResetTimer_) highlightResetTimer_.Stop();
         if (renderingToken_.value != 0)
         {
@@ -1138,107 +1141,27 @@ namespace winrt::Mayasaba::implementation
         double const chatHeight = ChatScreen().ActualHeight();
         double const headerHeight = ChatHeaderGrid().ActualHeight();
 
-        // THE ACTION CENTER CARD AND THE CLI CARDS SHARE ONE HEIGHT POOL, AND THE
-        // POOL IS COMPUTED ONCE.
-        //
-        // Each card used to bound itself against "the rest of the header" and
-        // treat the other card as part of that rest. That is correct only while
-        // the other card is absent. Once both are present they take the same
-        // budget twice: measured at 1440x740 with a D-11 tie, the decision card
-        // occupied 143px of the header and the Action Center card computed to
-        // MaxHeight(0) -- so 50 seeded obligations were loaded, the status line
-        // truthfully read "50 item(s) loaded (more available).", and the entire
-        // card, its list and its Load more action were 0x0 and offscreen.
-        //
-        // Serving one card first and collapsing the other is not a fix, it only
-        // moves the defect: measured after giving the Action Center priority, the
-        // decision card became 0x0 and the user lost the only control that can
-        // resolve a D-11 tie. BOTH cards are user-actionable -- the Action Center
-        // carries obligations that block work, and a D-11 card is the sole route
-        // to choosing between two verified CLIs -- so neither may be silently
-        // collapsed to keep the other alive.
-        //
-        // The pool is divided, not contested. The CLI cards' floor is reserved
-        // first (they are the informational projection and take only their floor
-        // while the pool is tight), and the Action Center -- which blocks work and
-        // therefore gets first claim on anything above the floors -- takes what
-        // remains up to its own cap. If the pool cannot hold both floors, the
-        // Action Center keeps its chrome and the informational card is the one
-        // that collapses, because a readiness card gates nothing (readiness never
-        // gates Chat, Send, folder selection, drafts, history or navigation).
-        //
-        // The pool is `chatHeight` minus the header's non-card chrome and the
-        // composer. The two card heights cancel out of that subtraction because
-        // the header is auto-sized, so the pool does not depend on how it is
-        // then divided and cannot chase its own output.
-        double const actionCenterActual = ActionCenterPanel().Visibility() == Visibility::Visible
-            ? ActionCenterPanel().ActualHeight() : 0.0;
-        double const cardsActual = ChatProblemCardsScroller()
-            && ChatProblemCardsScroller().Visibility() == Visibility::Visible
-            ? ChatProblemCardsScroller().ActualHeight() : 0.0;
-
-        // Enough for a card's heading and cause; below that it would show a title
-        // with no explanation, which is worse than showing it collapsed.
-        double const cardChrome = 88.0;
-        double const cardsFloor = 72.0;
-
+        // One allocation owns both bounds. Use the composer's content requirement,
+        // never the stretched host height, and remove both regions from the header
+        // before computing the remaining pool. The production allocator is also
+        // exercised by the convergence regression.
         if (chatHeight > 0 && headerHeight > 0)
         {
-            // THE COMPOSER'S RESERVE IS ITS CONTENT HEIGHT, NOT ITS HOST'S.
-            //
-            // `ComposerHost` is a StackPanel in the Chat screen's star row, so on
-            // an empty conversation (where the composer is centred in the
-            // conversation area, per the UI contract) its ActualHeight is the
-            // *leftover* after the header, not its own requirement. Measured at
-            // 1440x740: chatScreen 448.8 = header 236.8 + composer 188.0 + 24.
-            // Subtracting that 188 as a "reserve" makes the pool equal whatever
-            // the cards currently occupy, so the bound can never change -- a
-            // self-fulfilling measurement that silently pinned the Action Center
-            // at 120.8 and starved the CLI cards to 0x0 no matter how the pool was
-            // divided.
-            //
-            // `ComposerStack` is the Auto-sized content inside that stretched
-            // host, so its ActualHeight is what the composer needs and does not
-            // depend on how much space is left over. Because the figure is
-            // content-driven rather than a measurement of the row the header's
-            // height feeds, the pass cannot chase its own output.
-            double const composerReserve = ComposerStack()
-                ? ComposerStack().ActualHeight() : 0.0;
-            double const nonCardHeader = headerHeight - actionCenterActual - cardsActual;
-            double const pool = std::max(0.0, chatHeight - nonCardHeader - composerReserve - 24.0);
-
-            bool const cardsPresent = ChatProblemCardsScroller()
+            bool const attentionPresent = ActionCenterPanel().Visibility() == Visibility::Visible;
+            bool const problemsPresent = ChatProblemCardsScroller()
                 && ChatProblemCardsScroller().Visibility() == Visibility::Visible;
-
-            // Divide the pool in one place so the two bounds cannot disagree. The
-            // precedence is explicit rather than emergent: both floors are served
-            // when the pool holds them, otherwise the blocking card keeps its
-            // chrome and the informational card gives way, and below the blocking
-            // card's own chrome the pool is too small to show either.
-            double actionCenterWanted = 0.0;
-            double cardsWanted = 0.0;
-            if (cardsPresent && pool >= cardChrome + cardsFloor)
-            {
-                actionCenterWanted = std::clamp(pool - cardsFloor, 0.0, 300.0);
-                cardsWanted = std::clamp(pool - actionCenterWanted, 0.0, 300.0);
-            }
-            else if (pool >= cardChrome)
-            {
-                actionCenterWanted = std::clamp(pool, 0.0, 300.0);
-            }
-
-            headerCardPool_ = pool;
-            headerCardsPresent_ = cardsPresent;
-
-            if (ActionCenterPanel().MaxHeight() != actionCenterWanted)
-            {
-                ActionCenterPanel().MaxHeight(actionCenterWanted);
-            }
-            if (ChatProblemCardsScroller()
-                && ChatProblemCardsScroller().MaxHeight() != cardsWanted)
-            {
-                ChatProblemCardsScroller().MaxHeight(cardsWanted);
-            }
+            auto const allocation = mayasaba::ui::AllocateHeaderLayout(
+                chatHeight, headerHeight,
+                attentionPresent ? ActionCenterPanel().ActualHeight() : 0.0,
+                problemsPresent ? ChatProblemCardsScroller().ActualHeight() : 0.0,
+                ComposerStack() ? ComposerStack().ActualHeight() : 0.0,
+                attentionPresent, problemsPresent);
+            headerCardPool_ = allocation.pool;
+            headerCardsPresent_ = problemsPresent;
+            if (ActionCenterPanel().MaxHeight() != allocation.attention)
+                ActionCenterPanel().MaxHeight(allocation.attention);
+            if (ChatProblemCardsScroller() && ChatProblemCardsScroller().MaxHeight() != allocation.problems)
+                ChatProblemCardsScroller().MaxHeight(allocation.problems);
         }
 
         // The saved-message search overlay is bounded by the space that is really
@@ -4340,8 +4263,9 @@ namespace winrt::Mayasaba::implementation
         // Compact metrics when the space is short: the chrome shrinks before the
         // results list does, because the list can scroll and the chrome cannot.
         bool const compact = belowHeader < 360.0;
-        double const padding = compact ? 10.0 : 16.0;
-        double const spacing = compact ? 6.0 : 10.0;
+        auto const density = mayasaba::ui::SearchDensity(screenHeight, compact);
+        double const padding = density.padding;
+        double const spacing = density.spacing;
 
         Thickness const wantedPadding{padding, padding, padding, padding};
         if (panel.Padding() != wantedPadding) panel.Padding(wantedPadding);
@@ -4350,7 +4274,7 @@ namespace winrt::Mayasaba::implementation
         // The chrome is measured from the fixed rows, never from the panel's own
         // height: the rows are auto-sized and do not change with the bound, so the
         // measurement cannot chase its own output.
-        double chrome = 2.0 * padding + 4.0 * spacing;
+        double chrome = 2.0 * padding + 4.0 * spacing + 3.0; // the two 1.5 DIP borders
         double pagingHeight = 0.0;
         double const header = SearchHeaderRow().ActualHeight();
         double const query = SearchQueryRow().ActualHeight();
@@ -4393,7 +4317,7 @@ namespace winrt::Mayasaba::implementation
         // The results list keeps at least one visible row, and never more than its
         // own cap. The panel therefore always contains its chrome and a scrollable
         // list.
-        double const listFloor = 48.0;
+        double const listFloor = density.listFloor;
         double const listCap = 280.0;
         double const minimum = chrome + listFloor;
 
@@ -4818,6 +4742,79 @@ namespace winrt::Mayasaba::implementation
         {
             NavigateToMessage(subId);
         }
+    }
+
+    void MainWindow::InitLayoutTrace()
+    {
+        wchar_t path[4096]{};
+        auto const length = GetEnvironmentVariableW(L"MAYASABA_LAYOUT_TRACE", path, 4096);
+        if (length == 0 || length >= 4096) return;
+        layoutTraceFile_.open(std::filesystem::path(path), std::ios::out | std::ios::trunc);
+        if (!layoutTraceFile_) return;
+        // Reproducible physical window dimensions for an explicitly requested
+        // diagnostic run. Ignored entirely when tracing is not enabled.
+        wchar_t size[32]{};
+        if (GetEnvironmentVariableW(L"MAYASABA_LAYOUT_WINDOW", size, 32) > 0)
+        {
+            int width = 0, height = 0;
+            if (swscanf_s(size, L"%dx%d", &width, &height) == 2
+                && width >= 480 && width <= 3840 && height >= 480 && height <= 2160)
+                AppWindow().Resize(Windows::Graphics::SizeInt32{width, height});
+        }
+        layoutTraceFile_ << "elapsed_ms,element,x,y,width,height,visible,attention_items,search_items,animations,high_contrast\n";
+        QueryPerformanceFrequency(&layoutTraceFrequency_);
+        QueryPerformanceCounter(&layoutTraceStart_);
+        layoutTraceTimer_ = DispatcherTimer{};
+        layoutTraceTimer_.Interval(std::chrono::milliseconds(100));
+        auto weak = get_weak();
+        layoutTraceTimer_.Tick([weak](auto const&, auto const&)
+        {
+            if (auto self = weak.get()) self->CaptureLayoutTrace();
+        });
+        layoutTraceTimer_.Start();
+    }
+
+    void MainWindow::CaptureLayoutTrace()
+    {
+        // Ten minutes maximum. Timer and output exist only with explicit opt-in;
+        // stream each sample, so long observations do not grow an in-memory buffer.
+        if (windowClosed_ || ++layoutTraceSamples_ > 6000 || !layoutTraceFile_)
+        {
+            layoutTraceTimer_.Stop();
+            return;
+        }
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        auto const ms = (now.QuadPart - layoutTraceStart_.QuadPart) * 1000.0 / layoutTraceFrequency_.QuadPart;
+        auto sample = [&](char const* name, FrameworkElement const& element)
+        {
+            if (!element) return;
+            Windows::Foundation::Rect rect{};
+            try
+            {
+                rect = element.TransformToVisual(RootLayout()).TransformBounds(
+                    Windows::Foundation::Rect{0, 0, static_cast<float>(element.ActualWidth()), static_cast<float>(element.ActualHeight())});
+            }
+            catch (winrt::hresult_error const&)
+            {
+                // Search rebuilds its controls. A temporarily detached element
+                // has no root transform; omit that sample, not the rest of the run.
+                return;
+            }
+            layoutTraceFile_ << ms << ',' << name << ',' << rect.X << ',' << rect.Y << ','
+                << rect.Width << ',' << rect.Height << ',' << (element.Visibility() == Visibility::Visible)
+                << ',' << actionCenterItems_.size() << ',' << SearchResultsList().Items().Size()
+                << ',' << animationsEnabled_ << ',' << highContrast_ << '\n';
+        };
+        try
+        {
+            sample("chat", ChatScreen()); sample("header", ChatHeaderGrid());
+            sample("attention", ActionCenterPanel()); sample("problems", ChatProblemCardsScroller());
+            sample("composer", ComposerStack()); sample("search", MessageSearchPanel());
+            sample("results", SearchResultsList()); sample("paging", SearchLoadMoreButton());
+            layoutTraceFile_.flush();
+        }
+        catch (...) { layoutTraceTimer_.Stop(); }
     }
 
     void MainWindow::InitPerfMeasurement()
@@ -5449,10 +5446,11 @@ namespace winrt::Mayasaba::implementation
 
             if (vs.items.empty())
             {
-                ActionCenterPanel().Visibility(Visibility::Visible);
+                ActionCenterPanel().Visibility(vs.isVisible ? Visibility::Visible : Visibility::Collapsed);
                 ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
                 CollapseActionCenterDetails();
                 MoreActionCenterItemsButton().Visibility(Visibility::Collapsed);
+                ApplyResponsiveLayout();
                 break;
             }
 

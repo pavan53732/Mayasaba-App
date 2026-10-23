@@ -3374,3 +3374,133 @@ Result: 19 PASS, 2 INCONCLUSIVE (criteria 11, 12 OLE drag-drop, environmental), 
 Relevant criteria: 5 (narrow 520px) PASS; 8 (Action Center pagination) PASS; 9 (stale invalidation/refresh) PASS; 10 (dismissal stability) PASS; 15 (composition perf) PASS; 16 (search overlay flat resting) PASS; 17 (bounded height/scroll/paging) PASS; 18 (repeated open/close) PASS; 20 (reduced motion) PASS; 21 (readiness projection) PASS.
 Controlling mutation: NOT executed in this session. The harness result supports the implemented shared-pool correction but does not by itself prove the regression test would catch its removal; that remains a required follow-up.
 Model used: kilo-auto/free (Kilo Code). No provider/model configuration changed.
+
+## 30. Layout oscillation completion: direct native observation (2026-10-23)
+
+### 30.1 Scope and artifact identity
+
+The starting commit was `95a2879cb9f1412485f8941c817d66f92f81ab7f`.
+Its source already contained the shared-pool correction; that fact and a green
+build were insufficient evidence for the recorded oscillation. This work extracts
+the allocation into the production `HeaderLayoutBudget.h`, removes reservations
+for absent cards, keeps confirmed-empty attention hidden, and fixes search chrome
+clipping observed in a short window. No agent session or provider configuration
+was changed. Evidence below was taken against uncommitted source, not the starting
+commit's executable.
+
+Final Release x64 v145 artifact:
+
+- Mayasaba.exe: `576CC048D512CB0EDF38F1A55B086EAC6D788DFEBA48F97B6F8180717B7A4415`
+- MainWindow.xbf: `8DB43C7E5406591327D4A25E725C3438EDDB52D0FAEB04936BB25AFEB5DFEA3A`
+- Built with VS 18 Enterprise MSBuild; build exit 0, no warnings/errors reported.
+- Production database SHA-256 before and after:
+  `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`.
+
+All new evidence is under the durable local directory:
+`C:/Users/pavan/.codex/visualizations/2026/10/16/01a14481-97c4-79a3-bd0c-39889505c645/layout-completion-20261023`.
+The application was launched from its Release build directory with that directory
+as working directory. `both.db` and `empty.db` are disposable copies of the existing
+three-project fixture, not production data. `both.db` adds three deliberately
+rejected attachment records to provide real Action Center rows while the observed
+Claude executable-choice problem card is present. These records and saved-message
+fixtures are not live agent evidence. No Send or Start was performed.
+
+### 30.2 Production changes and measurements
+
+The allocator subtracts both card regions together from the header, reserves
+ComposerStack content height and divides one pool. It is shared with the regression
+test. Confirmed complete empty results hide the attention card; incomplete results,
+unavailable owners, continuation and errors do not falsely imply clearance.
+Search keeps its existing independent parent geometry and flat orientation.
+Below 260 DIP of remaining Chat height, tighter chrome metrics reserve the close,
+query and paging controls, with the list taking the smaller scroll viewport.
+The two panel borders are included in the budget.
+
+The opt-in native sampler writes QPC timestamps and root-relative DIP bounds for
+Chat, header, attention, CLI problems, composer, search, results and paging at a
+requested 100 ms timer cadence. Actual dispatch cadence is measured, not assumed.
+It streams to disk, has a 6,000-tick cap and contains no message text. Ordinary
+runs without `MAYASABA_LAYOUT_TRACE` create neither timer nor output. A detached
+element during search rebuilding is omitted until it can be measured again.
+The analyzer requires at least ten seconds of samples per surface; use
+`--require-search` to reject hidden or zero-sized search/results/paging geometry.
+Own XAML Visibility is not a claim of physical reachability.
+
+Final-artifact observations at actual window DPI 120 (125%):
+
+| Physical window | Fixture / condition | Quiet measured span | Samples per surface | Largest x/y/width/height change | Search size, DIP |
+|---|---|---:|---:|---:|---|
+| 1440 x 740 | Both cards, search open; after repeat open/close and CLI Recheck | 11,920 ms | 107 | 0 DIP | 452 x 430.4 |
+| 640 x 480 | Both fixture/card states, short search open | 11,947.7 ms | 109 | 0 DIP | 440 x 162.4 |
+| 520 x 800 | Confirmed no obligations, CLI problem present, search open | 11,978 ms | 108 | 0 DIP | 364.8 x 397.6 |
+
+Raw files are `measured-open-final.csv`, `measured-short-final.csv` and
+`measured-empty-final.csv`, with corresponding `.summary.json` files. Each final
+summary reports `stable: true` and `search_visible_geometry: true`. In the narrow
+empty case, attention has Visibility=Collapsed and zero dimensions. In the normal
+case attention is 66.4 DIP tall and CLI problems 54.4 DIP tall, both nonzero.
+In the short case the paging button is 32.8 DIP tall at y=174.4, within the Chat
+bottom at y=220; a physical mouse click advanced 20/50 to 40/50 results.
+
+The final normal run repeated close/reopen twice, retaining `contribution` and
+returning 20/50 results each time. The disposable composer sentinel
+`Layout verification draft - preserve` remained present. Recheck recreated the CLI
+card while search stayed open; the final quiet trace above remained stable.
+Earlier same-product-code observations also exercised list scrolling and three
+close/reopen cycles, before the diagnostic-only sampler correction; they are not
+substitutes for the final-artifact measurements.
+
+`verified-after.mp4` is the final-artifact after-recording: 28 selected-window
+captures spanning 15,061 ms, encoded using their recorded intervals. Raw JPEGs and
+timestamps are in `final-window-frames/`; `verified-after-contact.jpg` was visually
+inspected. This is a sampled window recording, not display FPS or proof of every
+intermediate frame. `final-short.jpg` and `final-narrow.jpg` show the small layouts.
+
+### 30.3 Controlling mutations and regressions
+
+Mutations ran in the isolated `mutation/` source copy. No deliberately broken
+budget was run against the production store or left in the checkout.
+
+| Mutation | Discriminating observation |
+|---|---|
+| Reintroduce separate per-card residual budgets | Exit 1, `FAIL after 0 groups: budget.attention + budget.problems <= pool + 0.001` |
+| Force confirmed-empty presenter visible | Exit 1 at `!visible(empty)` |
+| Remove very-short search density | Exit 1, `FAIL after 1 groups: required <= 180.0` |
+| Restore source byte-identically and force Rebuild | Exit 0, 6 executed layout/visibility groups PASS |
+
+Logs are `mutation-old-budget.log`, `mutation-empty-card.log`,
+`mutation-short-chrome.log` and `restored-final-regression.log`. The controlling
+budget mutation is a deterministic allocator oracle, not a fabricated live video
+of the original defect. The live trace independently checks actual XAML settling.
+An initial incremental restoration kept a newer mutant object despite matching
+source hashes; forced Rebuild corrected the executed artifact.
+
+Executed checks: layout oracle 6 groups PASS; rebuilt `verify_ac_ai.exe` 15 tests
+PASS; existing unchanged-storage regression binary 45 groups PASS; managed-Python
+contract registry 124 checks PASS. These are scoped runs, not a fresh full UI
+acceptance-harness run. The earlier 19 PASS / 2 INCONCLUSIVE harness report remains
+historical and is not relabeled with this artifact's hash.
+
+### 30.4 Rejected evidence and retained limits
+
+- The initial normal trace stopped on draft debounce; its later summaries described
+  hidden search geometry. `verified-normal.csv`, `final-normal-baseline-summary.json`
+  and `final-recorded-interval-summary.json` are rejected as proof of open search.
+  The timer placement was corrected, detached transforms no longer halt the run,
+  the analyzer gained the visible-search condition, and fresh final traces above
+  replaced these observations.
+- Black backing-store capture (`after-both-cards.mp4`) and wrong-foreground desktop
+  capture (`after-final.mp4`, showing Codex) are rejected. Earlier recordings of
+  different executable hashes are historical only; use `verified-after.mp4`.
+- Actual Windows animation preference was disabled (animations=0), high contrast
+  was off (0). This verifies static reduced-motion settling, not live preference
+  toggling, enabled-motion behavior or high-contrast presentation in this run.
+- Very short background Chat still crowds/clips composer/header controls; search
+  reachability does not establish those controls' acceptance. Narrow Screen 2 path
+  wrapping/list reachability also needs a separate fix. Setup maximized the selector
+  to open alpha, then restored the exact test window size. Neither is marked PASS.
+- Escape/focus restoration was not newly established; close-button interaction is
+  the demonstrated dismissal path. Real OS 150%/200% scaling, Narrator speech and
+  the two desktop OLE drop criteria retain their prior incomplete/inconclusive
+  dispositions. This work does not close containment, agent-session or orchestration
+  gates and does not certify the complete product.

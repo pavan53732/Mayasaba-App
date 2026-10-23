@@ -1160,3 +1160,20 @@ Do not introduce:
 - a language picker, translated Mayasaba resources, multilingual UI, non-English agent reply, or non-English generated deliverable.
 
 The best Mayasaba interface is not the one that makes automation look effortless. It is the one that makes the exact boundary between request, authority, execution, evidence, and completion easy to see.
+
+### Stable Chat geometry (2026-10-23)
+
+Action Center and CLI problem cards share one height allocation, implemented in
+`HeaderLayoutBudget.h`. Remove both measured card regions from the header before
+calculating the pool, reserve the composer's content height, then divide the pool
+once. An absent card consumes no allocation. A confirmed complete empty Action
+Center result hides its card; errors, unavailable owners and incomplete results
+remain visible rather than implying that no obligations exist.
+
+Search uses parent geometry and fixed chrome rows, with the results viewport
+absorbing changes. It remains flat. When less than 260 DIP of Chat height remains,
+reduce padding, gaps and the results floor before clipping query, close or paging
+controls. Include panel borders in the chrome budget. These bounds do not certify
+every background Chat control at arbitrarily small heights: the 640 by 480 physical
+pixel test still exposes insufficient background composer/header space at 125% DPI.
+See native validation section 30 for measurements and retained limitations.

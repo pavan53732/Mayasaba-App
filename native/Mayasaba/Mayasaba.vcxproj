@@ -122,6 +122,7 @@
     <ClInclude Include="ThemeBrushes.h" />
     <ClInclude Include="Fixtures.h" />
     <ClInclude Include="SearchController.h" />
+    <ClInclude Include="HeaderLayoutBudget.h" />
     <ClInclude Include="NavigationRecovery.h" />
     <ClInclude Include="CanonicalJson.h" />
     <ClInclude Include="DeliveryContract.h" />
