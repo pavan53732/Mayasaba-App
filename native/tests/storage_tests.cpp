@@ -4998,6 +4998,66 @@ fs::remove(bigManaged);
                 CASES_END();
             }
 
+            CASES_BEGIN("52. Delete-then-COMMIT failure quarantines instead of dangling bytes");
+            {
+                auto folder2 = folder / "cleanup-audit";
+                fs::create_directories(folder2);
+                {
+                mayasaba::Storage store(folder2 / "cleanup.db");
+                store.BindProject("proj-clean", "Clean", "C:/CLEAN");
+                auto const managedRoot = store.ManagedAttachmentRoot();
+                fs::create_directories(managedRoot);
+                auto const staged = managedRoot / "staged.bin";
+                {
+                    std::ofstream out(staged, std::ios::binary);
+                    out << "payload";
+                }
+                mayasaba::AttachmentRecord rec;
+                rec.id = "att-staged";
+                rec.projectId = "proj-clean";
+                rec.fileName = "staged.bin";
+                rec.fileSize = 7;
+                rec.sha256 = "sha";
+                rec.detectedType = "application/octet-stream";
+                rec.storagePath = staged.string();
+                rec.sourcePath = staged.string();
+                rec.status = "READY";
+                store.SaveDraftAttachment("proj-clean", rec);
+
+                store.SetForceCommitFailureForTesting(true);
+                bool threw = false;
+                bool fileGone = false;
+                try
+                {
+                    auto deleter = [&](std::string const& path, std::string* reason) -> bool
+                    {
+                        std::error_code ec;
+                        fs::remove(path, ec);
+                        if (ec) { if (reason) *reason = ec.message(); return false; }
+                        fileGone = true;
+                        return true;
+                    };
+                    (void)store.RemoveDraftAttachmentGuarded("proj-clean", "att-staged", deleter);
+                }
+                catch (std::exception const&) { threw = true; }
+
+                EXPECT(threw);
+                EXPECT(fileGone);
+                EXPECT(fs::exists(staged) == false);
+                EXPECT(store.IsQuarantinedForTesting());
+
+                }
+                mayasaba::Storage reopened(folder2 / "cleanup.db");
+                // Quarantine is in-memory for this store version; reopened stores are
+                // not automatically quarantined. The immediate-store quarantine above
+                // is the enforced protection. Durable quarantine is tracked as open.
+                (void)reopened;
+
+                std::error_code rmEc2;
+                fs::remove_all(folder2, rmEc2);
+                CASES_END();
+            }
+
         fs::remove_all(folder);
         // The summary is derived from the groups that actually ran. It is not a fixed
         // claim: the count and the names come from execution, and any group that threw
