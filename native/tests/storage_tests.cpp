@@ -5308,15 +5308,17 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
-        // 57. Candidate-only uncertainty for clear: decoy candidate fails, no certain cross-project reference
+        // 57. Candidate-only uncertainty for clear: failing candidate in another project
         {
-            CASES_BEGIN("57. Candidate-only uncertainty (clear) retains bytes via decoy candidate");
+            CASES_BEGIN("57. Candidate-only uncertainty (clear) retains bytes via cross-project decoy");
             mayasaba::Storage store(folder / "uncertainty-cand-clr.db");
             auto staging = folder / "uncertainty-cand-clr-stage";
             fs::create_directories(staging);
 
-            std::string const projectId = "unc-cand-clr";
+            std::string const projectId = "unc-cand-clr-P";
+            std::string const projQ = "unc-cand-clr-Q";
             store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
             auto dir = staging / "staging" / projectId;
             fs::create_directories(dir);
             auto path = dir / "kept.bin";
@@ -5324,12 +5326,8 @@ fs::remove(bigManaged);
                 std::ofstream of(path, std::ios::binary);
                 of.write("uncertain-clr", 13);
             }
-            auto decoyPath = dir / "decoy.bin";
-            {
-                std::ofstream of(decoyPath, std::ios::binary);
-                of.write("decoy-content", 13);
-            }
 
+            // Project P: primary attachment to protect
             mayasaba::AttachmentRecord primary;
             primary.id = "unc-cand-clr-primary";
             primary.projectId = projectId;
@@ -5342,40 +5340,57 @@ fs::remove(bigManaged);
             primary.status = "READY";
             store.SaveDraftAttachment(projectId, primary);
 
-            mayasaba::AttachmentRecord decoyRec = primary;
+            // Project Q: decoy candidate at a DIFFERENT path (not an alias)
+            // This reference is NOT cleared by ClearDraftAttachments(P)
+            auto decoyPath = staging / "staging" / projQ / "decoy.bin";
+            fs::create_directories(decoyPath.parent_path());
+            {
+                std::ofstream of(decoyPath, std::ios::binary);
+                of.write("decoy-content", 13);
+            }
+            mayasaba::AttachmentRecord decoyRec;
             decoyRec.id = "unc-cand-clr-decoy";
+            decoyRec.projectId = projQ;
             decoyRec.fileName = "decoy.bin";
+            decoyRec.fileSize = 13;
+            decoyRec.sha256 = ComputeSha256ForTestFile(WideToUtf8(decoyPath.wstring()));
+            decoyRec.detectedType = "application/octet-stream";
             decoyRec.storagePath = WideToUtf8(decoyPath.wstring());
-            decoyRec.sourcePath = "C:/source/clr2.bin";
-            store.SaveDraftAttachment(projectId, decoyRec);
+            decoyRec.sourcePath = "C:/source/clrq.bin";
+            decoyRec.status = "READY";
+            store.SaveDraftAttachment(projQ, decoyRec);
 
-            // Target path observable; decoy candidate fails
+            // Target path (X) observable; decoy candidate (Y) fails canonicalization
             store.SetForcePathCanonicalizationFailureForTestingPath(WideToUtf8(decoyPath.wstring()));
 
-            // Production boundary: RemoveDraftAttachmentGuarded exposes truthful uncertainty diagnostic
-            auto noopDeleter = [](std::string const&, std::string* r) -> bool {
-                if (r) *r = "deferred";
-                return false;
+            // Recording deleter: tracks which paths were actually deleted
+            std::vector<std::string> deletedPaths;
+            auto recordingDeleter = [&deletedPaths](std::string const& p, std::string*) -> bool {
+                deletedPaths.push_back(p);
+                std::error_code ec;
+                std::filesystem::remove(p, ec);
+                return !ec;
             };
-            auto rem = store.RemoveDraftAttachmentGuarded(projectId, "unc-cand-clr-primary", noopDeleter);
-            EXPECT(rem.recordFound);
-            EXPECT(rem.recordRemoved);
-            EXPECT(rem.bytesShared);
-            EXPECT(rem.reasonEn.find("could not be established") != std::string::npos);
+
+            // Clear P: primary's path (X) should be retained due to uncertainty from Q's decoy (Y)
+            auto cleared = store.ClearDraftAttachmentsGuarded(projectId, recordingDeleter);
+            EXPECT(!cleared.sharedPaths.empty());  // X is in sharedPaths (uncertain -> retained)
+            EXPECT(cleared.sharedPaths.size() == 1);
+            EXPECT(cleared.sharedPaths[0] == WideToUtf8(path.wstring()));
+            EXPECT(deletedPaths.empty());  // deleter NOT called for X
             EXPECT(fs::exists(path));
 
-            // Reference count returns INT_MAX under uncertainty (before clear, decoy still present)
-            EXPECT(store.CountProtectedReferencesExcluding(WideToUtf8(path.wstring()), projectId, "unc-cand-clr-primary") == std::numeric_limits<int>::max());
-
-            // Clear also retains due to uncertainty
-            auto cleared = store.ClearDraftAttachmentsGuarded(projectId, noopDeleter);
-            EXPECT(!cleared.sharedPaths.empty());
-            EXPECT(fs::exists(path));
+            // Primary project rows retired; other project's reference remains
             EXPECT(store.GetDraftAttachments(projectId).empty());
+            EXPECT(store.GetDraftAttachments(projQ).size() == 1);
+            EXPECT(store.GetDraftAttachments(projQ)[0].id == "unc-cand-clr-decoy");
 
-            // Recovery: restore observations, clear again -> bytes deleted
+            // Reference count for X returns INT_MAX under uncertainty
+            EXPECT(store.CountProtectedReferencesExcluding(WideToUtf8(path.wstring()), projectId, "") == std::numeric_limits<int>::max());
+
+            // Recovery: restore observations, remove Q's decoy, reconcile P (owns the file) -> file deleted
             store.ClearForcePathCanonicalizationFailureForTestingPath();
-            auto cleared2 = store.ClearDraftAttachmentsGuarded(projectId, [](std::string const&, std::string*) { return true; });
+            store.RemoveDraftAttachmentGuarded(projQ, "unc-cand-clr-decoy", [](std::string const&, std::string*) { return true; });
             mayasaba::AttachmentService serviceRec(store, staging);
             serviceRec.ReconcileStagedFiles(projectId, false);
             EXPECT(!fs::exists(path));
