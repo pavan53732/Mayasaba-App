@@ -947,41 +947,15 @@ namespace mayasaba
 
             if (!d.storagePath.empty())
             {
-                // Reference fence: a PREPARING file may be protected by another project's
-                // draft or committed record. Check global references before any deletion.
-                bool protectedElsewhere = false;
-                auto allProjects = storage_.RecentProjects(10000);
-                std::vector<std::string> ids;
-                for (auto const& p : allProjects) ids.push_back(p.id);
-                if (std::find(ids.begin(), ids.end(), projectId) == ids.end()) ids.push_back(projectId);
-                for (auto const& pid : ids)
-                {
-                    if (pid == projectId)
-                    {
-                        auto drafts = storage_.GetDraftAttachments(pid);
-                        for (auto const& dd : drafts)
-                        {
-                            if (dd.id == d.id) continue;
-                            if (dd.storagePath == d.storagePath) { protectedElsewhere = true; break; }
-                        }
-                    }
-                    else
-                    {
-                        auto drafts = storage_.GetDraftAttachments(pid);
-                        for (auto const& dd : drafts)
-                        {
-                            if (dd.storagePath == d.storagePath) { protectedElsewhere = true; break; }
-                        }
-                    }
-                    if (protectedElsewhere) break;
-                    auto committed = storage_.GetCommittedAttachmentsForProject(pid);
-                    for (auto const& cc : committed)
-                    {
-                        if (cc.storagePath == d.storagePath) { protectedElsewhere = true; break; }
-                    }
-                    if (protectedElsewhere) break;
-                }
-                if (protectedElsewhere)
+                // Reference fence: a PREPARING record may be protected by another project's
+                // draft or committed record. Reference eligibility is filesystem-level, not
+                // text-level: an alias spelled through dot-segments or a case variant names the
+                // same object, so a text comparison (the earlier RecentProjects-based fence)
+                // let an equivalent alias slip through and delete the bytes.
+                // CountProtectedReferencesExcluding canonicalizes every path and counts
+                // equivalent references across ALL projects (excluding this PREPARING row).
+                if (int refs = 0; (refs = storage_.CountProtectedReferencesExcluding(
+                        d.storagePath, projectId, d.id)) > 0)
                 {
                     // Another record protects these bytes; leave the PREPARING record and
                     // the file alone for reconciliation.

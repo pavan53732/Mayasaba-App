@@ -14,6 +14,7 @@
 #include <thread>
 #include <chrono>
 #include <algorithm>
+#include <cwctype>
 #include <memory>
 #include <cctype>
 #ifdef _WIN32
@@ -1051,24 +1052,115 @@ namespace mayasaba
         }
     }
 
+    static bool EqualLowercaseW(std::wstring const& a, std::wstring const& b);
+
+    int Storage::CountProtectedReferences(std::string const& path)
+    {
+        std::lock_guard lock(mutex_);
+        // Unknown or uncanonicalizable paths fail closed: report a sentinel that can
+        // never be zero so the caller refuses deletion rather than trusting a guess.
+        int refs = 0;
+        bool certain = true;
+        try
+        {
+            std::error_code ec;
+            auto cp = std::filesystem::weakly_canonical(std::filesystem::path(Utf8ToWide(path)), ec);
+            if (ec) { certain = false; }
+            auto self = [target = cp.wstring(), &path, &certain](std::string const& candidate) -> bool {
+                if (candidate.empty()) return false;
+                if (!certain) return false;
+                std::error_code ec2;
+                auto cc = std::filesystem::weakly_canonical(std::filesystem::path(Utf8ToWide(candidate)), ec2);
+                if (ec2) return false;
+                return EqualLowercaseW(cc.wstring(), target);
+            };
+            {
+                Statement q(db_, "SELECT staged_path FROM draft_attachments WHERE staged_path IS NOT NULL;");
+                int rc = SQLITE_OK;
+                while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+                    if (self(Text(q.value, 0)) || (!certain && path == Text(q.value,0))) ++refs;
+                Check(rc, db_);
+            }
+            {
+                Statement q(db_, "SELECT storage_path FROM attachments WHERE storage_path IS NOT NULL;");
+                int rc = SQLITE_OK;
+                while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+                    if (self(Text(q.value, 0)) || (!certain && path == Text(q.value,0))) ++refs;
+                Check(rc, db_);
+            }
+        }
+        catch (...)
+        {
+            return INT_MAX;
+        }
+        return certain ? refs : INT_MAX;
+    }
+
+    static bool EqualLowercaseW(std::wstring const& a, std::wstring const& b)
+    {
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (towlower((wint_t)a[i]) != towlower((wint_t)b[i])) return false;
+        return true;
+    }
+
+    int Storage::CountProtectedReferencesExcluding(std::string const& path, std::string const& projectId, std::string const& attachmentId)
+    {
+        std::lock_guard lock(mutex_);
+        return CountOtherProtectedReferences_locked(path, projectId, attachmentId);
+    }
+
+    static bool PathMatchesReference(std::string const& a, std::string const& b)
+    {
+        // Equivalent path spellings (case differences, dot segments, trailing
+        // separators) must count as the same object. Normalize both to a canonical
+        // absolute form for a filesystem-equivalent comparison, and fall back to a
+        // case-insensitive comparison if canonicalization is unavailable. A failed
+        // comparison is never treated as a match: fail closed.
+        try
+        {
+            auto pa = std::filesystem::path(Utf8ToWide(a)).wstring();
+            auto pb = std::filesystem::path(Utf8ToWide(b)).wstring();
+            std::error_code ec;
+            auto ca = std::filesystem::weakly_canonical(pa, ec);
+            if (ec) return false;
+            auto cb = std::filesystem::weakly_canonical(pb, ec);
+            if (ec) return false;
+            return EqualLowercaseW(ca.wstring(), cb.wstring());
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
     int Storage::CountOtherProtectedReferences_locked(std::string const& stagedPath, std::string const& projectId, std::string const& attachmentId)
     {
         // Retirement of one record is not authorization to delete the bytes at its path
-        // (R03): any other protected record that still names the same recorded path
-        // protects the bytes. Only the exact recorded path counts - matching size, digest
-        // or file-name similarity is never treated as ownership.
+        // (R03): any other protected record that still names an equivalent path protects
+        // the bytes. Path equivalence is filesystem-level, not text-level: case-variant
+        // and dot-segment spellings of the same object must count.
         int refs = 0;
         {
-            Statement q(db_, "SELECT count(*) FROM draft_attachments WHERE LOWER(staged_path)=LOWER(?1) AND NOT (project_id=?2 AND attachment_id=?3);");
-            Bind(q.value, 1, stagedPath);
+            Statement q(db_, "SELECT staged_path FROM draft_attachments "
+                             "WHERE NOT (project_id=?2 AND attachment_id=?3);");
             Bind(q.value, 2, projectId);
             Bind(q.value, 3, attachmentId);
-            if (sqlite3_step(q.value) == SQLITE_ROW) refs += sqlite3_column_int(q.value, 0);
+            int rc = SQLITE_OK;
+            while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+            {
+                if (PathMatchesReference(Text(q.value, 0), stagedPath)) ++refs;
+            }
+            Check(rc, db_);
         }
         {
-            Statement q(db_, "SELECT count(*) FROM attachments WHERE LOWER(storage_path)=LOWER(?1);");
-            Bind(q.value, 1, stagedPath);
-            if (sqlite3_step(q.value) == SQLITE_ROW) refs += sqlite3_column_int(q.value, 0);
+            Statement q(db_, "SELECT storage_path FROM attachments;");
+            int rc = SQLITE_OK;
+            while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+            {
+                if (PathMatchesReference(Text(q.value, 0), stagedPath)) ++refs;
+            }
+            Check(rc, db_);
         }
         return refs;
     }

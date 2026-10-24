@@ -4891,9 +4891,7 @@ auto const capDb = capFolder / "cap.db";
                 {
                     // Reopening at the ceiling succeeds: eligible inspection and recovery
                     // access is not capacity-gated.
-                    std::cerr << "DBG before atCeiling size=" << std::filesystem::file_size(capDb) << " exists=" << std::filesystem::exists(capDb) << std::endl;
-std::cerr << "DBG A" << std::endl;
-mayasaba::Storage atCeiling(capDb);
+                    mayasaba::Storage atCeiling(capDb);
                     
                     EXPECT(!atCeiling.IsQuarantinedForTesting());
                     EXPECT(atCeiling.Project("proj-cap").has_value());
@@ -4987,64 +4985,214 @@ fs::remove(bigManaged);
             {
                 auto folder2 = folder / "cleanup-audit";
                 fs::create_directories(folder2);
+                std::wstring stagedW;
+                std::string expectedSha;
                 {
-                mayasaba::Storage store(folder2 / "cleanup.db");
-                store.BindProject("proj-clean", "Clean", "C:/CLEAN");
-                auto const managedRoot = store.ManagedAttachmentRoot();
-                fs::create_directories(managedRoot);
-                auto const staged = managedRoot / "staged.bin";
-                {
-                    std::ofstream out(staged, std::ios::binary);
-                    out << "payload";
-                }
-                mayasaba::AttachmentRecord rec;
-                rec.id = "att-staged";
-                rec.projectId = "proj-clean";
-                rec.fileName = "staged.bin";
-                rec.fileSize = 7;
-                rec.sha256 = "sha";
-                rec.detectedType = "application/octet-stream";
-                rec.storagePath = staged.string();
-                rec.sourcePath = staged.string();
-                rec.status = "READY";
-                store.SaveDraftAttachment("proj-clean", rec);
-
-                store.SetForceCommitFailureForTesting(true);
-                bool threw = false;
-                bool fileGone = false;
-                try
-                {
-                    auto deleter = [&](std::string const& path, std::string* reason) -> bool
+                    mayasaba::Storage store(folder2 / "cleanup.db");
+                    store.BindProject("proj-clean", "Clean", "C:/CLEAN");
+                    auto const managedRoot = store.ManagedAttachmentRoot();
+                    fs::create_directories(managedRoot);
+                    auto const staged = managedRoot / "staged.bin";
                     {
-                        std::error_code ec;
-                        fs::remove(path, ec);
-                        if (ec) { if (reason) *reason = ec.message(); return false; }
-                        fileGone = true;
-                        return true;
-                    };
-                    (void)store.RemoveDraftAttachmentGuarded("proj-clean", "att-staged", deleter);
-                }
-                catch (std::exception const&) { threw = true; }
+                        std::ofstream out(staged, std::ios::binary);
+                        out << "payload";
+                    }
+                    mayasaba::AttachmentRecord rec;
+                    rec.id = "att-staged";
+                    rec.projectId = "proj-clean";
+                    rec.fileName = "staged.bin";
+                    rec.fileSize = 7;
+                    rec.sha256 = "sha";
+                    rec.detectedType = "application/octet-stream";
+                    rec.storagePath = staged.string();
+                    rec.sourcePath = staged.string();
+                    rec.status = "READY";
+                    store.SaveDraftAttachment("proj-clean", rec);
 
-                EXPECT(threw);
-                EXPECT(!fileGone);
-                EXPECT(fs::exists(staged));
-                // No physical effect occurred, so the store is not quarantined and the
-                // record survives the failed commit.
-                EXPECT(!store.IsQuarantinedForTesting());
-                EXPECT(store.GetDraftAttachments("proj-clean").size() == 1);
+                    store.SetForceCommitFailureForTesting(true);
+                    bool threw = false;
+                    bool fileGone = false;
+                    try
+                    {
+                        auto deleter = [&](std::string const& path, std::string* reason) -> bool
+                        {
+                            std::error_code ec;
+                            fs::remove(path, ec);
+                            if (ec) { if (reason) *reason = ec.message(); return false; }
+                            fileGone = true;
+                            return true;
+                        };
+                        (void)store.RemoveDraftAttachmentGuarded("proj-clean", "att-staged", deleter);
+                    }
+                    catch (std::exception const&) { threw = true; }
 
+                    EXPECT(threw);
+                    EXPECT(!fileGone);
+                    EXPECT(fs::exists(staged));
+                    // No physical effect occurred, so the store is not quarantined and the
+                    // record survives the failed commit.
+                    EXPECT(!store.IsQuarantinedForTesting());
+                    EXPECT(store.GetDraftAttachments("proj-clean").size() == 1);
+                    stagedW = staged.wstring();
+                    expectedSha = ComputeSha256ForTestFile(staged.string());
                 }
+                // The failed COMMIT preserved the record and the staged bytes durably. The
+                // store instance is now closed so the single-instance lock is released; a
+                // fresh handle must observe the same state and integrity-verify the bytes.
                 mayasaba::Storage reopened(folder2 / "cleanup.db");
-                // Quarantine is in-memory for this store version; reopened stores are
-                // not automatically quarantined. The immediate-store quarantine above
-                // is the enforced protection. Durable quarantine is tracked as open.
-                (void)reopened;
+                auto reopenedRows = reopened.GetDraftAttachments("proj-clean");
+                EXPECT(reopenedRows.size() == 1);
+                EXPECT(reopenedRows[0].id == "att-staged");
+                EXPECT(reopenedRows[0].status == "READY");
+
+                std::filesystem::path const stagedP = std::filesystem::path(stagedW);
+                EXPECT(fs::exists(stagedP));
+                // The record was saved with a placeholder digest; the durable invariant is
+                // that the failed commit preserved the exact stored record and its bytes.
+                EXPECT(reopenedRows[0].sha256 == "sha");
+                EXPECT(reopenedRows[0].storagePath == WideToUtf8(stagedW));
+                std::error_code sze;
+                EXPECT(fs::file_size(stagedP, sze) == 7);
 
                 std::error_code rmEc2;
                 fs::remove_all(folder2, rmEc2);
                 CASES_END();
             }
+
+        // 53. Failure A reproduction: an equivalent path-spelling alias must protect
+        // staged bytes. The older `LOWER(path)` guard matched only identical text, so a
+        // second record naming the same file through `parent/./file` or a case variant
+        // was invisible to reference accounting and the bytes were deleted out from
+        // under it. PathMatchesReference now compares filesystem identity.
+        {
+            CASES_BEGIN("53. An equivalent path-spelling alias protects staged bytes (Failure A)");
+            mayasaba::Storage store(folder / "path-alias.db");
+            auto staging = folder / "path-alias-stage";
+            fs::create_directories(staging);
+            mayasaba::AttachmentService service(store, staging);
+
+            std::string const projectId = "alias-proj";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "original.txt";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("protected by alias", 18);
+            }
+
+            mayasaba::AttachmentRecord primary;
+            primary.id = "alias-primary";
+            primary.projectId = projectId;
+            primary.fileName = "original.txt";
+            primary.fileSize = 18;
+            primary.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+            primary.detectedType = "text/plain";
+            primary.storagePath = WideToUtf8(path.wstring());
+            primary.sourcePath = "C:/source/original.txt";
+            primary.status = "READY";
+            store.SaveDraftAttachment(projectId, primary);
+
+            // Same physical file, different spelling: a dot-segment that collapses on
+            // canonicalization. The stored text differs even though the object is one.
+            auto aliasPath = dir / "." / path.filename();
+            std::string aliasSpelling = WideToUtf8(aliasPath.wstring());
+            EXPECT(aliasSpelling != primary.storagePath);
+
+            mayasaba::AttachmentRecord aliasRec = primary;
+            aliasRec.id = "alias-secondary";
+            aliasRec.storagePath = aliasSpelling;
+            aliasRec.sourcePath = "C:/source/alias.txt";
+            store.SaveDraftAttachment(projectId, aliasRec);
+
+            // The alias is a real protected reference even though its text differs.
+            EXPECT(store.CountProtectedReferencesExcluding(primary.storagePath, projectId, primary.id) >= 1);
+
+            // Removing the primary must retain the bytes for the alias.
+            auto const r = service.RemoveDraftAttachment(projectId, "alias-primary");
+            EXPECT(r.recordRemoved);
+            EXPECT(r.bytesRemoved); // retention is the policy; no unresolved failure
+            EXPECT(fs::exists(path));
+            EXPECT(store.GetDraftAttachments(projectId).size() == 1);
+            EXPECT(store.GetDraftAttachments(projectId)[0].id == "alias-secondary");
+
+            // Removing the last referencing record finally reclaims the bytes.
+            auto const r2 = service.RemoveDraftAttachment(projectId, "alias-secondary");
+            EXPECT(r2.recordRemoved);
+            EXPECT(r2.bytesRemoved);
+            EXPECT(!fs::exists(path));
+            EXPECT(store.GetDraftAttachments(projectId).empty());
+            fs::remove_all(staging);
+            CASES_END();
+        }
+
+        // 54. Failure B reproduction: an interrupted PREPARING cleanup must not delete
+        // bytes that another project's READY record still protects. The old PREPARING
+        // sweep deleted the staged file before global reference tracking, so a
+        // cross-project committed/draft record could be left pointing at missing bytes.
+        // ReconcileStagedFiles now counts every equivalent reference across all projects
+        // (excluding the PREPARING row) before touching bytes.
+        {
+            CASES_BEGIN("54. Interrupted PREPARING cleanup is fenced by cross-project references (Failure B)");
+            mayasaba::Storage store(folder / "preparing-fence.db");
+            auto staging = folder / "preparing-fence-stage";
+            fs::create_directories(staging);
+            mayasaba::AttachmentService service(store, staging);
+
+            // Project P owns the staged file; an interrupted preparation left a PREPARING row.
+            std::string const projP = "prep-P";
+            store.BindProject(projP, projP, "C:/Projects/" + projP);
+            auto dirP = staging / "staging" / projP;
+            fs::create_directories(dirP);
+            auto pFile = dirP / "shared.bin";
+            {
+                std::ofstream of(pFile, std::ios::binary);
+                of.write("cross-project bytes", 18);
+            }
+
+            mayasaba::AttachmentRecord preparing;
+            preparing.id = "prep-interrupted";
+            preparing.projectId = projP;
+            preparing.fileName = "shared.bin";
+            preparing.fileSize = 18;
+            preparing.sha256 = ComputeSha256ForTestFile(WideToUtf8(pFile.wstring()));
+            preparing.detectedType = "application/octet-stream";
+            preparing.storagePath = WideToUtf8(pFile.wstring());
+            preparing.sourcePath = "C:/source/p.bin";
+            preparing.status = "PREPARING";
+            store.SaveDraftAttachment(projP, preparing);
+
+            // Project Q holds a READY reference to the same bytes: this must protect them.
+            std::string const projQ = "prep-Q";
+            store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
+            mayasaba::AttachmentRecord qRec = preparing;
+            qRec.id = "prep-q-ready";
+            qRec.projectId = projQ;
+            qRec.status = "READY";
+            qRec.sourcePath = "C:/source/q.bin";
+            store.SaveDraftAttachment(projQ, qRec);
+
+            EXPECT(fs::exists(pFile));
+            EXPECT(store.GetDraftAttachments(projP).size() == 1);
+
+            // Reconcile P without an active preparation: the PREPARING row is eligible,
+            // but Q's READY reference still protects the bytes, so nothing is deleted.
+            service.ReconcileStagedFiles(projP, false);
+            EXPECT(fs::exists(pFile));
+            EXPECT(store.GetDraftAttachments(projP).size() == 1); // PREPARING retained
+            EXPECT(store.GetDraftAttachments(projQ).size() == 1); // Q untouched
+
+            // Remove Q's reference; the bytes are now unreferenced and cleanup may proceed.
+            store.RemoveDraftAttachmentGuarded(projQ, "prep-q-ready", nullptr);
+            EXPECT(store.GetDraftAttachments(projQ).empty());
+
+            // Re-reconcile P: now safe to retire the PREPARING row and delete the file.
+            service.ReconcileStagedFiles(projP, false);
+            EXPECT(!fs::exists(pFile));
+            EXPECT(store.GetDraftAttachments(projP).empty());
+            fs::remove_all(staging);
+            CASES_END();
+        }
 
         fs::remove_all(folder);
         // The summary is derived from the groups that actually ran. It is not a fixed

@@ -401,6 +401,13 @@ namespace mayasaba
         std::vector<AttachmentRecord> GetDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);
         std::vector<AttachmentRecord> GetCommittedAttachmentsForProject(std::string const& projectId);
+        // Counts every protected reference, across all projects, that points at the same
+        // filesystem object as `path`. Equivalence is filesystem-level (case-variant and
+        // dot-segment spellings count). Unknown or uncanonicalizable paths fail closed
+        // (return a large sentinel so nothing is treated as unprotected). Used by cleanup
+        // and reconciliation to prove a byte range is unreferenced before deletion.
+        int CountProtectedReferences(std::string const& path);
+        int CountProtectedReferencesExcluding(std::string const& path, std::string const& projectId, std::string const& attachmentId);
         static std::string ComputeAttachmentManifest(std::vector<AttachmentRecord> const& attachments);
 
         // Action Center: read-only projection over owner records.
