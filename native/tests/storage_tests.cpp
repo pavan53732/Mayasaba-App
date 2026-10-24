@@ -5238,71 +5238,215 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
-        // 56. Unknown reference (candidate-only) via per-path injection
+        // 56. Candidate-only uncertainty for removal: target observable, alias candidate fails
         {
-            CASES_BEGIN("56. Candidate-only uncertainty (per-path) retains bytes for removal/clear/PREPARING");
-            mayasaba::Storage store(folder / "uncertainty-cand.db");
-            auto staging = folder / "uncertainty-cand-stage";
+            CASES_BEGIN("56. Candidate-only uncertainty (removal) retains bytes and exposes diagnostic");
+            mayasaba::Storage store(folder / "uncertainty-cand-rem.db");
+            auto staging = folder / "uncertainty-cand-rem-stage";
             fs::create_directories(staging);
-            mayasaba::AttachmentService service(store, staging);
 
-            std::string const projectId = "unc-cand-proj";
+            std::string const projectId = "unc-cand-rem";
             store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
             auto dir = staging / "staging" / projectId;
             fs::create_directories(dir);
-            auto path = dir / "kept2.bin";
+            auto path = dir / "kept.bin";
             {
                 std::ofstream of(path, std::ios::binary);
-                of.write("uncertain-cand", 14);
+                of.write("uncertain-rem", 13);
+            }
+            auto aliasPath = dir / "." / path.filename();
+            {
+                std::ofstream of(aliasPath, std::ios::binary);
+                of.write("uncertain-rem-alias", 19);
             }
 
             mayasaba::AttachmentRecord primary;
-            primary.id = "unc-cand-primary";
+            primary.id = "unc-cand-rem-primary";
             primary.projectId = projectId;
-            primary.fileName = "kept2.bin";
-            primary.fileSize = 14;
+            primary.fileName = "kept.bin";
+            primary.fileSize = 13;
             primary.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
             primary.detectedType = "application/octet-stream";
             primary.storagePath = WideToUtf8(path.wstring());
-            primary.sourcePath = "C:/source/c1.bin";
+            primary.sourcePath = "C:/source/rem1.bin";
             primary.status = "READY";
             store.SaveDraftAttachment(projectId, primary);
 
             mayasaba::AttachmentRecord aliasRec = primary;
-            aliasRec.id = "unc-cand-alias";
-            std::string aliasSpelling = WideToUtf8((dir / "." / path.filename()).wstring());
-            aliasRec.storagePath = aliasSpelling;
-            aliasRec.sourcePath = "C:/source/c2.bin";
+            aliasRec.id = "unc-cand-rem-alias";
+            aliasRec.storagePath = WideToUtf8(aliasPath.wstring());
+            aliasRec.sourcePath = "C:/source/rem2.bin";
             store.SaveDraftAttachment(projectId, aliasRec);
 
-            // Target path observable; candidate-only fails
+            std::string aliasSpelling = WideToUtf8(aliasPath.wstring());
             store.SetForcePathCanonicalizationFailureForTestingPath(aliasSpelling);
 
-            // Removal
-            auto const r1 = service.RemoveDraftAttachment(projectId, "unc-cand-primary");
-            EXPECT(r1.recordRemoved);
+            // Production boundary: Storage exposes truthful uncertainty diagnostic
+            auto noopDeleter = [](std::string const&, std::string* r) -> bool {
+                if (r) *r = "deferred";
+                return false;
+            };
+            auto rem = store.RemoveDraftAttachmentGuarded(projectId, "unc-cand-rem-primary", noopDeleter);
+            EXPECT(rem.recordFound);
+            EXPECT(rem.recordRemoved);
+            EXPECT(rem.bytesShared);
+            EXPECT(rem.reasonEn.find("could not be established") != std::string::npos);
             EXPECT(fs::exists(path));
-            EXPECT(r1.unresolvedReason.empty());
 
-            // Clear with cross-project reference present
+            // Reference count returns INT_MAX under uncertainty
+            EXPECT(store.CountProtectedReferencesExcluding(WideToUtf8(path.wstring()), projectId, "unc-cand-rem-primary") == std::numeric_limits<int>::max());
+
+            // Recovery: restore observations, remove alias, clean file
+            store.ClearForcePathCanonicalizationFailureForTestingPath();
+            auto rem2 = store.RemoveDraftAttachmentGuarded(projectId, "unc-cand-rem-alias", noopDeleter);
+            // Now both records gone, no references remain
+            EXPECT(rem2.recordRemoved);
+            // Clean the orphaned file via AttachmentService reconcile
+            mayasaba::AttachmentService serviceRec(store, staging);
+            serviceRec.ReconcileStagedFiles(projectId, false);
+            EXPECT(!fs::exists(path));
+            CASES_END();
+        }
+
+        // 57. Candidate-only uncertainty for clear: decoy candidate fails, no certain cross-project reference
+        {
+            CASES_BEGIN("57. Candidate-only uncertainty (clear) retains bytes via decoy candidate");
+            mayasaba::Storage store(folder / "uncertainty-cand-clr.db");
+            auto staging = folder / "uncertainty-cand-clr-stage";
+            fs::create_directories(staging);
+
+            std::string const projectId = "unc-cand-clr";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "kept.bin";
             {
-                std::string const projQ = "unc-cand-projq";
-                store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
-                mayasaba::AttachmentRecord qRec = primary;
-                qRec.id = "unc-cand-qready";
-                qRec.projectId = projQ;
-                qRec.status = "READY";
-                qRec.sourcePath = "C:/source/cq.bin";
-                store.SaveDraftAttachment(projQ, qRec);
-                auto const rc = service.ClearDraftAttachments(projectId);
-                EXPECT(rc.recordRemoved);
-                EXPECT(fs::exists(path));
-                EXPECT(rc.unresolvedReason.empty());
-                store.RemoveDraftAttachmentGuarded(projQ, "unc-cand-qready", nullptr);
+                std::ofstream of(path, std::ios::binary);
+                of.write("uncertain-clr", 13);
+            }
+            auto decoyPath = dir / "decoy.bin";
+            {
+                std::ofstream of(decoyPath, std::ios::binary);
+                of.write("decoy-content", 13);
             }
 
+            mayasaba::AttachmentRecord primary;
+            primary.id = "unc-cand-clr-primary";
+            primary.projectId = projectId;
+            primary.fileName = "kept.bin";
+            primary.fileSize = 13;
+            primary.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+            primary.detectedType = "application/octet-stream";
+            primary.storagePath = WideToUtf8(path.wstring());
+            primary.sourcePath = "C:/source/clr1.bin";
+            primary.status = "READY";
+            store.SaveDraftAttachment(projectId, primary);
+
+            mayasaba::AttachmentRecord decoyRec = primary;
+            decoyRec.id = "unc-cand-clr-decoy";
+            decoyRec.fileName = "decoy.bin";
+            decoyRec.storagePath = WideToUtf8(decoyPath.wstring());
+            decoyRec.sourcePath = "C:/source/clr2.bin";
+            store.SaveDraftAttachment(projectId, decoyRec);
+
+            // Target path observable; decoy candidate fails
+            store.SetForcePathCanonicalizationFailureForTestingPath(WideToUtf8(decoyPath.wstring()));
+
+            // Production boundary: RemoveDraftAttachmentGuarded exposes truthful uncertainty diagnostic
+            auto noopDeleter = [](std::string const&, std::string* r) -> bool {
+                if (r) *r = "deferred";
+                return false;
+            };
+            auto rem = store.RemoveDraftAttachmentGuarded(projectId, "unc-cand-clr-primary", noopDeleter);
+            EXPECT(rem.recordFound);
+            EXPECT(rem.recordRemoved);
+            EXPECT(rem.bytesShared);
+            EXPECT(rem.reasonEn.find("could not be established") != std::string::npos);
+            EXPECT(fs::exists(path));
+
+            // Reference count returns INT_MAX under uncertainty (before clear, decoy still present)
+            EXPECT(store.CountProtectedReferencesExcluding(WideToUtf8(path.wstring()), projectId, "unc-cand-clr-primary") == std::numeric_limits<int>::max());
+
+            // Clear also retains due to uncertainty
+            auto cleared = store.ClearDraftAttachmentsGuarded(projectId, noopDeleter);
+            EXPECT(!cleared.sharedPaths.empty());
+            EXPECT(fs::exists(path));
+            EXPECT(store.GetDraftAttachments(projectId).empty());
+
+            // Recovery: restore observations, clear again -> bytes deleted
             store.ClearForcePathCanonicalizationFailureForTestingPath();
-            fs::remove_all(staging);
+            auto cleared2 = store.ClearDraftAttachmentsGuarded(projectId, [](std::string const&, std::string*) { return true; });
+            mayasaba::AttachmentService serviceRec(store, staging);
+            serviceRec.ReconcileStagedFiles(projectId, false);
+            EXPECT(!fs::exists(path));
+            CASES_END();
+        }
+
+        // 58. Candidate-only uncertainty for PREPARING reconciliation: decoy PREPARING candidate fails
+        {
+            CASES_BEGIN("58. Candidate-only uncertainty (PREPARING) retains bytes via decoy candidate");
+            mayasaba::Storage store(folder / "uncertainty-cand-prep.db");
+            auto staging = folder / "uncertainty-cand-prep-stage";
+            fs::create_directories(staging);
+
+            std::string const projectId = "unc-cand-prep";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "prep.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("uncertain-prep", 14);
+            }
+            auto decoyPath = dir / "decoy.bin";
+            {
+                std::ofstream of(decoyPath, std::ios::binary);
+                of.write("decoy-prep", 10);
+            }
+
+            mayasaba::AttachmentRecord prepRec;
+            prepRec.id = "unc-cand-prep-prep";
+            prepRec.projectId = projectId;
+            prepRec.fileName = "prep.bin";
+            prepRec.fileSize = 14;
+            prepRec.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+            prepRec.detectedType = "application/octet-stream";
+            prepRec.storagePath = WideToUtf8(path.wstring());
+            prepRec.sourcePath = "C:/source/prep1.bin";
+            prepRec.status = "PREPARING";
+            store.SaveDraftAttachment(projectId, prepRec);
+
+            mayasaba::AttachmentRecord decoyRec = prepRec;
+            decoyRec.id = "unc-cand-prep-decoy";
+            decoyRec.fileName = "decoy.bin";
+            decoyRec.fileSize = 10;
+            decoyRec.sha256 = ComputeSha256ForTestFile(WideToUtf8(decoyPath.wstring()));
+            decoyRec.storagePath = WideToUtf8(decoyPath.wstring());
+            decoyRec.sourcePath = "C:/source/prep2.bin";
+            decoyRec.status = "PREPARING";
+            store.SaveDraftAttachment(projectId, decoyRec);
+
+            // Target path observable; decoy candidate fails
+            store.SetForcePathCanonicalizationFailureForTestingPath(WideToUtf8(decoyPath.wstring()));
+
+            // Reconcile: PREPARING rows retained under uncertainty
+            mayasaba::AttachmentService service(store, staging);
+            auto noopDeleter = [](std::string const&, std::string* r) -> bool {
+                if (r) *r = "deferred";
+                return false;
+            };
+            service.ReconcileStagedFiles(projectId, false);
+            EXPECT(fs::exists(path));
+            EXPECT(store.GetDraftAttachments(projectId).size() >= 1);
+
+            // Reference count returns INT_MAX under uncertainty
+            EXPECT(store.CountProtectedReferencesExcluding(WideToUtf8(path.wstring()), projectId, "unc-cand-prep-prep") == std::numeric_limits<int>::max());
+
+            // Recovery: restore observations, reconcile again -> bytes deleted
+            store.ClearForcePathCanonicalizationFailureForTestingPath();
+            service.ReconcileStagedFiles(projectId, false);
+            EXPECT(!fs::exists(path));
+            EXPECT(store.GetDraftAttachments(projectId).empty());
             CASES_END();
         }
 
