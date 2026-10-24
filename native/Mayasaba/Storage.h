@@ -370,6 +370,20 @@ namespace mayasaba
         // hash or size equality is never used as ownership proof - only the exact
         // recorded path. A failed deletion rolls the whole removal back, so the record and
         // the bytes stay recoverable, and the English reason names the cause.
+        // The physical object whose references were checked. Captured inside the same
+        // serialized section that establishes deletion eligibility, so a path that is
+        // renamed over, replaced or re-pointed between eligibility and the delete call
+        // is detectable: the deleter compares this against the object its own open
+        // handle actually names. A path spelling proves nothing about identity; this
+        // does, because it is the volume serial plus the file index Windows assigned to
+        // the object, not its name.
+        struct StagedObjectIdentity
+        {
+            bool valid{false};
+            unsigned long volumeSerial{0};
+            unsigned long long fileIndex{0};
+        };
+
         struct DraftAttachmentRemoval
         {
             bool recordFound{false};
@@ -379,7 +393,11 @@ namespace mayasaba
             bool bytesRemoved{false};
             std::string reasonEn;
         };
-        using StagedBytesDeleter = std::function<bool(std::string const& stagedPath, std::string* reasonEn)>;
+        // `expected` is the identity captured at eligibility. A deleter that cannot
+        // prove the object it is about to remove is that object must refuse and return
+        // false: refusing retains bytes, which is always recoverable, while removing a
+        // substituted object is not.
+        using StagedBytesDeleter = std::function<bool(std::string const& stagedPath, StagedObjectIdentity const& expected, std::string* reasonEn)>;
         DraftAttachmentRemoval RemoveDraftAttachmentGuarded(std::string const& projectId, std::string const& attachmentId, StagedBytesDeleter const& deleteBytes);
         // Removes every draft attachment record of the project and returns the staged paths
         // they owned, under the same authorization rule and the same serialization.
@@ -398,6 +416,76 @@ namespace mayasaba
             std::string reasonEn;
         };
         DraftAttachmentClear ClearDraftAttachmentsGuarded(std::string const& projectId, StagedBytesDeleter const& deleteBytes);
+
+        // Retires one interrupted PREPARING record under the SAME serialization as
+        // admission: the shared-reference count, the object-identity capture and the
+        // physical removal all happen inside one mutex-guarded write transaction.
+        //
+        // This replaces a caller-side "count references, then delete the file, then
+        // retire the record" sequence. Those three steps were separate calls with the
+        // store mutex released between them, so a protected reference admitted in the
+        // window made the count stale and the delete removed bytes a live record had
+        // just been told it could rely on. Here the window does not exist: admission
+        // needs the same mutex, so it either completes before eligibility (and is
+        // counted) or begins after the deletion (and is refused by the cleanup
+        // tombstone that this operation records).
+        //
+        // A record that another protected record still references is left completely
+        // untouched, record and bytes, so a later pass can reconsider it. A failed
+        // physical removal also leaves the record in place, so the failure stays
+        // visible and retryable instead of orphaning bytes silently.
+        struct PreparationRetirement
+        {
+            bool recordFound{false};
+            bool recordRetired{false};
+            bool bytesRetained{false};
+            bool bytesRemoved{false};
+            std::string reasonEn;
+        };
+        PreparationRetirement RetireInterruptedPreparationGuarded(
+            std::string const& projectId,
+            std::string const& attachmentId,
+            StagedBytesDeleter const& deleteBytes);
+
+        // Removes one staged file that no protected record names, deciding and deleting
+        // inside one serialized section.
+        //
+        // Reconciliation used to build a set of tracked paths from a capped project
+        // listing and then delete anything the set did not contain. A capped listing is
+        // not complete reference coverage, and the set was a snapshot: a reference
+        // admitted after the snapshot and before the delete was invisible to it. Here
+        // the reference query is uncapped and runs against the tables themselves, and
+        // it runs immediately before the removal under the mutex admission needs.
+        struct UntrackedStagedDeletion
+        {
+            bool referenced{false};
+            bool removed{false};
+            std::string reasonEn;
+        };
+        UntrackedStagedDeletion RemoveUntrackedStagedFileGuarded(
+            std::string const& projectId,
+            std::string const& stagedPath,
+            StagedBytesDeleter const& deleteBytes);
+
+        // One durable cleanup intent and its observed outcome. A cleanup that removed
+        // bytes is not "transactional" just because a mutex or a SQL transaction was
+        // involved: SQLite rollback cannot restore a deleted file. The intent is
+        // therefore recorded durably BEFORE the bytes are touched and resolved after, so
+        // a process that dies at either boundary leaves a record that the next open can
+        // reconcile instead of a silent inconsistency.
+        struct CleanupRecoveryOutcome
+        {
+            std::string stagedPath;
+            std::string projectId;
+            std::string state;
+            bool bytesPresent{false};
+            bool resolved{false};
+            std::string reasonEn;
+        };
+        // Reconciles cleanup intents left unresolved by an earlier process. Idempotent:
+        // running it twice changes nothing the second time. It never deletes bytes; it
+        // records what it observed and leaves a resolution decision to the owning layer.
+        std::vector<CleanupRecoveryOutcome> RecoverInterruptedCleanups();
         std::vector<AttachmentRecord> GetDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);
         std::vector<AttachmentRecord> GetCommittedAttachmentsForProject(std::string const& projectId);
@@ -559,6 +647,31 @@ namespace mayasaba
         // attachment rows. Must be called inside the same write transaction that
         // established eligibility.
         int CountOtherProtectedReferences_locked(std::string const& stagedPath, std::string const& projectId, std::string const& attachmentId);
+        // Lowercase canonical spelling used as the journal key, so a cleanup tombstone
+        // matches an admission spelled through a case variant or dot segments. Falls back
+        // to the lowercase raw spelling when the path cannot be canonicalized: an
+        // uncanonicalizable path must still be tombstoned, not silently admitted.
+        std::string CleanupPathKey(std::string const& path) const;
+        // Volume serial and file index of the object currently at `path`, captured inside
+        // the eligibility section. `valid` is false when no regular object could be
+        // opened, which makes every later identity comparison fail closed.
+        StagedObjectIdentity CaptureStagedObjectIdentity(std::string const& path) const;
+        void RecordCleanupIntent_locked(std::string const& projectId, std::string const& stagedPath, std::string const& state, std::string const& reason);
+        void ResolveCleanupIntent_locked(std::string const& projectId, std::string const& stagedPath, std::string const& state, std::string const& reason);
+        // Records the observed outcome of a cleanup whose physical effect has already
+        // happened. Caller holds mutex_; it opens its own transaction because the
+        // retirement transaction has committed by then. A resolution that cannot be
+        // recorded leaves the intent PENDING on purpose - the next open reconciles it
+        // from the observed physical state - and does not turn a completed cleanup into
+        // a reported failure.
+        void ResolveCleanup(std::string const& projectId, std::string const& stagedPath, std::string const& state, std::string const& reason);
+        // Refuses a READY admission that names a path this store has durably recorded as
+        // cleaned and whose bytes are still absent. This is what stops an admission that
+        // resumes after a deletion from claiming a valid READY reference to bytes that no
+        // longer exist. It is deliberately narrow: a path is refused only when this store
+        // cleaned it AND the bytes are still gone, so re-staging the same path and
+        // admitting it is allowed, and no pre-existing record is affected.
+        void RefuseCleanedPathAdmission_locked(std::string const& status, std::string const& stagedPath);
         int PathReferenceMatch(std::string const& a, std::string const& b, bool forceFailure = false) const;
         // Establishes the transaction state after a failed mutation; quarantines the store
         // when the rollback cannot be proven.

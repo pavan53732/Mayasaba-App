@@ -3650,3 +3650,169 @@ junction substitution against the production staging root was not separately
 reproduced (the finalization check is the handle-canonical-path mechanism the
 audit's `audit_probe.cpp` demonstrated works for this exact shape). Storage-level
 tests do not exercise the WinUI call sites directly.
+
+## 2026-10-24 — Concurrent attachment fencing, object identity and interrupted-cleanup recovery
+
+Baseline at start of work: `main` = `a6e4948e5ec2bb37fc220d16d1c9b4bbe33995ad`,
+queried `origin/main` identical, working tree dirty with one file
+(`native/tests/storage_tests.cpp`, +206 lines) containing the handoff drafts numbered
+59-61. Those drafts were preserved before any edit: full-file snapshot
+`storage_tests.cpp.working` SHA-256
+`cde70a9a2ec84656b9d2b70945c4431e6e90a461b3530a57f8acf707d37bdc8d` and unified diff
+`groups-59-61.diff` SHA-256
+`2d2aff835257a02f70691a15bb0d79dcfab86a17cec53ff3f6b4814669d92c4e`, both outside
+temporary storage under
+`~/.codex/visualizations/2026/10/24/handoff-preserve/`. The drafts were not committed:
+each was unsound as written, and the snapshot is the durable record of them.
+
+Why each draft was replaced rather than kept:
+
+- **59** ran every operation sequentially on one thread. A reference created before a
+  cleanup and an admission created after it returned do not test an overlapping
+  admission/deletion race, so the group name described an execution it never performed.
+- **60** changed SQLite metadata (`UPDATE draft_attachments SET staged_path`) before
+  cleanup ran, which is not a time-of-check/time-of-use substitution: the cleanup simply
+  read the new value. It also used `store.GetDb()`, `mayasaba::Statement`,
+  `mayasaba::Bind` and `mayasaba::Check`; `Bind` and `Check` are private static members
+  and no public `GetDb()` exists, so the draft could not compile. No audit-only accessor
+  was added to production to accommodate it.
+- **61** opened a second `Storage` on the same file while the first was alive. That is a
+  second live handle, not a restart, and it conflicts with the store's single-instance
+  protection. It also never interrupted a cleanup boundary.
+
+### Production defects found and corrected
+
+1. **PREPARING reconciliation had a real admission/delete gap.**
+   `AttachmentService::ReconcileStagedFiles` called
+   `Storage::CountProtectedReferencesExcluding` (which takes and releases the store
+   mutex), then `RemoveContainedStagedFile` (no fence at all), then
+   `Storage::RemoveDraftAttachment`. A protected reference admitted between the count and
+   the delete was never counted, so the delete removed bytes a live record had just been
+   admitted against. Replaced by
+   `Storage::RetireInterruptedPreparationGuarded`, which performs the reference query,
+   the object-identity capture, the physical removal and the record retirement inside one
+   mutex-guarded write transaction. A record still referenced by another protected record
+   is left completely untouched; a failed removal leaves the record in place so the
+   failure stays visible and retryable.
+
+2. **The orphan sweep decided from a capped, stale listing.**
+   `ReconcileStagedFiles` built its tracked-path set from `RecentProjects(10000)` and then
+   deleted any staging file the set did not contain. A capped listing is not complete
+   reference coverage, and the set was a snapshot taken before the deletion. The listing
+   is now an explicit pre-filter only; the authoritative decision is
+   `Storage::RemoveUntrackedStagedFileGuarded`, which counts references against the
+   tables themselves (no cap) and removes the identified object inside the same
+   serialized section that admission requires.
+
+3. **Object identity was containment-only.** `DeleteStagedFileWithHandleIdentity` proved
+   the opened object was inside the project's staging directory, which does not prove it
+   is the object whose references were counted. A different object placed at the same
+   name after eligibility was therefore deleted. The deleter now also compares the opened
+   handle's volume serial and file index against a `StagedObjectIdentity` captured at
+   eligibility, and refuses on mismatch or when no identity could be captured.
+
+4. **Cleanup had no durable record and no admission tombstone.** SQLite rollback cannot
+   restore a deleted file, so an interruption at either boundary left no evidence. New
+   table `staged_cleanup_journal` records the intent to remove a specific object
+   (path key, identity, state `PENDING`) inside the transaction that established
+   eligibility, and the observed outcome (`DELETED` / `FAILED` / `RETAINED`) afterwards.
+   `Storage::RecoverInterruptedCleanups` reconciles unresolved intents on reopen and never
+   deletes bytes. The same rows are the admission tombstone:
+   `RefuseCleanedPathAdmission_locked` refuses a READY admission naming a path this store
+   cleaned whose bytes are still absent, so an admission that only resumes after a
+   deletion cannot claim a valid READY reference to nothing. It is deliberately narrow —
+   a path is refused only when this store cleaned it and the bytes are still gone — so
+   re-staging and admitting the same path is allowed and no pre-existing record is
+   affected. That narrowness is why the existing suite, which admits READY rows for paths
+   such as `C:/stage/a.txt` that never existed, still passes unchanged.
+
+### Test-adequacy correction
+
+Groups 59-61 were replaced with 59-62, which exercise the claims above:
+
+| Group | What it actually does |
+|---|---|
+| 59 | Two real threads. Cleanup holds the store mutex at the production boundary (inside the deleter, after eligibility, before deletion); the competing admission is launched from the main thread, must block, and is recorded as blocked. Asserts `!admitted` and that the refusal names the cleanup. |
+| 60 | Substitutes a different object at the recorded path through `SetStagedDeletionBoundaryHookForTesting`, which fires before the production open. Asserts the replacement survives with its own bytes. |
+| 61 | First `Storage` destroyed before reopen. Interruption produced by the production path (the removal never reports an outcome). Asserts one `RETAINED` and one `DELETED` disposition and that a second recovery pass is empty. |
+| 62 | Untracked deletion against a case-variant, dot-segment reference held by another project: orphan removed, protected file retained. |
+
+Deleter signature change: `StagedBytesDeleter` now receives
+`StagedObjectIdentity const&`. Four existing test deleters (groups 48, 52, 56, 57) and
+the two production deleters were updated mechanically; their assertions and behaviour
+are unchanged, and all of them still pass.
+
+### Executed results
+
+- Clean suite: `native/tests/bin/storage_tests.exe` SHA-256
+  `a5f309fb6cfc42d1952bddf25c0e5456d915cfc1fec28314c906091190554384`,
+  **PASS: 62 of 62 executed native regression groups**, exit 0, after a forced
+  `Rebuild` from the committed sources. (An earlier run of the same 62 groups, before two
+  non-behavioural cleanups described under mutation evidence, produced binary
+  `46b0b22ccb406c9c08e565dc4a88e490daa66fc53900edd6cf7792ea8fe09914` with the same
+  result.)
+- Accepted baseline preserved: the same source tree with only groups 59-62 absent
+  (`a6e4948` test file) passed 58 of 58, exit 0, binary
+  `e915dd01b5412973aec7f4d2e2319f58f250e080d3586ddb1b4e74a7662ba627`; the same 58
+  groups also passed with the production changes in place, binary
+  `1d5e86357a723bc57962c3cab5caae66bbd7e80ccf119ee26f1d09602fadd917`, before any test
+  was added. Groups 56-58, their tri-state observations, the per-path injection and the
+  `INT_MAX` sentinel are unchanged.
+- Application build: `native/Mayasaba/Mayasaba.vcxproj` Release x64
+  `/p:PlatformToolset=v145`, exit 0, 0 warnings, 0 errors.
+- Contract validator: `PASS: 124 contract-registry and Screen 2 slice schema checks`,
+  exit 0.
+
+### Mutation evidence
+
+Each mutation was applied in place with an exact anchor (single occurrence enforced),
+forced through `-t:Rebuild`, and restored byte-identically afterwards; every restoration
+was verified against the recorded SHA-256 of the clean file. Fragments, diffs and run
+logs are under `~/.codex/visualizations/2026/10/24/handoff-preserve/mutation/`.
+
+| Mutant | Change | Result |
+|---|---|---|
+| M1 | `RefuseCleanedPathAdmission_locked` call removed from `SaveDraftAttachment` | FAIL group 59, `Assertion failed: !admitted` (`storage_tests.cpp:5592`); 58 of 59 completed |
+| M2 | Identity comparison removed from `DeleteStagedFileWithHandleIdentity` | FAIL group 60, `Assertion failed: !outcome.bytesRemoved` (`storage_tests.cpp:5652`); 59 of 60 completed |
+| M3 | `RecoverInterruptedCleanups` returns early when work exists | FAIL group 61, `Assertion failed: recovered.size() == 2` (`storage_tests.cpp:5758`); 60 of 61 completed |
+| M4 | Reference fence removed from `RemoveUntrackedStagedFileGuarded` | FAIL group 62, `Assertion failed: guardedResult.referenced` (`storage_tests.cpp:5846`); 61 of 62 completed |
+
+Each mutant fails in its own group and only after the earlier groups pass, so an early
+failure does not stand in for the later guards.
+
+Source state used for the mutation runs: `Storage.cpp`
+`1d6f7df91d8cf5642101bc717a45cef36a3fbe43e868552c9533d2e7f0ea97b3` (also the final
+value), `Storage.h` `e9d431f7343b984495bb1e4bc1ce075224e7bc8105e8e44e3fa7124c0d358993`
+(also final), `AttachmentService.cpp`
+`630cb941ea5254f070570478af68238960bfa630af5deedf825facc5a5752ca0`,
+`AttachmentService.h` `db4a9bfc889a8ac11df899dd52c6fc464d606f76adad9d80942dda9b02c3d295`,
+`storage_tests.cpp` `5f4eb3360e335336910db59d0be7807aa0f9a3b9d588a10ed117dbfaf792b322`
+(also final). The two `AttachmentService` files changed after the mutation runs by a
+redundant `continue;` removal and an added comment on an unused helper — neither alters
+control flow at the M2 anchor, which is unchanged. Final committed values are
+`AttachmentService.cpp`
+`9684ec0548c3fe2c8932e6d054d91892e450ad269b9cab88a02b824572839628` and
+`AttachmentService.h` `67e6fd53d0d63e5a507c67aff24773a80598c27ff345c75da119599c556d1b8a`;
+the full 62-group suite was rebuilt and re-run against exactly those values.
+
+Production-data protection: `%LOCALAPPDATA%\Mayasaba\mayasaba.db` was hashed by direct
+file read only and still matches `23E3ED87...94272`. Every test used disposable stores
+under the test folder.
+
+### Still open on this milestone
+
+- **Cross-process fencing is not claimed.** The fence is the in-process store mutex plus
+  the store's single-instance protection; there is no cross-process admission fence, and
+  none was tested.
+- **Group 59 proves the admission fence and the refusal, not the mutex in isolation.** A
+  mutant that removed the mutex around deletion was not attempted, because it would be
+  undefined behaviour rather than a controlled experiment.
+- **Reparse-point and parent-path substitution at the boundary were not separately
+  reproduced.** The deleter refuses reparse points and multi-link files, and group 50
+  already covers hard-link refusal, but a junction swapped at the boundary was not run.
+- **Recovery does not delete.** `RecoverInterruptedCleanups` records what it observed and
+  leaves the deletion decision to reconciliation; the combined
+  recover-then-reconcile path was not separately measured for byte reclamation.
+- **R05 capacity, logical-client sizing/layout, strict certification and final-artifact
+  Windows acceptance remain unstarted in this work item.** No UI result from any earlier
+  executable hash applies to the current build.

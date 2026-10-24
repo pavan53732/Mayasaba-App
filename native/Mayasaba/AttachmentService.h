@@ -163,10 +163,23 @@ namespace mayasaba
             preparationChunkHook_ = std::move(hook);
         }
 
+        // Test-only: runs at the start of DeleteStagedFileWithHandleIdentity, before the
+        // path is opened. That is the exact window in which a substitution could occur -
+        // after eligibility was established, before the verified open - so a test can
+        // attempt one there instead of changing metadata before cleanup even starts. It
+        // is a hook into the production boundary, not a reimplementation of the decision:
+        // the identity comparison that follows is the production one. A null hook
+        // restores normal behaviour.
+        void SetStagedDeletionBoundaryHookForTesting(std::function<void(std::string const& path)> hook)
+        {
+            stagedDeletionBoundaryHook_ = std::move(hook);
+        }
+
     private:
         Storage& storage_;
         std::filesystem::path stagingRoot_;
         std::function<void()> preparationChunkHook_;
+        std::function<void(std::string const&)> stagedDeletionBoundaryHook_;
 
         // Proves, before anything is deleted, that a recorded staged path names a regular
         // file inside this project's managed staging subtree. A stored path is metadata,
@@ -187,13 +200,26 @@ namespace mayasaba
         // attributes normalized and the delete disposition set - on that same handle. The
         // object removed is therefore provably the object whose containment was verified,
         // even if the recorded path is substituted between eligibility and deletion (R15).
+        //
+        // `expected` closes the remaining gap. Containment proves the object is inside the
+        // right directory; it does not prove it is the object whose references were
+        // counted. When `expected.valid` is set, the opened object's volume serial and file
+        // index must match it, so a different object placed at the same name after
+        // eligibility is refused instead of removed. An invalid expectation fails closed
+        // for the same reason.
         bool DeleteStagedFileWithHandleIdentity(
             std::string const& projectId,
             std::string const& storagePath,
+            Storage::StagedObjectIdentity const& expected,
             std::string* reason) const;
         // Deletes a staged copy only after containment is proven. An unprovable path is
         // left in place and reported, because an unresolved cleanup obligation is always
         // safer than a deletion that cannot be justified.
+        //
+        // NOT reference-fenced and NOT object-identity-checked: it proves containment and
+        // then removes by path. It must not be used to make a cleanup decision - that is
+        // what Storage's guarded operations are for. It has no production caller; it is
+        // retained only because the containment proof it shares is still exercised.
         bool RemoveContainedStagedFile(
             std::string const& projectId,
             std::string const& storagePath,

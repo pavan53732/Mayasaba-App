@@ -743,6 +743,7 @@ namespace mayasaba
     bool AttachmentService::DeleteStagedFileWithHandleIdentity(
         std::string const& projectId,
         std::string const& storagePath,
+        Storage::StagedObjectIdentity const& expected,
         std::string* reason) const
     {
         auto refuse = [reason](std::string why)
@@ -754,6 +755,11 @@ namespace mayasaba
         if (projectId.empty()) return refuse("the project identity is empty");
         if (storagePath.empty()) return refuse("the recorded staged path is empty");
         std::wstring const target = Utf8ToUtf16(storagePath);
+
+        // The substitution window ends here: everything above is bookkeeping, and the
+        // next step opens the path. A test hook placed at this point can attempt a
+        // substitution in the real window rather than before cleanup began.
+        if (stagedDeletionBoundaryHook_) stagedDeletionBoundaryHook_(storagePath);
 
 #ifdef _WIN32
         // Open the recorded path itself with DELETE access. Whatever object this handle
@@ -781,6 +787,27 @@ namespace mayasaba
         {
             CloseHandle(h);
             return refuse("the staged copy shares its bytes with other hard links, so its removal was refused");
+        }
+
+        // Identity, not spelling. The reference count that authorized this removal was
+        // taken for the object at this path at eligibility time; the handle above names
+        // whatever object is there now. If those are not the same object - because the
+        // path was renamed over or replaced between eligibility and deletion - removing
+        // it would destroy an unrelated file. An unidentified object fails closed for the
+        // same reason.
+        if (!expected.valid)
+        {
+            CloseHandle(h);
+            return refuse("the object whose references were checked could not be identified, so its removal was refused");
+        }
+        {
+            unsigned long long const index =
+                (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+            if (info.dwVolumeSerialNumber != expected.volumeSerial || index != expected.fileIndex)
+            {
+                CloseHandle(h);
+                return refuse("the object now at that path is not the object whose references were checked, so it was not removed");
+            }
         }
 
         // The handle's own canonical final path must be inside the project's managed
@@ -860,9 +887,9 @@ namespace mayasaba
         // Storage now decides, retires, reference-accounts and invokes the verified
         // same-object deleter inside one transaction. If it refuses, this throws and no
         // byte has been touched.
-        auto deleteBytes = [this, &projectId](std::string const& path, std::string* why)
+        auto deleteBytes = [this, &projectId](std::string const& path, Storage::StagedObjectIdentity const& expected, std::string* why)
         {
-            return this->DeleteStagedFileWithHandleIdentity(projectId, path, why);
+            return this->DeleteStagedFileWithHandleIdentity(projectId, path, expected, why);
         };
         auto const removal = storage_.RemoveDraftAttachmentGuarded(projectId, attachmentId, deleteBytes);
 
@@ -905,9 +932,9 @@ namespace mayasaba
         // Same rule, one serialized step: Storage authorizes, retires, reference-accounts
         // and deletes inside a single transaction, so shared bytes are retained by policy
         // and only unreferenced paths are ever deleted.
-        auto deleteBytes = [this, &projectId](std::string const& path, std::string* why)
+        auto deleteBytes = [this, &projectId](std::string const& path, Storage::StagedObjectIdentity const& expected, std::string* why)
         {
-            return this->DeleteStagedFileWithHandleIdentity(projectId, path, why);
+            return this->DeleteStagedFileWithHandleIdentity(projectId, path, expected, why);
         };
         auto const cleared = storage_.ClearDraftAttachmentsGuarded(projectId, deleteBytes);
         outcome.recordRemoved = true;
@@ -947,31 +974,27 @@ namespace mayasaba
 
             if (!d.storagePath.empty())
             {
-                // Reference fence: a PREPARING record may be protected by another project's
-                // draft or committed record. Reference eligibility is filesystem-level, not
-                // text-level: an alias spelled through dot-segments or a case variant names the
-                // same object, so a text comparison (the earlier RecentProjects-based fence)
-                // let an equivalent alias slip through and delete the bytes.
-                // CountProtectedReferencesExcluding canonicalizes every path and counts
-                // equivalent references across ALL projects (excluding this PREPARING row).
-                if (int refs = 0; (refs = storage_.CountProtectedReferencesExcluding(
-                        d.storagePath, projectId, d.id)) > 0)
+                // ONE serialized, reference-fenced operation, owned by Storage.
+                //
+                // This used to be three separate calls: count the references, delete the
+                // file, retire the record. Each call was individually correct and the
+                // sequence was not, because the store mutex was released between them. A
+                // protected reference admitted in that window was not counted, so the
+                // delete removed bytes a live record had just been admitted against.
+                // RetireInterruptedPreparationGuarded performs the reference query, the
+                // object-identity capture, the physical removal and the record retirement
+                // under the same mutex that admission requires, so the window does not
+                // exist. The deleter proves containment and same-object identity.
+                auto deleteBytes = [this, &projectId](std::string const& path, Storage::StagedObjectIdentity const& expected, std::string* why)
                 {
-                    // Another record protects these bytes; leave the PREPARING record and
-                    // the file alone for reconciliation.
-                    continue;
-                }
-
-                // The stored path came from durable metadata, which may be corrupt or may
-                // have been written by a build that trusted it. It is not authority to
-                // delete: containment inside this project's staging subtree is proven
-                // first, and an unprovable path is left for a human to reconcile.
-                std::string reason;
-                if (!RemoveContainedStagedFile(projectId, d.storagePath, &reason))
+                    return this->DeleteStagedFileWithHandleIdentity(projectId, path, expected, why);
+                };
+                auto const retirement = storage_.RetireInterruptedPreparationGuarded(projectId, d.id, deleteBytes);
+                if (!retirement.recordRetired)
                 {
-                    // The staged copy could not be removed, or could not be proven to be
-                    // ours. Keep the durable record so a later pass can retry; dropping it
-                    // would orphan the bytes and hide the failure.
+                    // Either another protected record still covers these bytes, or the
+                    // removal could not be proven. Both retain the record and the bytes so
+                    // a later pass can reconsider them; neither is reported as reclaimed.
                     continue;
                 }
             }
@@ -1001,6 +1024,10 @@ namespace mayasaba
         // Account for references from EVERY project, not only this one: a file staged
         // for project P may be referenced by a committed/draft record in project Q,
         // and reconciling P must not delete bytes another project still protects.
+        //
+        // This listing is deliberately treated as a pre-filter only. RecentProjects is
+        // capped, so it cannot prove that a path is untracked; the deletion decision is
+        // revalidated by Storage against the tables at the moment of removal.
         std::vector<std::string> allProjectIds;
         for (auto const& p : storage_.RecentProjects(10000))
         {
@@ -1100,13 +1127,22 @@ namespace mayasaba
                     }
                     if (trackedPaths.find(to_lower(canonical.wstring())) == trackedPaths.end())
                     {
-#ifdef _WIN32
-                        SetFileAttributesW(entry.path().c_str(), FILE_ATTRIBUTE_NORMAL);
-#endif
-                        std::error_code removeEc;
-                        std::filesystem::remove(entry.path(), removeEc);
-                        // A failed removal leaves the file for a later pass; it is not reported
-                        // as reclaimed.
+                        // The tracked set is only a fast pre-filter. It is built from a
+                        // capped project listing, so it is neither complete reference
+                        // coverage nor a live view: a record added after it was built is
+                        // invisible to it. The authoritative decision is made by Storage
+                        // under the mutex admission requires - an uncapped reference query
+                        // against the tables themselves, immediately followed by the
+                        // removal of the identified object. A file that a record outside
+                        // the listing window still names is therefore retained.
+                        auto deleteBytes = [this, &projectId](std::string const& path, Storage::StagedObjectIdentity const& expected, std::string* why)
+                        {
+                            return this->DeleteStagedFileWithHandleIdentity(projectId, path, expected, why);
+                        };
+                        (void)storage_.RemoveUntrackedStagedFileGuarded(
+                            projectId, Utf16ToUtf8(entry.path().wstring()), deleteBytes);
+                        // A retained or failed removal leaves the file for a later pass; it
+                        // is not reported as reclaimed.
                     }
                 }
             }

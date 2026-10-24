@@ -12,6 +12,9 @@
 #include <future>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <filesystem>
 #include <iostream>
 #include <set>
@@ -5014,7 +5017,7 @@ fs::remove(bigManaged);
                     bool fileGone = false;
                     try
                     {
-                        auto deleter = [&](std::string const& path, std::string* reason) -> bool
+                        auto deleter = [&](std::string const& path, mayasaba::Storage::StagedObjectIdentity const&, std::string* reason) -> bool
                         {
                             std::error_code ec;
                             fs::remove(path, ec);
@@ -5282,7 +5285,7 @@ fs::remove(bigManaged);
             store.SetForcePathCanonicalizationFailureForTestingPath(aliasSpelling);
 
             // Production boundary: Storage exposes truthful uncertainty diagnostic
-            auto noopDeleter = [](std::string const&, std::string* r) -> bool {
+            auto noopDeleter = [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string* r) -> bool {
                 if (r) *r = "deferred";
                 return false;
             };
@@ -5365,7 +5368,7 @@ fs::remove(bigManaged);
 
             // Recording deleter: tracks which paths were actually deleted
             std::vector<std::string> deletedPaths;
-            auto recordingDeleter = [&deletedPaths](std::string const& p, std::string*) -> bool {
+            auto recordingDeleter = [&deletedPaths](std::string const& p, mayasaba::Storage::StagedObjectIdentity const&, std::string*) -> bool {
                 deletedPaths.push_back(p);
                 std::error_code ec;
                 std::filesystem::remove(p, ec);
@@ -5390,7 +5393,7 @@ fs::remove(bigManaged);
 
             // Recovery: restore observations, remove Q's decoy, reconcile P (owns the file) -> file deleted
             store.ClearForcePathCanonicalizationFailureForTestingPath();
-            store.RemoveDraftAttachmentGuarded(projQ, "unc-cand-clr-decoy", [](std::string const&, std::string*) { return true; });
+            store.RemoveDraftAttachmentGuarded(projQ, "unc-cand-clr-decoy", [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string*) { return true; });
             mayasaba::AttachmentService serviceRec(store, staging);
             serviceRec.ReconcileStagedFiles(projectId, false);
             EXPECT(!fs::exists(path));
@@ -5446,7 +5449,7 @@ fs::remove(bigManaged);
 
             // Reconcile: PREPARING rows retained under uncertainty
             mayasaba::AttachmentService service(store, staging);
-            auto noopDeleter = [](std::string const&, std::string* r) -> bool {
+            auto noopDeleter = [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string* r) -> bool {
                 if (r) *r = "deferred";
                 return false;
             };
@@ -5462,6 +5465,388 @@ fs::remove(bigManaged);
             service.ReconcileStagedFiles(projectId, false);
             EXPECT(!fs::exists(path));
             EXPECT(store.GetDraftAttachments(projectId).empty());
+            CASES_END();
+        }
+
+        // 59. Concurrent fence. The handoff drafts numbered 59-61 did not test what their
+        // names claimed: 59 ran everything sequentially, 60 changed SQLite metadata before
+        // cleanup instead of substituting an object at the boundary, and 61 opened a second
+        // Storage while the first was alive. This group runs two real threads and holds the
+        // cleanup at the production boundary between eligibility and physical deletion.
+        {
+            CASES_BEGIN("59. Concurrent fence: admission cannot interleave with guarded removal");
+            mayasaba::Storage store(folder / "concurrent-fence.db");
+            auto staging = folder / "concurrent-fence-stage";
+            fs::create_directories(staging);
+
+            std::string const projectId = "conc-P";
+            std::string const projQ = "conc-Q";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "shared.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("concurrent-data", 15);
+            }
+            std::string const pathUtf8 = WideToUtf8(path.wstring());
+
+            mayasaba::AttachmentRecord primary;
+            primary.id = "conc-primary";
+            primary.projectId = projectId;
+            primary.fileName = "shared.bin";
+            primary.fileSize = 15;
+            primary.sha256 = ComputeSha256ForTestFile(pathUtf8);
+            primary.detectedType = "application/octet-stream";
+            primary.storagePath = pathUtf8;
+            primary.sourcePath = "C:/source/p1.bin";
+            primary.status = "READY";
+            store.SaveDraftAttachment(projectId, primary);
+
+            // Bounded synchronization, no deadlock: the deleter runs INSIDE the store
+            // mutex, so it never waits for the competing admission to finish - that cannot
+            // complete while the mutex is held. It waits only for the admission to be
+            // launched, then for a bounded window in which the admission must be blocked.
+            std::mutex gate;
+            std::condition_variable cv;
+            bool eligibilityReached = false;
+            bool admissionLaunched = false;
+            bool admissionReturned = false;
+            bool admissionWasBlocked = false;
+            bool admitted = false;
+            bool admissionRefused = false;
+            std::string admissionError;
+
+            std::thread cleanup([&]
+            {
+                auto deleter = [&](std::string const& p, mayasaba::Storage::StagedObjectIdentity const&, std::string* why) -> bool
+                {
+                    {
+                        std::lock_guard<std::mutex> lk(gate);
+                        eligibilityReached = true;
+                    }
+                    cv.notify_all();
+                    {
+                        std::unique_lock<std::mutex> lk(gate);
+                        cv.wait_for(lk, std::chrono::seconds(5), [&] { return admissionLaunched; });
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                    {
+                        std::lock_guard<std::mutex> lk(gate);
+                        admissionWasBlocked = !admissionReturned;
+                    }
+                    std::error_code ec;
+                    fs::remove(p, ec);
+                    if (ec)
+                    {
+                        if (why) *why = ec.message();
+                        return false;
+                    }
+                    return true;
+                };
+                (void)store.RemoveDraftAttachmentGuarded(projectId, "conc-primary", deleter);
+            });
+
+            {
+                std::unique_lock<std::mutex> lk(gate);
+                cv.wait_for(lk, std::chrono::seconds(10), [&] { return eligibilityReached; });
+            }
+            EXPECT(eligibilityReached);
+
+            std::thread admission([&]
+            {
+                {
+                    std::lock_guard<std::mutex> lk(gate);
+                    admissionLaunched = true;
+                }
+                cv.notify_all();
+                try
+                {
+                    mayasaba::AttachmentRecord q = primary;
+                    q.id = "conc-q-new";
+                    q.projectId = projQ;
+                    q.sourcePath = "C:/source/q1.bin";
+                    store.SaveDraftAttachment(projQ, q);
+                    admitted = true;
+                }
+                catch (std::exception const& ex)
+                {
+                    admissionRefused = true;
+                    admissionError = ex.what();
+                }
+                {
+                    std::lock_guard<std::mutex> lk(gate);
+                    admissionReturned = true;
+                }
+                cv.notify_all();
+            });
+
+            admission.join();
+            cleanup.join();
+
+            // The two operations genuinely overlapped, and the admission could not
+            // complete while cleanup held the fence.
+            EXPECT(admissionWasBlocked);
+            // And it did not get to claim a READY reference to bytes that are gone.
+            EXPECT(!admitted);
+            EXPECT(admissionRefused);
+            EXPECT(admissionError.find("removed by attachment cleanup") != std::string::npos);
+            EXPECT(!fs::exists(path));
+            EXPECT(store.GetDraftAttachments(projectId).empty());
+            EXPECT(store.GetDraftAttachments(projQ).empty());
+            CASES_END();
+        }
+
+        // 60. Physical identity. A different object placed at the recorded path between
+        // eligibility and the verified open is not the object whose references were
+        // counted. The substitution happens at the production boundary, through the
+        // production hook, and the production identity comparison is what refuses it.
+        {
+            CASES_BEGIN("60. Substitution at the deletion boundary is refused by object identity");
+            mayasaba::Storage store(folder / "substitution.db");
+            auto staging = folder / "substitution-stage";
+            fs::create_directories(staging);
+
+            std::string const projectId = "subst-P";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "victim.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("original-bytes", 14);
+            }
+            std::string const pathUtf8 = WideToUtf8(path.wstring());
+
+            mayasaba::AttachmentRecord rec;
+            rec.id = "subst-rec";
+            rec.projectId = projectId;
+            rec.fileName = "victim.bin";
+            rec.fileSize = 14;
+            rec.sha256 = ComputeSha256ForTestFile(pathUtf8);
+            rec.detectedType = "application/octet-stream";
+            rec.storagePath = pathUtf8;
+            rec.sourcePath = "C:/source/victim.bin";
+            rec.status = "READY";
+            store.SaveDraftAttachment(projectId, rec);
+
+            mayasaba::AttachmentService service(store, staging);
+            bool substituted = false;
+            service.SetStagedDeletionBoundaryHookForTesting([&](std::string const& p)
+            {
+                if (p != pathUtf8) return;
+                std::error_code ec;
+                fs::remove(path, ec);
+                {
+                    std::ofstream of(path, std::ios::binary);
+                    of.write("replacement-bytes", 17);
+                }
+                substituted = true;
+            });
+
+            auto const outcome = service.RemoveDraftAttachment(projectId, "subst-rec");
+
+            EXPECT(substituted);
+            EXPECT(outcome.recordRemoved);
+            EXPECT(!outcome.bytesRemoved);
+            EXPECT(outcome.unresolvedReason.find("not the object whose references were checked") != std::string::npos);
+            // The unrelated replacement object was not deleted.
+            EXPECT(fs::exists(path));
+            std::error_code sizeEc;
+            EXPECT(fs::file_size(path, sizeEc) == 17 && !sizeEc);
+            CASES_END();
+        }
+
+        // 61. Interrupted cleanup and a real restart. The first Storage instance is
+        // destroyed before the store is reopened, so this is a reopen and not a second
+        // live handle. The interruption is produced by the production path: the physical
+        // removal never reports an outcome, so the durable intent stays unresolved.
+        {
+            CASES_BEGIN("61. Interrupted cleanup recovers on reopen and is idempotent");
+            auto const dbPath = folder / "interrupted-cleanup.db";
+            auto staging = folder / "interrupted-cleanup-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "interrupt-P";
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+
+            auto pathKeep = dir / "keep.bin";
+            auto pathGone = dir / "gone.bin";
+            {
+                std::ofstream of(pathKeep, std::ios::binary);
+                of.write("keep-bytes", 10);
+            }
+            {
+                std::ofstream of(pathGone, std::ios::binary);
+                of.write("gone-bytes", 10);
+            }
+            std::string const keepUtf8 = WideToUtf8(pathKeep.wstring());
+            std::string const goneUtf8 = WideToUtf8(pathGone.wstring());
+
+            {
+                mayasaba::Storage store(dbPath);
+                store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+                mayasaba::AttachmentRecord a;
+                a.id = "int-keep";
+                a.projectId = projectId;
+                a.fileName = "keep.bin";
+                a.fileSize = 10;
+                a.sha256 = ComputeSha256ForTestFile(keepUtf8);
+                a.detectedType = "application/octet-stream";
+                a.storagePath = keepUtf8;
+                a.sourcePath = "C:/source/keep.bin";
+                a.status = "READY";
+                store.SaveDraftAttachment(projectId, a);
+
+                mayasaba::AttachmentRecord b;
+                b.id = "int-gone";
+                b.projectId = projectId;
+                b.fileName = "gone.bin";
+                b.fileSize = 10;
+                b.sha256 = ComputeSha256ForTestFile(goneUtf8);
+                b.detectedType = "application/octet-stream";
+                b.storagePath = goneUtf8;
+                b.sourcePath = "C:/source/gone.bin";
+                b.status = "READY";
+                store.SaveDraftAttachment(projectId, b);
+
+                // Interrupted before the physical removal: the intent committed, the bytes
+                // were never touched, no outcome was recorded.
+                bool threwKeep = false;
+                try
+                {
+                    store.RemoveDraftAttachmentGuarded(projectId, "int-keep",
+                        [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string*) -> bool
+                        {
+                            throw std::runtime_error("simulated interruption before physical removal");
+                        });
+                }
+                catch (std::exception const&)
+                {
+                    threwKeep = true;
+                }
+                EXPECT(threwKeep);
+
+                // Interrupted after the physical removal: the bytes are gone, but the
+                // outcome was never recorded.
+                bool threwGone = false;
+                try
+                {
+                    store.RemoveDraftAttachmentGuarded(projectId, "int-gone",
+                        [&](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string*) -> bool
+                        {
+                            std::error_code ec;
+                            fs::remove(pathGone, ec);
+                            throw std::runtime_error("simulated interruption after physical removal");
+                        });
+                }
+                catch (std::exception const&)
+                {
+                    threwGone = true;
+                }
+                EXPECT(threwGone);
+            }
+
+            EXPECT(fs::exists(pathKeep));
+            EXPECT(!fs::exists(pathGone));
+
+            {
+                mayasaba::Storage reopened(dbPath);
+                auto const recovered = reopened.RecoverInterruptedCleanups();
+                EXPECT(recovered.size() == 2);
+                bool sawRetained = false;
+                bool sawDeleted = false;
+                for (auto const& r : recovered)
+                {
+                    EXPECT(r.resolved);
+                    if (r.stagedPath == keepUtf8)
+                    {
+                        sawRetained = true;
+                        EXPECT(r.bytesPresent);
+                        EXPECT(r.state == "RETAINED");
+                    }
+                    if (r.stagedPath == goneUtf8)
+                    {
+                        sawDeleted = true;
+                        EXPECT(!r.bytesPresent);
+                        EXPECT(r.state == "DELETED");
+                    }
+                }
+                EXPECT(sawRetained);
+                EXPECT(sawDeleted);
+                // Idempotent: a second pass has nothing left to reconcile.
+                EXPECT(reopened.RecoverInterruptedCleanups().empty());
+            }
+            CASES_END();
+        }
+
+        // 62. Orphan-sweep coverage. Reconciliation used to decide from a set built by a
+        // capped project listing. The decision now comes from the tables themselves, so a
+        // reference spelled through a case variant and a dot segment - and one held by a
+        // project outside any listing window - still protects the bytes.
+        {
+            CASES_BEGIN("62. Untracked staged deletion uses complete, serialized reference coverage");
+            mayasaba::Storage store(folder / "orphan-coverage.db");
+            auto staging = folder / "orphan-coverage-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "orphan-P";
+            std::string const projQ = "orphan-Q";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+
+            auto orphan = dir / "orphan.bin";
+            auto guarded = dir / "guarded.bin";
+            {
+                std::ofstream of(orphan, std::ios::binary);
+                of.write("orphan-bytes", 12);
+            }
+            {
+                std::ofstream of(guarded, std::ios::binary);
+                of.write("guarded-bytes", 13);
+            }
+            std::string const guardedUtf8 = WideToUtf8(guarded.wstring());
+
+            // A different project names the same object, spelled with a dot segment and a
+            // case variant, so text equality would not have matched it.
+            std::string const variant = WideToUtf8((dir / "." / "GUARDED.BIN").wstring());
+            mayasaba::AttachmentRecord q;
+            q.id = "orphan-q";
+            q.projectId = projQ;
+            q.fileName = "guarded.bin";
+            q.fileSize = 13;
+            q.sha256 = ComputeSha256ForTestFile(guardedUtf8);
+            q.detectedType = "application/octet-stream";
+            q.storagePath = variant;
+            q.sourcePath = "C:/source/guarded.bin";
+            q.status = "READY";
+            store.SaveDraftAttachment(projQ, q);
+
+            auto del = [](std::string const& p, mayasaba::Storage::StagedObjectIdentity const&, std::string* why) -> bool
+            {
+                std::error_code ec;
+                fs::remove(fs::path(p), ec);
+                if (ec)
+                {
+                    if (why) *why = ec.message();
+                    return false;
+                }
+                return true;
+            };
+
+            auto const orphanResult = store.RemoveUntrackedStagedFileGuarded(projectId, WideToUtf8(orphan.wstring()), del);
+            EXPECT(!orphanResult.referenced);
+            EXPECT(orphanResult.removed);
+            EXPECT(!fs::exists(orphan));
+
+            auto const guardedResult = store.RemoveUntrackedStagedFileGuarded(projectId, guardedUtf8, del);
+            EXPECT(guardedResult.referenced);
+            EXPECT(!guardedResult.removed);
+            EXPECT(fs::exists(guarded));
+            EXPECT(store.GetDraftAttachments(projQ).size() == 1);
             CASES_END();
         }
 
