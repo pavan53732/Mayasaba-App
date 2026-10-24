@@ -1110,13 +1110,16 @@ namespace mayasaba
         return CountOtherProtectedReferences_locked(path, projectId, attachmentId);
     }
 
-    // Returns 1 for a certain match, 0 for a certain non-match, -1 when the
-    // comparison could not be established (canonicalization or conversion failed).
-    // Callers must treat -1 as "unknown" and retain bytes rather than counting
-    // the candidate as unprotected.
-    static int PathReferenceMatch(std::string const& a, std::string const& b, bool forceFailure = false)
+    int Storage::PathReferenceMatch(std::string const& a, std::string const& b, bool forceFailure) const
     {
         if (forceFailure) return -1;
+        {
+            std::string const forced = this->forcedPathCanonicalFailurePath_;
+            if (!forced.empty())
+            {
+                if (a == forced || b == forced) return -1;
+            }
+        }
         try
         {
             std::wstring wa, wb;
@@ -1153,6 +1156,17 @@ namespace mayasaba
             {
                 uncertain = true;
             }
+            else if (!forcedPathCanonicalFailurePath_.empty())
+            {
+                if (stagedPath == forcedPathCanonicalFailurePath_) uncertain = true;
+                else
+                {
+                    std::error_code ec;
+                    auto cp = std::filesystem::weakly_canonical(std::filesystem::path(Utf8ToWide(stagedPath)), ec);
+                    if (ec) uncertain = true;
+                    (void)cp;
+                }
+            }
             else
             {
                 std::error_code ec;
@@ -1173,7 +1187,9 @@ namespace mayasaba
             int rc = SQLITE_OK;
             while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
             {
-                int m = PathReferenceMatch(Text(q.value, 0), stagedPath, forcePathCanonicalizationFailureForTesting_);
+                std::string cand = Text(q.value, 0);
+                int m = PathReferenceMatch(cand, stagedPath, forcePathCanonicalizationFailureForTesting_);
+                if (!forcedPathCanonicalFailurePath_.empty() && cand == forcedPathCanonicalFailurePath_) m = -1;
                 if (m == 1) ++refs;
                 else if (m == -1) uncertain = true;
             }
@@ -1184,7 +1200,9 @@ namespace mayasaba
             int rc = SQLITE_OK;
             while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
             {
-                int m = PathReferenceMatch(Text(q.value, 0), stagedPath, forcePathCanonicalizationFailureForTesting_);
+                std::string cand = Text(q.value, 0);
+                int m = PathReferenceMatch(cand, stagedPath, forcePathCanonicalizationFailureForTesting_);
+                if (!forcedPathCanonicalFailurePath_.empty() && cand == forcedPathCanonicalFailurePath_) m = -1;
                 if (m == 1) ++refs;
                 else if (m == -1) uncertain = true;
             }

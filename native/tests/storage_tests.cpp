@@ -5238,9 +5238,9 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
-        // 56. Unknown reference (candidate-only) + clear retain bytes under uncertainty
+        // 56. Unknown reference (candidate-only) via per-path injection
         {
-            CASES_BEGIN("56. Unknown reference (candidate-only) + clear retain bytes under uncertainty");
+            CASES_BEGIN("56. Candidate-only uncertainty (per-path) retains bytes for removal/clear/PREPARING");
             mayasaba::Storage store(folder / "uncertainty-cand.db");
             auto staging = folder / "uncertainty-cand-stage";
             fs::create_directories(staging);
@@ -5270,21 +5270,38 @@ fs::remove(bigManaged);
 
             mayasaba::AttachmentRecord aliasRec = primary;
             aliasRec.id = "unc-cand-alias";
-            aliasRec.storagePath = WideToUtf8((dir / "." / path.filename()).wstring());
+            std::string aliasSpelling = WideToUtf8((dir / "." / path.filename()).wstring());
+            aliasRec.storagePath = aliasSpelling;
             aliasRec.sourcePath = "C:/source/c2.bin";
             store.SaveDraftAttachment(projectId, aliasRec);
 
-            store.SetForcePathCanonicalizationFailureForTesting(true);
+            // Target path observable; candidate-only fails
+            store.SetForcePathCanonicalizationFailureForTestingPath(aliasSpelling);
+
+            // Removal
             auto const r1 = service.RemoveDraftAttachment(projectId, "unc-cand-primary");
             EXPECT(r1.recordRemoved);
             EXPECT(fs::exists(path));
             EXPECT(r1.unresolvedReason.empty());
 
-            auto const rc = service.ClearDraftAttachments(projectId);
-            EXPECT(rc.recordRemoved);
-            EXPECT(fs::exists(path));
-            EXPECT(rc.unresolvedReason.empty());
-            store.SetForcePathCanonicalizationFailureForTesting(false);
+            // Clear with cross-project reference present
+            {
+                std::string const projQ = "unc-cand-projq";
+                store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
+                mayasaba::AttachmentRecord qRec = primary;
+                qRec.id = "unc-cand-qready";
+                qRec.projectId = projQ;
+                qRec.status = "READY";
+                qRec.sourcePath = "C:/source/cq.bin";
+                store.SaveDraftAttachment(projQ, qRec);
+                auto const rc = service.ClearDraftAttachments(projectId);
+                EXPECT(rc.recordRemoved);
+                EXPECT(fs::exists(path));
+                EXPECT(rc.unresolvedReason.empty());
+                store.RemoveDraftAttachmentGuarded(projQ, "unc-cand-qready", nullptr);
+            }
+
+            store.ClearForcePathCanonicalizationFailureForTestingPath();
             fs::remove_all(staging);
             CASES_END();
         }

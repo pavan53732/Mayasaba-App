@@ -511,6 +511,8 @@ namespace mayasaba
         using CapacityProbe = std::function<CapacityObservation()>;
         void SetCapacityProbeForTesting(CapacityProbe probe) { capacityProbeForTesting_ = std::move(probe); }
         void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
+        void SetForcePathCanonicalizationFailureForTestingPath(std::string const& p) { forcedPathCanonicalFailurePath_ = p; }
+        void ClearForcePathCanonicalizationFailureForTestingPath() { forcedPathCanonicalFailurePath_.clear(); }
 
     private:
         sqlite3* db_{nullptr};
@@ -523,6 +525,7 @@ namespace mayasaba
         std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
         CapacityProbe capacityProbeForTesting_;
         bool forcePathCanonicalizationFailureForTesting_{false};
+        std::string forcedPathCanonicalFailurePath_;
         // True only while the constructor runs its idempotent schema DDL and crash
         // reconciliation (R05): these writes are part of opening, and opening an
         // existing store must never be capacity-gated, so the capacity check - only
@@ -556,6 +559,7 @@ namespace mayasaba
         // attachment rows. Must be called inside the same write transaction that
         // established eligibility.
         int CountOtherProtectedReferences_locked(std::string const& stagedPath, std::string const& projectId, std::string const& attachmentId);
+        int PathReferenceMatch(std::string const& a, std::string const& b, bool forceFailure = false) const;
         // Establishes the transaction state after a failed mutation; quarantines the store
         // when the rollback cannot be proven.
         void RollbackAfterFailure_locked() noexcept;
