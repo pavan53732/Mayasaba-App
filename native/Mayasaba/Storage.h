@@ -418,22 +418,29 @@ namespace mayasaba
         DraftAttachmentClear ClearDraftAttachmentsGuarded(std::string const& projectId, StagedBytesDeleter const& deleteBytes);
 
         // Retires one interrupted PREPARING record under the SAME serialization as
-        // admission: the shared-reference count, the object-identity capture and the
-        // physical removal all happen inside one mutex-guarded write transaction.
+        // admission, in three ordered phases: a committed eligibility-and-intent
+        // transaction with no physical effect, then the removal outside any transaction,
+        // then a committed outcome.
+        //
+        // The ordering is the point. An earlier version did all three inside one
+        // uncommitted transaction, which the mutex made thread-safe but not durable: a
+        // refused COMMIT restored the record while the bytes were already gone and
+        // discarded the only evidence of the removal with the rollback. The intent is
+        // therefore committed before the irreversible step, so an interruption at any
+        // boundary leaves either nothing done or a durable record of what was started.
         //
         // This replaces a caller-side "count references, then delete the file, then
         // retire the record" sequence. Those three steps were separate calls with the
         // store mutex released between them, so a protected reference admitted in the
         // window made the count stale and the delete removed bytes a live record had
-        // just been told it could rely on. Here the window does not exist: admission
-        // needs the same mutex, so it either completes before eligibility (and is
-        // counted) or begins after the deletion (and is refused by the cleanup
-        // tombstone that this operation records).
+        // just been told it could rely on. Here admission needs the same mutex, so it
+        // either completes before eligibility (and is counted) or begins after the
+        // deletion (and is refused by the cleanup tombstone this operation records).
         //
         // A record that another protected record still references is left completely
-        // untouched, record and bytes, so a later pass can reconsider it. A failed
-        // physical removal also leaves the record in place, so the failure stays
-        // visible and retryable instead of orphaning bytes silently.
+        // untouched, record and bytes, so a later pass can reconsider it. A failed or
+        // unknown removal also leaves the record in place, so the failure stays visible
+        // and retryable instead of orphaning bytes silently.
         struct PreparationRetirement
         {
             bool recordFound{false};
@@ -448,14 +455,19 @@ namespace mayasaba
             StagedBytesDeleter const& deleteBytes);
 
         // Removes one staged file that no protected record names, deciding and deleting
-        // inside one serialized section.
+        // under one mutex, with the tombstone committed before the removal.
         //
         // Reconciliation used to build a set of tracked paths from a capped project
         // listing and then delete anything the set did not contain. A capped listing is
         // not complete reference coverage, and the set was a snapshot: a reference
         // admitted after the snapshot and before the delete was invisible to it. Here
-        // the reference query is uncapped and runs against the tables themselves, and
-        // it runs immediately before the removal under the mutex admission needs.
+        // the reference query is uncapped and runs against the tables themselves, and it
+        // runs immediately before the removal under the mutex admission needs.
+        //
+        // The tombstone is committed in a transaction that performs no physical effect.
+        // Recording it in the same transaction as the removal would let a refused COMMIT
+        // erase the only thing that stops a later READY admission from claiming bytes that
+        // no longer exist.
         struct UntrackedStagedDeletion
         {
             bool referenced{false};
@@ -485,7 +497,23 @@ namespace mayasaba
         // Reconciles cleanup intents left unresolved by an earlier process. Idempotent:
         // running it twice changes nothing the second time. It never deletes bytes; it
         // records what it observed and leaves a resolution decision to the owning layer.
+        //
+        // The constructor calls this while opening an existing store, so in production a
+        // caller does not invoke it for automatic recovery - a reopened store has already
+        // reconciled. It stays public because an explicit re-check is a legitimate
+        // operation and because tests assert the automatic path produces the same state.
         std::vector<CleanupRecoveryOutcome> RecoverInterruptedCleanups();
+
+        // Read-only projection of the cleanup journal, so the recorded intent, its state
+        // and its diagnostic can be inspected without opening the database directly.
+        struct CleanupJournalEntry
+        {
+            std::string projectId;
+            std::string stagedPath;
+            std::string state;
+            std::string reasonEn;
+        };
+        std::vector<CleanupJournalEntry> CleanupJournal();
         std::vector<AttachmentRecord> GetDraftAttachments(std::string const& projectId);
         std::vector<AttachmentRecord> GetAttachmentsForContribution(std::string const& submissionId);
         std::vector<AttachmentRecord> GetCommittedAttachmentsForProject(std::string const& projectId);
@@ -601,6 +629,16 @@ namespace mayasaba
         void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
         void SetForcePathCanonicalizationFailureForTestingPath(std::string const& p) { forcedPathCanonicalFailurePath_ = p; }
         void ClearForcePathCanonicalizationFailureForTestingPath() { forcedPathCanonicalFailurePath_.clear(); }
+        // Makes one staged path unobservable, so the difference between "the bytes are
+        // absent" and "the bytes could not be observed" can be exercised deterministically
+        // instead of by trying to provoke a real ACL or I/O failure. Test-only.
+        void SetForceStagedPresenceFailureForTestingPath(std::string const& p) { forcedStagedPresenceFailurePath_ = p; }
+        void ClearForceStagedPresenceFailureForTestingPath() { forcedStagedPresenceFailurePath_.clear(); }
+        // Runs after the draft-clear retirement commit and before its deletion phase. That
+        // is the window in which an object could be replaced between the identity that
+        // justified eligibility and the identity used for removal, so a test can attempt a
+        // substitution there rather than only inside the deleter. Test-only.
+        void SetClearDeletionPhaseHookForTesting(std::function<void()> hook) { clearDeletionPhaseHook_ = std::move(hook); }
 
     private:
         sqlite3* db_{nullptr};
@@ -614,6 +652,8 @@ namespace mayasaba
         CapacityProbe capacityProbeForTesting_;
         bool forcePathCanonicalizationFailureForTesting_{false};
         std::string forcedPathCanonicalFailurePath_;
+        std::string forcedStagedPresenceFailurePath_;
+        std::function<void()> clearDeletionPhaseHook_;
         // True only while the constructor runs its idempotent schema DDL and crash
         // reconciliation (R05): these writes are part of opening, and opening an
         // existing store must never be capacity-gated, so the capacity check - only
@@ -652,6 +692,19 @@ namespace mayasaba
         // to the lowercase raw spelling when the path cannot be canonicalized: an
         // uncanonicalizable path must still be tombstoned, not silently admitted.
         std::string CleanupPathKey(std::string const& path) const;
+        // Three outcomes, never two. A filesystem observation can fail - an inaccessible
+        // parent, a conversion failure, an I/O error - and a failure is not absence.
+        // Collapsing it to "not present" is how a recovery pass ends up certifying that
+        // bytes were removed when nothing was observed at all.
+        enum class StagedPresence
+        {
+            Absent,
+            Present,
+            Unknown
+        };
+        StagedPresence ObserveStagedPresence(std::string const& path, std::string* reasonEn) const;
+        // Current journal state for (project, path), if a row exists. Caller holds mutex_.
+        bool JournalState_locked(std::string const& projectId, std::string const& stagedPath, std::string* state) const;
         // Volume serial and file index of the object currently at `path`, captured inside
         // the eligibility section. `valid` is false when no regular object could be
         // opened, which makes every later identity comparison fail closed.

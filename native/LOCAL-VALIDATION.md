@@ -3816,3 +3816,126 @@ under the test folder.
 - **R05 capacity, logical-client sizing/layout, strict certification and final-artifact
   Windows acceptance remain unstarted in this work item.** No UI result from any earlier
   executable hash applies to the current build.
+
+## 2026-10-24 (correction) — cleanup durability, recovery outcomes, production invocation
+
+**This section retracts part of the section above.** The claim that the cleanup journal
+recorded durable intent before physical deletion was false for two paths, and the claim
+that interrupted cleanups were reconciled automatically was false because nothing in
+production called the recovery operation. An independent review
+(`validation-29a666f/REVIEW.md`, with an external native probe) reproduced both
+failures at `29a666f`; this section records the correction, not a re-description of the
+earlier work.
+
+### What was wrong
+
+`RetireInterruptedPreparationGuarded` and `RemoveUntrackedStagedFileGuarded` recorded the
+journal intent, performed the physical deletion and resolved the journal inside **one
+uncommitted transaction**. The store mutex serialized threads but proved nothing about
+durability:
+
+- PREPARING path: a refused COMMIT rolled back to the `PREPARING` row while the bytes were
+  already gone, and the intent was discarded with the transaction. Reopening left a
+  dangling row and no recovery record.
+- Orphan path: the same rollback discarded the tombstone, so a later `READY` admission
+  could claim bytes that no longer existed.
+
+`RecoverInterruptedCleanups` separately collapsed `exists()` errors and conversion
+exceptions into "not present" and then recorded `DELETED`, asserting that cleanup had
+removed bytes it had never observed. It also selected only path and project, ignoring the
+stored object identity. And it had no production caller: only group 61 invoked it.
+
+### Corrected ordering
+
+Both operations are now three phases, and the irreversible step is outside every
+transaction:
+
+1. **Eligibility and durable intent** - reference fence, object-identity capture and the
+   `PENDING` journal row, committed in a transaction containing no physical effect. If this
+   COMMIT is refused, nothing has been touched.
+2. **Removal** - the deleter runs outside any transaction, so an interruption here leaves a
+   committed intent rather than an unexplained absence.
+3. **Outcome** - the record is retired only when the bytes are provably gone; a failed or
+   unknown removal keeps the record and marks the intent `FAILED`/`UNCERTAIN`.
+
+A retry after a refused outcome COMMIT treats a committed intent plus a confirmed-absent
+path as "nothing left to remove": it retires the record and records `ABSENT` without a
+second physical effect, so the record cannot be stranded by repeating a removal that
+already happened.
+
+Recovery now uses a tri-state presence observation: `Unknown` (error, exception or
+injected failure) keeps the intent unresolved with the exact diagnostic and no physical
+claim; `Absent` records `ABSENT` and explicitly states that attribution is not established
+from the path alone; `Present` compares the recorded volume serial and file index, and
+distinguishes `REPLACED` (a different object now occupies the path), `RETAINED` and
+`UNCERTAIN` (reference safety unproven). `RecoverInterruptedCleanups` is invoked by the
+`Storage` constructor immediately after `ReconcileCrashOperations()`, inside the same
+schema phase, so the documented open policy applies - quarantine still denies writes and
+the capacity gate stays suppressed for opening. It never deletes bytes.
+
+`ClearDraftAttachmentsGuarded` now carries the identity captured during the eligibility
+transaction into its deletion phase instead of re-observing the path after the retirement
+commit, so an object replaced in that window cannot become the expected object.
+
+### Tests
+
+Group 61 was rewritten: it asserts that reopening is the production recovery invocation
+(an explicit call after reopen finds nothing), that the journal records `RETAINED` and
+`ABSENT`, that the `ABSENT` diagnostic does not claim attribution, and that a second
+reopen is idempotent. Four groups were added:
+
+| Group | Reproduces / asserts |
+|---|---|
+| 63 | PREPARING removal followed by a refused outcome COMMIT: bytes gone, intent still `PENDING`, row still present, then a retry that retires the record without a second physical effect. |
+| 64 | Orphan removal followed by a refused outcome COMMIT: tombstone survives, a later `READY` admission is refused, and the fence still holds after automatic recovery on reopen. |
+| 65 | Removal that throws after the intent commits: recovery with the path unobservable records `UNCERTAIN`, `resolved=false` and the observation diagnostic; with observation restored the same intent resolves to `RETAINED`, and recovery deletes nothing. |
+| 66 | Object replaced in the post-commit window of Clear: the replacement survives and the clear reports the failure. |
+
+The COMMIT refusal in groups 63 and 64 is armed from inside the deleter, so the refusal
+lands on the **outcome** commit - the window the old ordering could not survive - rather
+than on the intent commit, which is safe by construction.
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256
+  `1b535ad2951d6b5429ae3d8bc0f07fdfdd1c296652ac06b1a412197762742dc7`,
+  **PASS: 66 of 66 executed native regression groups**, exit 0, after `-t:Rebuild`.
+- Application build `Mayasaba.vcxproj` Release x64 v145: exit 0.
+- Contract validator: `PASS: 124 contract-registry and Screen 2 slice schema checks`,
+  exit 0.
+- Sources: `Storage.cpp` `fbdd4c0434b84d26fe1108c13dd88a397f9d394be32f59c6ba9591e82c546cb7`,
+  `Storage.h` `0e9311399ffc1279000e234711ae3d0d3dc2f48de72dda4382666431f60f742b`,
+  `AttachmentService.cpp` `9684ec0548c3fe2c8932e6d054d91892e450ad269b9cab88a02b824572839628`,
+  `AttachmentService.h` `67e6fd53d0d63e5a507c67aff24773a80598c27ff345c75da119599c556d1b8a`,
+  `storage_tests.cpp` `3a04a1b3d3b2adf1d41d9a8e56bafee2e43491621e075aedfea5fb277d814f4f`.
+
+### Mutation evidence (each fix reverted independently)
+
+Applied to `Storage.cpp` with exact single-occurrence anchors, `-t:Rebuild` for every
+mutant, restored byte-identically and verified by SHA-256 (`fbdd4c04…`). Fragments,
+records and logs under `~/.codex/visualizations/2026/10/24/mutation2/`.
+
+| Mutant | Reverted fix | Result |
+|---|---|---|
+| M5 | PREPARING intent moved out of the pre-effect transaction | FAIL group 63, `journal.size() == 1` (`storage_tests.cpp:5923`) |
+| M6 | Orphan tombstone moved out of the pre-effect transaction | FAIL group 64, `journal.size() == 1` (`:5987`) |
+| M7 | Failed observation collapsed to absence | FAIL group 65, `!unknown[0].resolved` (`:6103`) |
+| M8 | Clear recaptures identity after the retirement commit | FAIL group 66, `fs::exists(path)` (`:6174`) |
+| M9 | Automatic recovery removed from the constructor | FAIL group 61, `reopened.RecoverInterruptedCleanups().empty()` (`:5761`) |
+
+Each mutant fails in its own group and only after the preceding groups pass.
+
+### Still open
+
+- **The synthetic fixtures that admit `READY` rows for paths that never existed were not
+  changed.** They remain in the suite (for example `storage_tests.cpp` group 28's
+  `C:/stage/a.txt`). They are not treated as production policy, and the narrow tombstone is
+  justified on its own terms rather than by them; but whether admission should verify that
+  a `READY` record's staged bytes exist is an open contract question that this work did not
+  settle.
+- **No cross-process fence is claimed.** The fence remains the in-process store mutex plus
+  single-instance protection.
+- **Reparse-point substitution at the boundary** was still not reproduced.
+- **R05 capacity, logical-client sizing/layout, strict certification and final-artifact
+  Windows acceptance remain open.** No UI result from any earlier executable hash applies
+  to `1b535ad2…`.

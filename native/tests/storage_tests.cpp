@@ -5753,31 +5753,44 @@ fs::remove(bigManaged);
             EXPECT(!fs::exists(pathGone));
 
             {
+                // Reopening is the production recovery invocation: the constructor settles
+                // interrupted cleanups through the same opening/recovery owner as crash
+                // operations. The explicit call below must therefore find nothing left to
+                // do - if it still had work, automatic recovery would not be integrated.
                 mayasaba::Storage reopened(dbPath);
-                auto const recovered = reopened.RecoverInterruptedCleanups();
-                EXPECT(recovered.size() == 2);
+                EXPECT(reopened.RecoverInterruptedCleanups().empty());
+
+                auto const journal = reopened.CleanupJournal();
+                EXPECT(journal.size() == 2);
                 bool sawRetained = false;
-                bool sawDeleted = false;
-                for (auto const& r : recovered)
+                bool sawAbsent = false;
+                for (auto const& entry : journal)
                 {
-                    EXPECT(r.resolved);
-                    if (r.stagedPath == keepUtf8)
+                    if (entry.stagedPath == keepUtf8)
                     {
                         sawRetained = true;
-                        EXPECT(r.bytesPresent);
-                        EXPECT(r.state == "RETAINED");
+                        // The bytes were never touched, so the object is still the one the
+                        // intent was recorded for and is still there.
+                        EXPECT(entry.state == "RETAINED");
                     }
-                    if (r.stagedPath == goneUtf8)
+                    if (entry.stagedPath == goneUtf8)
                     {
-                        sawDeleted = true;
-                        EXPECT(!r.bytesPresent);
-                        EXPECT(r.state == "DELETED");
+                        sawAbsent = true;
+                        // Absence is recorded as absence. The recovery pass did not observe
+                        // the removal, so it must not claim that cleanup performed it.
+                        EXPECT(entry.state == "ABSENT");
+                        EXPECT(entry.reasonEn.find("not established") != std::string::npos);
                     }
                 }
                 EXPECT(sawRetained);
-                EXPECT(sawDeleted);
-                // Idempotent: a second pass has nothing left to reconcile.
-                EXPECT(reopened.RecoverInterruptedCleanups().empty());
+                EXPECT(sawAbsent);
+            }
+
+            {
+                // Idempotent across a second reopen: nothing new is resolved or rewritten.
+                mayasaba::Storage again(dbPath);
+                EXPECT(again.RecoverInterruptedCleanups().empty());
+                EXPECT(again.CleanupJournal().size() == 2);
             }
             CASES_END();
         }
@@ -5847,6 +5860,321 @@ fs::remove(bigManaged);
             EXPECT(!guardedResult.removed);
             EXPECT(fs::exists(guarded));
             EXPECT(store.GetDraftAttachments(projQ).size() == 1);
+            CASES_END();
+        }
+
+        // 63. Durable intent must be committed BEFORE the irreversible removal. The
+        // previous ordering recorded the intent, deleted the bytes and resolved the
+        // journal inside one transaction, so a refused COMMIT restored the PREPARING row
+        // while the bytes were already gone and the only record of the removal was rolled
+        // back with it. A mutex serializes threads; it does not make deletion reversible.
+        {
+            CASES_BEGIN("63. PREPARING cleanup keeps durable intent across a refused COMMIT");
+            mayasaba::Storage store(folder / "prep-commit-refusal.db");
+            auto staging = folder / "prep-commit-refusal-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "pcr-P";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "interrupted.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("prep-bytes", 10);
+            }
+            std::string const pathUtf8 = WideToUtf8(path.wstring());
+
+            mayasaba::AttachmentRecord rec;
+            rec.id = "pcr-rec";
+            rec.projectId = projectId;
+            rec.fileName = "interrupted.bin";
+            rec.fileSize = 10;
+            rec.sha256 = ComputeSha256ForTestFile(pathUtf8);
+            rec.detectedType = "application/octet-stream";
+            rec.storagePath = pathUtf8;
+            rec.sourcePath = "C:/source/interrupted.bin";
+            rec.status = "PREPARING";
+            store.SaveDraftAttachment(projectId, rec);
+
+            bool threw = false;
+            try
+            {
+                store.RetireInterruptedPreparationGuarded(projectId, "pcr-rec",
+                    [&](std::string const& p, mayasaba::Storage::StagedObjectIdentity const&, std::string*) -> bool
+                    {
+                        std::error_code ec;
+                        fs::remove(fs::path(p), ec);
+                        // Arm the one-shot refusal so the OUTCOME commit is the refused one:
+                        // exactly the window in which the old ordering lost everything.
+                        store.SetForceCommitFailureForTesting(true);
+                        return !ec;
+                    });
+            }
+            catch (std::exception const&)
+            {
+                threw = true;
+            }
+
+            EXPECT(threw);
+            EXPECT(!fs::exists(path));   // the irreversible effect did happen
+
+            // The intent committed before the effect, so it survived the refused COMMIT.
+            auto const journal = store.CleanupJournal();
+            EXPECT(journal.size() == 1);
+            EXPECT(journal[0].state == "PENDING");
+
+            // The retirement rolled back, so the record is still there - but it is now
+            // backed by a durable intent instead of being dangling and unexplained.
+            EXPECT(store.GetDraftAttachments(projectId).size() == 1);
+
+            // A retry settles it without a second physical effect and without inventing a
+            // failure for bytes that are already gone.
+            bool secondDeleterCalled = false;
+            auto const retry = store.RetireInterruptedPreparationGuarded(projectId, "pcr-rec",
+                [&](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string* why) -> bool
+                {
+                    secondDeleterCalled = true;
+                    if (why) *why = "a second physical removal should not be needed";
+                    return false;
+                });
+            EXPECT(retry.recordRetired);
+            EXPECT(!retry.bytesRemoved);      // this pass removed nothing
+            EXPECT(!secondDeleterCalled);     // and did not touch the filesystem
+            EXPECT(store.GetDraftAttachments(projectId).empty());
+            auto const afterRetry = store.CleanupJournal();
+            EXPECT(afterRetry.size() == 1);
+            EXPECT(afterRetry[0].state == "ABSENT");
+            CASES_END();
+        }
+
+        // 64. Orphan cleanup must keep its admission tombstone when the outcome COMMIT is
+        // refused. Previously the tombstone lived in the same transaction as the deletion,
+        // so the rollback erased it and a later READY admission could claim bytes that no
+        // longer existed.
+        {
+            CASES_BEGIN("64. Orphan cleanup keeps its tombstone across a refused COMMIT");
+            auto const dbPath = folder / "orphan-commit-refusal.db";
+            auto staging = folder / "orphan-commit-refusal-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "ocr-P";
+            std::string const projQ = "ocr-Q";
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "orphan.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("orphan-bytes", 12);
+            }
+            std::string const pathUtf8 = WideToUtf8(path.wstring());
+
+            {
+                mayasaba::Storage store(dbPath);
+                store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+                store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
+
+                (void)store.RemoveUntrackedStagedFileGuarded(projectId, pathUtf8,
+                    [&](std::string const& p, mayasaba::Storage::StagedObjectIdentity const&, std::string*) -> bool
+                    {
+                        std::error_code ec;
+                        fs::remove(fs::path(p), ec);
+                        store.SetForceCommitFailureForTesting(true);
+                        return !ec;
+                    });
+                EXPECT(!fs::exists(path));
+
+                // The tombstone committed before the removal and survived the refusal.
+                auto const journal = store.CleanupJournal();
+                EXPECT(journal.size() == 1);
+                EXPECT(journal[0].state == "PENDING");
+
+                // So a subsequent READY admission naming those bytes is refused instead of
+                // claiming a valid reference to a file that is gone.
+                bool refused = false;
+                std::string refusal;
+                try
+                {
+                    mayasaba::AttachmentRecord q;
+                    q.id = "ocr-q-rec";
+                    q.projectId = projQ;
+                    q.fileName = "orphan.bin";
+                    q.fileSize = 12;
+                    q.sha256 = std::string(64, 'a');
+                    q.detectedType = "application/octet-stream";
+                    q.storagePath = pathUtf8;
+                    q.sourcePath = "C:/source/orphan.bin";
+                    q.status = "READY";
+                    store.SaveDraftAttachment(projQ, q);
+                }
+                catch (std::exception const& ex)
+                {
+                    refused = true;
+                    refusal = ex.what();
+                }
+                EXPECT(refused);
+                EXPECT(refusal.find("removed by attachment cleanup") != std::string::npos);
+            }
+
+            // Automatic recovery on reopen settles the intent, and the fence still holds.
+            {
+                mayasaba::Storage reopened(dbPath);
+                auto const journal = reopened.CleanupJournal();
+                EXPECT(journal.size() == 1);
+                EXPECT(journal[0].state == "ABSENT");
+
+                bool stillRefused = false;
+                try
+                {
+                    mayasaba::AttachmentRecord q;
+                    q.id = "ocr-q-rec";
+                    q.projectId = projQ;
+                    q.fileName = "orphan.bin";
+                    q.fileSize = 12;
+                    q.sha256 = std::string(64, 'a');
+                    q.detectedType = "application/octet-stream";
+                    q.storagePath = pathUtf8;
+                    q.sourcePath = "C:/source/orphan.bin";
+                    q.status = "READY";
+                    reopened.SaveDraftAttachment(projQ, q);
+                }
+                catch (std::exception const&)
+                {
+                    stillRefused = true;
+                }
+                EXPECT(stillRefused);
+            }
+            CASES_END();
+        }
+
+        // 65. Recovery must not convert a failed observation into proof of deletion, and
+        // an unresolved outcome must be retryable once the path can be inspected again.
+        {
+            CASES_BEGIN("65. Recovery preserves an unknown outcome and resolves it on retry");
+            mayasaba::Storage store(folder / "recovery-unknown.db");
+            auto staging = folder / "recovery-unknown-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "ru-P";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "unobservable.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("kept-bytes", 10);
+            }
+            std::string const pathUtf8 = WideToUtf8(path.wstring());
+
+            mayasaba::AttachmentRecord rec;
+            rec.id = "ru-rec";
+            rec.projectId = projectId;
+            rec.fileName = "unobservable.bin";
+            rec.fileSize = 10;
+            rec.sha256 = ComputeSha256ForTestFile(pathUtf8);
+            rec.detectedType = "application/octet-stream";
+            rec.storagePath = pathUtf8;
+            rec.sourcePath = "C:/source/unobservable.bin";
+            rec.status = "PREPARING";
+            store.SaveDraftAttachment(projectId, rec);
+
+            // The intent commits; the removal then throws, so nothing was deleted and the
+            // outcome is genuinely unknown.
+            bool threw = false;
+            try
+            {
+                store.RetireInterruptedPreparationGuarded(projectId, "ru-rec",
+                    [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string*) -> bool
+                    {
+                        throw std::runtime_error("simulated removal failure");
+                    });
+            }
+            catch (std::exception const&)
+            {
+                threw = true;
+            }
+            EXPECT(threw);
+            EXPECT(fs::exists(path));
+            auto const pending = store.CleanupJournal();
+            EXPECT(pending.size() == 1);
+            EXPECT(pending[0].state == "UNCERTAIN");
+
+            // With the path unobservable, recovery must not report absence.
+            store.SetForceStagedPresenceFailureForTestingPath(pathUtf8);
+            auto const unknown = store.RecoverInterruptedCleanups();
+            EXPECT(unknown.size() == 1);
+            EXPECT(!unknown[0].resolved);
+            EXPECT(!unknown[0].bytesPresent);
+            EXPECT(unknown[0].state == "UNCERTAIN");
+            EXPECT(unknown[0].reasonEn.find("could not be observed") != std::string::npos);
+            auto const stillUnknown = store.CleanupJournal();
+            EXPECT(stillUnknown.size() == 1);
+            EXPECT(stillUnknown[0].state == "UNCERTAIN");
+
+            // Observation restored: the same intent resolves truthfully, and recovery
+            // still never deletes anything.
+            store.ClearForceStagedPresenceFailureForTestingPath();
+            auto const resolved = store.RecoverInterruptedCleanups();
+            EXPECT(resolved.size() == 1);
+            EXPECT(resolved[0].resolved);
+            EXPECT(resolved[0].bytesPresent);
+            EXPECT(resolved[0].state == "RETAINED");
+            EXPECT(fs::exists(path));
+            EXPECT(store.RecoverInterruptedCleanups().empty());
+            CASES_END();
+        }
+
+        // 66. Clear must delete under the identity that justified eligibility, not one
+        // observed after the retirement commit. The substitution here happens in that
+        // post-commit window, not inside the deleter, so it is a different window from the
+        // one group 60 covers.
+        {
+            CASES_BEGIN("66. Clear retains the eligibility identity across its deletion phase");
+            mayasaba::Storage store(folder / "clear-identity.db");
+            auto staging = folder / "clear-identity-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "ci-P";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "cleared.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("original-bytes", 14);
+            }
+            std::string const pathUtf8 = WideToUtf8(path.wstring());
+
+            mayasaba::AttachmentRecord rec;
+            rec.id = "ci-rec";
+            rec.projectId = projectId;
+            rec.fileName = "cleared.bin";
+            rec.fileSize = 14;
+            rec.sha256 = ComputeSha256ForTestFile(pathUtf8);
+            rec.detectedType = "application/octet-stream";
+            rec.storagePath = pathUtf8;
+            rec.sourcePath = "C:/source/cleared.bin";
+            rec.status = "READY";
+            store.SaveDraftAttachment(projectId, rec);
+
+            bool substituted = false;
+            store.SetClearDeletionPhaseHookForTesting([&]
+            {
+                std::error_code ec;
+                fs::remove(path, ec);
+                {
+                    std::ofstream of(path, std::ios::binary);
+                    of.write("replacement-bytes", 17);
+                }
+                substituted = true;
+            });
+
+            mayasaba::AttachmentService service(store, staging);
+            auto const outcome = service.ClearDraftAttachments(projectId);
+
+            EXPECT(substituted);
+            // The replacement is not the object whose references were checked, so it is not
+            // removed and the clear reports the failure instead of claiming success.
+            EXPECT(fs::exists(path));
+            std::error_code sizeEc;
+            EXPECT(fs::file_size(path, sizeEc) == 17 && !sizeEc);
+            EXPECT(!outcome.unresolvedReason.empty());
             CASES_END();
         }
 

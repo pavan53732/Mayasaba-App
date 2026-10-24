@@ -1325,7 +1325,7 @@ namespace mayasaba
 
         bool cleaned = false;
         {
-            Statement q(db_, "SELECT count(*) FROM staged_cleanup_journal WHERE path_key=?1 AND state IN ('PENDING','DELETED');");
+            Statement q(db_, "SELECT count(*) FROM staged_cleanup_journal WHERE path_key=?1 AND state IN ('PENDING','DELETED','ABSENT');");
             Bind(q.value, 1, key);
             int const rc = sqlite3_step(q.value);
             if (rc == SQLITE_ROW) cleaned = sqlite3_column_int(q.value, 0) > 0;
@@ -1340,6 +1340,60 @@ namespace mayasaba
         throw std::runtime_error(
             "This staged copy was removed by attachment cleanup and its bytes are still absent, so a READY "
             "reference to it cannot be admitted. Stage the bytes again before admitting the attachment.");
+    }
+
+    Storage::StagedPresence Storage::ObserveStagedPresence(std::string const& path, std::string* reasonEn) const
+    {
+        auto unknown = [reasonEn](std::string why)
+        {
+            if (reasonEn) *reasonEn = std::move(why);
+            return StagedPresence::Unknown;
+        };
+        if (path.empty()) return unknown("the recorded staged path is empty");
+        if (!forcedStagedPresenceFailurePath_.empty() && path == forcedStagedPresenceFailurePath_)
+            return unknown("the staged path could not be observed (observation failure injected for testing)");
+        try
+        {
+            std::wstring wide;
+            try { wide = Utf8ToWide(path); }
+            catch (...) { return unknown("the recorded staged path is not valid UTF-8"); }
+
+            std::error_code ec;
+            bool const present = std::filesystem::exists(std::filesystem::path(wide), ec);
+            if (ec)
+            {
+                // An inaccessible parent, a reparse loop or an I/O error all land here.
+                // None of them is evidence that the bytes are gone.
+                return unknown("the staged path could not be observed (" + ec.message() + ")");
+            }
+            if (reasonEn) reasonEn->clear();
+            return present ? StagedPresence::Present : StagedPresence::Absent;
+        }
+        catch (std::exception const& ex)
+        {
+            return unknown(std::string("the staged path could not be observed (") + ex.what() + ")");
+        }
+        catch (...)
+        {
+            return unknown("the staged path could not be observed (unknown failure)");
+        }
+    }
+
+    bool Storage::JournalState_locked(std::string const& projectId, std::string const& stagedPath, std::string* state) const
+    {
+        auto const key = CleanupPathKey(stagedPath);
+        if (key.empty()) return false;
+        Statement q(db_, "SELECT state FROM staged_cleanup_journal WHERE project_id=?1 AND path_key=?2;");
+        Bind(q.value, 1, projectId);
+        Bind(q.value, 2, key);
+        int const rc = sqlite3_step(q.value);
+        if (rc == SQLITE_ROW)
+        {
+            if (state) *state = Text(q.value, 0);
+            return true;
+        }
+        Check(rc, db_);
+        return false;
     }
 
     void Storage::ResolveCleanup(std::string const& projectId, std::string const& stagedPath, std::string const& state, std::string const& reason)
@@ -1369,8 +1423,19 @@ namespace mayasaba
 
         std::optional<std::string> staged;
         StagedObjectIdentity expectedIdentity;
-        int otherRefs = 0;
+        bool mustRemove = false;
+        bool alreadyGone = false;
 
+        // PHASE 1 - eligibility and durable intent, with NO physical effect inside it.
+        //
+        // The previous version recorded the intent, deleted the bytes, retired the record
+        // and resolved the journal in ONE uncommitted transaction. The mutex serialized
+        // threads but proved nothing about durability: when that COMMIT was refused, the
+        // rollback restored the PREPARING row while the bytes were already gone and the
+        // only record of the removal was discarded with the transaction. The intent has to
+        // be committed BEFORE the irreversible step, in a transaction that cannot fail
+        // after the bytes have been touched - that is what makes it a record of intent
+        // rather than a note carried alongside the effect.
         AdmitWrite_locked();
         Exec("BEGIN IMMEDIATE;");
         try
@@ -1396,7 +1461,7 @@ namespace mayasaba
                 // Same reference query, same transaction, same mutex as admission. The
                 // caller-side sequence this replaces asked this question in one call and
                 // deleted the bytes in another, with the mutex released in between.
-                otherRefs = CountOtherProtectedReferences_locked(*staged, projectId, attachmentId);
+                int const otherRefs = CountOtherProtectedReferences_locked(*staged, projectId, attachmentId);
                 if (otherRefs > 0)
                 {
                     outcome.bytesRetained = true;
@@ -1408,48 +1473,113 @@ namespace mayasaba
                     Exec("COMMIT;");
                     return outcome;
                 }
-            }
 
-            // Physical removal happens here, inside the serialized section, before the
-            // record is retired. Deleting first means a failed removal leaves the record
-            // in place so the failure stays visible and retryable, instead of orphaning
-            // the bytes and dropping the only record of them.
-            if (!staged->empty() && deleteBytes)
-            {
-                expectedIdentity = CaptureStagedObjectIdentity(*staged);
-                RecordCleanupIntent_locked(projectId, *staged, "PENDING",
-                    "Interrupted preparation cleanup established that no other protected record references these bytes.");
-                std::string deletionReason;
-                if (!deleteBytes(*staged, expectedIdentity, &deletionReason))
+                // A previous attempt may already have removed these bytes and lost only its
+                // outcome record. Retiring the record then needs no second physical effect,
+                // and repeating the removal would report a failure for bytes that are
+                // already gone - which would keep the record forever.
+                std::string previousState;
+                bool const known = JournalState_locked(projectId, *staged, &previousState);
+                std::string observeReason;
+                // PENDING counts as well as DELETED: a committed intent plus a confirmed
+                // absent path means there is nothing left to remove, whether the removal
+                // was recorded or its outcome record was lost. Without this a refused
+                // outcome COMMIT would strand the record forever, because every retry
+                // would try to remove bytes that are already gone and record a failure.
+                if (known && (previousState == "DELETED" || previousState == "PENDING") &&
+                    ObserveStagedPresence(*staged, &observeReason) == StagedPresence::Absent)
                 {
-                    outcome.reasonEn = "The interrupted staged copy could not be removed (" + deletionReason +
-                        "), so its record was retained for a later pass.";
-                    ResolveCleanupIntent_locked(projectId, *staged, "FAILED", outcome.reasonEn);
-                    Exec("COMMIT;");
-                    return outcome;
+                    alreadyGone = true;
                 }
-                outcome.bytesRemoved = true;
-            }
-
-            {
-                Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
-                Bind(q.value, 1, projectId);
-                Bind(q.value, 2, attachmentId);
-                Check(sqlite3_step(q.value), db_);
-            }
-            if (staged && !staged->empty())
-            {
-                ResolveCleanupIntent_locked(projectId, *staged, "DELETED",
-                    "The recorded object was removed by interrupted-preparation cleanup.");
+                else
+                {
+                    mustRemove = true;
+                    expectedIdentity = CaptureStagedObjectIdentity(*staged);
+                    RecordCleanupIntent_locked(projectId, *staged, "PENDING",
+                        "Interrupted preparation cleanup established that no other protected record references these bytes.");
+                }
             }
             Exec("COMMIT;");
-            outcome.recordRetired = true;
         }
         catch (...)
         {
             RollbackAfterFailure_locked();
             throw;
         }
+
+        // PHASE 2 - the irreversible step, outside any transaction. The intent is already
+        // committed, so an interruption here leaves a durable record of what was about to
+        // happen instead of an unexplained absence.
+        bool removed = false;
+        bool uncertain = false;
+        std::string deletionReason;
+        if (mustRemove && deleteBytes)
+        {
+            try
+            {
+                removed = deleteBytes(*staged, expectedIdentity, &deletionReason);
+            }
+            catch (std::exception const& ex)
+            {
+                uncertain = true;
+                deletionReason = ex.what();
+            }
+            catch (...)
+            {
+                uncertain = true;
+                deletionReason = "an unknown failure occurred while removing the staged copy";
+            }
+        }
+
+        // PHASE 3 - record what actually happened. The record is retired only when the
+        // bytes are provably gone; an unknown physical outcome keeps both the record and
+        // the intent so recovery can settle it later.
+        AdmitWrite_locked();
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            bool const recordOnly = !mustRemove || !deleteBytes;
+            bool const retire = recordOnly || removed || alreadyGone;
+            if (retire)
+            {
+                {
+                    Statement q(db_, "DELETE FROM draft_attachments WHERE project_id=?1 AND attachment_id=?2;");
+                    Bind(q.value, 1, projectId);
+                    Bind(q.value, 2, attachmentId);
+                    Check(sqlite3_step(q.value), db_);
+                }
+                if (staged && !staged->empty())
+                {
+                    // "ABSENT" rather than "DELETED" when this pass performed no removal:
+                    // the path is gone, but this operation did not remove it, and the
+                    // journal should not claim an effect it did not have.
+                    ResolveCleanupIntent_locked(projectId, *staged, alreadyGone ? "ABSENT" : "DELETED",
+                        alreadyGone
+                            ? "The recorded path was already absent when this pass ran, so the record was retired without a further physical effect. Which operation removed the bytes is not established from the path alone."
+                            : "The recorded object was removed by interrupted-preparation cleanup.");
+                }
+                outcome.recordRetired = true;
+                // A pass that found the bytes already gone did not remove them.
+                outcome.bytesRemoved = removed;
+            }
+            else
+            {
+                outcome.reasonEn = uncertain
+                    ? "The physical outcome of removing the interrupted staged copy is unknown (" + deletionReason +
+                      "), so its record and the cleanup intent were retained for recovery."
+                    : "The interrupted staged copy could not be removed (" + deletionReason +
+                      "), so its record was retained for a later pass.";
+                ResolveCleanupIntent_locked(projectId, *staged, uncertain ? "UNCERTAIN" : "FAILED", outcome.reasonEn);
+            }
+            Exec("COMMIT;");
+        }
+        catch (...)
+        {
+            RollbackAfterFailure_locked();
+            throw;
+        }
+
+        if (uncertain) throw std::runtime_error(outcome.reasonEn);
         return outcome;
     }
 
@@ -1463,7 +1593,11 @@ namespace mayasaba
         if (stagedPath.empty()) return outcome;
 
         AdmitWrite_locked();
+        // PHASE 1 - reference fence and durable tombstone, no physical effect inside it.
+        // The tombstone must survive a refused COMMIT, otherwise a rollback erases the
+        // only thing that stops a later READY admission from claiming these bytes.
         Exec("BEGIN IMMEDIATE;");
+        StagedObjectIdentity expectedIdentity;
         try
         {
             // Empty project and attachment identities exclude nothing, so this counts
@@ -1488,26 +1622,48 @@ namespace mayasaba
                 return outcome;
             }
 
-            auto const expectedIdentity = CaptureStagedObjectIdentity(stagedPath);
+            expectedIdentity = CaptureStagedObjectIdentity(stagedPath);
             RecordCleanupIntent_locked(projectId, stagedPath, "PENDING",
                 "Reconciliation established that no protected record references these bytes.");
-            std::string deletionReason;
-            if (!deleteBytes(stagedPath, expectedIdentity, &deletionReason))
-            {
-                outcome.reasonEn = "The untracked staged copy could not be removed (" + deletionReason + ").";
-                ResolveCleanupIntent_locked(projectId, stagedPath, "FAILED", outcome.reasonEn);
-                Exec("COMMIT;");
-                return outcome;
-            }
-            outcome.removed = true;
-            ResolveCleanupIntent_locked(projectId, stagedPath, "DELETED",
-                "The recorded object was removed by reconciliation.");
             Exec("COMMIT;");
         }
         catch (...)
         {
             RollbackAfterFailure_locked();
             throw;
+        }
+
+        // PHASE 2 - irreversible removal, outside any transaction.
+        bool removed = false;
+        bool uncertain = false;
+        std::string deletionReason;
+        try
+        {
+            removed = deleteBytes(stagedPath, expectedIdentity, &deletionReason);
+        }
+        catch (std::exception const& ex)
+        {
+            uncertain = true;
+            deletionReason = ex.what();
+        }
+        catch (...)
+        {
+            uncertain = true;
+            deletionReason = "an unknown failure occurred while removing the staged copy";
+        }
+
+        // PHASE 3 - record the observed outcome.
+        outcome.removed = removed;
+        if (removed)
+        {
+            ResolveCleanup(projectId, stagedPath, "DELETED", "The recorded object was removed by reconciliation.");
+        }
+        else
+        {
+            outcome.reasonEn = uncertain
+                ? "The physical outcome of removing the untracked staged copy is unknown (" + deletionReason + ")."
+                : "The untracked staged copy could not be removed (" + deletionReason + ").";
+            ResolveCleanup(projectId, stagedPath, uncertain ? "UNCERTAIN" : "FAILED", outcome.reasonEn);
         }
         return outcome;
     }
@@ -1521,19 +1677,30 @@ namespace mayasaba
         {
             std::string projectId;
             std::string stagedPath;
+            unsigned long volumeSerial{0};
+            unsigned long long fileIndex{0};
         };
         std::vector<Row> unresolved;
         {
-            Statement q(db_, "SELECT project_id,staged_path FROM staged_cleanup_journal WHERE state IN ('PENDING','UNCERTAIN');");
+            // The recorded identity is selected with the path: a current pathname proves
+            // nothing about which object an intent was recorded for.
+            Statement q(db_, "SELECT project_id,staged_path,volume_serial,file_index FROM staged_cleanup_journal "
+                             "WHERE state IN ('PENDING','UNCERTAIN');");
             int rc = SQLITE_OK;
             while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
             {
-                unresolved.push_back(Row{Text(q.value, 0), Text(q.value, 1)});
+                Row row;
+                row.projectId = Text(q.value, 0);
+                row.stagedPath = Text(q.value, 1);
+                row.volumeSerial = static_cast<unsigned long>(sqlite3_column_int64(q.value, 2));
+                row.fileIndex = static_cast<unsigned long long>(sqlite3_column_int64(q.value, 3));
+                unresolved.push_back(std::move(row));
             }
             Check(rc, db_);
         }
         if (unresolved.empty()) return outcomes;
 
+        AdmitWrite_locked();
         Exec("BEGIN IMMEDIATE;");
         try
         {
@@ -1543,41 +1710,74 @@ namespace mayasaba
                 outcome.projectId = row.projectId;
                 outcome.stagedPath = row.stagedPath;
 
-                std::error_code ec;
-                bool present = false;
-                try
-                {
-                    present = !row.stagedPath.empty() &&
-                        std::filesystem::exists(std::filesystem::path(Utf8ToWide(row.stagedPath)), ec) && !ec;
-                }
-                catch (...)
-                {
-                    present = false;
-                }
-                outcome.bytesPresent = present;
+                std::string observeReason;
+                StagedPresence const presence = ObserveStagedPresence(row.stagedPath, &observeReason);
+                outcome.bytesPresent = presence == StagedPresence::Present;
 
-                if (!present)
+                if (presence == StagedPresence::Unknown)
                 {
-                    // The removal did happen; only the record of it was lost.
-                    outcome.state = "DELETED";
-                    outcome.reasonEn = "The recorded cleanup removed these bytes before the interruption; nothing remained to reclaim.";
+                    // A failed observation is not absence. Nothing is resolved and no
+                    // physical outcome is claimed; the intent stays unresolved so a later
+                    // pass can settle it once the path can actually be inspected.
+                    outcome.state = "UNCERTAIN";
+                    outcome.resolved = false;
+                    outcome.reasonEn = "The staged copy could not be observed (" + observeReason +
+                        "), so the cleanup outcome remains unresolved and will be retried.";
+                    ResolveCleanupIntent_locked(row.projectId, row.stagedPath, "UNCERTAIN", outcome.reasonEn);
+                    outcomes.push_back(std::move(outcome));
+                    continue;
+                }
+
+                if (presence == StagedPresence::Absent)
+                {
+                    // Absence is a fact about the path, not proof of who removed the
+                    // object. Say exactly that instead of claiming the cleanup did it.
+                    outcome.state = "ABSENT";
+                    outcome.resolved = true;
+                    outcome.reasonEn = "The recorded path is absent, so no bytes remain to reclaim there. "
+                        "Which operation removed them is not established from the path alone.";
+                    ResolveCleanupIntent_locked(row.projectId, row.stagedPath, outcome.state, outcome.reasonEn);
+                    outcomes.push_back(std::move(outcome));
+                    continue;
+                }
+
+                // Present. Whether this is the object the intent was recorded for is a
+                // separate question from whether bytes exist at the path.
+                StagedObjectIdentity const now = CaptureStagedObjectIdentity(row.stagedPath);
+                bool const identityRecorded = row.volumeSerial != 0 || row.fileIndex != 0;
+                bool const sameObject = identityRecorded && now.valid &&
+                    now.volumeSerial == row.volumeSerial && now.fileIndex == row.fileIndex;
+
+                if (identityRecorded && !sameObject)
+                {
+                    outcome.state = "REPLACED";
+                    outcome.resolved = true;
+                    outcome.reasonEn = "A different object now occupies the recorded path, so the object this cleanup "
+                        "intended to remove was not confirmed present; the current bytes were retained.";
+                    ResolveCleanupIntent_locked(row.projectId, row.stagedPath, outcome.state, outcome.reasonEn);
+                    outcomes.push_back(std::move(outcome));
+                    continue;
+                }
+
+                int const refs = CountOtherProtectedReferences_locked(row.stagedPath, std::string{}, std::string{});
+                if (refs == INT_MAX)
+                {
+                    outcome.state = "UNCERTAIN";
+                    outcome.resolved = false;
+                    outcome.reasonEn = "The bytes are present and reference safety could not be established, "
+                        "so they were retained and the outcome remains unresolved.";
                 }
                 else
                 {
-                    // The bytes are still there, so the physical effect never happened or
-                    // its outcome was uncertain. Nothing is deleted during recovery: this
-                    // reports what it observed and leaves the decision to the owning layer.
-                    int const refs = CountOtherProtectedReferences_locked(row.stagedPath, std::string{}, std::string{});
                     outcome.state = "RETAINED";
-                    outcome.reasonEn = (refs == INT_MAX)
-                        ? "The bytes are present and reference safety could not be established, so they were retained."
-                        : (refs > 0
-                            ? "The bytes are present and still referenced by " + std::to_string(refs) + " protected record(s), so they were retained."
-                            : "The bytes are present and unreferenced; the removal did not take effect, so they remain reclaimable by reconciliation.");
+                    outcome.resolved = true;
+                    outcome.reasonEn = refs > 0
+                        ? "The recorded object is still present and referenced by " + std::to_string(refs) +
+                          " protected record(s), so it was retained."
+                        : "The recorded object is still present and unreferenced; the removal did not take effect, "
+                          "so it remains reclaimable by reconciliation.";
                 }
-
                 ResolveCleanupIntent_locked(row.projectId, row.stagedPath, outcome.state, outcome.reasonEn);
-                outcome.resolved = true;
                 outcomes.push_back(std::move(outcome));
             }
             Exec("COMMIT;");
@@ -1588,6 +1788,26 @@ namespace mayasaba
             throw;
         }
         return outcomes;
+    }
+
+    std::vector<Storage::CleanupJournalEntry> Storage::CleanupJournal()
+    {
+        std::lock_guard lock(mutex_);
+        std::vector<CleanupJournalEntry> entries;
+        Statement q(db_, "SELECT project_id,staged_path,state,reason FROM staged_cleanup_journal "
+                         "ORDER BY created_at,project_id,path_key;");
+        int rc = SQLITE_OK;
+        while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+        {
+            CleanupJournalEntry entry;
+            entry.projectId = Text(q.value, 0);
+            entry.stagedPath = Text(q.value, 1);
+            entry.state = Text(q.value, 2);
+            entry.reasonEn = Text(q.value, 3);
+            entries.push_back(std::move(entry));
+        }
+        Check(rc, db_);
+        return entries;
     }
 
     void Storage::CheckWriteCapacity()
@@ -2059,6 +2279,15 @@ namespace mayasaba
             Exec("PRAGMA user_version=4;");
             Exec("COMMIT;");
             ReconcileCrashOperations();
+            // Automatic cleanup recovery on reopen, through the same opening/recovery
+            // owner as the crash-operation reconciliation above and inside the same
+            // schema phase, so the documented constructor policy applies: quarantine still
+            // denies writes, and the capacity gate stays suppressed for opening because a
+            // store must remain openable at its ceiling in order to be inspected and
+            // recovered. A cleanup that was interrupted between its committed intent and
+            // its recorded outcome is settled here, before any caller can observe the
+            // store. It never deletes bytes.
+            RecoverInterruptedCleanups();
             openSchemaPhase_ = false;
         }
         catch (...)
@@ -4184,6 +4413,7 @@ namespace mayasaba
 
         std::vector<std::string> staged;
         std::vector<std::string> toDelete;
+        std::vector<StagedObjectIdentity> toDeleteIdentities;
 
         // Pending-submission guard, row retirement and shared-reference accounting
         // happen inside a single write transaction. Physical bytes are deleted only
@@ -4233,8 +4463,15 @@ namespace mayasaba
                 else
                 {
                     toDelete.push_back(path);
+                    // Capture the identity that justifies eligibility HERE, while the
+                    // decision is being made, and carry it to the deletion phase. Taking a
+                    // fresh identity after the retirement commit would let an object
+                    // replaced in that window become the expected object, which would then
+                    // be deleted under the previous object's authorization.
+                    toDeleteIdentities.push_back(CaptureStagedObjectIdentity(path));
                     // Durable intent, recorded while the bytes are still there, for every
-                    // path this clear is about to remove.
+                    // path this clear is about to remove. It is committed with the
+                    // retirement below, before any byte is touched.
                     RecordCleanupIntent_locked(projectId, path, "PENDING",
                         "Draft clear established that no other protected record references these bytes.");
                 }
@@ -4249,15 +4486,18 @@ namespace mayasaba
         }
 
         // Physical cleanup follows the committed retirement.
+        if (clearDeletionPhaseHook_) clearDeletionPhaseHook_();
         std::string firstFailure;
-        for (auto const& path : toDelete)
+        for (std::size_t i = 0; i < toDelete.size(); ++i)
         {
+            auto const& path = toDelete[i];
             if (deleteBytes)
             {
-                // The identity is captured now, after the retirement committed but before
-                // the delete, so the deleter can refuse an object that replaced the one
-                // whose references were counted.
-                auto const expectedIdentity = CaptureStagedObjectIdentity(path);
+                // The eligibility identity captured inside the retirement transaction, not
+                // a fresh observation of whatever is at the path now.
+                auto const expectedIdentity = i < toDeleteIdentities.size()
+                    ? toDeleteIdentities[i]
+                    : StagedObjectIdentity{};
                 std::string deletionReason;
                 if (deleteBytes(path, expectedIdentity, &deletionReason))
                 {
