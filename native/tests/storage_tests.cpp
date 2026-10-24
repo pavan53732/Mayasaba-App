@@ -6178,6 +6178,310 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // 67. The restart -> recovery -> retry sequence. Group 63 retries BEFORE reopening,
+        // so it never observes the state transition that breaks the agreement between
+        // recovery and retry: automatic recovery rewrites PENDING to ABSENT, and a retry
+        // that only recognises DELETED/PENDING then tries to delete an absent file, records
+        // FAILED and strands the record - after which FAILED was implicitly safe for
+        // admission and a READY row could be admitted against bytes the pipeline deleted.
+        {
+            CASES_BEGIN("67. Restart recovery and PREPARING retry agree on an absent path");
+            auto const dbPath = folder / "prep-restart-retry.db";
+            auto staging = folder / "prep-restart-retry-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "prr-P";
+            std::string const projQ = "prr-Q";
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "gone.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("gone-bytes", 10);
+            }
+            std::string const pathUtf8 = WideToUtf8(path.wstring());
+
+            {
+                mayasaba::Storage store(dbPath);
+                store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+                store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
+
+                mayasaba::AttachmentRecord rec;
+                rec.id = "prr-rec";
+                rec.projectId = projectId;
+                rec.fileName = "gone.bin";
+                rec.fileSize = 10;
+                rec.sha256 = ComputeSha256ForTestFile(pathUtf8);
+                rec.detectedType = "application/octet-stream";
+                rec.storagePath = pathUtf8;
+                rec.sourcePath = "C:/source/gone.bin";
+                rec.status = "PREPARING";
+                store.SaveDraftAttachment(projectId, rec);
+
+                bool threw = false;
+                try
+                {
+                    store.RetireInterruptedPreparationGuarded(projectId, "prr-rec",
+                        [&](std::string const& p, mayasaba::Storage::StagedObjectIdentity const&, std::string*) -> bool
+                        {
+                            std::error_code ec;
+                            fs::remove(fs::path(p), ec);
+                            store.SetForceCommitFailureForTesting(true);
+                            return !ec;
+                        });
+                }
+                catch (std::exception const&)
+                {
+                    threw = true;
+                }
+                EXPECT(threw);
+                EXPECT(!fs::exists(path));
+                auto const journal = store.CleanupJournal();
+                EXPECT(journal.size() == 1);
+                EXPECT(journal[0].state == "PENDING");
+            }
+
+            {
+                mayasaba::Storage store(dbPath);
+                // Automatic recovery on reopen is what rewrites the state.
+                auto journal = store.CleanupJournal();
+                EXPECT(journal.size() == 1);
+                EXPECT(journal[0].state == "ABSENT");
+
+                // The retry must agree that nothing is left to remove.
+                mayasaba::AttachmentService service(store, staging);
+                service.ReconcileStagedFiles(projectId, false);
+                EXPECT(store.GetDraftAttachments(projectId).empty());
+                auto const afterRetry = store.CleanupJournal();
+                EXPECT(afterRetry.size() == 1);
+                EXPECT(afterRetry[0].state == "ABSENT");
+
+                // And the admission fence must still hold for those bytes.
+                bool refused = false;
+                try
+                {
+                    mayasaba::AttachmentRecord q;
+                    q.id = "prr-q-rec";
+                    q.projectId = projQ;
+                    q.fileName = "gone.bin";
+                    q.fileSize = 10;
+                    q.sha256 = std::string(64, 'b');
+                    q.detectedType = "application/octet-stream";
+                    q.storagePath = pathUtf8;
+                    q.sourcePath = "C:/source/gone-q.bin";
+                    q.status = "READY";
+                    store.SaveDraftAttachment(projQ, q);
+                }
+                catch (std::exception const&)
+                {
+                    refused = true;
+                }
+                EXPECT(refused);
+            }
+            CASES_END();
+        }
+
+        // 68. An unknown physical outcome must not admit READY against missing bytes. The
+        // deleter removes the file and then throws, so the journal is UNCERTAIN - a state
+        // the previous admission allowlist did not list, and therefore treated as safe.
+        {
+            CASES_BEGIN("68. Unknown physical outcome does not admit READY to missing bytes");
+            mayasaba::Storage store(folder / "uncertain-admission.db");
+            auto staging = folder / "uncertain-admission-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "ua-P";
+            std::string const projQ = "ua-Q";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "uncertain.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("uncertain-bytes", 15);
+            }
+            std::string const pathUtf8 = WideToUtf8(path.wstring());
+
+            (void)store.RemoveUntrackedStagedFileGuarded(projectId, pathUtf8,
+                [](std::string const& p, mayasaba::Storage::StagedObjectIdentity const&, std::string*) -> bool
+                {
+                    std::error_code ec;
+                    fs::remove(fs::path(p), ec);
+                    throw std::runtime_error("removed, then the outcome became unknown");
+                });
+            EXPECT(!fs::exists(path));
+            auto const journal = store.CleanupJournal();
+            EXPECT(journal.size() == 1);
+            EXPECT(journal[0].state == "UNCERTAIN");
+
+            auto readyRecord = [&](std::string const& id)
+            {
+                mayasaba::AttachmentRecord r;
+                r.id = id;
+                r.projectId = projQ;
+                r.fileName = "uncertain.bin";
+                r.fileSize = 15;
+                r.sha256 = std::string(64, 'c');
+                r.detectedType = "application/octet-stream";
+                r.storagePath = pathUtf8;
+                r.sourcePath = "C:/source/uncertain-q.bin";
+                r.status = "READY";
+                return r;
+            };
+
+            bool singleRefused = false;
+            try { store.SaveDraftAttachment(projQ, readyRecord("ua-single")); }
+            catch (std::exception const&) { singleRefused = true; }
+            EXPECT(singleRefused);
+
+            bool batchRefused = false;
+            try { store.SaveDraftAttachments(projQ, {readyRecord("ua-batch")}); }
+            catch (std::exception const&) { batchRefused = true; }
+            EXPECT(batchRefused);
+            EXPECT(store.GetDraftAttachments(projQ).empty());
+            CASES_END();
+        }
+
+        // 69. Admission safety must follow one rule across every cleanup disposition, not
+        // an allowlist that leaves unlisted states implicitly safe.
+        {
+            CASES_BEGIN("69. Admission safety is consistent across cleanup dispositions");
+            mayasaba::Storage store(folder / "admission-dispositions.db");
+            auto staging = folder / "admission-dispositions-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "ad-P";
+            std::string const projQ = "ad-Q";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            store.BindProject(projQ, projQ, "C:/Projects/" + projQ);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+
+            auto readyRecord = [&](std::string const& id, std::string const& stagedPath)
+            {
+                mayasaba::AttachmentRecord r;
+                r.id = id;
+                r.projectId = projQ;
+                r.fileName = "disposition.bin";
+                r.fileSize = 8;
+                r.sha256 = std::string(64, 'd');
+                r.detectedType = "application/octet-stream";
+                r.storagePath = stagedPath;
+                r.sourcePath = "C:/source/disposition.bin";
+                r.status = "READY";
+                return r;
+            };
+            auto admits = [&](std::string const& id, std::string const& stagedPath)
+            {
+                try { store.SaveDraftAttachment(projQ, readyRecord(id, stagedPath)); }
+                catch (std::exception const&) { return false; }
+                return true;
+            };
+
+            // FAILED with the bytes still present: the failure was that removal did not
+            // happen, so a READY reference is legitimate.
+            auto kept = dir / "kept.bin";
+            {
+                std::ofstream of(kept, std::ios::binary);
+                of.write("keptbyte", 8);
+            }
+            std::string const keptUtf8 = WideToUtf8(kept.wstring());
+            (void)store.RemoveUntrackedStagedFileGuarded(projectId, keptUtf8,
+                [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string* why) -> bool
+                {
+                    if (why) *why = "refused for the test";
+                    return false;
+                });
+            auto const failedEntry = store.CleanupJournal();
+            EXPECT(failedEntry.size() == 1);
+            EXPECT(failedEntry[0].state == "FAILED");
+            EXPECT(fs::exists(kept));
+            EXPECT(admits("ad-failed-present", keptUtf8));   // bytes are there: allowed
+
+            // The same FAILED path, once the bytes are gone, must not be admitted.
+            {
+                std::error_code ec;
+                fs::remove(kept, ec);
+            }
+            EXPECT(!admits("ad-failed-absent", keptUtf8));
+
+            // Unknown observation must not be treated as present.
+            auto unknownPath = dir / "unknown.bin";
+            {
+                std::ofstream of(unknownPath, std::ios::binary);
+                of.write("unkbytes", 8);
+            }
+            std::string const unknownUtf8 = WideToUtf8(unknownPath.wstring());
+            (void)store.RemoveUntrackedStagedFileGuarded(projectId, unknownUtf8,
+                [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string* why) -> bool
+                {
+                    if (why) *why = "refused for the test";
+                    return false;
+                });
+            store.SetForceStagedPresenceFailureForTestingPath(unknownUtf8);
+            EXPECT(!admits("ad-unknown", unknownUtf8));
+            store.ClearForceStagedPresenceFailureForTestingPath();
+
+            // Valid restaging: writing the bytes back makes the path admissible again.
+            auto restaged = dir / "restaged.bin";
+            std::string const restagedUtf8 = WideToUtf8(restaged.wstring());
+            (void)store.RemoveUntrackedStagedFileGuarded(projectId, restagedUtf8,
+                [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string* why) -> bool
+                {
+                    if (why) *why = "refused for the test";
+                    return false;
+                });
+            EXPECT(!admits("ad-restaged-missing", restagedUtf8));
+            {
+                std::ofstream of(restaged, std::ios::binary);
+                of.write("restaged", 8);
+            }
+            EXPECT(admits("ad-restaged-present", restagedUtf8));
+            CASES_END();
+        }
+
+        // 70. Failure to identify a present object is not proof that it was replaced.
+        {
+            CASES_BEGIN("70. Recovery keeps an unidentifiable object uncertain, not replaced");
+            mayasaba::Storage store(folder / "identity-unknown.db");
+            auto staging = folder / "identity-unknown-stage";
+            fs::create_directories(staging);
+            std::string const projectId = "iu-P";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "object.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("object-bytes", 12);
+            }
+            std::string const pathUtf8 = WideToUtf8(path.wstring());
+
+            // Record an intent whose removal outcome is unknown, leaving the object present
+            // and the intent in a state recovery revisits.
+            (void)store.RemoveUntrackedStagedFileGuarded(projectId, pathUtf8,
+                [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string*) -> bool
+                {
+                    throw std::runtime_error("outcome unknown for the test");
+                });
+            auto const recorded = store.CleanupJournal();
+            EXPECT(recorded.size() == 1);
+            EXPECT(recorded[0].state == "UNCERTAIN");
+
+            // Replace the object with a directory of the same name: the path is present but
+            // its identity cannot be established as a file identity.
+            {
+                std::error_code ec;
+                fs::remove(path, ec);
+                fs::create_directories(path, ec);
+            }
+            auto const recovered = store.RecoverInterruptedCleanups();
+            EXPECT(recovered.size() == 1);
+            EXPECT(recovered[0].bytesPresent);
+            // Unknown identity is uncertainty, not replacement.
+            EXPECT(recovered[0].state == "UNCERTAIN");
+            EXPECT(!recovered[0].resolved);
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.

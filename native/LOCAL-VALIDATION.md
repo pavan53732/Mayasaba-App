@@ -3939,3 +3939,87 @@ Each mutant fails in its own group and only after the preceding groups pass.
 - **R05 capacity, logical-client sizing/layout, strict certification and final-artifact
   Windows acceptance remain open.** No UI result from any earlier executable hash applies
   to `1b535ad2…`.
+
+## 2026-10-24 (second correction) — admission safety across cleanup dispositions
+
+A second independent review (`validation-cb3ccf2/REVIEW.md`) accepted the durability
+ordering and reproduced two further failures. Both came from the same mistake: admission
+safety was expressed as an allowlist of journal states, so every state the list omitted was
+implicitly safe.
+
+### Failure 1: restart → recovery → retry disagree about `ABSENT` (executed)
+
+`RetireInterruptedPreparationGuarded` recognised only `DELETED` and `PENDING` as
+"nothing left to remove". Automatic recovery on reopen rewrites `PENDING` to `ABSENT`, so
+after a restart the retry attempted to delete an absent file, recorded `FAILED`, and left
+the `PREPARING` row stranded. `FAILED` was not in the tombstone allowlist either, so a
+cross-project `READY` admission then succeeded against bytes the pipeline itself deleted.
+Group 63 retried before reopening and therefore never observed the transition.
+
+### Failure 2: an unknown physical outcome dropped admission protection (executed)
+
+A deleter that removes the bytes and then throws leaves the journal `UNCERTAIN`. `UNCERTAIN`
+was not in the allowlist, so a subsequent `READY` admission succeeded against missing
+bytes.
+
+### Corrections
+
+- **Admission safety is derived, not enumerated.** `RefuseCleanedPathAdmission_locked` now
+  refuses when *any* journal row exists for the path and the bytes are not confirmed
+  present. Presence uses the same tri-state observation as recovery, so an unobservable path
+  refuses rather than passing. A path this store never recorded a cleanup for is unaffected,
+  which is what keeps re-staging and every pre-existing record working.
+- **Retry decides physically.** Any recorded cleanup plus a confirmed-absent path means
+  there is nothing left to remove, whatever label the last pass wrote. The record is retired
+  and the intent recorded `ABSENT` without a second physical effect.
+- **Unknown identity stays uncertain.** Recovery no longer certifies `REPLACED` when the
+  present object could not be identified; that is an unresolved observation, not evidence of
+  substitution.
+
+### Tests (66 groups preserved, 4 added)
+
+| Group | Sequence |
+|---|---|
+| 67 | The exact restart sequence: outcome COMMIT refused, reopen (recovery rewrites to `ABSENT`), retry retires the record and leaves the state `ABSENT` rather than `FAILED`, and a cross-project `READY` admission is refused. |
+| 68 | Deleter removes then throws (`UNCERTAIN`), then single **and** batch admission of a `READY` row against the missing path are both refused, with no partial row left by the batch. |
+| 69 | One rule across dispositions: `FAILED` with bytes present is admitted; the same path with bytes gone is refused; an unobservable path is refused; a missing path is refused and the same path is admitted once the bytes are written back. |
+| 70 | A present object that cannot be identified (replaced by a directory of the same name) is `UNCERTAIN` and unresolved, not `REPLACED`. |
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256
+  `0958c2a6dc69bc807b7ec4c111d2b122b0575f1503f6ba89904735ead4788769`,
+  **PASS: 70 of 70 executed native regression groups**, exit 0, after `-t:Rebuild`.
+- Application build Release x64 v145: exit 0. Contract validator: `PASS: 124`, exit 0.
+- Sources: `Storage.cpp` `a8a9ec882a2651d434fa708b96495620c20a721db54b9d19f28a4ee7ad19f7c5`,
+  `Storage.h` `0e9311399ffc1279000e234711ae3d0d3dc2f48de72dda4382666431f60f742b`,
+  `storage_tests.cpp` `5892d4fca3eeab263ad75fca4cefcb1189d9d582bc32f8bfa30af4c0d735c5bf`.
+
+The new groups were written and executed **before** the fix: group 67 failed at
+`store.GetDraftAttachments(projectId).empty()` (`storage_tests.cpp:6253`) with 66 of 67
+groups passing, confirming the retry left the record stranded.
+
+### Mutation evidence
+
+Fragments, records and logs under `~/.codex/visualizations/2026/10/24/mutation3/`. Each
+mutant was forced through `-t:Rebuild` and restored byte-identically, verified by SHA-256
+(`a8a9ec88…`).
+
+| Mutant | Reverted fix | Result |
+|---|---|---|
+| M10 | Retry back to the `DELETED`/`PENDING` allowlist | FAIL group 67, `store.GetDraftAttachments(projectId).empty()` (`:6253`) |
+| M11 | Admission back to a state allowlist | FAIL group 68, `singleRefused` |
+| M12 | Unidentifiable present object certified `REPLACED` | FAIL group 70, `recovered[0].state == "UNCERTAIN"` |
+
+### Still open
+
+- **`FAILED` intents are not revisited by recovery** (it selects `PENDING` and `UNCERTAIN`).
+  Safety does not depend on that: the admission fence keys on any journal row plus physical
+  observation. Re-examining `FAILED` would improve disposition accuracy and is not done.
+- **Whether admission should verify staged bytes for paths with no cleanup record remains
+  an open contract question.** The synthetic fixtures that admit `READY` rows for
+  never-existent paths are unchanged and are not treated as production policy.
+- No cross-process fence; reparse-point substitution at the boundary not reproduced.
+- **R05 capacity, logical-client sizing/layout, strict certification and final-artifact
+  Windows acceptance remain open.** No UI result from any earlier executable hash applies to
+  `0958c2a6…`.

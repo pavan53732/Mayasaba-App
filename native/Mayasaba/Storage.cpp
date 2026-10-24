@@ -1315,27 +1315,43 @@ namespace mayasaba
 
     void Storage::RefuseCleanedPathAdmission_locked(std::string const& status, std::string const& stagedPath)
     {
-        // Narrow by construction. A path is refused only when this store durably
-        // recorded cleaning it AND the bytes are still absent. Re-staging the same path
-        // and admitting it is therefore allowed, and a store that never cleaned the path
-        // is never affected - which is why this cannot break an unrelated admission.
+        // ONE rule, derived from physical observation and cleanup provenance rather than
+        // from a list of states. If this store has any cleanup record for the path, a READY
+        // reference is admitted only when the bytes are CONFIRMED present.
+        //
+        // The previous version enumerated PENDING, DELETED and ABSENT, which made every
+        // unlisted state implicitly safe: UNCERTAIN after a deleter removed the bytes and
+        // then threw, and FAILED after a retry tried to delete an already-absent file, both
+        // admitted READY rows against missing bytes. An allowlist over a state machine
+        // invites exactly that, because the safe default must be refusal, not permission.
         if (status != "READY" || stagedPath.empty()) return;
         auto const key = CleanupPathKey(stagedPath);
         if (key.empty()) return;
 
         bool cleaned = false;
         {
-            Statement q(db_, "SELECT count(*) FROM staged_cleanup_journal WHERE path_key=?1 AND state IN ('PENDING','DELETED','ABSENT');");
+            Statement q(db_, "SELECT count(*) FROM staged_cleanup_journal WHERE path_key=?1;");
             Bind(q.value, 1, key);
             int const rc = sqlite3_step(q.value);
             if (rc == SQLITE_ROW) cleaned = sqlite3_column_int(q.value, 0) > 0;
             else Check(rc, db_);
         }
+        // A store that never recorded a cleanup for this path is unaffected, so re-staging
+        // and every pre-existing record keep working.
         if (!cleaned) return;
 
-        std::error_code ec;
-        bool const present = std::filesystem::exists(std::filesystem::path(Utf8ToWide(stagedPath)), ec) && !ec;
-        if (present) return;
+        std::string observeReason;
+        StagedPresence const presence = ObserveStagedPresence(stagedPath, &observeReason);
+        if (presence == StagedPresence::Present) return;
+
+        if (presence == StagedPresence::Unknown)
+        {
+            // Fail closed. "I could not check" is not "the bytes are there".
+            throw std::runtime_error(
+                "This store recorded a cleanup for this staged copy and its presence could not be verified (" +
+                observeReason + "), so a READY reference to it cannot be admitted. Stage the bytes again and "
+                "verify they exist before admitting the attachment.");
+        }
 
         throw std::runtime_error(
             "This staged copy was removed by attachment cleanup and its bytes are still absent, so a READY "
@@ -1481,13 +1497,13 @@ namespace mayasaba
                 std::string previousState;
                 bool const known = JournalState_locked(projectId, *staged, &previousState);
                 std::string observeReason;
-                // PENDING counts as well as DELETED: a committed intent plus a confirmed
-                // absent path means there is nothing left to remove, whether the removal
-                // was recorded or its outcome record was lost. Without this a refused
-                // outcome COMMIT would strand the record forever, because every retry
-                // would try to remove bytes that are already gone and record a failure.
-                if (known && (previousState == "DELETED" || previousState == "PENDING") &&
-                    ObserveStagedPresence(*staged, &observeReason) == StagedPresence::Absent)
+                // ANY recorded cleanup for this path plus a confirmed-absent path means
+                // there is nothing left to remove. Enumerating particular states here is
+                // what broke the retry: recovery rewrites PENDING to ABSENT, so a retry
+                // that only knew DELETED and PENDING tried to delete an absent file,
+                // recorded FAILED and stranded the record forever. The question is
+                // physical - are the bytes there - not which label the last pass wrote.
+                if (known && ObserveStagedPresence(*staged, &observeReason) == StagedPresence::Absent)
                 {
                     alreadyGone = true;
                 }
@@ -1745,6 +1761,22 @@ namespace mayasaba
                 // separate question from whether bytes exist at the path.
                 StagedObjectIdentity const now = CaptureStagedObjectIdentity(row.stagedPath);
                 bool const identityRecorded = row.volumeSerial != 0 || row.fileIndex != 0;
+
+                if (identityRecorded && !now.valid)
+                {
+                    // A present object that cannot be identified is not evidence that it
+                    // differs from the recorded one. Certifying REPLACED here would claim a
+                    // substitution nobody observed.
+                    outcome.state = "UNCERTAIN";
+                    outcome.resolved = false;
+                    outcome.reasonEn = "The object at the recorded path is present but its identity could not be "
+                        "established, so it cannot be compared with the recorded identity and the outcome remains "
+                        "unresolved.";
+                    ResolveCleanupIntent_locked(row.projectId, row.stagedPath, outcome.state, outcome.reasonEn);
+                    outcomes.push_back(std::move(outcome));
+                    continue;
+                }
+
                 bool const sameObject = identityRecorded && now.valid &&
                     now.volumeSerial == row.volumeSerial && now.fileIndex == row.fileIndex;
 
