@@ -1110,27 +1110,30 @@ namespace mayasaba
         return CountOtherProtectedReferences_locked(path, projectId, attachmentId);
     }
 
-    static bool PathMatchesReference(std::string const& a, std::string const& b)
+    // Returns 1 for a certain match, 0 for a certain non-match, -1 when the
+    // comparison could not be established (canonicalization or conversion failed).
+    // Callers must treat -1 as "unknown" and retain bytes rather than counting
+    // the candidate as unprotected.
+    static int PathReferenceMatch(std::string const& a, std::string const& b, bool forceFailure = false)
     {
-        // Equivalent path spellings (case differences, dot segments, trailing
-        // separators) must count as the same object. Normalize both to a canonical
-        // absolute form for a filesystem-equivalent comparison, and fall back to a
-        // case-insensitive comparison if canonicalization is unavailable. A failed
-        // comparison is never treated as a match: fail closed.
+        if (forceFailure) return -1;
         try
         {
-            auto pa = std::filesystem::path(Utf8ToWide(a)).wstring();
-            auto pb = std::filesystem::path(Utf8ToWide(b)).wstring();
+            std::wstring wa, wb;
+            try { wa = Utf8ToWide(a); }
+            catch (...) { return -1; }
+            try { wb = Utf8ToWide(b); }
+            catch (...) { return -1; }
             std::error_code ec;
-            auto ca = std::filesystem::weakly_canonical(pa, ec);
-            if (ec) return false;
-            auto cb = std::filesystem::weakly_canonical(pb, ec);
-            if (ec) return false;
-            return EqualLowercaseW(ca.wstring(), cb.wstring());
+            auto ca = std::filesystem::weakly_canonical(wa, ec);
+            if (ec) return -1;
+            auto cb = std::filesystem::weakly_canonical(wb, ec);
+            if (ec) return -1;
+            return EqualLowercaseW(ca.wstring(), cb.wstring()) ? 1 : 0;
         }
         catch (...)
         {
-            return false;
+            return -1;
         }
     }
 
@@ -1141,6 +1144,27 @@ namespace mayasaba
         // the bytes. Path equivalence is filesystem-level, not text-level: case-variant
         // and dot-segment spellings of the same object must count.
         int refs = 0;
+        bool uncertain = false;
+        // If the staged path itself cannot be canonicalized, every comparison is
+        // unknown: fail closed by reporting the sentinel.
+        try
+        {
+            if (forcePathCanonicalizationFailureForTesting_)
+            {
+                uncertain = true;
+            }
+            else
+            {
+                std::error_code ec;
+                auto cp = std::filesystem::weakly_canonical(std::filesystem::path(Utf8ToWide(stagedPath)), ec);
+                if (ec) uncertain = true;
+                (void)cp;
+            }
+        }
+        catch (...)
+        {
+            uncertain = true;
+        }
         {
             Statement q(db_, "SELECT staged_path FROM draft_attachments "
                              "WHERE NOT (project_id=?2 AND attachment_id=?3);");
@@ -1149,7 +1173,9 @@ namespace mayasaba
             int rc = SQLITE_OK;
             while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
             {
-                if (PathMatchesReference(Text(q.value, 0), stagedPath)) ++refs;
+                int m = PathReferenceMatch(Text(q.value, 0), stagedPath, forcePathCanonicalizationFailureForTesting_);
+                if (m == 1) ++refs;
+                else if (m == -1) uncertain = true;
             }
             Check(rc, db_);
         }
@@ -1158,10 +1184,13 @@ namespace mayasaba
             int rc = SQLITE_OK;
             while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
             {
-                if (PathMatchesReference(Text(q.value, 0), stagedPath)) ++refs;
+                int m = PathReferenceMatch(Text(q.value, 0), stagedPath, forcePathCanonicalizationFailureForTesting_);
+                if (m == 1) ++refs;
+                else if (m == -1) uncertain = true;
             }
             Check(rc, db_);
         }
+        if (uncertain) return INT_MAX;
         return refs;
     }
 

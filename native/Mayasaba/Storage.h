@@ -510,6 +510,7 @@ namespace mayasaba
         };
         using CapacityProbe = std::function<CapacityObservation()>;
         void SetCapacityProbeForTesting(CapacityProbe probe) { capacityProbeForTesting_ = std::move(probe); }
+        void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
 
     private:
         sqlite3* db_{nullptr};
@@ -521,6 +522,7 @@ namespace mayasaba
         std::function<void()> queryActionCenterSnapshotHook_;
         std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
         CapacityProbe capacityProbeForTesting_;
+        bool forcePathCanonicalizationFailureForTesting_{false};
         // True only while the constructor runs its idempotent schema DDL and crash
         // reconciliation (R05): these writes are part of opening, and opening an
         // existing store must never be capacity-gated, so the capacity check - only

@@ -1012,8 +1012,8 @@ namespace mayasaba
         }
         for (auto const& pid : allProjectIds)
         {
-            auto drafts = storage_.GetDraftAttachments(pid);
-            for (auto const& d : drafts)
+            auto pidDrafts = storage_.GetDraftAttachments(pid);
+            for (auto const& d : pidDrafts)
             {
                 track(d.storagePath);
             }
