@@ -3686,8 +3686,16 @@ namespace mayasaba
             {
                 outcome.bytesShared = true;
                 outcome.recordRemoved = true;
-                outcome.reasonEn = "The staged copy is still referenced by " + std::to_string(otherRefs) +
-                    " other protected attachment record(s), so its bytes were retained.";
+                if (otherRefs == INT_MAX)
+                {
+                    outcome.reasonEn = "Reference safety for the staged copy could not be established "
+                        "(path canonicalization failed), so its bytes were retained.";
+                }
+                else
+                {
+                    outcome.reasonEn = "The staged copy is still referenced by " + std::to_string(otherRefs) +
+                        " other protected attachment record(s), so its bytes were retained.";
+                }
                 Exec("COMMIT;");
                 return outcome;
             }

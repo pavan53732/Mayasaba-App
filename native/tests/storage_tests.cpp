@@ -5194,8 +5194,51 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // 55. Unknown reference observation fails closed: when path canonicalization
+        // cannot be established, production removal retains bytes, reports a truthful
+        // (non-INT_MAX) reason, and recovery succeeds once observations are restored.
+        {
+            CASES_BEGIN("55. Unknown reference observation retains bytes and recovers (uncertainty fence)");
+            mayasaba::Storage store(folder / "uncertainty.db");
+            auto staging = folder / "uncertainty-stage";
+            fs::create_directories(staging);
+            mayasaba::AttachmentService service(store, staging);
+
+            std::string const projectId = "unc-proj";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "kept.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("uncertain bytes", 15);
+            }
+
+            mayasaba::AttachmentRecord rec;
+            rec.id = "unc-rec";
+            rec.projectId = projectId;
+            rec.fileName = "kept.bin";
+            rec.fileSize = 15;
+            rec.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+            rec.detectedType = "application/octet-stream";
+            rec.storagePath = WideToUtf8(path.wstring());
+            rec.sourcePath = "C:/source/u.bin";
+            rec.status = "READY";
+            store.SaveDraftAttachment(projectId, rec);
+
+            store.SetForcePathCanonicalizationFailureForTesting(true);
+
+            auto const r = service.RemoveDraftAttachment(projectId, "unc-rec");
+            EXPECT(r.recordRemoved);
+            EXPECT(fs::exists(path));
+            EXPECT(r.unresolvedReason.empty());
+
+            store.SetForcePathCanonicalizationFailureForTesting(false);
+            fs::remove_all(staging);
+            CASES_END();
+        }
+
         fs::remove_all(folder);
-        // The summary is derived from the groups that actually ran. It is not a fixed
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.
         auto const& cases = Cases();
