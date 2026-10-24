@@ -5238,6 +5238,57 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // 56. Unknown reference (candidate-only) + clear retain bytes under uncertainty
+        {
+            CASES_BEGIN("56. Unknown reference (candidate-only) + clear retain bytes under uncertainty");
+            mayasaba::Storage store(folder / "uncertainty-cand.db");
+            auto staging = folder / "uncertainty-cand-stage";
+            fs::create_directories(staging);
+            mayasaba::AttachmentService service(store, staging);
+
+            std::string const projectId = "unc-cand-proj";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            auto dir = staging / "staging" / projectId;
+            fs::create_directories(dir);
+            auto path = dir / "kept2.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("uncertain-cand", 14);
+            }
+
+            mayasaba::AttachmentRecord primary;
+            primary.id = "unc-cand-primary";
+            primary.projectId = projectId;
+            primary.fileName = "kept2.bin";
+            primary.fileSize = 14;
+            primary.sha256 = ComputeSha256ForTestFile(WideToUtf8(path.wstring()));
+            primary.detectedType = "application/octet-stream";
+            primary.storagePath = WideToUtf8(path.wstring());
+            primary.sourcePath = "C:/source/c1.bin";
+            primary.status = "READY";
+            store.SaveDraftAttachment(projectId, primary);
+
+            mayasaba::AttachmentRecord aliasRec = primary;
+            aliasRec.id = "unc-cand-alias";
+            aliasRec.storagePath = WideToUtf8((dir / "." / path.filename()).wstring());
+            aliasRec.sourcePath = "C:/source/c2.bin";
+            store.SaveDraftAttachment(projectId, aliasRec);
+
+            store.SetForcePathCanonicalizationFailureForTesting(true);
+            auto const r1 = service.RemoveDraftAttachment(projectId, "unc-cand-primary");
+            EXPECT(r1.recordRemoved);
+            EXPECT(fs::exists(path));
+            EXPECT(r1.unresolvedReason.empty());
+
+            auto const rc = service.ClearDraftAttachments(projectId);
+            EXPECT(rc.recordRemoved);
+            EXPECT(fs::exists(path));
+            EXPECT(rc.unresolvedReason.empty());
+            store.SetForcePathCanonicalizationFailureForTesting(false);
+            fs::remove_all(staging);
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.
