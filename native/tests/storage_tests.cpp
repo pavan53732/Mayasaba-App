@@ -65,6 +65,7 @@ namespace
         void Begin(std::string name)
         {
             current = std::move(name);
+            std::cout << "RUN: " << current << std::endl;
             rows.push_back(Row{current, false});
         }
 
@@ -7416,14 +7417,32 @@ fs::remove(bigManaged);
             reserve(5 * gib);                                           // 9 + 5 = 14 < 100: admitted
             reserve(40 * gib);                                          // 54 < 100: admitted
 
-            // A 2 GiB ceiling refuses what the higher ceilings admitted: with 54 GiB already
-            // reserved, no further reservation fits beneath it.
-            store.SetStorageCeilingGiB(2);
-            EXPECT(store.StorageCeilingGiB() == 2);
-            bool refusedAtTwo = false;
-            try { store.ReserveManagedBytes(1 * gib); }                 // 54 + 1 >= 2: refused
-            catch (std::exception const&) { refusedAtTwo = true; }
-            EXPECT(refusedAtTwo);
+            // Lowering the ceiling below current reservations (54 GiB) is refused under C06.
+            bool refusedLower = false;
+            try { store.SetStorageCeilingGiB(2); }
+            catch (std::exception const&) { refusedLower = true; }
+            EXPECT(refusedLower);
+            EXPECT(store.StorageCeilingGiB() == 100);
+
+            // Setting 2 GiB in a fresh store with 0 bytes reserved succeeds and demonstrates
+            // that 2 GiB refuses what higher ceilings admit.
+            {
+                auto freshDir = folder / L"ceiling-fresh-two.db";
+                mayasaba::Storage freshStore(freshDir);
+                freshStore.SetStorageCeilingGiB(2);
+                EXPECT(freshStore.StorageCeilingGiB() == 2);
+                std::uint64_t freshReserved = 0;
+                freshStore.SetCapacityProbeForTesting([&freshReserved] {
+                    return mayasaba::Storage::CapacityObservation{freshReserved, 400ull * 1024 * 1024 * 1024};
+                });
+                freshStore.ReserveManagedBytes(1 * gib);
+                freshReserved += 1 * gib;
+                bool refusedAtTwo = false;
+                try { freshStore.ReserveManagedBytes(1 * gib); }
+                catch (std::exception const&) { refusedAtTwo = true; }
+                EXPECT(refusedAtTwo);
+                freshStore.SetCapacityProbeForTesting(nullptr);
+            }
 
             store.SetCapacityProbeForTesting(nullptr);
             CASES_END();
@@ -7668,6 +7687,245 @@ fs::remove(bigManaged);
 
             std::error_code ec;
             for (auto const& b : backups) fs::remove(b, ec);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("97. Raising the storage ceiling is admitted when store has reached the old ceiling");
+            auto storeDir = folder / L"raise-ceiling.db";
+            mayasaba::Storage store(storeDir);
+            constexpr auto gib = 1024ull * 1024 * 1024;
+            std::uint64_t inUse = 10 * gib;
+            store.SetCapacityProbeForTesting([&inUse] {
+                return mayasaba::Storage::CapacityObservation{inUse, 400ull * 1024 * 1024 * 1024};
+            });
+            EXPECT(store.StorageCeilingGiB() == 10);
+            // Ordinary write capacity check refuses because 10 >= 10 GiB
+            bool ordinaryRefused = false;
+            try { store.ReserveManagedBytes(1); }
+            catch (std::exception const&) { ordinaryRefused = true; }
+            EXPECT(ordinaryRefused);
+
+            // Raising ceiling to 20 GiB must NOT be blocked by the 10 GiB ceiling
+            store.SetStorageCeilingGiB(20);
+            EXPECT(store.StorageCeilingGiB() == 20);
+
+            // Now with 20 GiB ceiling, write capacity admits up to 20 GiB
+            bool admittedAtTwenty = false;
+            try { store.ReserveManagedBytes(5 * gib); admittedAtTwenty = true; }
+            catch (std::exception const&) { admittedAtTwenty = false; }
+            EXPECT(admittedAtTwenty);
+
+            store.SetCapacityProbeForTesting(nullptr);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("98. Lowering ceiling below currently protected bytes is refused");
+            auto storeDir = folder / L"lower-protected.db";
+            mayasaba::Storage store(storeDir);
+            constexpr auto gib = 1024ull * 1024 * 1024;
+            std::uint64_t inUse = 5 * gib;
+            store.SetCapacityProbeForTesting([&inUse] {
+                return mayasaba::Storage::CapacityObservation{inUse, 400ull * 1024 * 1024 * 1024};
+            });
+            store.SetStorageCeilingGiB(10);
+            EXPECT(store.StorageCeilingGiB() == 10);
+
+            // Requesting 4 GiB when 5 GiB is in use must be refused
+            bool refusedLower = false;
+            try { store.SetStorageCeilingGiB(4); }
+            catch (std::exception const&) { refusedLower = true; }
+            EXPECT(refusedLower);
+            EXPECT(store.StorageCeilingGiB() == 10);
+
+            // Lowering to 6 GiB (which is > 5 GiB in use) must succeed
+            store.SetStorageCeilingGiB(6);
+            EXPECT(store.StorageCeilingGiB() == 6);
+
+            store.SetCapacityProbeForTesting(nullptr);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("99. Lowering ceiling below outstanding reservations is refused");
+            auto storeDir = folder / L"lower-reservations.db";
+            mayasaba::Storage store(storeDir);
+            constexpr auto gib = 1024ull * 1024 * 1024;
+            std::uint64_t inUse = 0;
+            store.SetCapacityProbeForTesting([&inUse] {
+                return mayasaba::Storage::CapacityObservation{inUse, 400ull * 1024 * 1024 * 1024};
+            });
+            store.SetStorageCeilingGiB(20);
+            store.ReserveManagedBytes(8 * gib);
+            inUse += 8 * gib;
+
+            // Attempting to lower ceiling to 5 GiB when 8 GiB is reserved must be refused
+            bool refused = false;
+            try { store.SetStorageCeilingGiB(5); }
+            catch (std::exception const&) { refused = true; }
+            EXPECT(refused);
+            EXPECT(store.StorageCeilingGiB() == 20);
+
+            store.SetCapacityProbeForTesting(nullptr);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("100. Streaming hash of backup file computes authoritative digest");
+            auto storeDir = folder / L"stream-hash.db";
+            mayasaba::Storage store(storeDir);
+            auto backupPath = folder / L"backup-stream.bak";
+            {
+                std::ofstream of(backupPath, std::ios::binary);
+                for (int i = 0; i < 2000; ++i)
+                {
+                    of.write("chunk-of-deterministic-backup-data-1234567890", 45);
+                }
+            }
+            auto const pathUtf8 = WideToUtf8(backupPath.wstring());
+            store.RecordVerifiedBackup(pathUtf8);
+
+            // Compute direct hash using Sha256HexFile and verify it matches what was stored
+            auto const expected = mayasaba::Sha256HexFile(backupPath);
+            EXPECT(expected.has_value());
+
+            int count = 0;
+            std::string recordedSha;
+            sqlite3* rawDb = nullptr;
+            EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &rawDb) == SQLITE_OK);
+            sqlite3_stmt* stmt = nullptr;
+            sqlite3_prepare_v2(rawDb, "SELECT sha256_hex FROM backup_manifest LIMIT 1;", -1, &stmt, nullptr);
+            if (sqlite3_step(stmt) == SQLITE_ROW)
+            {
+                count = 1;
+                auto const* ptr = sqlite3_column_text(stmt, 0);
+                if (ptr) recordedSha = reinterpret_cast<char const*>(ptr);
+            }
+            sqlite3_finalize(stmt);
+            sqlite3_close(rawDb);
+            EXPECT(count == 1);
+            EXPECT(recordedSha == *expected);
+
+            std::error_code ec;
+            fs::remove(backupPath, ec);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("101. Injected unreadable backup fails verification and is not marked verified");
+            auto storeDir = folder / L"unreadable-backup.db";
+            mayasaba::Storage store(storeDir);
+            auto missingPath = folder / L"nonexistent-backup.bak";
+            auto const pathUtf8 = WideToUtf8(missingPath.wstring());
+
+            store.RecordVerifiedBackup(pathUtf8);
+
+            int count = 0;
+            sqlite3* rawDb = nullptr;
+            EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &rawDb) == SQLITE_OK);
+            sqlite3_stmt* stmt = nullptr;
+            sqlite3_prepare_v2(rawDb, "SELECT count(*) FROM backup_manifest WHERE verified=1;", -1, &stmt, nullptr);
+            if (sqlite3_step(stmt) == SQLITE_ROW)
+            {
+                count = sqlite3_column_int(stmt, 0);
+            }
+            sqlite3_finalize(stmt);
+            sqlite3_close(rawDb);
+            EXPECT(count == 0);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("102. Legacy verified backup record with empty hash is rejected from retained verified set");
+            auto storeDir = folder / L"legacy-manifest.db";
+            mayasaba::Storage store(storeDir);
+
+            // Insert a legacy backup manifest row with verified=1 but empty sha256_hex
+            auto backupPath = folder / L"legacy.bak";
+            {
+                std::ofstream of(backupPath, std::ios::binary);
+                of.write("legacy-backup-bytes", 19);
+            }
+            auto const pathUtf8 = WideToUtf8(backupPath.wstring());
+
+            sqlite3* rawDb = nullptr;
+            EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &rawDb) == SQLITE_OK);
+            sqlite3_exec(rawDb, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
+            sqlite3_stmt* stmt = nullptr;
+            sqlite3_prepare_v2(rawDb, "INSERT INTO backup_manifest(path_key,verified,verified_at,sha256_hex,file_size) "
+                                      "VALUES(?1,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),'',0);", -1, &stmt, nullptr);
+            sqlite3_bind_text(stmt, 1, pathUtf8.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+            sqlite3_exec(rawDb, "COMMIT;", nullptr, nullptr, nullptr);
+            sqlite3_close(rawDb);
+
+            // Run evaluation: because the legacy row has empty digest, it must NOT count as a verified backup!
+            // With 0 valid verified backups (< 3), retirement cannot run.
+            auto const res = store.ReclaimEligibleCleanup();
+            EXPECT(res.removed == 0);
+
+            std::error_code ec;
+            fs::remove(backupPath, ec);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("103. Removed cursor file between passes fails closed and clears cursor");
+            auto storeDir = folder / L"deleted-cursor.db";
+            mayasaba::Storage store(storeDir);
+            std::string const projectId = "deleted-cursor-proj";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+
+            std::vector<fs::path> files;
+            for (int i = 0; i < 505; ++i)
+            {
+                auto f = staging / ("cfile_" + std::to_string(1000 + i) + ".bin");
+                std::ofstream of(f, std::ios::binary);
+                of.write("data", 4);
+                files.push_back(f);
+            }
+
+            store.ResetStagedDiscoveryCursorForTesting();
+            auto const pass1 = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(pass1.bounded);
+            EXPECT(pass1.examined == 500);
+
+            // Now delete all files in the directory so the stored cursor file no longer exists!
+            std::error_code ec;
+            for (auto const& f : files) fs::remove(f, ec);
+
+            // Pass 2 seeks the deleted cursor. It must fail closed (complete == false) rather than reporting false completeness!
+            auto const pass2 = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(!pass2.complete);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("104. Traversal over directory trees respects visited entry budget");
+            auto storeDir = folder / L"dir-budget.db";
+            mayasaba::Storage store(storeDir);
+            std::string const projectId = "dir-budget-proj";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+
+            // Create 2100 subdirectories with 0 files
+            for (int i = 0; i < 2100; ++i)
+            {
+                fs::create_directories(staging / ("subdir_" + std::to_string(1000 + i)));
+            }
+
+            store.ResetStagedDiscoveryCursorForTesting();
+            auto const eval = store.EvaluateCleanup("EXPLICIT");
+            // The directory traversal must be bounded by visitedEntries >= kBatchLimit * 4 (2000 entries)
+            EXPECT(eval.bounded);
+
             CASES_END();
         }
 

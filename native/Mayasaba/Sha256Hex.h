@@ -9,6 +9,8 @@
 // This is deliberately not a general hashing API. The profile hashes canonical
 // UTF-8 bytes (see CanonicalJson.h) or managed blob bytes, and nothing else.
 
+#include <chrono>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,4 +18,7 @@
 namespace mayasaba
 {
     std::optional<std::string> Sha256Hex(std::string_view input);
+    std::optional<std::string> Sha256HexFile(std::filesystem::path const& path,
+        std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max());
 }
+

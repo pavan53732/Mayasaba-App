@@ -876,6 +876,7 @@ namespace mayasaba
         // No ordinary mutation may run while this is true; it is cleared immediately after
         // the recovery calls, before the constructor returns.
         bool openSchemaPhase_{false};
+        bool inSettingsAdmission_{false};
         bool forceHashFailureForTesting_{false};
         bool forceRollbackFailureForTesting_{false};
         bool forceCommitFailureForTesting_{false};
@@ -891,6 +892,7 @@ namespace mayasaba
         HANDLE legacyMutex_{nullptr};
 #endif
         void Exec(char const* sql);
+        CapacityObservation ObserveCapacity_locked();
         void CheckWriteCapacity();
 
         // Mandatory admission for every mutation: a quarantined connection records nothing.

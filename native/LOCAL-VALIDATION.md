@@ -7,8 +7,9 @@
 **Scope.** This report covers the native C++20 / C++/WinRT / WinUI 3 starting slice under `native/Mayasaba/` and unit test runner `native/tests/storage_tests.cpp`. It is **not** certification of the complete Mayasaba application: the three CLI adapters, orchestration, work authority, publication, accessibility acceptance and MSI packaging are not implemented, so no whole-product acceptance is claimed anywhere below.
 
 **Current revision.** `main` plus the native Screen 2 implementation in `MainWindow.xaml`, `MainWindow.xaml.h`, `MainWindow.xaml.cpp`, `Storage.h`, `Storage.cpp`, `ProjectRoot.h`, `ProjectRoot.cpp`, and `storage_tests.cpp`.
-**Current binary.** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-19 (0 warnings, 0 errors).
-**Test binary.** `native/tests/storage_tests.exe`, built 2026-10-19 with MSVC `14.50.35717` x64 (0 warnings, 0 errors).
+**Current binary.** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-26 (0 warnings, 0 errors).
+**Test binary.** `native/tests/storage_tests.exe`, built 2026-10-26 with MSVC `14.44.35207` x64 (0 warnings, 0 errors).
+
 
 ---
 
@@ -4638,26 +4639,75 @@ grace clock; the mutant is still discriminated, just not first by group 86.
 - **README Layer 4 / 9 alignment (S0-D01)**: `native/README.md` was updated to accurately document that Layer 4 Agent Gateway detection and Layer 9 Execution Kernel process-launch primitives exist, while truthfully noting that session adapters, CLI protocol translation, and containment remain absent.
 - **Strict certification harness (S4-G01)**: `native/tests/test_full_ui_acceptance.py` now supports `--strict` and `MAYASABA_STRICT_CERTIFICATION=1`. In strict mode or whenever incomplete/inconclusive criteria remain, the harness fails closed with exit code 1.
 
-### Tests (1–92 preserved, 93–96 added)
+### Tests (1–88 preserved, 89–92 added for C3, 93–96 added for C2A/C2B)
+
+> **Documentation accuracy reconciliation (S0-F01)**: The previous entry described groups 1–92 as preserved from earlier work; groups 89–92 were actually newly implemented in C3 covering configurable ceiling and scheduled maintenance behavior, while groups 93–96 were added in C2A/C2B. Both additions are now explicitly enumerated below:
 
 | Group | Asserts |
 |---|---|
+| 89 | Effective ceiling drives admission, not a hardcoded 10 GiB; store admits up to configured ceiling. |
+| 90 | Out-of-range ceiling values (< 2 GiB or > 100 GiB) are refused before any write admission. |
+| 91 | Configured ceiling persists across store reopen and restarts. |
+| 92 | Scheduled maintenance executes changed-day and 80%-capacity triggers, bounding evaluation records to 100 entries. |
 | 93 | Candidate discovery is read-only; no grace rows are inserted in SQLite during candidate collection; grace registration occurs only during admitted write transaction. |
 | 94 | Resumable traversal guarantees forward progress across batch bounds (`kBatchLimit` = 500) without omitting or duplicating entries across subsequent passes. |
 | 95 | Staging grace clock is invalidated when an unreferenced file receives a protected reference. |
 | 96 | Corrupt or modified verified backup fails SHA-256/size verification and blocks backup retirement. |
 
+---
+
+## 2026-10-26 — S2 & S0 Deep Audit Remediation: Ceiling Admission, Bounded Streaming Backups, Resumable Traversal and Work Budgets (S2-F01 to S2-F07, S0-F01)
+
+### Storage ceiling admission under storage pressure (S2-F01)
+`SetStorageCeilingGiB` previously called `AdmitWrite_locked()` which checked capacity against the *old* ceiling. If the store had already reached or exceeded its 10 GiB ceiling, attempts by the user to raise the ceiling to 20 GiB were refused by the old capacity check.
+- **Fix**: Implemented `inSettingsAdmission_` scoped guard in `SetStorageCeilingGiB`. Settings modifications skip capacity limit checks while strictly preserving store quarantine checks (`poisoned_`) and volume free-space validation (>= 5 GiB reserve).
+
+### Preventing ceiling reduction below protected usage (S2-F02)
+Lowering the storage ceiling is now validated against currently accounted usage.
+- **Fix**: `SetStorageCeilingGiB` invokes `ObserveCapacity_locked()` and refuses any ceiling reduction where `newCeilingBytes < observed.managedBytes` or where the new ceiling is lower than active staging byte reservations (`stagingReservationBytes_`). Protected bytes are never deleted or jeopardized to force-fit a lower ceiling.
+
+### Bounded streaming backup integrity hashing (S2-F03)
+`RecordVerifiedBackup` and backup candidate evaluation previously loaded entire backup files into a `std::string` buffer in memory while holding the store mutex, posing an out-of-memory risk for multi-gigabyte databases.
+- **Fix**: Implemented `Sha256HexFile(path, deadline)` in `Sha256Hex.h` / `Sha256Hex.cpp` using a heap-allocated fixed 64 KiB buffer (`std::vector<char> buffer(65536)`) and BCrypt streaming hash API (`BCryptHashData`). Storage mutex is held only for transaction operations; file hashing streams in bounded chunks checking deadlines between chunks.
+
+### Legacy backup verification records re-validation (S2-F04)
+Legacy `backup_manifest` records created before hash columns were added defaulted to empty `sha256_hex` and `file_size = 0`.
+- **Fix**: In `CollectCleanupCandidates_locked`, any manifest row where `expectedSha.empty() || expectedSize == 0` is rejected from the retained verified backup count and marked as needing re-verification. Retirement remains refused until three fully verified, digest-matched backups exist.
+
+### Resumable traversal cursor recovery and fail-closed completeness (S2-F06)
+If a cursor file was deleted or renamed between discovery passes, the directory iterator reached the end without finding the cursor, clearing `lastStagedDiscoveryCursor_` and potentially reporting a false complete pass.
+- **Fix**: If `seekingCursor` remains true at iterator completion (`it == end`), the pass records `out.noteError("Traversal cursor not found in staging directory; failing closed and resetting cursor.")`, sets `out.complete = false`, and resets `lastStagedDiscoveryCursor_.clear()`.
+
+### Directory tree traversal entry work budget (S2-F07)
+Directory entries and non-regular files were previously traversed without incrementing `out.examined` or checking the batch limit.
+- **Fix**: In `CollectCleanupCandidates_locked`, a `visitedEntries` counter tracks every visited filesystem entry (directories, non-regular files, and files). Total visited entries are bounded at `kBatchLimit * 4` (2000 entries), ensuring large directory trees cannot cause unbounded CPU loops while holding the store lock.
+
+### Tests (1–96 preserved, 97–104 added)
+
+| Group | Asserts |
+|---|---|
+| 97 | Raising the storage ceiling is admitted when store has reached the old ceiling (fixes S2-F01). |
+| 98 | Lowering ceiling below currently protected bytes is refused and leaves setting unchanged (fixes S2-F02). |
+| 99 | Lowering ceiling below outstanding reservations is refused (fixes S2-F02). |
+| 100 | Streaming hash of backup file computes authoritative digest using fixed 64 KiB chunks (fixes S2-F03). |
+| 101 | Injected unreadable backup fails verification and is not marked verified (fixes S2-F03). |
+| 102 | Legacy verified backup record with empty hash is rejected from retained verified set (fixes S2-F04). |
+| 103 | Removed cursor file between passes fails closed and clears cursor, preventing false clean verdicts (fixes S2-F06). |
+| 104 | Traversal over directory trees respects visited entry budget (fixes S2-F07). |
+
 ### Executed results
 
-- `native/tests/bin/storage_tests.exe` SHA-256: `b4e1e6e6f0af51f9b142931e866d098118a3be2146d8e763d8cdfcde4e014cbd`
-  **PASS: 96 of 96 executed native regression groups**, exit 0.
-- `native/Mayasaba/bin/x64/Release/Mayasaba.exe` SHA-256: `ef3e0cd2d62ea89613da8dc3fa000028b513906c2d18fabbf4a92e00b738f226`
+- `native/tests/bin/storage_tests.exe` SHA-256: `74c897a4c44e933ff179b3cd2e6fbb96ee1d2c1c9ed7dcebe7406178a23b72fd`
+  **PASS: 104 of 104 executed native regression groups**, exit 0.
+- `native/Mayasaba/bin/x64/Release/Mayasaba.exe` SHA-256: `8c88d610b0b2ddf8c4dbad8cca26515a065fb23b6d963a2795ffcc776dfa000c`
   Application build Release x64 v145: exit 0 (0 warnings, 0 errors).
+- `native/Mayasaba/bin/x64/Release/App.xbf` SHA-256: `8ff36d87df831e09c799fa65e7f0d59cb48ceefc89fedd5a8fc6bd5cbc018b46`
+- `native/Mayasaba/bin/x64/Release/MainWindow.xbf` SHA-256: `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a`
 - Contract validator `native/tests/validate_contract_registry.py`: `PASS: 124 contract-registry and Screen 2 slice schema checks`, exit 0.
-- Strict UI acceptance harness `native/tests/test_full_ui_acceptance.py`: fails closed with exit code 1 when criteria remain incomplete, preventing misleading zero exit codes.
 - Sources:
-  - `native/Mayasaba/Storage.cpp`: `877d2b27dc8b7ecd4caf8d4eedc6f169415d5c24b3c38396796853408c89fde7`
-  - `native/Mayasaba/Storage.h`: `d2106c63bab8d12faf978de341afd7ed420c6cd9814b7dd55adc521861872fb2`
-  - `native/tests/storage_tests.cpp`: `ea7f65479887a2818a7e6a8dac26db476e56e89ff4fcb3d992edb9754112674d`
-  - `native/README.md`: `461e34baa4e61893fee5df901dd0c276763c69ce69bfdea5265da74ef4edc965`
-  - `native/tests/test_full_ui_acceptance.py`: `08ca661f352ed2b11643314ba374e44f8c1f60e322d35a439401764fcc4fddb5`
+  - `native/Mayasaba/Storage.cpp`: `13f4168337d46ada1c4efb41ce49fb01c10c78e5f77f9423e7788f430309649f`
+  - `native/Mayasaba/Storage.h`: `67707e0f8076ad82f76eb64ba73a66b5193c5a276a6182ff7ac5453ac9612a99`
+  - `native/Mayasaba/Sha256Hex.cpp`: `4d9d9cad98c24b6f15a7c62d21298e5c3bcd1f1bd3f284d525dc6c5a884bd37c`
+  - `native/Mayasaba/Sha256Hex.h`: `a21161b5645a792c8840d231182e9ce3b63ee03d412667c52271d49d2ff7749e`
+  - `native/tests/storage_tests.cpp`: `682b46d6a50792398a43ec5fc7e4492077553e2aa5bb04b7f981a08f1e1b970f`
+

@@ -956,8 +956,8 @@ namespace mayasaba
                 "recorded. Reopen the project store and reconcile the unresolved submission before retrying.");
         }
         // Capacity is suppressed only during the constructor's scoped schema/recovery
-        // phase (R05); quarantine is never suppressed.
-        if (!openSchemaPhase_) CheckWriteCapacity();
+        // phase (R05) and during explicit ceiling settings changes; quarantine is never suppressed.
+        if (!openSchemaPhase_ && !inSettingsAdmission_) CheckWriteCapacity();
     }
 
     int Storage::WriteAdmissionAuthorizer(void* userData, int action, char const*, char const*,
@@ -2321,11 +2321,24 @@ namespace mayasaba
             else
             {
                 bool seekingCursor = !lastStagedDiscoveryCursor_.empty();
+                std::size_t visitedEntries = 0;
                 for (; it != end; it.increment(walkEc))
                 {
                     if (walkEc)
                     {
                         noteError("the staging tree could not be fully enumerated (" + walkEc.message() + ")");
+                        break;
+                    }
+
+                    ++visitedEntries;
+                    if (std::chrono::steady_clock::now() >= deadline || visitedEntries >= kBatchLimit * 4)
+                    {
+                        out.bounded = true;
+                        if (!seekingCursor)
+                        {
+                            auto const curPathUtf8 = WideToUtf8(it->path().wstring());
+                            lastStagedDiscoveryCursor_ = curPathUtf8;
+                        }
                         break;
                     }
 
@@ -2435,7 +2448,12 @@ namespace mayasaba
                 {
                     noteError("the staging tree could not be fully enumerated (" + walkEc.message() + ")");
                 }
-                if (seekingCursor || (!out.bounded && it == end))
+                if (seekingCursor)
+                {
+                    lastStagedDiscoveryCursor_.clear();
+                    noteError("the staged discovery cursor was invalidated by file removal or rename; traversal restarted from beginning");
+                }
+                else if (!out.bounded && it == end)
                 {
                     lastStagedDiscoveryCursor_.clear();
                 }
@@ -2458,28 +2476,25 @@ namespace mayasaba
                     auto const expectedSha = Text(q.value, 1);
                     auto const expectedSize = static_cast<std::uint64_t>(sqlite3_column_int64(q.value, 2));
 
-                    if (!expectedSha.empty())
+                    if (expectedSha.empty() || expectedSize == 0)
                     {
-                        std::error_code chkEc;
-                        auto const actualSize = std::filesystem::file_size(std::filesystem::path(key), chkEc);
-                        if (chkEc || actualSize != expectedSize)
-                        {
-                            noteError("a retained verified backup size mismatch or missing (" + key + ")");
-                            continue;
-                        }
-                        std::ifstream bf(key, std::ios::binary);
-                        if (!bf)
-                        {
-                            noteError("a retained verified backup could not be opened for verification (" + key + ")");
-                            continue;
-                        }
-                        std::string buf((std::istreambuf_iterator<char>(bf)), std::istreambuf_iterator<char>());
-                        auto actualHex = Sha256Hex(buf);
-                        if (!actualHex || *actualHex != expectedSha)
-                        {
-                            noteError("a retained verified backup hash mismatch (" + key + ")");
-                            continue;
-                        }
+                        noteError("a retained backup record lacks verification hash or size (" + key + ")");
+                        continue;
+                    }
+
+                    std::error_code chkEc;
+                    auto const actualSize = std::filesystem::file_size(std::filesystem::path(key), chkEc);
+                    if (chkEc || actualSize != expectedSize)
+                    {
+                        noteError("a retained verified backup size mismatch or missing (" + key + ")");
+                        continue;
+                    }
+
+                    auto actualHex = Sha256HexFile(std::filesystem::path(key), deadline);
+                    if (!actualHex || *actualHex != expectedSha)
+                    {
+                        noteError("a retained verified backup hash mismatch (" + key + ")");
+                        continue;
                     }
                     retainedVerified.push_back(key);
                 }
@@ -2577,12 +2592,10 @@ namespace mayasaba
         if (key.empty()) return;
         std::error_code ec;
         auto const size = std::filesystem::file_size(std::filesystem::path(path), ec);
-        if (ec) return;
-        std::ifstream f(path, std::ios::binary);
-        if (!f) return;
-        std::string buffer((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-        auto hex = Sha256Hex(buffer);
-        if (!hex) return;
+        if (ec || size == 0) return;
+        auto hex = Sha256HexFile(std::filesystem::path(path),
+            std::chrono::steady_clock::now() + std::chrono::seconds(30));
+        if (!hex || hex->empty()) return;
 
         AdmitWrite_locked();
         Exec("BEGIN IMMEDIATE;");
@@ -2910,7 +2923,40 @@ namespace mayasaba
                 "existing ceiling is unchanged. No protected data was touched.");
         }
         std::lock_guard lock(mutex_);
-        AdmitWrite_locked();
+        if (poisoned_)
+        {
+            throw std::runtime_error(
+                "The store is quarantined after an unconfirmed transaction rollback, so no change can be "
+                "recorded. Reopen the project store and reconcile the unresolved submission before retrying.");
+        }
+
+        auto const observed = ObserveCapacity_locked();
+        constexpr uintmax_t reserve = 5ull * 1024 * 1024 * 1024;
+        if (observed.freeBytes < reserve)
+        {
+            throw std::runtime_error(
+                "Local storage free-space reserve is below 5 GiB; protected data was retained and nothing was "
+                "deleted. Free space on the store's volume before writing again.");
+        }
+
+        std::uint64_t const newCeilingBytes = gib * 1024ull * 1024ull * 1024ull;
+        if (newCeilingBytes < observed.managedBytes)
+        {
+            std::uint64_t const inUseGiB = (observed.managedBytes + 1024ull * 1024ull * 1024ull - 1) / (1024ull * 1024ull * 1024ull);
+            throw std::runtime_error(
+                "The storage ceiling cannot be lowered below currently protected and reserved bytes (" +
+                std::to_string(inUseGiB) +
+                " GiB in use); the requested value was refused and the existing ceiling is unchanged. "
+                "No protected data was touched.");
+        }
+
+        inSettingsAdmission_ = true;
+        struct SettingsAdmissionGuard
+        {
+            bool& flag;
+            ~SettingsAdmissionGuard() { flag = false; }
+        } guard{ inSettingsAdmission_ };
+
         Exec("BEGIN IMMEDIATE;");
         try
         {
@@ -2999,30 +3045,8 @@ namespace mayasaba
         return result;
     }
 
-    void Storage::CheckWriteCapacity()
+    Storage::CapacityObservation Storage::ObserveCapacity_locked()
     {
-        // Ordinary write admission (R05). Two properties are load-bearing here.
-        //
-        // BOUNDED. This runs under the store mutex on every mutation, so it must not walk
-        // the managed attachment tree: that walk is unbounded in the number of entries and
-        // would put a full directory traversal inside the critical section of every write.
-        // The attachment component is the maintained ledger, not a snapshot: the staging
-        // path adds bytes when it copies and removal paths subtract them, so no explicit
-        // refresh is required for growth to be visible. The database companions are
-        // re-measured here - three stats, constant cost - so SQLite growth is never stale.
-        //
-        // PROJECTED GROWTH. Outstanding reservations are added to the total, so admission
-        // accounts for bytes an in-flight copy has been authorized to write but has not
-        // written yet. Without that, two concurrent operations could each pass the ceiling
-        // check on the same headroom.
-        //
-        // FAIL CLOSED. What is never done is substituting a guess for an observation: if any
-        // component could not be observed, admission refuses instead of counting the
-        // unreadable part as zero.
-        //
-        // Opening an existing store is never gated here. Inspection and recovery must remain
-        // possible at the ceiling or on a low volume; only creating a brand-new store is
-        // gated as ordinary write admission.
         CapacityObservation observed{};
         if (capacityProbeForTesting_)
         {
@@ -3077,6 +3101,34 @@ namespace mayasaba
             observed.managedBytes = managed;
             observed.freeBytes = space.available;
         }
+        return observed;
+    }
+
+    void Storage::CheckWriteCapacity()
+    {
+        // Ordinary write admission (R05). Two properties are load-bearing here.
+        //
+        // BOUNDED. This runs under the store mutex on every mutation, so it must not walk
+        // the managed attachment tree: that walk is unbounded in the number of entries and
+        // would put a full directory traversal inside the critical section of every write.
+        // The attachment component is the maintained ledger, not a snapshot: the staging
+        // path adds bytes when it copies and removal paths subtract them, so no explicit
+        // refresh is required for growth to be visible. The database companions are
+        // re-measured here - three stats, constant cost - so SQLite growth is never stale.
+        //
+        // PROJECTED GROWTH. Outstanding reservations are added to the total, so admission
+        // accounts for bytes an in-flight copy has been authorized to write but has not
+        // written yet. Without that, two concurrent operations could each pass the ceiling
+        // check on the same headroom.
+        //
+        // FAIL CLOSED. What is never done is substituting a guess for an observation: if any
+        // component could not be observed, admission refuses instead of counting the
+        // unreadable part as zero.
+        //
+        // Opening an existing store is never gated here. Inspection and recovery must remain
+        // possible at the ceiling or on a low volume; only creating a brand-new store is
+        // gated as ordinary write admission.
+        auto const observed = ObserveCapacity_locked();
 
         std::uintmax_t const ceiling = static_cast<std::uintmax_t>(EffectiveCeilingBytes_locked());
         constexpr uintmax_t reserve = 5ull * 1024 * 1024 * 1024;
