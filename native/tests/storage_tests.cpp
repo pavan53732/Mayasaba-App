@@ -6977,6 +6977,11 @@ fs::remove(bigManaged);
                 of.write("aged-bytes", 10);
             }
             fs::last_write_time(orphan, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            // The grace clock starts at the first durable observation that the copy is
+            // unreferenced, not at its modification time, so the clock has to be started and
+            // then moved back rather than inferred from an old timestamp.
+            (void)store.EvaluateCleanup("EXPLICIT");
+            store.BackdateStagingGraceForTesting(WideToUtf8(orphan.wstring()), 8);
 
             auto const found = store.EvaluateCleanup("EXPLICIT");
             EXPECT(found.candidates >= 1);
@@ -7039,6 +7044,11 @@ fs::remove(bigManaged);
                 of.write("raced-bytes", 11);
             }
             fs::last_write_time(raced, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            // The grace clock starts at the first durable observation that the copy is
+            // unreferenced, not at its modification time, so the clock has to be started and
+            // then moved back rather than inferred from an old timestamp.
+            (void)store.EvaluateCleanup("EXPLICIT");
+            store.BackdateStagingGraceForTesting(WideToUtf8(raced.wstring()), 8);
 
             auto const evaluated = store.EvaluateCleanup("EXPLICIT");
             EXPECT(evaluated.candidates >= 1);
@@ -7081,6 +7091,8 @@ fs::remove(bigManaged);
                 of.write("aged-bytes", 10);
             }
             fs::last_write_time(aged, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            (void)store.EvaluateCleanup("EXPLICIT");
+            store.BackdateStagingGraceForTesting(WideToUtf8(aged.wstring()), 8);
             EXPECT(store.EvaluateCleanup("EXPLICIT").candidates >= 1);
 
             // Poison the connection through the same path group 29 uses: a conflicting replay
@@ -7123,6 +7135,8 @@ fs::remove(bigManaged);
                 of.write("journaled-bytes", 15);
             }
             fs::last_write_time(aged, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            (void)store.EvaluateCleanup("EXPLICIT");
+            store.BackdateStagingGraceForTesting(WideToUtf8(aged.wstring()), 8);
             std::string const agedUtf8 = WideToUtf8(aged.wstring());
 
             auto const result = store.ReclaimEligibleCleanup();
@@ -7160,6 +7174,8 @@ fs::remove(bigManaged);
                 of.write("original-bytes", 14);
             }
             fs::last_write_time(path, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            (void)store.EvaluateCleanup("EXPLICIT");
+            store.BackdateStagingGraceForTesting(WideToUtf8(path.wstring()), 8);
             EXPECT(store.EvaluateCleanup("EXPLICIT").candidates >= 1);
 
             bool substituted = false;
@@ -7214,12 +7230,20 @@ fs::remove(bigManaged);
                 backups.push_back(b);
             }
 
+            // Retirement requires three backups the owner has verified as restorable. The
+            // three newest are verified and therefore form the retained set; the two oldest
+            // are eligible.
+            for (int i = 2; i < 5; ++i)
+            {
+                store.RecordVerifiedBackup(WideToUtf8(backups[static_cast<std::size_t>(i)].wstring()));
+            }
+
             // Observe so the backup component is populated.
             store.RefreshManagedScopeObservation();
             std::uint64_t const attachmentBefore = store.AccountedAttachmentBytesForTesting();
 
             auto const result = store.ReclaimEligibleCleanup();
-            EXPECT(result.removed >= 1);
+            EXPECT(result.removed == 2);
 
             // Attachment accounting is untouched by a backup removal.
             EXPECT(store.AccountedAttachmentBytesForTesting() == attachmentBefore);
@@ -7237,6 +7261,117 @@ fs::remove(bigManaged);
 
             std::error_code ec;
             for (auto const& b : backups) fs::remove(b, ec);
+            CASES_END();
+        }
+
+        // 86. The staging grace counts from the durable observation that the copy is
+        // unreferenced, not from the file's modification time. An ancient timestamp alone is
+        // not evidence that the originating operation reached publication or recovery.
+        {
+            CASES_BEGIN("86. Staging grace counts from the durable observation, not file age");
+            mayasaba::Storage store(folder / "c2-grace.db");
+            std::string const projectId = "c2-grace";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+            auto const ancient = staging / "ancient.bin";
+            {
+                std::ofstream of(ancient, std::ios::binary);
+                of.write("ancient-bytes", 13);
+            }
+            // Thirty days old by timestamp, and nothing else makes it eligible.
+            fs::last_write_time(ancient, fs::file_time_type::clock::now() - std::chrono::hours(24 * 30));
+
+            auto const first = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(first.candidates == 0);
+            // Still inside the grace on the next pass: the clock started at the observation.
+            EXPECT(store.EvaluateCleanup("EXPLICIT").candidates == 0);
+
+            store.BackdateStagingGraceForTesting(WideToUtf8(ancient.wstring()), 8);
+            EXPECT(store.EvaluateCleanup("EXPLICIT").candidates >= 1);
+
+            std::error_code ec;
+            fs::remove(ancient, ec);
+            CASES_END();
+        }
+
+        // 87. Backup retirement is gated on three verified backups. While fewer exist the
+        // retained set cannot be guaranteed, so nothing is retired.
+        {
+            CASES_BEGIN("87. Backup retirement requires three verified backups");
+            auto const dbPath = folder / "c2-backup.db";
+            mayasaba::Storage store(dbPath);
+            store.BindProject("c2-bk", "c2-bk", "C:/Projects/c2-bk");
+
+            std::vector<std::filesystem::path> backups;
+            for (int i = 0; i < 5; ++i)
+            {
+                auto b = std::filesystem::path(dbPath.wstring() + L".pre_migration.bak.w" + std::to_wstring(i));
+                std::ofstream of(b, std::ios::binary);
+                std::string const payload(1024, 'w');
+                of.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+                of.close();
+                fs::last_write_time(b, fs::file_time_type::clock::now() - std::chrono::hours(24 * (20 - i)));
+                backups.push_back(b);
+            }
+
+            // Only two verified: the required three cannot be preserved.
+            store.RecordVerifiedBackup(WideToUtf8(backups[3].wstring()));
+            store.RecordVerifiedBackup(WideToUtf8(backups[4].wstring()));
+            auto const refused = store.ReclaimEligibleCleanup();
+            EXPECT(refused.removed == 0);
+            for (auto const& b : backups)
+            {
+                std::error_code existsEc;
+                EXPECT(fs::exists(b, existsEc));
+            }
+
+            // A third verified backup makes the retained set guaranteeable, and only the
+            // unverified remainder becomes eligible.
+            store.RecordVerifiedBackup(WideToUtf8(backups[2].wstring()));
+            auto const allowed = store.ReclaimEligibleCleanup();
+            EXPECT(allowed.removed == 2);
+            for (int i = 2; i < 5; ++i)
+            {
+                std::error_code existsEc;
+                EXPECT(fs::exists(backups[static_cast<std::size_t>(i)], existsEc));
+            }
+            for (int i = 0; i < 2; ++i)
+            {
+                std::error_code existsEc;
+                EXPECT(!fs::exists(backups[static_cast<std::size_t>(i)], existsEc));
+            }
+
+            std::error_code ec;
+            for (auto const& b : backups) fs::remove(b, ec);
+            CASES_END();
+        }
+
+        // 88. An incomplete discovery pass must be reported as incomplete. It must never be
+        // presented as "nothing is eligible", which would tell the user the scope is clean.
+        {
+            CASES_BEGIN("88. An incomplete scan is reported as incomplete");
+            mayasaba::Storage store(folder / "c2-incomplete.db");
+            std::string const projectId = "c2-inc";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const stagingRoot = store.ManagedAttachmentRoot() / "staging";
+            fs::remove_all(stagingRoot);
+            {
+                std::ofstream of(stagingRoot, std::ios::binary);
+                of.write("not a directory", 15);
+            }
+
+            auto const evaluation = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(evaluation.evaluated);
+            EXPECT(!evaluation.complete);
+            EXPECT(evaluation.dispositionEn.find("could not be fully evaluated") != std::string::npos);
+            EXPECT(evaluation.dispositionEn.find("not a report that no disposable data exists") != std::string::npos);
+            EXPECT(evaluation.dispositionEn.find("No disposable data is currently eligible") == std::string::npos);
+
+            std::error_code ec;
+            fs::remove(stagingRoot, ec);
             CASES_END();
         }
 

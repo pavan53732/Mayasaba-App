@@ -2279,116 +2279,248 @@ namespace mayasaba
         Check(sqlite3_step(q.value), db_);
     }
 
-    std::vector<Storage::CleanupCandidate> Storage::CollectCleanupCandidates_locked(bool* bounded, std::string* reasonEn)
+    Storage::CleanupCollection Storage::CollectCleanupCandidates_locked(std::chrono::steady_clock::time_point deadline)
     {
-        std::vector<CleanupCandidate> candidates;
-        if (bounded) *bounded = false;
-        if (reasonEn) reasonEn->clear();
-
-        constexpr std::uint64_t kStagingGraceDays = 7;
+        CleanupCollection out;
+        constexpr std::uint64_t kGraceDays = 7;
         constexpr std::uint64_t kBatchLimit = 500;
+        constexpr std::size_t kRetainedVerifiedBackups = 3;
 
-        auto const now = std::filesystem::file_time_type::clock::now();
-        auto const grace = std::chrono::hours(24 * static_cast<int>(kStagingGraceDays));
+        auto noteError = [&out](std::string why)
+        {
+            if (out.firstErrorEn.empty()) out.firstErrorEn = std::move(why);
+        };
 
-        // Class 1: staged copies past the staging grace with no protected reference. The
-        // reference query runs here, under the same mutex admission uses, and an uncertain
-        // observation (INT_MAX) counts as protected.
+        // ---- staged copies -------------------------------------------------
         auto const stagingRoot = ManagedAttachmentRoot() / "staging";
         std::error_code rootEc;
         auto const rootStatus = std::filesystem::symlink_status(stagingRoot, rootEc);
-        if (!rootEc && std::filesystem::is_directory(rootStatus))
+        if (rootEc && rootEc != std::errc::no_such_file_or_directory)
+        {
+            noteError("the managed staging root could not be inspected (" + rootEc.message() + ")");
+        }
+        else if (std::filesystem::exists(rootStatus) && !std::filesystem::is_directory(rootStatus))
+        {
+            noteError("the managed staging path exists but is not a directory");
+        }
+        else if (std::filesystem::exists(rootStatus))
         {
             std::error_code walkEc;
             std::filesystem::recursive_directory_iterator it(stagingRoot, walkEc);
             std::filesystem::recursive_directory_iterator const end;
             if (walkEc)
             {
-                if (reasonEn) *reasonEn = "the staging tree could not be enumerated (" + walkEc.message() + ")";
-                return candidates;
+                noteError("the staging tree could not be enumerated (" + walkEc.message() + ")");
             }
-            for (; it != end; it.increment(walkEc))
+            else
             {
-                if (walkEc) break;
-                std::error_code typeEc;
-                auto const status = it->symlink_status(typeEc);
-                if (typeEc) continue;
-                if (std::filesystem::is_symlink(status)) { it.disable_recursion_pending(); continue; }
-                if (!std::filesystem::is_regular_file(status)) continue;
-
-                std::error_code timeEc;
-                auto const written = it->last_write_time(timeEc);
-                if (timeEc) continue;
-                if (now - written < grace) continue;
-
-                auto const pathUtf8 = WideToUtf8(it->path().wstring());
-                int const refs = CountOtherProtectedReferences_locked(pathUtf8, std::string{}, std::string{});
-                if (refs != 0) continue;   // referenced, or unknown: retained
-
-                std::error_code sizeEc;
-                auto const bytes = it->file_size(sizeEc);
-                if (sizeEc) continue;
-
-                if (candidates.size() >= kBatchLimit)
+                for (; it != end; it.increment(walkEc))
                 {
-                    if (bounded) *bounded = true;
-                    break;
+                    if (walkEc)
+                    {
+                        noteError("the staging tree could not be fully enumerated (" + walkEc.message() + ")");
+                        break;
+                    }
+                    // The budget covers discovery, not only deletion: walking a large tree
+                    // while holding the store mutex is exactly what the bound exists to stop.
+                    if (std::chrono::steady_clock::now() >= deadline || out.examined >= kBatchLimit)
+                    {
+                        out.bounded = true;
+                        break;
+                    }
+                    ++out.examined;
+
+                    std::error_code typeEc;
+                    auto const status = it->symlink_status(typeEc);
+                    if (typeEc)
+                    {
+                        noteError("a staged entry's type could not be read (" + typeEc.message() + ")");
+                        continue;
+                    }
+                    if (std::filesystem::is_symlink(status))
+                    {
+                        it.disable_recursion_pending();
+                        continue;
+                    }
+                    if (!std::filesystem::is_regular_file(status)) continue;
+
+                    auto const pathUtf8 = WideToUtf8(it->path().wstring());
+                    int const refs = CountOtherProtectedReferences_locked(pathUtf8, std::string{}, std::string{});
+                    if (refs != 0) continue;   // referenced, or unknown: retained
+
+                    // The grace clock starts at the first durable observation that this copy is
+                    // unreferenced, not at its modification time. An old file is not evidence
+                    // that its originating operation reached publication or recovery, and a
+                    // missing reference may itself be the result of an interrupted workflow.
+                    auto const key = CleanupPathKey(pathUtf8);
+                    if (key.empty())
+                    {
+                        noteError("a staged copy's path could not be keyed for the grace clock");
+                        continue;
+                    }
+                    {
+                        Statement ins(db_, "INSERT OR IGNORE INTO staging_grace(path_key,project_id,first_unreferenced_at) "
+                                           "VALUES(?1,?2,strftime('%Y-%m-%dT%H:%M:%fZ','now'));");
+                        Bind(ins.value, 1, key);
+                        Bind(ins.value, 2, std::string{});
+                        Check(sqlite3_step(ins.value), db_);
+                    }
+                    bool graceElapsed = false;
+                    {
+                        // The grace length is a compile-time constant, so it is inlined
+                        // rather than bound: this build's SQLite surface does not expose
+                        // sqlite3_bind_double.
+                        auto const graceSql = "SELECT (julianday('now') - julianday(first_unreferenced_at)) >= " +
+                            std::to_string(kGraceDays) + " FROM staging_grace WHERE path_key=?1;";
+                        Statement q(db_, graceSql.c_str());
+                        Bind(q.value, 1, key);
+                        int const rc = sqlite3_step(q.value);
+                        if (rc == SQLITE_ROW) graceElapsed = sqlite3_column_int(q.value, 0) != 0;
+                        else Check(rc, db_);
+                    }
+                    if (!graceElapsed) continue;
+
+                    std::error_code sizeEc;
+                    auto const bytes = it->file_size(sizeEc);
+                    if (sizeEc)
+                    {
+                        noteError("a staged file's size could not be read (" + sizeEc.message() + ")");
+                        continue;
+                    }
+
+                    CleanupCandidate candidate;
+                    candidate.path = pathUtf8;
+                    candidate.bytes = static_cast<std::uint64_t>(bytes);
+                    candidate.storageClass = CleanupStorageClass::StagedAttachment;
+                    candidate.identity = CaptureStagedObjectIdentity(pathUtf8);
+                    out.candidates.push_back(std::move(candidate));
                 }
-                CleanupCandidate candidate;
-                candidate.path = pathUtf8;
-                candidate.bytes = static_cast<std::uint64_t>(bytes);
-                candidate.storageClass = CleanupStorageClass::StagedAttachment;
-                candidate.identity = CaptureStagedObjectIdentity(pathUtf8);
-                candidates.push_back(std::move(candidate));
             }
         }
 
-        // Class 2: migration backups beyond the three most recent the contract requires.
-        auto const storeDir = file_.parent_path();
-        auto const dbName = file_.filename().wstring();
-        std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> backups;
+        // ---- migration backups --------------------------------------------
+        // Only a backup the owner has verified as restorable may count toward the required
+        // three. While fewer than three verified backups exist, the retained set itself cannot
+        // be guaranteed, so nothing is retired.
+        std::vector<std::string> retainedVerified;
         {
+            Statement q(db_, "SELECT path_key FROM backup_manifest WHERE verified=1 ORDER BY verified_at DESC;");
+            int rc = SQLITE_OK;
+            while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
+            {
+                if (retainedVerified.size() < kRetainedVerifiedBackups) retainedVerified.push_back(Text(q.value, 0));
+            }
+            Check(rc, db_);
+        }
+        if (retainedVerified.size() >= kRetainedVerifiedBackups)
+        {
+            auto const storeDir = file_.parent_path();
+            auto const dbName = file_.filename().wstring();
+            std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> backups;
             std::error_code dirEc;
             std::filesystem::directory_iterator it(storeDir, dirEc);
             std::filesystem::directory_iterator const dirEnd;
-            if (!dirEc)
+            if (dirEc)
+            {
+                noteError("the store directory could not be enumerated (" + dirEc.message() + ")");
+            }
+            else
             {
                 for (; it != dirEnd; it.increment(dirEc))
                 {
-                    if (dirEc) break;
+                    if (dirEc)
+                    {
+                        noteError("the store directory could not be fully enumerated (" + dirEc.message() + ")");
+                        break;
+                    }
+                    if (std::chrono::steady_clock::now() >= deadline)
+                    {
+                        out.bounded = true;
+                        break;
+                    }
+                    ++out.examined;
                     auto const name = it->path().filename().wstring();
                     if (name.rfind(dbName + L".pre_migration.bak", 0) != 0) continue;
                     std::error_code stEc;
                     auto const st = it->symlink_status(stEc);
-                    if (stEc || !std::filesystem::is_regular_file(st)) continue;
+                    if (stEc)
+                    {
+                        noteError("a managed backup's type could not be read (" + stEc.message() + ")");
+                        continue;
+                    }
+                    if (!std::filesystem::is_regular_file(st)) continue;
                     std::error_code timeEc;
                     auto const written = it->last_write_time(timeEc);
-                    if (timeEc) continue;
+                    if (timeEc)
+                    {
+                        noteError("a managed backup's timestamp could not be read (" + timeEc.message() + ")");
+                        continue;
+                    }
                     backups.emplace_back(written, it->path());
+                }
+                std::sort(backups.begin(), backups.end(),
+                    [](auto const& a, auto const& b) { return a.first > b.first; });
+                for (auto const& backup : backups)
+                {
+                    auto const pathUtf8 = WideToUtf8(backup.second.wstring());
+                    auto const key = CleanupPathKey(pathUtf8);
+                    if (std::find(retainedVerified.begin(), retainedVerified.end(), key) != retainedVerified.end())
+                        continue;   // part of the required retained set
+                    std::error_code sizeEc;
+                    auto const bytes = std::filesystem::file_size(backup.second, sizeEc);
+                    if (sizeEc)
+                    {
+                        noteError("a managed backup's size could not be read (" + sizeEc.message() + ")");
+                        continue;
+                    }
+                    CleanupCandidate candidate;
+                    candidate.path = pathUtf8;
+                    candidate.bytes = static_cast<std::uint64_t>(bytes);
+                    candidate.storageClass = CleanupStorageClass::MigrationBackup;
+                    candidate.identity = CaptureStagedObjectIdentity(candidate.path);
+                    out.candidates.push_back(std::move(candidate));
                 }
             }
         }
-        std::sort(backups.begin(), backups.end(),
-            [](auto const& a, auto const& b) { return a.first > b.first; });
-        for (std::size_t i = 3; i < backups.size(); ++i)
-        {
-            if (candidates.size() >= kBatchLimit)
-            {
-                if (bounded) *bounded = true;
-                break;
-            }
-            std::error_code sizeEc;
-            auto const bytes = std::filesystem::file_size(backups[i].second, sizeEc);
-            if (sizeEc) continue;
-            CleanupCandidate candidate;
-            candidate.path = WideToUtf8(backups[i].second.wstring());
-            candidate.bytes = static_cast<std::uint64_t>(bytes);
-            candidate.storageClass = CleanupStorageClass::MigrationBackup;
-            candidate.identity = CaptureStagedObjectIdentity(candidate.path);
-            candidates.push_back(std::move(candidate));
-        }
 
-        return candidates;
+        out.complete = out.firstErrorEn.empty() && !out.bounded;
+        return out;
+    }
+
+    void Storage::RecordVerifiedBackup(std::string const& path)
+    {
+        std::lock_guard lock(mutex_);
+        auto const key = CleanupPathKey(path);
+        if (key.empty()) return;
+        AdmitWrite_locked();
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            Statement q(db_, "INSERT INTO backup_manifest(path_key,verified,verified_at) "
+                             "VALUES(?1,1,strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
+                             "ON CONFLICT(path_key) DO UPDATE SET verified=1, verified_at=excluded.verified_at;");
+            Bind(q.value, 1, key);
+            Check(sqlite3_step(q.value), db_);
+            Exec("COMMIT;");
+        }
+        catch (...)
+        {
+            RollbackAfterFailure_locked();
+            throw;
+        }
+    }
+
+    void Storage::BackdateStagingGraceForTesting(std::string const& path, std::uint64_t days)
+    {
+        std::lock_guard lock(mutex_);
+        auto const key = CleanupPathKey(path);
+        if (key.empty()) return;
+        AdmitWrite_locked();
+        Statement q(db_, "UPDATE staging_grace SET first_unreferenced_at = "
+                         "strftime('%Y-%m-%dT%H:%M:%fZ','now',?1) WHERE path_key=?2;");
+        Bind(q.value, 1, std::string("-") + std::to_string(days) + " days");
+        Bind(q.value, 2, key);
+        Check(sqlite3_step(q.value), db_);
     }
 
     Storage::CleanupEvaluation Storage::EvaluateCleanup(std::string const& trigger)
@@ -2430,19 +2562,27 @@ namespace mayasaba
             }
         }
 
-        bool bounded = false;
-        std::string collectReason;
-        auto const candidates = CollectCleanupCandidates_locked(&bounded, &collectReason);
+        auto const collection = CollectCleanupCandidates_locked(
+            std::chrono::steady_clock::now() + std::chrono::seconds(30));
         evaluation.evaluated = true;
-        evaluation.candidates = candidates.size();
-        for (auto const& candidate : candidates) evaluation.candidateBytes += candidate.bytes;
+        evaluation.complete = collection.complete;
+        evaluation.examined = collection.examined;
+        evaluation.candidates = collection.candidates.size();
+        for (auto const& candidate : collection.candidates) evaluation.candidateBytes += candidate.bytes;
 
-        if (!collectReason.empty())
+        if (!collection.firstErrorEn.empty())
         {
-            evaluation.dispositionEn = "Cleanup could not be fully evaluated: " + collectReason +
-                ". Nothing was deleted. Make the managed staging area readable and evaluate again.";
+            evaluation.dispositionEn = "Cleanup could not be fully evaluated: " + collection.firstErrorEn +
+                ". Nothing was deleted, and this is not a report that no disposable data exists. Make the managed "
+                "area readable and evaluate again.";
         }
-        else if (candidates.empty())
+        else if (collection.bounded)
+        {
+            evaluation.dispositionEn = "Cleanup examined the first " + std::to_string(collection.examined) +
+                " managed objects and stopped at the batch bound; nothing was deleted, and this is not a report that "
+                "the whole scope was checked. Evaluate again to continue.";
+        }
+        else if (collection.candidates.empty())
         {
             // Nothing safely reclaimable. Say exactly what that means and what to do next,
             // rather than reporting success.
@@ -2451,11 +2591,6 @@ namespace mayasaba
                 "uncertain submission, a draft, required evidence, or a staged copy still inside its grace period. "
                 "Nothing was deleted. Protected data is retained; free space on the store's volume, or move the "
                 "store to a volume with more room, before writing again.";
-        }
-        else if (bounded)
-        {
-            evaluation.dispositionEn = "Cleanup evaluated the first 500 eligible objects and stopped at the batch bound; "
-                "nothing was deleted. Reclaim and evaluate again to continue.";
         }
         else
         {
@@ -2491,17 +2626,17 @@ namespace mayasaba
         CleanupReclaimResult result;
         auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 
-        bool bounded = false;
-        std::string collectReason;
-        auto const candidates = CollectCleanupCandidates_locked(&bounded, &collectReason);
-        result.bounded = bounded;
-        if (!collectReason.empty())
+        auto const collection = CollectCleanupCandidates_locked(deadline);
+        result.bounded = collection.bounded;
+        result.complete = collection.complete;
+        if (!collection.firstErrorEn.empty())
         {
-            result.reasonEn = "Reclamation did not run: " + collectReason + ". Nothing was deleted.";
+            result.reasonEn = "Reclamation did not run: " + collection.firstErrorEn +
+                ". Nothing was deleted, and this is not a report that nothing is eligible.";
             return result;
         }
 
-        for (auto const& candidate : candidates)
+        for (auto const& candidate : collection.candidates)
         {
             if (std::chrono::steady_clock::now() >= deadline)
             {
@@ -2968,6 +3103,20 @@ namespace mayasaba
                  "day_key TEXT NOT NULL, candidates INTEGER NOT NULL, candidate_bytes INTEGER NOT NULL,"
                  "disposition TEXT NOT NULL DEFAULT '');");
             Exec("CREATE INDEX IF NOT EXISTS cleanup_evaluations_day ON cleanup_evaluations(day_key);");
+
+            // The grace clock for staged copies. The contract starts the seven-day wait at
+            // verified publication or recovery, not at a file's modification time; this row
+            // records the first durable observation that the copy carries no protected
+            // reference, which is the earliest point the system can honestly start counting.
+            Exec("CREATE TABLE IF NOT EXISTS staging_grace("
+                 "path_key TEXT PRIMARY KEY, project_id TEXT NOT NULL DEFAULT '',"
+                 "first_unreferenced_at TEXT NOT NULL);");
+
+            // Which migration backups the owner has verified as restorable. Only these may
+            // count toward the three retained backups the policy requires.
+            Exec("CREATE TABLE IF NOT EXISTS backup_manifest("
+                 "path_key TEXT PRIMARY KEY, verified INTEGER NOT NULL DEFAULT 0,"
+                 "verified_at TEXT NOT NULL DEFAULT '');");
 
             {
                 bool hasDraftVersion = false;

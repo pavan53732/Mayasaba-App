@@ -687,6 +687,10 @@ namespace mayasaba
             bool evaluated{false};
             std::uint64_t candidates{0};
             std::uint64_t candidateBytes{0};
+            // Whether every managed object was actually inspected. An evaluation that could
+            // not complete must never report that nothing is eligible.
+            bool complete{false};
+            std::uint64_t examined{0};
             std::string dispositionEn;
         };
         // Runs the policy for one trigger. `trigger` is STARTUP, CHANGED_DAY,
@@ -699,6 +703,7 @@ namespace mayasaba
             std::uint64_t removed{0};
             std::uint64_t retained{0};
             bool bounded{false};
+            bool complete{false};
             std::string reasonEn;
         };
         CleanupReclaimResult ReclaimEligibleCleanup();
@@ -711,6 +716,14 @@ namespace mayasaba
             StagedAttachment,
             MigrationBackup
         };
+
+        // Records that the backup owner verified a migration backup as restorable. Only
+        // verified backups may be retained as part of the three the policy requires, and
+        // nothing is retired while fewer than three verified backups exist.
+        void RecordVerifiedBackup(std::string const& path);
+        // Moves a staging copy's grace clock backwards, so the durable-scan rule can be
+        // exercised without waiting seven days. Test-only.
+        void BackdateStagingGraceForTesting(std::string const& path, std::uint64_t days);
         void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
         void SetForcePathCanonicalizationFailureForTestingPath(std::string const& p) { forcedPathCanonicalFailurePath_ = p; }
         void ClearForcePathCanonicalizationFailureForTestingPath() { forcedPathCanonicalFailurePath_.clear(); }
@@ -776,7 +789,18 @@ namespace mayasaba
             StagedObjectIdentity identity;
         };
         // Collects eligible objects under mutex_, bounded to the contract's batch size.
-        std::vector<CleanupCandidate> CollectCleanupCandidates_locked(bool* bounded, std::string* reasonEn);
+        // Result of one discovery pass. Completeness is a first-class field: a partial scan
+        // that looks like an empty one is how a policy reports "nothing to reclaim" while
+        // unread data still occupies the disk.
+        struct CleanupCollection
+        {
+            std::vector<CleanupCandidate> candidates;
+            bool complete{false};
+            bool bounded{false};
+            std::uint64_t examined{0};
+            std::string firstErrorEn;
+        };
+        CleanupCollection CollectCleanupCandidates_locked(std::chrono::steady_clock::time_point deadline);
         void RecordCleanupEvaluation_locked(CleanupEvaluation const& evaluation);
         bool LastCleanupEvaluationDay_locked(std::string* day);
         bool forcePathCanonicalizationFailureForTesting_{false};

@@ -4537,3 +4537,83 @@ that stops opening a transaction there. Not claimed as an independently proven g
 C2 (verified backup set, scan completeness, bounded discovery, event-based grace), C3
 (configurable ceiling, scheduler, evaluation-table retention), C4–C6 remain. **S2 is not
 complete.**
+
+## 2026-10-25 — C2: eligibility, completeness and bounds (S2-F04 to F07)
+
+### F05 — completeness is a first-class result
+
+`CollectCleanupCandidates_locked` now returns a `CleanupCollection` with `complete`,
+`bounded`, `examined` and `firstErrorEn`. Inspection failures (entry type, timestamp, size,
+enumeration) record the first error and mark the pass incomplete instead of silently
+skipping the entry. Evaluation and reclamation both branch on completeness **before** the
+no-candidates case, so a partial scan can never be reported as "no disposable data is
+currently eligible".
+
+### F06 — the budget covers discovery
+
+The deadline and the 500-object budget are checked inside the discovery loop and in the
+backup enumeration, not only around deletion. The bound therefore covers the whole
+operation, and discovery no longer runs unbounded while holding the store mutex.
+
+### F07 — grace starts at a durable observation
+
+New `staging_grace(path_key, project_id, first_unreferenced_at)`. A staged copy becomes
+eligible only when `julianday('now') - julianday(first_unreferenced_at) >= 7`, where the row is
+created the first time a durable scan observes the copy as carrying no protected reference.
+Modification time is no longer consulted. This is the earliest event the system can honestly
+observe in place of "verified publication or recovery"; that stronger event is not recorded
+anywhere yet and is stated as the remaining gap.
+
+### F04 — retention needs verified backups
+
+New `backup_manifest(path_key, verified, verified_at)` and `RecordVerifiedBackup(path)`.
+Retirement is refused entirely while fewer than three verified backups exist, because the
+retained set itself cannot then be guaranteed. When three exist, the three most recent
+verified backups form the retained set and only the unverified remainder is eligible.
+Selection is no longer "three newest by timestamp".
+
+### Tests (1–85 preserved, 86–88 added; groups 80–85 updated)
+
+Groups 80–85 were updated because the grace clock is now event-based: they start the clock
+through an evaluation and then call `BackdateStagingGraceForTesting`. Group 85 also records
+three verified backups, since retirement is now gated on the manifest.
+
+| Group | Asserts |
+|---|---|
+| 86 | A file 30 days old by timestamp with no grace row is not eligible; it stays ineligible on a second pass; only after the clock is moved back 8 days does it become eligible. |
+| 87 | With two verified backups nothing is retired and all five files survive; with a third verified, exactly the two unverified backups are removed and the three verified ones survive. |
+| 88 | With the staging root replaced by a file, evaluation reports `complete == false` and says it "could not be fully evaluated" and that this is "not a report that no disposable data exists", and does not emit the no-eligible wording. |
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256
+  `cb40542afee220e166e2ad1d61df9499c9b470762cc493f80034e1394a64fbec`,
+  **PASS: 88 of 88 executed native regression groups**, exit 0, after `-t:Rebuild`.
+- Application build Release x64 v145: exit 0. Contract validator: `PASS: 124`, exit 0.
+- Sources: `Storage.cpp` `a59aa0ddfa4dff9b69e3013ada2d172b158800a8a83549b929cf6314036c9275`,
+  `Storage.h` `f7caf26df9b3f6dc04220c74aa9f075ac6306ffad0477d79cdaa85b61768772d`,
+  `storage_tests.cpp` `09e44c2d6c95d025ef9ea1b6ecda471f540c643c5643746aa06874678d063e70`.
+
+### Mutation evidence
+
+Under `~/.codex/visualizations/2026/10/25/mutation9/`; all restores `matches_clean: true`.
+
+| Mutant | Reverted fix | Result |
+|---|---|---|
+| M29 | Grace elapsed check ignored | FAIL group 80, `empty.candidates == 0` (the earliest group that depends on the grace) |
+| M30 | Verified-backup gate removed | FAIL group 87, `refused.removed == 0` |
+| M31 | Incomplete pass reported as complete | FAIL group 88, `!evaluation.complete` |
+
+M29 fails in group 80 rather than 86 because group 80 runs first and also depends on the
+grace clock; the mutant is still discriminated, just not first by group 86.
+
+### Still open after C2
+
+- **The true contractual grace event** — verified publication or recovery — is still not
+  recorded; `staging_grace` starts at the first durable unreferenced observation instead, and
+  that substitution is stated here rather than presented as the contract's event.
+- **Backup verification is not performed.** `RecordVerifiedBackup` is the owner's hook; the
+  constructor does not call it, so in production no backup is retired until a verification
+  routine exists. That is the safe default, not a completed feature.
+- C3 (configurable ceiling, scheduler, evaluation-table retention), C4–C6 remain. **S2 is not
+  complete.**
