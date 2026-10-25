@@ -139,6 +139,24 @@ namespace mayasaba
         std::string errorMessage;
     };
 
+    // Bounded history paging for scalable Chat restoration.
+    // Keyset pagination uses row_id as the authoritative monotonic continuation token.
+    // The page is returned newest-first to match the Chat timeline order.
+    struct ContributionsQuery
+    {
+        std::string projectId;
+        size_t limit{50};
+        std::int64_t beforeRowId{}; // 0 = newest page; otherwise fetch older messages before this row_id
+    };
+
+    struct ContributionsPage
+    {
+        std::vector<Contribution> items; // newest first
+        bool hasMore{false};
+        std::int64_t oldestRowId{0}; // continuation token for next older page
+        std::string errorMessage;
+    };
+
     // ------------------------------------------------------------------
     // Action Center read-only projection types.
     // Each item is a projection over authoritative owner records; none is a new
@@ -337,7 +355,8 @@ namespace mayasaba
         // user or reconciled; the disposition alone cannot distinguish "definitely nothing
         // was written" from "the outcome is unknown".
         SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body, std::vector<AttachmentRecord> const& attachments, SaveContributionDetail& detail);
-        std::vector<Contribution> Contributions(std::string const& projectId);
+        ContributionsPage ContributionsPaged(ContributionsQuery const& query);
+        std::vector<Contribution> Contributions(std::string const& projectId); // legacy full-load, kept for compatibility
         MessageSearchResult SearchUserMessages(MessageSearchQuery const& query);
         std::optional<std::string> LastBoundProject();
         std::filesystem::path const& FilePath() const noexcept { return file_; }

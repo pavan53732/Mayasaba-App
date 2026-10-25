@@ -220,6 +220,34 @@ namespace mayasaba::ui
         }
     }
 
+    // Prepends older messages (for infinite scroll up). The new entries are
+    // inserted at the beginning so the reading anchor is preserved by the
+    // ItemsRepeater's virtualization. Returns the number of entries prepended.
+    std::size_t TimelineRenderer::PrependOlder(std::vector<TimelineEntry> olderEntries)
+    {
+        if (olderEntries.empty()) return 0;
+
+        // Insert at the beginning - newest of the older entries first
+        std::size_t count = olderEntries.size();
+        entries_.insert(entries_.begin(), std::make_move_iterator(olderEntries.begin()), std::make_move_iterator(olderEntries.end()));
+        shown_.insert(shown_.begin(), count, true); // restored history = no entrance motion
+        tokens_.insert(tokens_.begin(), count, 0);
+        tokenIndex_.clear();
+        tokens_.resize(entries_.size());
+        for (std::size_t index = 0; index < entries_.size(); ++index)
+        {
+            auto const token = nextToken_++;
+            tokens_[index] = token;
+            tokenIndex_[token] = index;
+        }
+        items_.Clear();
+        for (std::size_t index = 0; index < entries_.size(); ++index)
+        {
+            items_.Append(box_value(tokens_[index]));
+        }
+        return count;
+    }
+
     void TimelineRenderer::Append(TimelineEntry entry)
     {
         auto const index = entries_.size();

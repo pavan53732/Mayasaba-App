@@ -42,6 +42,11 @@ namespace mayasaba::ui
         // transition, so every entry is marked as already shown.
         void ReplaceAll(std::vector<TimelineEntry> entries);
 
+        // Prepends older messages (for infinite scroll up). The new entries are
+        // inserted at the beginning so the reading anchor is preserved by the
+        // ItemsRepeater's virtualization. Returns the number of entries prepended.
+        std::size_t PrependOlder(std::vector<TimelineEntry> olderEntries);
+
         // Appends one entry. The newly realized card receives the insertion motion
         // exactly once, even under virtualization and recycling, unless the entry
         // is marked silentInsert.

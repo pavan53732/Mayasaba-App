@@ -433,6 +433,12 @@ namespace winrt::Mayasaba::implementation
         // across the card's rebuild so an open detail is never closed by an update.
         bool conditionDetailsOpen_{false};
 
+        // History pagination state for bounded loading and infinite scroll up.
+        std::int64_t historyOldestRowId_{0};
+        bool historyHasMore_{false};
+        bool historyLoading_{false};
+        uint64_t historyLoadSeq_{0};
+
         std::atomic_uint64_t selectorGeneration_{0};
 
         void ApplyMotionPreference();
@@ -460,6 +466,8 @@ namespace winrt::Mayasaba::implementation
         // Rebuilds or extends the timeline from historyCache_. `dockTransition` is
         // true only for the first confirmed save, which animates the connected Dock.
         void RenderHistory(bool dockTransition = false);
+        // Loads older messages when the user scrolls near the top of the history.
+        winrt::fire_and_forget LoadOlderHistoryAsync(uint64_t gen);
         void ApplyChatLayout(bool dockTransition);
         void ApplyResponsiveLayout();
         // Keeps every full CLI name visible: the readiness entries are compact on a

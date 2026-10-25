@@ -9,6 +9,7 @@
 #include <sstream>
 #include <iomanip>
 #include <unordered_set>
+#include <unordered_map>
 #include <array>
 #include <optional>
 #include <string_view>
@@ -18,6 +19,7 @@
 #include <cwctype>
 #include <memory>
 #include <cctype>
+#include <cstdint>
 #ifdef _WIN32
 #include <shlobj.h>
 #include <bcrypt.h>
@@ -5666,40 +5668,168 @@ namespace mayasaba
         return duplicate ? SaveDisposition::Duplicate : SaveDisposition::Saved;
     }
 
+    // Helper: fetch attachments for a batch of submission IDs in one query.
+// Uses raw SQLite C API so it can be a free function (not a Storage member).
+    static void FetchAttachmentsForSubmissions(sqlite3* db, const std::vector<std::string>& submissionIds, std::unordered_map<std::string, std::vector<AttachmentRecord>>& outAttachments)
+    {
+        auto columnText = [](sqlite3_stmt* stmt, int column) -> std::string
+        {
+            auto const* ptr = sqlite3_column_text(stmt, column);
+            auto length = sqlite3_column_bytes(stmt, column);
+            if (!ptr || length <= 0) return {};
+            return {reinterpret_cast<char const*>(ptr), static_cast<size_t>(length)};
+        };
+
+        if (submissionIds.empty()) return;
+        std::string placeholders;
+        placeholders.reserve(submissionIds.size() * 2);
+        for (size_t i = 0; i < submissionIds.size(); ++i)
+        {
+            if (i > 0) placeholders += ",";
+            placeholders += "?";
+        }
+        std::string sql = "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,version,created_at FROM attachments WHERE submission_id IN (" + placeholders + ") ORDER BY rowid;";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) return;
+        for (size_t i = 0; i < submissionIds.size(); ++i)
+        {
+            sqlite3_bind_text(stmt, static_cast<int>(i + 1), submissionIds[i].c_str(), -1, SQLITE_TRANSIENT);
+        }
+        int attRc = SQLITE_OK;
+        while ((attRc = sqlite3_step(stmt)) == SQLITE_ROW)
+        {
+            AttachmentRecord attRec{
+                columnText(stmt, 0),
+                columnText(stmt, 1),
+                columnText(stmt, 2),
+                columnText(stmt, 3),
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 4)),
+                columnText(stmt, 5),
+                columnText(stmt, 6),
+                columnText(stmt, 7),
+                columnText(stmt, 8),
+                columnText(stmt, 9),
+                columnText(stmt, 10),
+                static_cast<uint64_t>(sqlite3_column_int64(stmt, 11)),
+                columnText(stmt, 12)
+            };
+            outAttachments[attRec.submissionId].push_back(std::move(attRec));
+        }
+        if (attRc != SQLITE_DONE && attRc != SQLITE_OK)
+        {
+            throw std::runtime_error(sqlite3_errmsg(db));
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    ContributionsPage Storage::ContributionsPaged(ContributionsQuery const& query)
+    {
+        ContributionsPage page;
+        if (query.projectId.empty() || query.limit == 0)
+        {
+            page.errorMessage = "Invalid query: projectId empty or limit zero";
+            return page;
+        }
+
+        std::lock_guard lock(mutex_);
+
+        size_t limit = query.limit;
+        if (limit > 200) limit = 200; // hard cap
+
+        std::string sql;
+        if (query.beforeRowId == 0)
+        {
+            // Newest page: fetch latest N contributions, ordered newest-first for display
+            sql = "SELECT row_id, submission_id, body, created_at FROM contributions WHERE project_id = ?1 ORDER BY row_id DESC LIMIT ?2;";
+        }
+        else
+        {
+            // Older page: fetch N contributions before the given row_id, ordered newest-first
+            sql = "SELECT row_id, submission_id, body, created_at FROM contributions WHERE project_id = ?1 AND row_id < ?2 ORDER BY row_id DESC LIMIT ?3;";
+        }
+
+        Statement p(db_, sql.c_str());
+        if (query.beforeRowId == 0)
+        {
+            Bind(p.value, 1, query.projectId);
+            sqlite3_bind_int64(p.value, 2, static_cast<sqlite3_int64>(limit));
+        }
+        else
+        {
+            Bind(p.value, 1, query.projectId);
+            sqlite3_bind_int64(p.value, 2, query.beforeRowId);
+            sqlite3_bind_int64(p.value, 3, static_cast<sqlite3_int64>(limit));
+        }
+
+        std::vector<Contribution> contributions;
+        contributions.reserve(limit);
+        std::vector<std::string> submissionIds;
+        submissionIds.reserve(limit);
+        std::int64_t oldestRowId = 0;
+
+        int rc = SQLITE_OK;
+        while ((rc = sqlite3_step(p.value)) == SQLITE_ROW)
+        {
+            std::int64_t rowId = sqlite3_column_int64(p.value, 0);
+            std::string subId = Text(p.value, 1);
+            std::string body = Text(p.value, 2);
+            std::string createdAt = Text(p.value, 3);
+
+            Contribution c{subId, body, createdAt};
+            contributions.push_back(std::move(c));
+            submissionIds.push_back(subId);
+            oldestRowId = rowId;
+        }
+        Check(rc, db_);
+
+        // Fetch all attachments for this page in one batched query
+        std::unordered_map<std::string, std::vector<AttachmentRecord>> attachmentsBySubmission;
+        FetchAttachmentsForSubmissions(db_, submissionIds, attachmentsBySubmission);
+
+        // Attach to contributions (they're already newest-first)
+        for (auto& c : contributions)
+        {
+            auto it = attachmentsBySubmission.find(c.submissionId);
+            if (it != attachmentsBySubmission.end())
+            {
+                c.attachments = std::move(it->second);
+            }
+            page.items.push_back(std::move(c));
+        }
+
+        // Determine if there are more older messages
+        if (page.items.size() == limit)
+        {
+            // Check if there are more rows before the oldest we fetched
+            std::string countSql = "SELECT 1 FROM contributions WHERE project_id = ?1 AND row_id < ?2 LIMIT 1;";
+            Statement countStmt(db_, countSql.c_str());
+            Bind(countStmt.value, 1, query.projectId);
+            sqlite3_bind_int64(countStmt.value, 2, oldestRowId);
+            int countRc = sqlite3_step(countStmt.value);
+            if (countRc == SQLITE_ROW)
+            {
+                page.hasMore = true;
+                page.oldestRowId = oldestRowId;
+            }
+            Check(countRc, db_);
+        }
+
+        return page;
+    }
+
+    // Legacy full-load kept for compatibility; NOT recommended for production use with large histories.
     std::vector<Contribution> Storage::Contributions(std::string const& id)
     {
-        std::lock_guard lock(mutex_);
-        Statement p(db_, "SELECT submission_id,body,created_at FROM contributions WHERE project_id=?1 ORDER BY row_id;");
-        Bind(p.value,1,id);
+        ContributionsQuery query;
+        query.projectId = id;
+        query.limit = 10000; // hard cap to prevent unbounded load
+        ContributionsPage page = ContributionsPaged(query);
         std::vector<Contribution> result;
-        int rc=SQLITE_OK;
-        while ((rc=sqlite3_step(p.value))==SQLITE_ROW)
+        result.reserve(page.items.size());
+        for (auto& c : page.items)
         {
-            Contribution c{Text(p.value,0),Text(p.value,1),Text(p.value,2)};
-            Statement att(db_, "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,version,created_at FROM attachments WHERE submission_id=?1 ORDER BY rowid;");
-            Bind(att.value,1,c.submissionId);
-            int attRc=SQLITE_OK;
-            while ((attRc=sqlite3_step(att.value))==SQLITE_ROW)
-            {
-                c.attachments.push_back({
-                    Text(att.value,0),
-                    Text(att.value,1),
-                    Text(att.value,2),
-                    Text(att.value,3),
-                    static_cast<uint64_t>(sqlite3_column_int64(att.value,4)),
-                    Text(att.value,5),
-                    Text(att.value,6),
-                    Text(att.value,7),
-                    Text(att.value,8),
-                    Text(att.value,9),
-                    Text(att.value,10),
-                    static_cast<uint64_t>(sqlite3_column_int64(att.value,11)),
-                    Text(att.value,12)
-                });
-            }
             result.push_back(std::move(c));
         }
-        Check(rc,db_);
         return result;
     }
 

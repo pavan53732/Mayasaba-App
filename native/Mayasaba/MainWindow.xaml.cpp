@@ -770,14 +770,17 @@ namespace winrt::Mayasaba::implementation
         auto uiQueue = DispatcherQueue();
         std::optional<mayasaba::ProjectRecord> project;
         std::optional<mayasaba::PendingSubmission> pending;
-        std::vector<mayasaba::Contribution> history;
+        mayasaba::ContributionsPage historyPage;
         std::string error;
         try
         {
             co_await selectorQueue_.Background();
             project = storage_->Project(id);
             pending = storage_->Pending(id);
-            history = storage_->Contributions(id);
+            mayasaba::ContributionsQuery query;
+            query.projectId = id;
+            query.limit = 50;
+            historyPage = storage_->ContributionsPaged(query);
         }
         catch (std::exception const& e) { error = e.what(); }
         if (!co_await resume_foreground(uiQueue)) co_return;
@@ -792,7 +795,19 @@ namespace winrt::Mayasaba::implementation
         ActionCenterStatusText().Text(L"");
         ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
         CollapseActionCenterDetails();
+
+        // Convert the page to timeline entries (newest first from storage = oldest first in timeline)
+        std::vector<mayasaba::Contribution> history;
+        history.reserve(historyPage.items.size());
+        for (auto& item : historyPage.items)
+        {
+            history.push_back(std::move(item));
+        }
         historyCache_ = std::move(history);
+
+        historyOldestRowId_ = historyPage.oldestRowId;
+        historyHasMore_ = historyPage.hasMore;
+
         draftTimer_.Stop();
         motion_.CancelAll();
         bool const chatAlreadyVisible = ChatScreen().Visibility() == Visibility::Visible;
@@ -854,6 +869,60 @@ namespace winrt::Mayasaba::implementation
             motion_.DepthReveal(EmptyHeroMark());
         }
         ComposerBox().Focus(FocusState::Programmatic);
+    }
+
+    // Loads older messages when the user scrolls near the top of the history.
+    winrt::fire_and_forget MainWindow::LoadOlderHistoryAsync(uint64_t gen)
+    {
+        if (historyLoading_ || !historyHasMore_ || historyOldestRowId_ == 0 || activeProject_.empty() || !storage_)
+        {
+            co_return;
+        }
+
+        // Increment sequence so only the latest load applies its results
+        uint64_t const loadSeq = ++historyLoadSeq_;
+        historyLoading_ = true;
+
+        auto keepAlive = get_strong();
+        auto uiQueue = DispatcherQueue();
+        mayasaba::ContributionsPage olderPage;
+        std::string error;
+
+        try
+        {
+            co_await selectorQueue_.Background();
+            mayasaba::ContributionsQuery query;
+            query.projectId = activeProject_;
+            query.limit = 50;
+            query.beforeRowId = historyOldestRowId_;
+            olderPage = storage_->ContributionsPaged(query);
+        }
+        catch (std::exception const& e) { error = e.what(); }
+
+        if (!co_await resume_foreground(uiQueue)) co_return;
+        if (windowClosed_ || selectorGeneration_ != gen || historyLoadSeq_ != loadSeq) co_return;
+        if (!error.empty()) { ShowNotice(L"Older history load failed: " + Utf16(error), true); historyLoading_ = false; co_return; }
+
+        // Convert to timeline entries (newest first from storage)
+        std::vector<mayasaba::ui::TimelineEntry> olderEntries;
+        olderEntries.reserve(olderPage.items.size());
+        for (auto& item : olderPage.items)
+        {
+            olderEntries.push_back(ContributionEntry(item));
+        }
+
+        // Prepend to timeline - this preserves the reading anchor
+        if (!olderEntries.empty())
+        {
+            timeline_->PrependOlder(std::move(olderEntries));
+            historyCache_.insert(historyCache_.begin(),
+                std::make_move_iterator(olderPage.items.begin()),
+                std::make_move_iterator(olderPage.items.end()));
+            historyOldestRowId_ = olderPage.oldestRowId;
+            historyHasMore_ = olderPage.hasMore;
+        }
+
+        historyLoading_ = false;
     }
 
     winrt::fire_and_forget MainWindow::LoadDraftAttachmentsAsync(std::string projectId, uint64_t gen)
@@ -1332,6 +1401,14 @@ namespace winrt::Mayasaba::implementation
         auto const scroller = HistoryScroller();
         double const extent = scroller.ScrollableHeight();
         bool const atEnd = extent > 0.0 && (extent - scroller.VerticalOffset()) <= 24.0;
+
+        // Check if user is scrolling near the top to load older messages
+        bool const atTop = extent > 0.0 && scroller.VerticalOffset() <= 48.0;
+        if (atTop && !historyLoading_ && historyHasMore_)
+        {
+            LoadOlderHistoryAsync(selectorGeneration_.load());
+        }
+
         if (pendingScrollToEnd_)
         {
             if (atEnd && !e.IsIntermediate() && !scrollingToEnd_)
