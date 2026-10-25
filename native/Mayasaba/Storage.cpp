@@ -2285,7 +2285,7 @@ namespace mayasaba
         Check(sqlite3_step(q.value), db_);
     }
 
-    Storage::CleanupCollection Storage::CollectCleanupCandidates_locked(std::chrono::steady_clock::time_point deadline)
+    Storage::CleanupCollection Storage::CollectCleanupCandidates_locked(std::unique_lock<std::mutex>& lock, std::chrono::steady_clock::time_point deadline)
     {
         CleanupCollection out;
         constexpr std::uint64_t kGraceDays = 7;
@@ -2311,75 +2311,128 @@ namespace mayasaba
         }
         else if (std::filesystem::exists(rootStatus))
         {
-            std::error_code walkEc;
-            std::filesystem::recursive_directory_iterator it(stagingRoot, walkEc);
-            std::filesystem::recursive_directory_iterator const end;
-            if (walkEc)
-            {
-                noteError("the staging tree could not be enumerated (" + walkEc.message() + ")");
-            }
-            else
-            {
-                bool seekingCursor = !lastStagedDiscoveryCursor_.empty();
-                std::filesystem::path const cursorPath = seekingCursor
-                    ? std::filesystem::path(Utf8ToWide(lastStagedDiscoveryCursor_))
-                    : std::filesystem::path();
-                std::filesystem::path const cursorParent = seekingCursor
-                    ? cursorPath.parent_path()
-                    : std::filesystem::path();
+            bool seekingCursor = !lastStagedDiscoveryCursor_.empty();
+            std::filesystem::path const cursorPath = seekingCursor
+                ? std::filesystem::path(Utf8ToWide(lastStagedDiscoveryCursor_))
+                : std::filesystem::path();
 
-                std::size_t examinedInPass = 0;
-                std::size_t visitedEntriesInPass = 0;
+            std::size_t examinedInPass = 0;
+            std::size_t visitedEntriesInPass = 0;
 
-                for (; it != end; it.increment(walkEc))
+            auto processFile = [&](std::filesystem::path const& fsPath)
+            {
+                auto const pathUtf8 = WideToUtf8(fsPath.wstring());
+                auto const key = CleanupPathKey(pathUtf8);
+                int const refs = CountOtherProtectedReferences_locked(pathUtf8, std::string{}, std::string{});
+                if (refs != 0)
                 {
-                    if (walkEc)
+                    if (!key.empty())
                     {
-                        noteError("the staging tree could not be fully enumerated (" + walkEc.message() + ")");
+                        out.referencedPathsToInvalidateGrace.push_back(key);
+                    }
+                    return;   // referenced, or unknown: retained
+                }
+
+                // The grace clock starts at the first durable observation that this copy is
+                // unreferenced, not at its modification time. An old file is not evidence
+                // that its originating operation reached publication or recovery, and a
+                // missing reference may itself be the result of an interrupted workflow.
+                if (key.empty())
+                {
+                    noteError("a staged copy's path could not be keyed for the grace clock");
+                    return;
+                }
+
+                bool graceElapsed = false;
+                bool hasGrace = false;
+                {
+                    // The grace length is a compile-time constant, so it is inlined
+                    // rather than bound: this build's SQLite surface does not expose
+                    // sqlite3_bind_double.
+                    auto const graceSql = "SELECT (julianday('now') - julianday(first_unreferenced_at)) >= " +
+                        std::to_string(kGraceDays) + " FROM staging_grace WHERE path_key=?1;";
+                    Statement q(db_, graceSql.c_str());
+                    Bind(q.value, 1, key);
+                    int const rc = sqlite3_step(q.value);
+                    if (rc == SQLITE_ROW)
+                    {
+                        hasGrace = true;
+                        graceElapsed = sqlite3_column_int(q.value, 0) != 0;
+                    }
+                    else if (rc == SQLITE_DONE)
+                    {
+                        hasGrace = false;
+                    }
+                    else Check(rc, db_);
+                }
+                if (!hasGrace)
+                {
+                    out.unregisteredGracePaths.push_back(key);
+                    return;
+                }
+                if (!graceElapsed) return;
+
+                std::error_code sizeEc;
+                auto const bytes = std::filesystem::file_size(fsPath, sizeEc);
+                if (sizeEc)
+                {
+                    noteError("a staged file's size could not be read (" + sizeEc.message() + ")");
+                    return;
+                }
+
+                CleanupCandidate candidate;
+                candidate.path = pathUtf8;
+                candidate.bytes = static_cast<std::uint64_t>(bytes);
+                candidate.storageClass = CleanupStorageClass::StagedAttachment;
+                candidate.identity = CaptureStagedObjectIdentity(pathUtf8);
+                out.candidates.push_back(std::move(candidate));
+            };
+
+            std::function<bool(std::filesystem::path const&)> traverseDir =
+                [&](std::filesystem::path const& dir) -> bool
+            {
+                std::error_code dirEc;
+                std::filesystem::directory_iterator it(dir, dirEc);
+                std::filesystem::directory_iterator const end;
+                if (dirEc)
+                {
+                    noteError("the staging directory could not be enumerated: " + WideToUtf8(dir.wstring()) + " (" + dirEc.message() + ")");
+                    return true;
+                }
+
+                std::vector<std::filesystem::path> files;
+                std::vector<std::filesystem::path> subdirs;
+
+                for (; it != end; it.increment(dirEc))
+                {
+                    if (dirEc)
+                    {
+                        noteError("a staging directory entry could not be enumerated (" + dirEc.message() + ")");
                         break;
                     }
 
-                    if (std::chrono::steady_clock::now() >= deadline)
+                    std::error_code stEc;
+                    auto const st = it->symlink_status(stEc);
+                    if (stEc)
                     {
-                        out.bounded = true;
-                        if (seekingCursor)
-                        {
-                            noteError("traversal search reached deadline before reaching cursor; cursor preserved for next pass");
-                        }
-                        else
-                        {
-                            auto const curPathUtf8 = WideToUtf8(it->path().wstring());
-                            lastStagedDiscoveryCursor_ = curPathUtf8;
-                        }
-                        break;
-                    }
-
-                    std::error_code typeEc;
-                    auto const status = it->symlink_status(typeEc);
-                    if (typeEc)
-                    {
-                        noteError("a staged entry's type could not be read (" + typeEc.message() + ")");
+                        noteError("a staged entry's type could not be read (" + stEc.message() + ")");
                         continue;
                     }
 
-                    if (std::filesystem::is_symlink(status))
+                    if (std::filesystem::is_symlink(st))
                     {
-                        it.disable_recursion_pending();
                         continue;
                     }
 
-                    // Skip subdirectories that are strictly before the cursor's directory
-                    if (seekingCursor && std::filesystem::is_directory(status))
+                    if (std::filesystem::is_directory(st))
                     {
-                        auto const curPath = it->path();
-                        if (curPath.parent_path() == cursorParent.parent_path() && curPath < cursorParent)
-                        {
-                            it.disable_recursion_pending();
-                            continue;
-                        }
+                        subdirs.push_back(it->path());
                     }
-
-                    if (!std::filesystem::is_regular_file(status))
+                    else if (std::filesystem::is_regular_file(st))
+                    {
+                        files.push_back(it->path());
+                    }
+                    else
                     {
                         if (!seekingCursor)
                         {
@@ -2387,117 +2440,199 @@ namespace mayasaba
                             if (visitedEntriesInPass >= kBatchLimit * 4)
                             {
                                 out.bounded = true;
-                                auto const curPathUtf8 = WideToUtf8(it->path().wstring());
-                                lastStagedDiscoveryCursor_ = curPathUtf8;
-                                break;
+                                lastStagedDiscoveryCursor_ = WideToUtf8(it->path().wstring());
+                                return false;
                             }
                         }
-                        continue;
                     }
-
-                    auto const pathUtf8 = WideToUtf8(it->path().wstring());
-
-                    if (seekingCursor)
-                    {
-                        if (pathUtf8 < lastStagedDiscoveryCursor_)
-                        {
-                            // Entry is strictly before the cursor; skip without consuming pass budget
-                            continue;
-                        }
-
-                        // Reached cursor (==) or cursor was deleted/renamed (>); resume discovery here
-                        seekingCursor = false;
-                    }
-
-                    ++visitedEntriesInPass;
-                    if (visitedEntriesInPass >= kBatchLimit * 4 || examinedInPass >= kBatchLimit)
-                    {
-                        out.bounded = true;
-                        lastStagedDiscoveryCursor_ = pathUtf8;
-                        break;
-                    }
-
-                    ++examinedInPass;
-                    ++out.examined;
-
-                    auto const key = CleanupPathKey(pathUtf8);
-                    int const refs = CountOtherProtectedReferences_locked(pathUtf8, std::string{}, std::string{});
-                    if (refs != 0)
-                    {
-                        if (!key.empty())
-                        {
-                            out.referencedPathsToInvalidateGrace.push_back(key);
-                        }
-                        continue;   // referenced, or unknown: retained
-                    }
-
-                    // The grace clock starts at the first durable observation that this copy is
-                    // unreferenced, not at its modification time. An old file is not evidence
-                    // that its originating operation reached publication or recovery, and a
-                    // missing reference may itself be the result of an interrupted workflow.
-                    if (key.empty())
-                    {
-                        noteError("a staged copy's path could not be keyed for the grace clock");
-                        continue;
-                    }
-
-                    bool graceElapsed = false;
-                    bool hasGrace = false;
-                    {
-                        // The grace length is a compile-time constant, so it is inlined
-                        // rather than bound: this build's SQLite surface does not expose
-                        // sqlite3_bind_double.
-                        auto const graceSql = "SELECT (julianday('now') - julianday(first_unreferenced_at)) >= " +
-                            std::to_string(kGraceDays) + " FROM staging_grace WHERE path_key=?1;";
-                        Statement q(db_, graceSql.c_str());
-                        Bind(q.value, 1, key);
-                        int const rc = sqlite3_step(q.value);
-                        if (rc == SQLITE_ROW)
-                        {
-                            hasGrace = true;
-                            graceElapsed = sqlite3_column_int(q.value, 0) != 0;
-                        }
-                        else if (rc == SQLITE_DONE)
-                        {
-                            hasGrace = false;
-                        }
-                        else Check(rc, db_);
-                    }
-                    if (!hasGrace)
-                    {
-                        out.unregisteredGracePaths.push_back(key);
-                        continue;
-                    }
-                    if (!graceElapsed) continue;
-
-                    std::error_code sizeEc;
-                    auto const bytes = it->file_size(sizeEc);
-                    if (sizeEc)
-                    {
-                        noteError("a staged file's size could not be read (" + sizeEc.message() + ")");
-                        continue;
-                    }
-
-                    CleanupCandidate candidate;
-                    candidate.path = pathUtf8;
-                    candidate.bytes = static_cast<std::uint64_t>(bytes);
-                    candidate.storageClass = CleanupStorageClass::StagedAttachment;
-                    candidate.identity = CaptureStagedObjectIdentity(pathUtf8);
-                    out.candidates.push_back(std::move(candidate));
                 }
-                if (walkEc)
-                {
-                    noteError("the staging tree could not be fully enumerated (" + walkEc.message() + ")");
-                }
+
+                std::sort(files.begin(), files.end());
+                std::sort(subdirs.begin(), subdirs.end());
+
+                // Process regular files in dir
+                bool filesAlreadyProcessed = false;
                 if (seekingCursor)
                 {
-                    // Reached end while seeking; all entries in tree were < cursor, so scan is complete
-                    lastStagedDiscoveryCursor_.clear();
+                    auto const dirW = dir.native();
+                    auto const cursorW = cursorPath.native();
+                    bool const startsWithDir = (cursorW.rfind(dirW, 0) == 0);
+                    bool isInside = false;
+                    std::size_t prefixLen = dirW.size();
+
+                    if (startsWithDir)
+                    {
+                        if (dirW.back() == L'\\' || dirW.back() == L'/')
+                        {
+                            isInside = true;
+                        }
+                        else if (cursorW.size() > prefixLen && (cursorW[prefixLen] == L'\\' || cursorW[prefixLen] == L'/'))
+                        {
+                            isInside = true;
+                            ++prefixLen;
+                        }
+                    }
+
+                    if (isInside)
+                    {
+                        std::wstring_view remaining(cursorW.data() + prefixLen, cursorW.size() - prefixLen);
+                        auto const sepPos = remaining.find_first_of(L"\\/");
+                        if (sepPos == std::wstring_view::npos && !std::filesystem::is_directory(cursorPath))
+                        {
+                            // Cursor is directly a file in this directory
+                            auto fileIt = std::lower_bound(files.begin(), files.end(), cursorPath);
+                            seekingCursor = false;
+                            filesAlreadyProcessed = true;
+
+                            for (; fileIt != files.end(); ++fileIt)
+                            {
+                                if (std::chrono::steady_clock::now() >= deadline)
+                                {
+                                    out.bounded = true;
+                                    lastStagedDiscoveryCursor_ = WideToUtf8(fileIt->wstring());
+                                    return false;
+                                }
+                                if (visitedEntriesInPass >= kBatchLimit * 4 || examinedInPass >= kBatchLimit)
+                                {
+                                    out.bounded = true;
+                                    lastStagedDiscoveryCursor_ = WideToUtf8(fileIt->wstring());
+                                    return false;
+                                }
+
+                                ++visitedEntriesInPass;
+                                ++examinedInPass;
+                                ++out.examined;
+                                processFile(*fileIt);
+                            }
+                        }
+                        else
+                        {
+                            // Cursor is in a subdirectory (or is a subdirectory) of dir.
+                            // Files in dir have already been visited in earlier passes.
+                            filesAlreadyProcessed = true;
+                        }
+                    }
+                    else
+                    {
+                        if (dir < cursorPath)
+                        {
+                            // Entire dir sorts before cursor; skip it in O(1)
+                            return true;
+                        }
+                        else
+                        {
+                            seekingCursor = false;
+                        }
+                    }
                 }
-                else if (!out.bounded && it == end)
+
+                if (!seekingCursor && !filesAlreadyProcessed)
                 {
-                    lastStagedDiscoveryCursor_.clear();
+                    for (auto const& filePath : files)
+                    {
+                        if (std::chrono::steady_clock::now() >= deadline)
+                        {
+                            out.bounded = true;
+                            lastStagedDiscoveryCursor_ = WideToUtf8(filePath.wstring());
+                            return false;
+                        }
+                        if (visitedEntriesInPass >= kBatchLimit * 4 || examinedInPass >= kBatchLimit)
+                        {
+                            out.bounded = true;
+                            lastStagedDiscoveryCursor_ = WideToUtf8(filePath.wstring());
+                            return false;
+                        }
+
+                        ++visitedEntriesInPass;
+                        ++examinedInPass;
+                        ++out.examined;
+                        processFile(filePath);
+                    }
                 }
+
+                // Process subdirectories
+                for (auto const& subdir : subdirs)
+                {
+                    if (seekingCursor)
+                    {
+                        auto const dirW = dir.native();
+                        auto const cursorW = cursorPath.native();
+                        bool const startsWithDir = (cursorW.rfind(dirW, 0) == 0);
+                        bool isInside = false;
+                        std::size_t prefixLen = dirW.size();
+
+                        if (startsWithDir)
+                        {
+                            if (dirW.back() == L'\\' || dirW.back() == L'/')
+                            {
+                                isInside = true;
+                            }
+                            else if (cursorW.size() > prefixLen && (cursorW[prefixLen] == L'\\' || cursorW[prefixLen] == L'/'))
+                            {
+                                isInside = true;
+                                ++prefixLen;
+                            }
+                        }
+
+                        if (isInside)
+                        {
+                            std::wstring_view remaining(cursorW.data() + prefixLen, cursorW.size() - prefixLen);
+                            auto const sepPos = remaining.find_first_of(L"\\/");
+                            auto const targetComp = (sepPos == std::wstring_view::npos)
+                                ? remaining
+                                : remaining.substr(0, sepPos);
+                            auto const targetSubdir = dir / targetComp;
+
+                            if (subdir < targetSubdir)
+                            {
+                                // O(1) prune of subdirectory branch before cursor
+                                continue;
+                            }
+                            else if (subdir == targetSubdir)
+                            {
+                                if (!traverseDir(subdir)) return false;
+                            }
+                            else
+                            {
+                                seekingCursor = false;
+                                if (!traverseDir(subdir)) return false;
+                            }
+                        }
+                        else
+                        {
+                            if (subdir < cursorPath)
+                            {
+                                continue;
+                            }
+                            else
+                            {
+                                seekingCursor = false;
+                                if (!traverseDir(subdir)) return false;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Check directory count budget for visited entries
+                        ++visitedEntriesInPass;
+                        if (visitedEntriesInPass >= kBatchLimit * 4)
+                        {
+                            out.bounded = true;
+                            lastStagedDiscoveryCursor_ = WideToUtf8(subdir.wstring());
+                            return false;
+                        }
+
+                        if (!traverseDir(subdir)) return false;
+                    }
+                }
+
+                return true;
+            };
+
+            bool const completed = traverseDir(stagingRoot);
+            if (completed && !out.bounded)
+            {
+                lastStagedDiscoveryCursor_.clear();
             }
         }
 
@@ -2505,13 +2640,29 @@ namespace mayasaba
         // Only a backup the owner has verified as restorable may count toward the required
         // three. While fewer than three verified backups exist, the retained set itself cannot
         // be guaranteed, so nothing is retired.
+        // Hashing runs OUTSIDE the Storage mutex (F109) with physical object identity and
+        // authority revalidation under the reacquired lock.
         std::vector<std::string> retainedVerified;
         {
+            struct BackupProbeCandidate
+            {
+                std::string key;
+                std::string expectedSha;
+                std::uint64_t expectedSize{0};
+                StagedObjectIdentity identityBefore;
+                std::filesystem::file_time_type mtimeBefore;
+                bool valid{false};
+                std::string actualHex;
+            };
+
+            std::vector<BackupProbeCandidate> probeCandidates;
+
+            // Step 1: Capture bounded candidate projection under lock
             Statement q(db_, "SELECT path_key, sha256_hex, file_size FROM backup_manifest WHERE verified=1 ORDER BY verified_at DESC;");
             int rc = SQLITE_OK;
             while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
             {
-                if (retainedVerified.size() < kRetainedVerifiedBackups)
+                if (probeCandidates.size() < kRetainedVerifiedBackups + 2)
                 {
                     auto const key = Text(q.value, 0);
                     auto const expectedSha = Text(q.value, 1);
@@ -2524,23 +2675,131 @@ namespace mayasaba
                     }
 
                     std::error_code chkEc;
-                    auto const actualSize = std::filesystem::file_size(std::filesystem::path(key), chkEc);
+                    auto const fsPath = std::filesystem::path(Utf8ToWide(key));
+                    auto const actualSize = std::filesystem::file_size(fsPath, chkEc);
                     if (chkEc || actualSize != expectedSize)
                     {
                         noteError("a retained verified backup size mismatch or missing (" + key + ")");
                         continue;
                     }
 
-                    auto actualHex = Sha256HexFile(std::filesystem::path(key), deadline);
-                    if (!actualHex || *actualHex != expectedSha)
+                    auto const identityBefore = CaptureStagedObjectIdentity(key);
+                    if (!identityBefore.valid)
                     {
-                        noteError("a retained verified backup hash mismatch (" + key + ")");
+                        noteError("a retained verified backup physical identity could not be captured (" + key + ")");
                         continue;
                     }
-                    retainedVerified.push_back(key);
+
+                    auto const mtimeBefore = std::filesystem::last_write_time(fsPath, chkEc);
+                    if (chkEc)
+                    {
+                        noteError("a retained verified backup timestamp could not be read (" + key + ")");
+                        continue;
+                    }
+
+                    BackupProbeCandidate candidate;
+                    candidate.key = key;
+                    candidate.expectedSha = expectedSha;
+                    candidate.expectedSize = expectedSize;
+                    candidate.identityBefore = identityBefore;
+                    candidate.mtimeBefore = mtimeBefore;
+                    candidate.valid = true;
+                    probeCandidates.push_back(std::move(candidate));
                 }
             }
             Check(rc, db_);
+
+            // Step 2: Stream SHA-256 OUTSIDE Storage lock (F109)
+            lock.unlock();
+            struct Relocker
+            {
+                std::unique_lock<std::mutex>& lk;
+                ~Relocker() { if (!lk.owns_lock()) lk.lock(); }
+            } relocker{ lock };
+
+            if (backupCandidateHashingHook_)
+            {
+                backupCandidateHashingHook_();
+            }
+
+            for (auto& candidate : probeCandidates)
+            {
+                if (!candidate.valid) continue;
+                if (std::chrono::steady_clock::now() >= deadline)
+                {
+                    candidate.valid = false;
+                    break;
+                }
+                auto hex = Sha256HexFile(std::filesystem::path(Utf8ToWide(candidate.key)), deadline);
+                if (hex && *hex == candidate.expectedSha)
+                {
+                    candidate.actualHex = *hex;
+                }
+                else
+                {
+                    candidate.valid = false;
+                }
+            }
+            relocker.lk.lock();
+
+            // Step 3: Revalidate under reacquired lock
+            for (auto const& candidate : probeCandidates)
+            {
+                if (!candidate.valid)
+                {
+                    noteError("a retained verified backup hash mismatch (" + candidate.key + ")");
+                    continue;
+                }
+
+                auto const identityAfter = CaptureStagedObjectIdentity(candidate.key);
+                if (!identityAfter.valid || identityAfter != candidate.identityBefore)
+                {
+                    noteError("a retained verified backup physical identity changed during hashing (" + candidate.key + ")");
+                    continue;
+                }
+
+                std::error_code chkEc;
+                auto const fsPath = std::filesystem::path(Utf8ToWide(candidate.key));
+                auto const mtimeAfter = std::filesystem::last_write_time(fsPath, chkEc);
+                if (chkEc || mtimeAfter != candidate.mtimeBefore)
+                {
+                    noteError("a retained verified backup timestamp changed during hashing (" + candidate.key + ")");
+                    continue;
+                }
+
+                auto const actualSize = std::filesystem::file_size(fsPath, chkEc);
+                if (chkEc || actualSize != candidate.expectedSize)
+                {
+                    noteError("a retained verified backup size changed during hashing (" + candidate.key + ")");
+                    continue;
+                }
+
+                // Verify SQLite authority row still exists with verified=1, matching hash and size
+                Statement vq(db_, "SELECT sha256_hex, file_size FROM backup_manifest WHERE path_key=?1 AND verified=1;");
+                Bind(vq.value, 1, candidate.key);
+                int vrc = sqlite3_step(vq.value);
+                if (vrc == SQLITE_ROW)
+                {
+                    auto const currentExpectedSha = Text(vq.value, 0);
+                    auto const currentExpectedSize = static_cast<std::uint64_t>(sqlite3_column_int64(vq.value, 1));
+                    if (currentExpectedSha == candidate.expectedSha && currentExpectedSize == candidate.expectedSize)
+                    {
+                        retainedVerified.push_back(candidate.key);
+                        if (retainedVerified.size() >= kRetainedVerifiedBackups)
+                        {
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        noteError("a retained verified backup manifest record changed (" + candidate.key + ")");
+                    }
+                }
+                else
+                {
+                    noteError("a retained verified backup manifest record removed (" + candidate.key + ")");
+                }
+            }
         }
         if (retainedVerified.size() >= kRetainedVerifiedBackups)
         {
@@ -2635,22 +2894,32 @@ namespace mayasaba
 
         // Capture physical object identity before hashing to detect concurrent file replacement
         auto const identityBefore = CaptureStagedObjectIdentity(path);
+        // FAIL CLOSED (F108): If physical identity cannot be captured, refuse verification
+        if (!identityBefore.valid) return;
+
+        // Capture timestamp before hashing to detect in-place modification
+        auto const mtimeBefore = std::filesystem::last_write_time(fsPath, ec);
+        if (ec) return;
 
         // Stream SHA-256 OUTSIDE the Storage mutex so multi-gigabyte files do not monopolize store operations
         auto hex = Sha256HexFile(fsPath,
             std::chrono::steady_clock::now() + std::chrono::seconds(30));
         if (!hex || hex->empty()) return;
 
+        if (backupHashingHook_)
+        {
+            backupHashingHook_(path);
+        }
+
         // Reacquire lock to record verified manifest entry
         std::lock_guard lock(mutex_);
 
         // Re-verify that the file was not deleted, substituted, or modified during hashing
-        if (identityBefore.valid)
-        {
-            auto const identityAfter = CaptureStagedObjectIdentity(path);
-            if (!identityAfter.valid || identityAfter != identityBefore) return;
-        }
+        auto const identityAfter = CaptureStagedObjectIdentity(path);
+        if (!identityAfter.valid || identityAfter != identityBefore) return;
 
+        auto const mtimeAfter = std::filesystem::last_write_time(fsPath, ec);
+        if (ec || mtimeAfter != mtimeBefore) return;
 
         auto const sizeAfter = std::filesystem::file_size(fsPath, ec);
         if (ec || sizeAfter != sizeBefore) return;
@@ -2700,7 +2969,7 @@ namespace mayasaba
 
     Storage::CleanupEvaluation Storage::EvaluateCleanup(std::string const& trigger)
     {
-        std::lock_guard lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         CleanupEvaluation evaluation;
         evaluation.trigger = trigger;
 
@@ -2749,7 +3018,7 @@ namespace mayasaba
             }
         }
 
-        auto const collection = CollectCleanupCandidates_locked(
+        auto const collection = CollectCleanupCandidates_locked(lock,
             std::chrono::steady_clock::now() + std::chrono::seconds(30));
         evaluation.evaluated = true;
         evaluation.complete = collection.complete;
@@ -2824,11 +3093,11 @@ namespace mayasaba
 
     Storage::CleanupReclaimResult Storage::ReclaimEligibleCleanup()
     {
-        std::lock_guard lock(mutex_);
+        std::unique_lock<std::mutex> lock(mutex_);
         CleanupReclaimResult result;
         auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 
-        auto const collection = CollectCleanupCandidates_locked(deadline);
+        auto const collection = CollectCleanupCandidates_locked(lock, deadline);
         result.bounded = collection.bounded;
         result.complete = collection.complete;
         if (!collection.firstErrorEn.empty())
@@ -3679,22 +3948,8 @@ namespace mayasaba
             Exec("PRAGMA user_version=4;");
             Exec("COMMIT;");
             ReconcileCrashOperations();
-            // Automatic cleanup recovery on reopen, through the same opening/recovery
-            // owner as the crash-operation reconciliation above and inside the same
-            // schema phase, so the documented constructor policy applies: quarantine still
-            // denies writes, and the capacity gate stays suppressed for opening because a
-            // store must remain openable at its ceiling in order to be inspected and
-            // recovered. A cleanup that was interrupted between its committed intent and
-            // its recorded outcome is settled here, before any caller can observe the
-            // store. It never deletes bytes.
             RecoverInterruptedCleanups();
-            // Startup cleanup evaluation. It computes eligibility, records the result and
-            // deletes nothing, so it is safe to run while opening; reclamation stays an
-            // explicit separate operation.
             EvaluateCleanup("STARTUP");
-            // Scheduled triggers and evaluation-log pruning, through the opening path. A
-            // timer-driven invocation is still not wired, so an in-session threshold crossing
-            // is not noticed until the next open or an explicit call.
             RunScheduledMaintenance();
             openSchemaPhase_ = false;
         }

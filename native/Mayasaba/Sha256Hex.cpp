@@ -5,6 +5,7 @@
 #include <bcrypt.h>
 
 #include <array>
+#include <atomic>
 #include <fstream>
 #include <vector>
 #endif
@@ -68,11 +69,11 @@ namespace mayasaba
 #endif
     }
 
-    static std::size_t g_faultInjectionMaxBytes = 0;
+    static std::atomic<std::size_t> g_faultInjectionMaxBytes{0};
 
     void SetSha256FileFaultInjectionMaxBytesForTesting(std::size_t maxBytes)
     {
-        g_faultInjectionMaxBytes = maxBytes;
+        g_faultInjectionMaxBytes.store(maxBytes, std::memory_order_relaxed);
     }
 
     std::optional<std::string> Sha256HexFile(std::filesystem::path const& path,
@@ -118,7 +119,8 @@ namespace mayasaba
                 return std::nullopt;
 
             auto const bytesRead = static_cast<ULONG>(file.gcount());
-            if (g_faultInjectionMaxBytes > 0 && (totalBytesHashed + bytesRead) > g_faultInjectionMaxBytes)
+            auto const maxFault = g_faultInjectionMaxBytes.load(std::memory_order_relaxed);
+            if (maxFault > 0 && (totalBytesHashed + bytesRead) > maxFault)
             {
                 // Inject interrupted-read failure mid-stream
                 return std::nullopt;

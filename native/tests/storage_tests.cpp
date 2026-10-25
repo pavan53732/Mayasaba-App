@@ -7901,7 +7901,8 @@ fs::remove(bigManaged);
             sqlite3* rawDb = nullptr;
             EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &rawDb) == SQLITE_OK);
             sqlite3_exec(rawDb, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
-            auto insertLegacy = [&](std::string const& pathKey) {
+            auto insertLegacy = [&](std::string const& path) {
+                auto const pathKey = store.CleanupPathKeyForTesting(path);
                 sqlite3_stmt* stmt = nullptr;
                 sqlite3_prepare_v2(rawDb, "INSERT INTO backup_manifest(path_key,verified,verified_at,sha256_hex,file_size) "
                                           "VALUES(?1,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),'',0);", -1, &stmt, nullptr);
@@ -8013,7 +8014,7 @@ fs::remove(bigManaged);
         }
 
         {
-            CASES_BEGIN("105. Large directory traversal with 3500 entries guarantees monotonic forward progress across 2000-entry bounds");
+            CASES_BEGIN("105. Large directory traversal with 3500 entries guarantees monotonic forward progress across 2000-entry bounds with unique coverage");
             auto testFolder = folder / L"large_traversal";
             fs::create_directories(testFolder);
             auto storeDir = testFolder / L"large-traversal.db";
@@ -8024,13 +8025,37 @@ fs::remove(bigManaged);
             auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
             fs::create_directories(staging);
 
-            // Create 3500 files
+            // Create subdirectories with out-of-order names to guarantee non-lexicographical OS enumeration
+            std::vector<std::string> subdirs = {
+                "sub_omega", "sub_alpha", "sub_mid", "sub_beta", "sub_deep/nested_z", "sub_deep/nested_a"
+            };
+            for (auto const& s : subdirs)
+            {
+                fs::create_directories(staging / s);
+            }
+
+            // Create 3500 files with varied, non-sequential names across root and subdirs
+            std::set<std::string> expectedPaths;
             for (int i = 0; i < 3500; ++i)
             {
-                auto f = staging / ("cfile_" + std::to_string(10000 + i) + ".bin");
+                std::string relPath;
+                if (i % 7 == 0)
+                {
+                    relPath = "cfile_top_" + std::to_string(50000 - i) + ".bin";
+                }
+                else
+                {
+                    auto const& sub = subdirs[i % subdirs.size()];
+                    relPath = sub + "/cfile_item_" + std::to_string((i * 37) % 100000) + "_" + std::to_string(i) + ".bin";
+                }
+                auto f = staging / relPath;
                 std::ofstream of(f, std::ios::binary);
                 of.write("data", 4);
+
+                auto const canonicalKey = store.CleanupPathKeyForTesting(WideToUtf8(f.wstring()));
+                expectedPaths.insert(canonicalKey);
             }
+            EXPECT(expectedPaths.size() == 3500);
 
             store.ResetStagedDiscoveryCursorForTesting();
             std::size_t totalExamined = 0;
@@ -8052,8 +8077,164 @@ fs::remove(bigManaged);
                 }
             }
 
-            // All 3500 files reached across passes, verifying forward progress past 2000 visited entries
+            // All 3500 files reached across passes
             EXPECT(totalExamined == 3500);
+
+            // Verify unique coverage: every single one of the 3500 distinct files was visited
+            // and recorded into staging_grace without duplication or omission
+            std::set<std::string> recordedPaths;
+            {
+                sqlite3* db = nullptr;
+                EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &db) == SQLITE_OK);
+                sqlite3_stmt* stmt = nullptr;
+                EXPECT(sqlite3_prepare_v2(db, "SELECT path_key FROM staging_grace;", -1, &stmt, nullptr) == SQLITE_OK);
+                while (sqlite3_step(stmt) == SQLITE_ROW)
+                {
+                    auto const key = reinterpret_cast<char const*>(sqlite3_column_text(stmt, 0));
+                    if (key) recordedPaths.insert(key);
+                }
+                sqlite3_finalize(stmt);
+                sqlite3_close(db);
+            }
+
+            EXPECT(recordedPaths.size() == 3500);
+            EXPECT(recordedPaths == expectedPaths);
+
+            std::error_code ec;
+            fs::remove_all(testFolder, ec);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("106. Backup verification fails closed on identity failure or in-place content mutation");
+            auto testFolder = folder / L"backup_mut";
+            fs::create_directories(testFolder);
+            auto storeDir = testFolder / L"backup-mut.db";
+            mayasaba::Storage store(storeDir);
+
+            auto const storeParent = storeDir.parent_path();
+            auto const dbName = storeDir.filename().wstring();
+            auto backupPath = storeParent / (dbName + L".pre_migration.bak.1");
+
+            // Write 1024 bytes of initial data
+            {
+                std::ofstream of(backupPath, std::ios::binary);
+                std::string data(1024, 'A');
+                of.write(data.data(), data.size());
+            }
+
+            auto const backupPathUtf8 = WideToUtf8(backupPath.wstring());
+
+            // Part A: In-place same-size content mutation during hashing
+            // Hook is invoked while hashing; modifies 7 bytes in the middle of the file
+            store.SetBackupHashingHookForTesting([&](std::string const& p) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(25));
+                std::fstream fs(p, std::ios::in | std::ios::out | std::ios::binary);
+                fs.seekp(100);
+                fs.write("MUTATED", 7);
+                fs.flush();
+                fs.close();
+            });
+
+            store.RecordVerifiedBackup(backupPathUtf8);
+
+            // Verify that RecordVerifiedBackup refused to certify the mutated backup
+            {
+                sqlite3* db = nullptr;
+                EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &db) == SQLITE_OK);
+                sqlite3_stmt* stmt = nullptr;
+                EXPECT(sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM backup_manifest WHERE verified=1;", -1, &stmt, nullptr) == SQLITE_OK);
+                EXPECT(sqlite3_step(stmt) == SQLITE_ROW);
+                int count = sqlite3_column_int(stmt, 0);
+                EXPECT(count == 0);
+                sqlite3_finalize(stmt);
+                sqlite3_close(db);
+            }
+
+            // Part B: Clear hook, now RecordVerifiedBackup on unmodified file succeeds
+            store.SetBackupHashingHookForTesting(nullptr);
+            store.RecordVerifiedBackup(backupPathUtf8);
+
+            {
+                sqlite3* db = nullptr;
+                EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &db) == SQLITE_OK);
+                sqlite3_stmt* stmt = nullptr;
+                EXPECT(sqlite3_prepare_v2(db, "SELECT verified, file_size FROM backup_manifest WHERE path_key=?1;", -1, &stmt, nullptr) == SQLITE_OK);
+                auto const key = store.CleanupPathKeyForTesting(backupPathUtf8);
+                sqlite3_bind_text(stmt, 1, key.c_str(), -1, SQLITE_TRANSIENT);
+                EXPECT(sqlite3_step(stmt) == SQLITE_ROW);
+                EXPECT(sqlite3_column_int(stmt, 0) == 1);
+                EXPECT(sqlite3_column_int64(stmt, 1) == 1024);
+                sqlite3_finalize(stmt);
+                sqlite3_close(db);
+            }
+
+            // Part C: Non-existent file fails closed
+            store.RecordVerifiedBackup("non_existent_path.bak");
+            {
+                sqlite3* db = nullptr;
+                EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &db) == SQLITE_OK);
+                sqlite3_stmt* stmt = nullptr;
+                EXPECT(sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM backup_manifest WHERE path_key='non_existent_path.bak';", -1, &stmt, nullptr) == SQLITE_OK);
+                EXPECT(sqlite3_step(stmt) == SQLITE_ROW);
+                EXPECT(sqlite3_column_int(stmt, 0) == 0);
+                sqlite3_finalize(stmt);
+                sqlite3_close(db);
+            }
+
+            std::error_code ec;
+            fs::remove_all(testFolder, ec);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("107. Backup candidate verification during cleanup evaluation runs hashing outside Storage lock");
+            auto testFolder = folder / L"backup_cand_concurrency";
+            fs::create_directories(testFolder);
+            auto storeDir = testFolder / L"cand-concurrency.db";
+            mayasaba::Storage store(storeDir);
+
+            auto const storeParent = storeDir.parent_path();
+            auto const dbName = storeDir.filename().wstring();
+
+            // Create 3 verified backups (the required retained set)
+            for (int i = 1; i <= 3; ++i)
+            {
+                auto bp = storeParent / (dbName + L".pre_migration.bak." + std::to_wstring(i));
+                std::ofstream of(bp, std::ios::binary);
+                std::string d(4096 * i, 'B');
+                of.write(d.data(), d.size());
+                store.RecordVerifiedBackup(WideToUtf8(bp.wstring()));
+            }
+
+            // Create a 4th backup which would be a retirement candidate once the 3 retained are verified
+            auto bp4 = storeParent / (dbName + L".pre_migration.bak.4");
+            {
+                std::ofstream of(bp4, std::ios::binary);
+                std::string d(1024, 'C');
+                of.write(d.data(), d.size());
+            }
+
+            // Hook executed during candidate hashing outside the lock
+            bool hookFired = false;
+            bool mutexWasUnlocked = false;
+            store.SetBackupCandidateHashingHookForTesting([&]() {
+                hookFired = true;
+                // Mutex must NOT be held by the current thread or any other thread!
+                // try_lock() succeeds when mutex is NOT held.
+                if (store.MutexForTesting().try_lock())
+                {
+                    mutexWasUnlocked = true;
+                    store.MutexForTesting().unlock();
+                }
+            });
+
+            auto const eval = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(hookFired);
+            EXPECT(mutexWasUnlocked);
+            EXPECT(eval.evaluated);
+
+            store.SetBackupCandidateHashingHookForTesting(nullptr);
 
             std::error_code ec;
             fs::remove_all(testFolder, ec);

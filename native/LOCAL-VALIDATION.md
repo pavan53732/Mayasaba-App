@@ -4674,21 +4674,37 @@ Lowering the storage ceiling is now validated against currently accounted usage.
 Legacy `backup_manifest` records created before hash columns were added defaulted to empty `sha256_hex` and `file_size = 0`.
 - **Fix**: In `CollectCleanupCandidates_locked`, any manifest row where `expectedSha.empty() || expectedSize == 0` is rejected from the retained verified backup count and marked as needing re-verification. Retirement remains refused until three fully verified, digest-matched backups exist. Hardened test group 102 constructs 3 empty-digest legacy rows alongside disposable backup files to strictly discriminate the guard, proving that unverified rows cannot authorize cleanup.
 
-### Resumable traversal cursor recovery, subdirectory pruning, and forward progress past 2000 entries (S2-F06, S2-F07)
-Previously, directory traversal restarted from the root for each batch and counted skipped entries toward the 2,000 visited-entry work limit. In directories with >2,000 files, the search limit was exhausted before reaching the cursor, causing cyclic failure.
+### Deterministic hierarchical traversal, O(1) branch pruning, and entry resumption (F106, F107)
+Previously, directory enumeration order was non-lexicographical, and `CollectCleanupCandidates_locked` resumption skipped or revisited entries across batch bounds.
 - **Fix**:
-  1. Entries strictly before the cursor (`pathUtf8 < lastStagedDiscoveryCursor_`) are skipped without consuming the current pass's examined or visited-entry work budget.
-  2. Subdirectories lexicographically strictly before the cursor's directory are pruned via `it.disable_recursion_pending()`.
-  3. If the exact cursor file was deleted or renamed, matching the first entry with `pathUtf8 >= lastStagedDiscoveryCursor_` resumes forward progress immediately at the next surviving file without restarting from the beginning.
-  4. Work budgets (`visitedEntriesInPass >= 2000` and `examinedInPass >= 500`) bound the work performed during candidate examination in the active pass.
-  5. Tested in regression group 105 across 3,500 entries over 7 consecutive passes with 100% complete traversal.
+  1. Implemented deterministic recursive directory traversal (`traverseDir`) in `Storage.cpp`:
+     - Lexicographically sorts entries (`std::sort` on files and subdirectories).
+     - Subdirectory branch pruning in $O(1)$: compares the current directory against the cursor directory prefix and skips strictly preceding branches (`subdir < targetSubdir`).
+     - Resumption in $O(\log N)$ via `std::lower_bound` on sorted directory files.
+     - `filesAlreadyProcessed` guard prevents duplicate examination of directory files upon cursor resumption.
+  2. Hardened test group 105: generates 3,500 files named non-monotonically (`(i * 37) % 100000`) across nested subdirectories. An exact `std::set<std::string>` oracle verifies that all 3,500 distinct files are visited and registered in `staging_grace` with zero omissions and zero duplicates across 7 consecutive passes.
 
-### Streaming read fault injection & authoritative test vectors (P2)
-Added `SetSha256FileFaultInjectionMaxBytesForTesting` hook in `Sha256Hex.h` / `Sha256Hex.cpp` to simulate partial/interrupted reads mid-stream during multi-chunk hashing.
-- Regression group 100 validates `Sha256Hex` and `Sha256HexFile` against authoritative NIST test vectors and multi-chunk files (>2 chunks of 64 KiB).
-- Regression group 101 verifies that an interrupted read mid-stream fails closed with `std::nullopt` and creates no verified manifest row.
+### Fail-closed backup identity verification & same-size in-place mutation detection (F108)
+Physical object identity verification in `RecordVerifiedBackup` was previously skipped if identity capture failed. Additionally, same-size in-place file content modifications during hashing were undetected.
+- **Fix**:
+  1. `RecordVerifiedBackup` fails closed immediately if `CaptureStagedObjectIdentity(path).valid == false`.
+  2. Captures file modification timestamp `mtimeBefore` and verifies `mtimeAfter == mtimeBefore` upon reacquiring the lock, detecting in-place content modifications that preserve file size.
+  3. Added regression group 106: tests fail-closed behavior on missing file identity and verifies that in-place content mutation (modifying 7 bytes mid-file during the hashing hook) fails verification and produces zero verified rows in `backup_manifest`.
 
-### Tests (1–96 preserved, 97–105 added)
+### Backup candidate verification unlocked streaming (F109)
+`CollectCleanupCandidates_locked` previously held `mutex_` while streaming SHA-256 digests for backup candidates.
+- **Fix**:
+  1. Decoupled candidate verification into three phases:
+     - Phase 1 (under lock): Project candidates from `backup_manifest`, capturing `StagedObjectIdentity`, `mtimeBefore`, and file size.
+     - Phase 2 (unlocked): Release `mutex_` via `lock.unlock()` to stream `Sha256HexFile` without blocking concurrent storage operations.
+     - Phase 3 (under lock): Reacquire lock and re-verify physical identity, `mtimeAfter == mtimeBefore`, file size, and the SQLite authority record before admitting into `retainedVerified`.
+  2. Added regression group 107: uses `SetBackupCandidateHashingHookForTesting` to assert that `mutex_.try_lock()` succeeds during candidate hashing, proving the lock is unheld.
+
+### Thread-safe fault injection global state (F110)
+`g_faultInjectionMaxBytes` in `Sha256Hex.cpp` was previously a non-atomic global variable.
+- **Fix**: Converted to `std::atomic<std::size_t> g_faultInjectionMaxBytes{0};` with relaxed atomic load/store operations.
+
+### Tests (1–96 preserved, 97–107 added)
 
 | Group | Asserts |
 |---|---|
@@ -4700,22 +4716,25 @@ Added `SetSha256FileFaultInjectionMaxBytesForTesting` hook in `Sha256Hex.h` / `S
 | 102 | Legacy verified backup record with empty hash is rejected from retained verified set (fixes S2-F04). |
 | 103 | Removed cursor file between passes resumes forward progress at next file (fixes S2-F06). |
 | 104 | Traversal over directory trees respects visited entry budget (fixes S2-F07). |
-| 105 | Large directory traversal with 3500 entries guarantees monotonic forward progress across 2000-entry bounds (fixes S2-F06/F07). |
+| 105 | Large directory traversal with 3500 entries guarantees monotonic forward progress across 2000-entry bounds with unique coverage (fixes F106/F107). |
+| 106 | Backup verification fails closed on identity failure or in-place content mutation (fixes F108). |
+| 107 | Backup candidate verification during cleanup evaluation runs hashing outside Storage lock (fixes F109). |
 
 ### Executed results
 
-- `native/tests/bin/storage_tests.exe` SHA-256: `c575a1f9091353d835299675bd35d9f1b98cb9ebfbcadca56b6e385717265590`
-  **PASS: 105 of 105 executed native regression groups**, exit 0.
-- `native/Mayasaba/bin/x64/Release/Mayasaba.exe` SHA-256: `b07e1f111be0742f50a8dd981d65ed472ca820b71faf8a2c0e81b77faafb24ad`
+- `native/tests/bin/storage_tests.exe` SHA-256: `342c97ee34a776d998808078c7a73bc8fa232efad7df261bbba34b17a47b154e`
+  **PASS: 107 of 107 executed native regression groups**, exit 0.
+- `native/Mayasaba/bin/x64/Release/Mayasaba.exe` SHA-256: `eac74a481f563c76fc1d73adb6f3fee80f27551e589f2b1c2082933d4596c716`
   Application build Release x64 v145: exit 0 (0 warnings, 0 errors).
 - `native/Mayasaba/bin/x64/Release/App.xbf` SHA-256: `8ff36d87df831e09c799fa65e7f0d59cb48ceefc89fedd5a8fc6bd5cbc018b46`
 - `native/Mayasaba/bin/x64/Release/MainWindow.xbf` SHA-256: `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a`
 - Contract validator `native/tests/validate_contract_registry.py`: `PASS: 124 contract-registry and Screen 2 slice schema checks`, exit 0.
 - Sources:
-  - `native/Mayasaba/Storage.cpp`: `a56407e23711ac99eec81a08bbf4f389526eba311bd71ba6be8f23d76860c8cc`
-  - `native/Mayasaba/Storage.h`: `1d42a115c71817a09f6b790d57a96ab0990f9994fff5ebf73b9f6f9dab0c205d`
-  - `native/Mayasaba/Sha256Hex.cpp`: `10b9b7551c1c6409612ab25ad48f4eaf17d9cd893161b7758943fa24ee872784`
+  - `native/Mayasaba/Storage.cpp`: `b431cea38416d3cb0c379f25721c5f5a16cbe394e799f7bbef9a872169b07a6a`
+  - `native/Mayasaba/Storage.h`: `1c3e7d3797a799c497a9b935aab6f5d5dcbd4e8fba4bfb06fcb8ab57144adc29`
+  - `native/Mayasaba/Sha256Hex.cpp`: `b29b0a8552b0ff4fead5a8762dab16d4668267e42cf65fd3ba2c72ef35f2cdb0`
   - `native/Mayasaba/Sha256Hex.h`: `ea0999836d056c1232b68341521927fd1aa27da0e901235a45f9ff65aff9e6f2`
-  - `native/tests/storage_tests.cpp`: `f8506a3ab6021e0be4e1d8d83abe73861fc31c3615c82ab35448d42c1f66cf32`
+  - `native/tests/storage_tests.cpp`: `0f5a61ae9909bc038ba461d521ad9c3a7d72995fa917714efac39f495219b2b4`
+  - `native/tests/storage_tests.vcxproj`: `05e4201ba87585f19eccc81a38f5d0dc8973ce8e9b26d19442bec5cbb96b9822`
 
 

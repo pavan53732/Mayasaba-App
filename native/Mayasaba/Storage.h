@@ -596,6 +596,9 @@ namespace mayasaba
         void SetInspectionFileHashedHookForTesting(std::function<void()> hook) { inspectionFileHashedHook_ = std::move(hook); }
         void SetQueryActionCenterSnapshotHookForTesting(std::function<void()> hook) { queryActionCenterSnapshotHook_ = std::move(hook); }
         void SetSaveDraftAttachmentsItemHookForTesting(std::function<void(size_t index, std::string const& id)> hook) { saveDraftAttachmentsItemHook_ = std::move(hook); }
+        void SetBackupHashingHookForTesting(std::function<void(std::string const& path)> hook) { backupHashingHook_ = std::move(hook); }
+        void SetBackupCandidateHashingHookForTesting(std::function<void()> hook) { backupCandidateHashingHook_ = std::move(hook); }
+        std::string CleanupPathKeyForTesting(std::string const& path) const { return CleanupPathKey(path); }
         std::mutex& MutexForTesting() noexcept { return mutex_; }
 
         // Exercises the exact production SHA-256 hex used for the Action Center
@@ -853,7 +856,7 @@ namespace mayasaba
             std::uint64_t examined{0};
             std::string firstErrorEn;
         };
-        CleanupCollection CollectCleanupCandidates_locked(std::chrono::steady_clock::time_point deadline);
+        CleanupCollection CollectCleanupCandidates_locked(std::unique_lock<std::mutex>& lock, std::chrono::steady_clock::time_point deadline);
         void RecordCleanupEvaluation_locked(CleanupEvaluation const& evaluation);
         std::uint64_t EffectiveCeilingBytes_locked();
         std::uint64_t PruneCleanupEvaluations_locked();
@@ -863,6 +866,8 @@ namespace mayasaba
         std::string forcedPathCanonicalFailurePath_;
         std::string forcedStagedPresenceFailurePath_;
         std::function<void()> clearDeletionPhaseHook_;
+        std::function<void(std::string const& path)> backupHashingHook_;
+        std::function<void()> backupCandidateHashingHook_;
         std::function<void()> reclaimRemovalPhaseHook_;
         // True only while the constructor runs its idempotent schema DDL, migration and the
         // two bounded recovery passes (crash-operation reconciliation and interrupted-cleanup
