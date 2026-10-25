@@ -4396,3 +4396,67 @@ This is recorded rather than presented as verified coverage.
   remain unstarted. No UI result from any earlier executable hash applies to `27f131a2…`.
 - **R05 remains incomplete**: the retention classes and the scheduling loop above are
   missing, and migration/recovery admission on an exhausted volume is unproven.
+
+## 2026-10-25 — first executed native UI acceptance run (A02 sizing, selector reachability)
+
+Run by driving the real application with the local computer-use skill
+(`~/.workbuddy-ai/skills/computer-use`), not by a harness fixture. Evidence under
+`~/.codex/visualizations/2026/10/25/ui-run/`.
+
+Artifact identity — these results apply **only** to these hashes:
+
+- `native/Mayasaba/bin/x64/Release/Mayasaba.exe`
+  `3c071193d4eab6cc5ac4395951a036d052adeae82c6d48873f9c92e3b237024e`
+- `native/Mayasaba/bin/x64/Release/MainWindow.xbf`
+  `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a`
+
+Environment: Windows 11 x64 build 26200, 125% display scale (physical = 1.25 × logical),
+isolated store via `MAYASABA_STORE_PATH` under the run's `data/` directory. The production
+store was never opened.
+
+### Executed observations
+
+| # | Observation | Evidence |
+|---|---|---|
+| 1 | Cold launch shows `Mayasaba · Engineering Control Room`; Welcome screen exposes the CLI readiness panel (`#WelcomeReadinessPanel`) with per-CLI status, `#SkipButton` and `#NextButton`. | `evidence/01-launch.png`, UIA snapshot in the run log |
+| 2 | Physical mouse click on `#NextButton` (pointer at absolute `[1565, 891]`) advances to Screen 2, the reusable project selector. Not a UIA Invoke — a real injected click. | `evidence/02-screen2.png` |
+| 3 | Screen 2 exposes `#FolderHeading`, `#ChooseFolderButton`, `#CreateNewProjectButton`, `#RecentProjectsFilterBox`, `#RecentProjectsStatusFilter`, `#NoRecentProjectsText`, `#PreviousRecentButton` (disabled), `#NextRecentButton` (disabled), `#FolderBackButton`. | UIA snapshot in the run log |
+| 4 | Client area at 520 × 640 **logical**: requested physical 650 × 800, captured client raster 650 × 800 → 520 × 640 logical exactly. | `evidence/size-520x640.png` |
+| 5 | Client area at 640 × 480 **logical**: requested physical 800 × 600, captured client raster 800 × 600 → 640 × 480 logical exactly. | `evidence/size-640x480.png` |
+| 6 | At 640 × 480 logical the selector controls are present with positive rects: heading `[123,205,721,250]`, Open `[123,348,821,397]`, Create `[123,410,821,459]`, filter box `[146,549,627,590]`, status combo `[642,544,802,594]`. | `evidence/uia-640x480.txt` |
+
+Physical and logical client sizes are recorded separately above; outer window dimensions are
+**not** substituted for client dimensions. `resize` was given physical pixels and the
+resulting client raster was measured independently from the capture, so the logical values
+are derived, not assumed.
+
+### Finding: content below the fold at 640 × 480 logical
+
+`#NoRecentProjectsText` reports rect `[146, 605, 797, 624]`, whose bottom edge (624) exceeds
+the 600 px client height, and the paging buttons were not enumerated within depth 3 at that
+size. The body is a scroller (`#FolderBodyScroller`), so this is content requiring scroll
+rather than clipped content — but "reachable only after scrolling" is not the same claim as
+"visible", and the empty-state and paging controls are therefore **not visible at the
+smallest declared size**. Recorded as an observation, not yet dispositioned as pass or fail
+against the layout criterion.
+
+### Dispositions
+
+- A02 (logical-client-size measurement oracle): **partially executed**. Both declared sizes
+  measured with real client rasters at real 125% DPI. Not yet measured at 100%, 150% or
+  200% scaling.
+- Selector reachability: **PASS** for presence and positive geometry of the primary controls
+  at both sizes, by physical input to reach the screen.
+- Empty-attention-card withdrawal and paging reachability: **INCONCLUSIVE** — present in the
+  tree, but below the fold at 640 × 480 and not exercised.
+- Not run at all, and not claimed: Explorer-origin single and mixed file/folder drops;
+  admission count/size/digest; locked pending-payload protection; keyboard-only flows and
+  focus restoration; Narrator; light/dark and high-contrast themes; reduced motion; text
+  scaling.
+
+### Process note
+
+The first two launch attempts produced no window: `launch` rejects `--json`, and a launched
+GUI process is reaped when the invoking shell command ends, so launch, focus, input and
+capture must occur in **one** command. Both are environment facts already recorded in
+`AGENTS.md` §3 and the project memory; they cost two wasted attempts here.
