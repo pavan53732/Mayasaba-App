@@ -1752,7 +1752,14 @@ def main():
             log("      before the observation that would have earned it.")
             log("=" * 70 + "\n")
             return 1
+        is_strict = ("--strict" in sys.argv) or (os.environ.get("MAYASABA_STRICT_CERTIFICATION", "0") == "1")
         if inconclusive_count > 0:
+            if is_strict:
+                log("\nSTATUS: STRICT CERTIFICATION FAILED (INCONCLUSIVE CRITERIA DISALLOWED IN STRICT MODE)")
+                log("NOTE: Strict certification requires every criterion to be PASS or justified NOT_APPLICABLE.")
+                log("      Inconclusive results cannot certify a release gate.")
+                log("=" * 70 + "\n")
+                return 1
             log("\nSTATUS: ACCEPTANCE CHECKS COMPLETE (INCONCLUSIVE CRITERIA RETAINED)")
             log("NOTE: Desktop automation environment constraints prevent automated verification")
             log("      of synthetic OLE drag-drop; native manual testing or interactive session required.")

@@ -4,6 +4,7 @@
 #include "ProtectedDraft.h"
 #include "Sha256Hex.h"
 #include <filesystem>
+#include <fstream>
 #include <utility>
 #include <sstream>
 #include <iomanip>
@@ -2133,13 +2134,18 @@ namespace mayasaba
             observed.freeBytes = space.available;
         }
 
-        constexpr uintmax_t ceiling = 10ull * 1024 * 1024 * 1024;
+        std::uintmax_t const ceiling = static_cast<std::uintmax_t>(EffectiveCeilingBytes_locked());
         constexpr uintmax_t reserve = 5ull * 1024 * 1024 * 1024;
         if (observed.managedBytes + bytes >= ceiling)
+        {
+            // The diagnostic names the ceiling that is actually in force. A hardcoded "10 GiB"
+            // would misreport the reason once the user has moved the ceiling.
+            std::uint64_t const gib = EffectiveCeilingBytes_locked() / (1024ull * 1024ull * 1024ull);
             throw std::runtime_error(
-                "This operation would take the local project store past its 10 GiB ceiling of Mayasaba-managed "
-                "bytes (database, attachments and backups); it was refused before any byte was copied. Protected "
-                "data was retained and nothing was deleted.");
+                "This operation would take the local project store past its " + std::to_string(gib) +
+                " GiB ceiling of Mayasaba-managed bytes (database, attachments and backups); it was refused before "
+                "any byte was copied. Protected data was retained and nothing was deleted.");
+        }
         // The required reserve is not just a floor to compare against: the operation's own
         // output, plus growth already admitted but not yet written, must fit ABOVE it.
         // Checking only `freeBytes < reserve` let a copy consume the reserve itself.
@@ -2314,6 +2320,7 @@ namespace mayasaba
             }
             else
             {
+                bool seekingCursor = !lastStagedDiscoveryCursor_.empty();
                 for (; it != end; it.increment(walkEc))
                 {
                     if (walkEc)
@@ -2321,14 +2328,6 @@ namespace mayasaba
                         noteError("the staging tree could not be fully enumerated (" + walkEc.message() + ")");
                         break;
                     }
-                    // The budget covers discovery, not only deletion: walking a large tree
-                    // while holding the store mutex is exactly what the bound exists to stop.
-                    if (std::chrono::steady_clock::now() >= deadline || out.examined >= kBatchLimit)
-                    {
-                        out.bounded = true;
-                        break;
-                    }
-                    ++out.examined;
 
                     std::error_code typeEc;
                     auto const status = it->symlink_status(typeEc);
@@ -2345,27 +2344,51 @@ namespace mayasaba
                     if (!std::filesystem::is_regular_file(status)) continue;
 
                     auto const pathUtf8 = WideToUtf8(it->path().wstring());
+                    if (seekingCursor)
+                    {
+                        if (pathUtf8 == lastStagedDiscoveryCursor_)
+                        {
+                            seekingCursor = false;
+                        }
+                        else
+                        {
+                            continue;
+                        }
+                    }
+
+                    // The budget covers discovery, not only deletion: walking a large tree
+                    // while holding the store mutex is exactly what the bound exists to stop.
+                    if (std::chrono::steady_clock::now() >= deadline || out.examined >= kBatchLimit)
+                    {
+                        out.bounded = true;
+                        lastStagedDiscoveryCursor_ = pathUtf8;
+                        break;
+                    }
+                    ++out.examined;
+
+                    auto const key = CleanupPathKey(pathUtf8);
                     int const refs = CountOtherProtectedReferences_locked(pathUtf8, std::string{}, std::string{});
-                    if (refs != 0) continue;   // referenced, or unknown: retained
+                    if (refs != 0)
+                    {
+                        if (!key.empty())
+                        {
+                            out.referencedPathsToInvalidateGrace.push_back(key);
+                        }
+                        continue;   // referenced, or unknown: retained
+                    }
 
                     // The grace clock starts at the first durable observation that this copy is
                     // unreferenced, not at its modification time. An old file is not evidence
                     // that its originating operation reached publication or recovery, and a
                     // missing reference may itself be the result of an interrupted workflow.
-                    auto const key = CleanupPathKey(pathUtf8);
                     if (key.empty())
                     {
                         noteError("a staged copy's path could not be keyed for the grace clock");
                         continue;
                     }
-                    {
-                        Statement ins(db_, "INSERT OR IGNORE INTO staging_grace(path_key,project_id,first_unreferenced_at) "
-                                           "VALUES(?1,?2,strftime('%Y-%m-%dT%H:%M:%fZ','now'));");
-                        Bind(ins.value, 1, key);
-                        Bind(ins.value, 2, std::string{});
-                        Check(sqlite3_step(ins.value), db_);
-                    }
+
                     bool graceElapsed = false;
+                    bool hasGrace = false;
                     {
                         // The grace length is a compile-time constant, so it is inlined
                         // rather than bound: this build's SQLite surface does not expose
@@ -2375,8 +2398,21 @@ namespace mayasaba
                         Statement q(db_, graceSql.c_str());
                         Bind(q.value, 1, key);
                         int const rc = sqlite3_step(q.value);
-                        if (rc == SQLITE_ROW) graceElapsed = sqlite3_column_int(q.value, 0) != 0;
+                        if (rc == SQLITE_ROW)
+                        {
+                            hasGrace = true;
+                            graceElapsed = sqlite3_column_int(q.value, 0) != 0;
+                        }
+                        else if (rc == SQLITE_DONE)
+                        {
+                            hasGrace = false;
+                        }
                         else Check(rc, db_);
+                    }
+                    if (!hasGrace)
+                    {
+                        out.unregisteredGracePaths.push_back(key);
+                        continue;
                     }
                     if (!graceElapsed) continue;
 
@@ -2395,6 +2431,14 @@ namespace mayasaba
                     candidate.identity = CaptureStagedObjectIdentity(pathUtf8);
                     out.candidates.push_back(std::move(candidate));
                 }
+                if (walkEc)
+                {
+                    noteError("the staging tree could not be fully enumerated (" + walkEc.message() + ")");
+                }
+                if (seekingCursor || (!out.bounded && it == end))
+                {
+                    lastStagedDiscoveryCursor_.clear();
+                }
             }
         }
 
@@ -2404,11 +2448,41 @@ namespace mayasaba
         // be guaranteed, so nothing is retired.
         std::vector<std::string> retainedVerified;
         {
-            Statement q(db_, "SELECT path_key FROM backup_manifest WHERE verified=1 ORDER BY verified_at DESC;");
+            Statement q(db_, "SELECT path_key, sha256_hex, file_size FROM backup_manifest WHERE verified=1 ORDER BY verified_at DESC;");
             int rc = SQLITE_OK;
             while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
             {
-                if (retainedVerified.size() < kRetainedVerifiedBackups) retainedVerified.push_back(Text(q.value, 0));
+                if (retainedVerified.size() < kRetainedVerifiedBackups)
+                {
+                    auto const key = Text(q.value, 0);
+                    auto const expectedSha = Text(q.value, 1);
+                    auto const expectedSize = static_cast<std::uint64_t>(sqlite3_column_int64(q.value, 2));
+
+                    if (!expectedSha.empty())
+                    {
+                        std::error_code chkEc;
+                        auto const actualSize = std::filesystem::file_size(std::filesystem::path(key), chkEc);
+                        if (chkEc || actualSize != expectedSize)
+                        {
+                            noteError("a retained verified backup size mismatch or missing (" + key + ")");
+                            continue;
+                        }
+                        std::ifstream bf(key, std::ios::binary);
+                        if (!bf)
+                        {
+                            noteError("a retained verified backup could not be opened for verification (" + key + ")");
+                            continue;
+                        }
+                        std::string buf((std::istreambuf_iterator<char>(bf)), std::istreambuf_iterator<char>());
+                        auto actualHex = Sha256Hex(buf);
+                        if (!actualHex || *actualHex != expectedSha)
+                        {
+                            noteError("a retained verified backup hash mismatch (" + key + ")");
+                            continue;
+                        }
+                    }
+                    retainedVerified.push_back(key);
+                }
             }
             Check(rc, db_);
         }
@@ -2433,7 +2507,7 @@ namespace mayasaba
                         noteError("the store directory could not be fully enumerated (" + dirEc.message() + ")");
                         break;
                     }
-                    if (std::chrono::steady_clock::now() >= deadline)
+                    if (std::chrono::steady_clock::now() >= deadline || out.examined >= kBatchLimit)
                     {
                         out.bounded = true;
                         break;
@@ -2458,10 +2532,19 @@ namespace mayasaba
                     }
                     backups.emplace_back(written, it->path());
                 }
+                if (dirEc)
+                {
+                    noteError("the store directory could not be fully enumerated (" + dirEc.message() + ")");
+                }
                 std::sort(backups.begin(), backups.end(),
                     [](auto const& a, auto const& b) { return a.first > b.first; });
                 for (auto const& backup : backups)
                 {
+                    if (out.candidates.size() >= kBatchLimit)
+                    {
+                        out.bounded = true;
+                        break;
+                    }
                     auto const pathUtf8 = WideToUtf8(backup.second.wstring());
                     auto const key = CleanupPathKey(pathUtf8);
                     if (std::find(retainedVerified.begin(), retainedVerified.end(), key) != retainedVerified.end())
@@ -2492,14 +2575,26 @@ namespace mayasaba
         std::lock_guard lock(mutex_);
         auto const key = CleanupPathKey(path);
         if (key.empty()) return;
+        std::error_code ec;
+        auto const size = std::filesystem::file_size(std::filesystem::path(path), ec);
+        if (ec) return;
+        std::ifstream f(path, std::ios::binary);
+        if (!f) return;
+        std::string buffer((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        auto hex = Sha256Hex(buffer);
+        if (!hex) return;
+
         AdmitWrite_locked();
         Exec("BEGIN IMMEDIATE;");
         try
         {
-            Statement q(db_, "INSERT INTO backup_manifest(path_key,verified,verified_at) "
-                             "VALUES(?1,1,strftime('%Y-%m-%dT%H:%M:%fZ','now')) "
-                             "ON CONFLICT(path_key) DO UPDATE SET verified=1, verified_at=excluded.verified_at;");
+            Statement q(db_, "INSERT INTO backup_manifest(path_key,verified,verified_at,sha256_hex,file_size) "
+                             "VALUES(?1,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?2,?3) "
+                             "ON CONFLICT(path_key) DO UPDATE SET verified=1, verified_at=excluded.verified_at, "
+                             "sha256_hex=excluded.sha256_hex, file_size=excluded.file_size;");
             Bind(q.value, 1, key);
+            Bind(q.value, 2, *hex);
+            sqlite3_bind_int64(q.value, 3, static_cast<sqlite3_int64>(size));
             Check(sqlite3_step(q.value), db_);
             Exec("COMMIT;");
         }
@@ -2508,6 +2603,12 @@ namespace mayasaba
             RollbackAfterFailure_locked();
             throw;
         }
+    }
+
+    void Storage::ResetStagedDiscoveryCursorForTesting()
+    {
+        std::lock_guard lock(mutex_);
+        lastStagedDiscoveryCursor_.clear();
     }
 
     void Storage::BackdateStagingGraceForTesting(std::string const& path, std::uint64_t days)
@@ -2547,14 +2648,26 @@ namespace mayasaba
         }
         else if (trigger == "EIGHTY_PERCENT")
         {
-            std::uint64_t managed = attachmentBytes_ + otherManagedBytes_;
+            std::uint64_t managed = managedLedgerOverrideForTesting_
+                ? managedLedgerAttachmentForTesting_ + managedLedgerOtherForTesting_
+                : attachmentBytes_ + otherManagedBytes_;
             for (auto const& suffix : { L"", L"-wal", L"-shm" })
             {
                 std::error_code ec;
                 auto const bytes = std::filesystem::file_size(file_.wstring() + suffix, ec);
-                if (!ec) managed += bytes;
+                if (!ec)
+                {
+                    managed += bytes;
+                }
+                else if (ec != std::errc::no_such_file_or_directory)
+                {
+                    evaluation.dispositionEn = "Cleanup could not be fully evaluated: a database companion file size could not be read (" + ec.message() + ").";
+                    evaluation.complete = false;
+                    evaluation.evaluated = true;
+                    return evaluation;
+                }
             }
-            constexpr std::uint64_t ceiling = 10ull * 1024 * 1024 * 1024;
+            std::uint64_t const ceiling = EffectiveCeilingBytes_locked();
             if (managed * 10 < ceiling * 8)
             {
                 evaluation.dispositionEn = "Cleanup was not evaluated: Mayasaba-managed storage is below 80% of its ceiling.";
@@ -2566,6 +2679,7 @@ namespace mayasaba
             std::chrono::steady_clock::now() + std::chrono::seconds(30));
         evaluation.evaluated = true;
         evaluation.complete = collection.complete;
+        evaluation.bounded = collection.bounded;
         evaluation.examined = collection.examined;
         evaluation.candidates = collection.candidates.size();
         for (auto const& candidate : collection.candidates) evaluation.candidateBytes += candidate.bytes;
@@ -2609,6 +2723,20 @@ namespace mayasaba
         Exec("BEGIN IMMEDIATE;");
         try
         {
+            for (auto const& refKey : collection.referencedPathsToInvalidateGrace)
+            {
+                Statement del(db_, "DELETE FROM staging_grace WHERE path_key=?1;");
+                Bind(del.value, 1, refKey);
+                Check(sqlite3_step(del.value), db_);
+            }
+            for (auto const& graceKey : collection.unregisteredGracePaths)
+            {
+                Statement ins(db_, "INSERT OR IGNORE INTO staging_grace(path_key,project_id,first_unreferenced_at) "
+                                   "VALUES(?1,?2,strftime('%Y-%m-%dT%H:%M:%fZ','now'));");
+                Bind(ins.value, 1, graceKey);
+                Bind(ins.value, 2, std::string{});
+                Check(sqlite3_step(ins.value), db_);
+            }
             RecordCleanupEvaluation_locked(evaluation);
             Exec("COMMIT;");
         }
@@ -2634,6 +2762,35 @@ namespace mayasaba
             result.reasonEn = "Reclamation did not run: " + collection.firstErrorEn +
                 ". Nothing was deleted, and this is not a report that nothing is eligible.";
             return result;
+        }
+
+        if (!collection.referencedPathsToInvalidateGrace.empty() || !collection.unregisteredGracePaths.empty())
+        {
+            AdmitWrite_locked();
+            Exec("BEGIN IMMEDIATE;");
+            try
+            {
+                for (auto const& refKey : collection.referencedPathsToInvalidateGrace)
+                {
+                    Statement del(db_, "DELETE FROM staging_grace WHERE path_key=?1;");
+                    Bind(del.value, 1, refKey);
+                    Check(sqlite3_step(del.value), db_);
+                }
+                for (auto const& graceKey : collection.unregisteredGracePaths)
+                {
+                    Statement ins(db_, "INSERT OR IGNORE INTO staging_grace(path_key,project_id,first_unreferenced_at) "
+                                       "VALUES(?1,?2,strftime('%Y-%m-%dT%H:%M:%fZ','now'));");
+                    Bind(ins.value, 1, graceKey);
+                    Bind(ins.value, 2, std::string{});
+                    Check(sqlite3_step(ins.value), db_);
+                }
+                Exec("COMMIT;");
+            }
+            catch (...)
+            {
+                RollbackAfterFailure_locked();
+                throw;
+            }
         }
 
         for (auto const& candidate : collection.candidates)
@@ -2709,6 +2866,135 @@ namespace mayasaba
         {
             result.reasonEn = "Reclamation stopped at the contract bound (500 objects or 30 seconds). "
                 "Run it again to continue; protected data was retained.";
+        }
+        return result;
+    }
+
+    std::uint64_t Storage::EffectiveCeilingBytes_locked()
+    {
+        // The creation gate runs before SQLite is open, so there is no settings table to read
+        // yet. The default is the correct answer in that state, not an error.
+        if (db_ == nullptr) return kDefaultCeilingGiB * 1024ull * 1024ull * 1024ull;
+        std::uint64_t gib = kDefaultCeilingGiB;
+        Statement q(db_, "SELECT value FROM storage_settings WHERE setting_key='ceiling_gib';");
+        int const rc = sqlite3_step(q.value);
+        if (rc == SQLITE_ROW)
+        {
+            auto const text = Text(q.value, 0);
+            std::uint64_t parsed = 0;
+            bool numeric = !text.empty();
+            for (char ch : text)
+            {
+                if (ch < '0' || ch > '9') { numeric = false; break; }
+                parsed = parsed * 10 + static_cast<std::uint64_t>(ch - '0');
+                if (parsed > kMaxCeilingGiB) { numeric = false; break; }
+            }
+            if (numeric && parsed >= kMinCeilingGiB && parsed <= kMaxCeilingGiB) gib = parsed;
+        }
+        else
+        {
+            Check(rc, db_);
+        }
+        // Clamp rather than trust: a persisted value outside the supported range falls back
+        // to the default instead of silently disabling the ceiling.
+        if (gib < kMinCeilingGiB || gib > kMaxCeilingGiB) gib = kDefaultCeilingGiB;
+        return gib * 1024ull * 1024ull * 1024ull;
+    }
+
+    void Storage::SetStorageCeilingGiB(std::uint64_t gib)
+    {
+        if (gib < kMinCeilingGiB || gib > kMaxCeilingGiB)
+        {
+            throw std::runtime_error(
+                "The storage ceiling must be between 2 and 100 GiB; the requested value was refused and the "
+                "existing ceiling is unchanged. No protected data was touched.");
+        }
+        std::lock_guard lock(mutex_);
+        AdmitWrite_locked();
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            Statement q(db_, "INSERT INTO storage_settings(setting_key,value) VALUES('ceiling_gib',?1) "
+                             "ON CONFLICT(setting_key) DO UPDATE SET value=excluded.value;");
+            Bind(q.value, 1, std::to_string(gib));
+            Check(sqlite3_step(q.value), db_);
+            Exec("COMMIT;");
+        }
+        catch (...)
+        {
+            RollbackAfterFailure_locked();
+            throw;
+        }
+        ++managedScopeGeneration_;
+    }
+
+    std::uint64_t Storage::StorageCeilingGiB()
+    {
+        std::lock_guard lock(mutex_);
+        return EffectiveCeilingBytes_locked() / (1024ull * 1024ull * 1024ull);
+    }
+
+    std::uint64_t Storage::PruneCleanupEvaluations_locked()
+    {
+        // The evaluation log is bookkeeping, not history: it grows one row per evaluation
+        // (including every open) and nothing else reclaims it. Keep a bounded recent window.
+        constexpr std::uint64_t kKeepEvaluations = 200;
+        std::uint64_t before = 0;
+        {
+            Statement q(db_, "SELECT count(*) FROM cleanup_evaluations;");
+            Check(sqlite3_step(q.value), db_);
+            before = static_cast<std::uint64_t>(sqlite3_column_int64(q.value, 0));
+        }
+        if (before <= kKeepEvaluations) return 0;
+        Statement q(db_, "DELETE FROM cleanup_evaluations WHERE evaluation_id NOT IN "
+                         "(SELECT evaluation_id FROM cleanup_evaluations ORDER BY evaluation_id DESC LIMIT 200);");
+        Check(sqlite3_step(q.value), db_);
+        return before - kKeepEvaluations;
+    }
+
+    void Storage::SetManagedLedgerForTesting(std::uint64_t attachmentBytes, std::uint64_t otherManagedBytes)
+    {
+        std::lock_guard lock(mutex_);
+        managedLedgerAttachmentForTesting_ = attachmentBytes;
+        managedLedgerOtherForTesting_ = otherManagedBytes;
+        managedLedgerOverrideForTesting_ = true;
+    }
+
+    std::uint64_t Storage::CleanupEvaluationCount()
+    {
+        std::lock_guard lock(mutex_);
+        Statement q(db_, "SELECT count(*) FROM cleanup_evaluations;");
+        Check(sqlite3_step(q.value), db_);
+        return static_cast<std::uint64_t>(sqlite3_column_int64(q.value, 0));
+    }
+
+    Storage::MaintenanceResult Storage::RunScheduledMaintenance()
+    {
+        MaintenanceResult result;
+        // Each trigger self-gates, so calling this repeatedly is safe and idempotent within
+        // the same 24-hour period and below the capacity threshold. A declined trigger is a
+        // correct outcome, not a failure, which is why the result records both.
+        auto const changed = EvaluateCleanup("CHANGED_DAY");
+        result.changedDayInvoked = true;
+        result.changedDayEvaluated = changed.evaluated;
+        result.changedDayDispositionEn = changed.dispositionEn;
+        auto const eighty = EvaluateCleanup("EIGHTY_PERCENT");
+        result.eightyPercentInvoked = true;
+        result.eightyPercentEvaluated = eighty.evaluated;
+        result.eightyPercentDispositionEn = eighty.dispositionEn;
+
+        std::lock_guard lock(mutex_);
+        AdmitWrite_locked();
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            result.evaluationsPruned = PruneCleanupEvaluations_locked();
+            Exec("COMMIT;");
+        }
+        catch (...)
+        {
+            RollbackAfterFailure_locked();
+            throw;
         }
         return result;
     }
@@ -2792,13 +3078,19 @@ namespace mayasaba
             observed.freeBytes = space.available;
         }
 
-        constexpr uintmax_t ceiling = 10ull * 1024 * 1024 * 1024;
+        std::uintmax_t const ceiling = static_cast<std::uintmax_t>(EffectiveCeilingBytes_locked());
         constexpr uintmax_t reserve = 5ull * 1024 * 1024 * 1024;
         if (observed.managedBytes >= ceiling)
+        {
+            // Same rule as the reservation path: name the ceiling in force. Before SQLite is
+            // open there is no persisted setting, so this is the default by definition.
+            std::uint64_t const gib = EffectiveCeilingBytes_locked() / (1024ull * 1024ull * 1024ull);
             throw std::runtime_error(
-                "Local project store reached its 10 GiB ceiling of Mayasaba-managed bytes (database and attachments); "
+                "Local project store reached its " + std::to_string(gib) +
+                " GiB ceiling of Mayasaba-managed bytes (database and attachments); "
                 "protected data was retained and nothing was deleted. Reclaim eligible data or relocate the store "
                 "before writing again.");
+        }
         if (observed.freeBytes < reserve)
             throw std::runtime_error(
                 "Local storage free-space reserve is below 5 GiB; protected data was retained and nothing was "
@@ -3116,7 +3408,28 @@ namespace mayasaba
             // count toward the three retained backups the policy requires.
             Exec("CREATE TABLE IF NOT EXISTS backup_manifest("
                  "path_key TEXT PRIMARY KEY, verified INTEGER NOT NULL DEFAULT 0,"
-                 "verified_at TEXT NOT NULL DEFAULT '');");
+                 "verified_at TEXT NOT NULL DEFAULT '',"
+                 "sha256_hex TEXT NOT NULL DEFAULT '',"
+                 "file_size INTEGER NOT NULL DEFAULT 0);");
+
+            {
+                bool hasSha = false;
+                Statement info(db_, "PRAGMA table_info(backup_manifest);");
+                while (sqlite3_step(info.value) == SQLITE_ROW)
+                {
+                    if (Text(info.value, 1) == "sha256_hex") { hasSha = true; break; }
+                }
+                if (!hasSha)
+                {
+                    Exec("ALTER TABLE backup_manifest ADD COLUMN sha256_hex TEXT NOT NULL DEFAULT '';");
+                    Exec("ALTER TABLE backup_manifest ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0;");
+                }
+            }
+
+            // Persisted user settings. The effective storage ceiling lives here so a change
+            // survives restart and every admission path reads one value.
+            Exec("CREATE TABLE IF NOT EXISTS storage_settings("
+                 "setting_key TEXT PRIMARY KEY, value TEXT NOT NULL);");
 
             {
                 bool hasDraftVersion = false;
@@ -3266,6 +3579,10 @@ namespace mayasaba
             // deletes nothing, so it is safe to run while opening; reclamation stays an
             // explicit separate operation.
             EvaluateCleanup("STARTUP");
+            // Scheduled triggers and evaluation-log pruning, through the opening path. A
+            // timer-driven invocation is still not wired, so an in-session threshold crossing
+            // is not noticed until the next open or an explicit call.
+            RunScheduledMaintenance();
             openSchemaPhase_ = false;
         }
         catch (...)

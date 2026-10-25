@@ -690,12 +690,14 @@ namespace mayasaba
             // Whether every managed object was actually inspected. An evaluation that could
             // not complete must never report that nothing is eligible.
             bool complete{false};
+            bool bounded{false};
             std::uint64_t examined{0};
             std::string dispositionEn;
         };
         // Runs the policy for one trigger. `trigger` is STARTUP, CHANGED_DAY,
         // EIGHTY_PERCENT or EXPLICIT. Never deletes.
         CleanupEvaluation EvaluateCleanup(std::string const& trigger);
+        void ResetStagedDiscoveryCursorForTesting();
         // Removes exactly what evaluation considered eligible, bounded to 500 objects or 30
         // seconds, re-verifying references per object. Never removes protected data.
         struct CleanupReclaimResult
@@ -724,6 +726,40 @@ namespace mayasaba
         // Moves a staging copy's grace clock backwards, so the durable-scan rule can be
         // exercised without waiting seven days. Test-only.
         void BackdateStagingGraceForTesting(std::string const& path, std::uint64_t days);
+
+        // Effective local-storage ceiling. The contract sets a 10 GiB default with a
+        // user-settable 2-100 GiB range. The value is persisted so it survives restart, and
+        // it only moves the threshold: lowering it never discards protected records, it just
+        // makes admission refuse sooner.
+        static constexpr std::uint64_t kDefaultCeilingGiB = 10;
+        static constexpr std::uint64_t kMinCeilingGiB = 2;
+        static constexpr std::uint64_t kMaxCeilingGiB = 100;
+        void SetStorageCeilingGiB(std::uint64_t gib);
+        std::uint64_t StorageCeilingGiB();
+
+        // The scheduled cleanup entry point: runs the changed-day and 80%-capacity triggers,
+        // each of which is self-gating, then prunes the evaluation log. Called when a store
+        // is opened; no timer drives it yet, so an in-session threshold crossing is not
+        // noticed until the next open or an explicit call.
+        // What one scheduled-maintenance pass did. The triggers are self-gating, so a
+        // trigger that correctly declines is a successful invocation: "invoked" records that
+        // the scheduler called it, "evaluated" records that the trigger's own rule let it run.
+        struct MaintenanceResult
+        {
+            bool changedDayInvoked{false};
+            bool eightyPercentInvoked{false};
+            bool changedDayEvaluated{false};
+            bool eightyPercentEvaluated{false};
+            std::string changedDayDispositionEn;
+            std::string eightyPercentDispositionEn;
+            std::uint64_t evaluationsPruned{0};
+        };
+        MaintenanceResult RunScheduledMaintenance();
+        // Rows currently held in the evaluation log. Test-only, for the pruning bound.
+        std::uint64_t CleanupEvaluationCount();
+        // Overrides the accounted managed-byte ledger so the 80% capacity trigger can be
+        // exercised without writing 1.6 GiB of real data. Test-only.
+        void SetManagedLedgerForTesting(std::uint64_t attachmentBytes, std::uint64_t otherManagedBytes);
         void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
         void SetForcePathCanonicalizationFailureForTestingPath(std::string const& p) { forcedPathCanonicalFailurePath_ = p; }
         void ClearForcePathCanonicalizationFailureForTestingPath() { forcedPathCanonicalFailurePath_.clear(); }
@@ -752,6 +788,11 @@ namespace mayasaba
         std::function<void()> queryActionCenterSnapshotHook_;
         std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
         CapacityProbe capacityProbeForTesting_;
+        // Ledger override for the 80% trigger. Absent (managedLedgerOverrideForTesting_ false)
+        // the gate reads the real accounted bytes.
+        bool managedLedgerOverrideForTesting_{false};
+        std::uint64_t managedLedgerAttachmentForTesting_{0};
+        std::uint64_t managedLedgerOtherForTesting_{0};
         // Accounted Mayasaba-managed bytes. `attachmentBytes_` is maintained incrementally
         // by the operations that add and remove managed attachment bytes, and reconciled by
         // a scan; `reservedBytes_` is growth that has been admitted but is not on disk yet.
@@ -795,6 +836,8 @@ namespace mayasaba
         struct CleanupCollection
         {
             std::vector<CleanupCandidate> candidates;
+            std::vector<std::string> unregisteredGracePaths;
+            std::vector<std::string> referencedPathsToInvalidateGrace;
             bool complete{false};
             bool bounded{false};
             std::uint64_t examined{0};
@@ -802,7 +845,10 @@ namespace mayasaba
         };
         CleanupCollection CollectCleanupCandidates_locked(std::chrono::steady_clock::time_point deadline);
         void RecordCleanupEvaluation_locked(CleanupEvaluation const& evaluation);
+        std::uint64_t EffectiveCeilingBytes_locked();
+        std::uint64_t PruneCleanupEvaluations_locked();
         bool LastCleanupEvaluationDay_locked(std::string* day);
+        std::string lastStagedDiscoveryCursor_;
         bool forcePathCanonicalizationFailureForTesting_{false};
         std::string forcedPathCanonicalFailurePath_;
         std::string forcedStagedPresenceFailurePath_;

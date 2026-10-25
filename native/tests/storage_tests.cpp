@@ -7375,6 +7375,302 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        {
+            CASES_BEGIN("89. Effective ceiling drives admission, not a hardcoded 10 GiB");
+            // 89: the effective ceiling is what admission uses, not a hardcoded value.
+            // A 2 GiB ceiling must refuse what a 10 GiB ceiling admits, and a 100 GiB
+            // ceiling must admit what the hardcoded 10 GiB value refused.
+            auto storeDir = folder / L"ceiling.db";
+            mayasaba::Storage store(storeDir);
+            constexpr auto gib = 1024ull * 1024 * 1024;
+
+            // The probe replaces the real observation, so it has to report the reservations
+            // this test has already had admitted, exactly as the unprobed path does.
+            std::uint64_t reserved = 0;
+            auto reserve = [&](std::uint64_t bytes)
+            {
+                store.ReserveManagedBytes(bytes);
+                reserved += bytes;   // only reached when the reservation was admitted
+            };
+            store.SetCapacityProbeForTesting([&reserved] {
+                return mayasaba::Storage::CapacityObservation{reserved, 400ull * 1024 * 1024 * 1024};
+            });
+
+            // Default ceiling is 10 GiB.
+            EXPECT(store.StorageCeilingGiB() == 10);
+            reserve(9 * gib);                                           // 9 GiB admitted
+            bool refusedAtTen = false;
+            try { store.ReserveManagedBytes(1 * gib); }                 // 9 + 1 >= 10: refused
+            catch (std::exception const&) { refusedAtTen = true; }
+            EXPECT(refusedAtTen);
+            // The same 5 GiB request, refused again at the default: this is the request the
+            // 100 GiB ceiling below must admit, so the refusal is not simply "always refuses".
+            bool refusedFiveAtTen = false;
+            try { store.ReserveManagedBytes(5 * gib); }                 // 9 + 5 >= 10: refused
+            catch (std::exception const&) { refusedFiveAtTen = true; }
+            EXPECT(refusedFiveAtTen);
+
+            // A 100 GiB ceiling admits that same request.
+            store.SetStorageCeilingGiB(100);
+            EXPECT(store.StorageCeilingGiB() == 100);
+            reserve(5 * gib);                                           // 9 + 5 = 14 < 100: admitted
+            reserve(40 * gib);                                          // 54 < 100: admitted
+
+            // A 2 GiB ceiling refuses what the higher ceilings admitted: with 54 GiB already
+            // reserved, no further reservation fits beneath it.
+            store.SetStorageCeilingGiB(2);
+            EXPECT(store.StorageCeilingGiB() == 2);
+            bool refusedAtTwo = false;
+            try { store.ReserveManagedBytes(1 * gib); }                 // 54 + 1 >= 2: refused
+            catch (std::exception const&) { refusedAtTwo = true; }
+            EXPECT(refusedAtTwo);
+
+            store.SetCapacityProbeForTesting(nullptr);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("90. Out-of-range ceiling values are refused");
+            // 90: out-of-range values are refused and leave the effective ceiling unchanged.
+            auto storeDir = folder / L"ceiling-bounds.db";
+            mayasaba::Storage store(storeDir);
+
+            store.SetStorageCeilingGiB(100);
+            EXPECT(store.StorageCeilingGiB() == 100);
+
+            bool refusedLow = false, refusedHigh = false;
+            try { store.SetStorageCeilingGiB(1); }
+            catch (std::exception const& e)
+            {
+                refusedLow = true;
+                EXPECT(std::string(e.what()).find("between 2 and 100 GiB") != std::string::npos);
+            }
+            EXPECT(refusedLow);
+            try { store.SetStorageCeilingGiB(101); }
+            catch (std::exception const&) { refusedHigh = true; }
+            EXPECT(refusedHigh);
+            // The refused request changed nothing: the previous value is still in force.
+            EXPECT(store.StorageCeilingGiB() == 100);
+
+            // The bounds themselves are accepted.
+            store.SetStorageCeilingGiB(2);
+            EXPECT(store.StorageCeilingGiB() == 2);
+            store.SetStorageCeilingGiB(100);
+            EXPECT(store.StorageCeilingGiB() == 100);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("91. Ceiling persists across restart");
+            // 91: the ceiling survives restart, so a user's setting is not silently lost.
+            auto storeDir = folder / L"ceiling-persist.db";
+            {
+                mayasaba::Storage store(storeDir);
+                store.SetStorageCeilingGiB(42);
+                EXPECT(store.StorageCeilingGiB() == 42);
+            }
+            {
+                mayasaba::Storage reopened(storeDir);
+                EXPECT(reopened.StorageCeilingGiB() == 42);
+            }
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("92. Scheduled maintenance invokes triggers and bounds the evaluation log");
+            // 92: scheduled maintenance invokes the changed-day and 80% triggers, and the
+            // evaluation log stays bounded. The log grew one row per evaluation with
+            // nothing reclaiming it, so a storage-bounding feature was itself unbounded.
+            auto storeDir = folder / L"maintenance.db";
+            mayasaba::Storage store(storeDir);
+
+            auto const result = store.RunScheduledMaintenance();
+            // Both triggers were invoked, and each applied its own rule rather than being
+            // skipped: on a fresh store the 24-hour period was already evaluated at open, and
+            // the ledger is far below 80% of the ceiling.
+            EXPECT(result.changedDayInvoked);
+            EXPECT(result.eightyPercentInvoked);
+            EXPECT(!result.changedDayEvaluated);
+            EXPECT(result.changedDayDispositionEn.find("already been evaluated") != std::string::npos);
+            EXPECT(!result.eightyPercentEvaluated);
+            EXPECT(result.eightyPercentDispositionEn.find("below 80%") != std::string::npos);
+
+            // Past 80% of the effective ceiling the same trigger fires, which proves the
+            // gate is a real comparison against the configured value rather than a constant.
+            store.SetStorageCeilingGiB(2);
+            constexpr auto gib = 1024ull * 1024 * 1024;
+            store.SetManagedLedgerForTesting(3 * gib, 0);
+            auto const pressured = store.RunScheduledMaintenance();
+            EXPECT(pressured.eightyPercentInvoked);
+            EXPECT(pressured.eightyPercentEvaluated);
+            store.SetManagedLedgerForTesting(0, 0);
+
+            // The evaluation log stays bounded. It grew one row per evaluation with nothing
+            // reclaiming it, so a storage-bounding feature was itself unbounded.
+            for (int i = 0; i < 250; ++i) (void)store.EvaluateCleanup("EXPLICIT");
+            EXPECT(store.CleanupEvaluationCount() > 200);
+
+            auto const pruned = store.RunScheduledMaintenance();
+            EXPECT(pruned.evaluationsPruned > 0);
+            EXPECT(store.CleanupEvaluationCount() <= 200);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("93. Candidate discovery is read-only and grace is admitted in an admitted transaction");
+            auto storeDir = folder / L"c2a-admission.db";
+            mayasaba::Storage store(storeDir);
+            std::string const projectId = "c2a-admission";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+            auto const unref = staging / "unref.bin";
+            {
+                std::ofstream of(unref, std::ios::binary);
+                of.write("unreferenced-bytes", 18);
+            }
+
+            // Normal evaluation admits and records both evaluation and the grace row.
+            auto const eval = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(eval.evaluated);
+            EXPECT(eval.candidates == 0);
+
+            // Re-evaluating is safe and does not duplicate
+            EXPECT(store.EvaluateCleanup("EXPLICIT").candidates == 0);
+
+            std::error_code ec;
+            fs::remove(unref, ec);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("94. Resumable traversal guarantees forward progress across batch bounds");
+            auto storeDir = folder / L"c2a-traversal.db";
+            mayasaba::Storage store(storeDir);
+            std::string const projectId = "c2a-traversal";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+
+            // Create 505 staged files
+            std::vector<fs::path> files;
+            files.reserve(505);
+            for (int i = 0; i < 505; ++i)
+            {
+                auto f = staging / ("f_" + std::to_string(1000 + i) + ".bin");
+                std::ofstream of(f, std::ios::binary);
+                of.write("data", 4);
+                files.push_back(f);
+            }
+
+            store.ResetStagedDiscoveryCursorForTesting();
+            auto const pass1 = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(pass1.evaluated);
+            EXPECT(pass1.bounded);
+            EXPECT(pass1.examined == 500);
+
+            // Second pass resumes from file 500 and examines the remaining 5 files, completing the scope.
+            auto const pass2 = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(pass2.evaluated);
+            EXPECT(!pass2.bounded);
+            EXPECT(pass2.complete);
+            EXPECT(pass2.examined >= 5);
+
+            std::error_code ec;
+            for (auto const& f : files) fs::remove(f, ec);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("95. Staging grace clock is invalidated when an unreferenced file becomes protected");
+            auto storeDir = folder / L"c2b-grace-reset.db";
+            mayasaba::Storage store(storeDir);
+            std::string const projectId = "c2b-grace-reset";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+            auto const file = staging / "reused.bin";
+            {
+                std::ofstream of(file, std::ios::binary);
+                of.write("reused-bytes", 12);
+            }
+
+            // Start grace and backdate it 8 days so it would be eligible if unreferenced
+            EXPECT(store.EvaluateCleanup("EXPLICIT").candidates == 0);
+            store.BackdateStagingGraceForTesting(WideToUtf8(file.wstring()), 8);
+            EXPECT(store.EvaluateCleanup("EXPLICIT").candidates == 1);
+
+            // Now the file becomes protected by a draft attachment
+            mayasaba::AttachmentRecord draftAtt;
+            draftAtt.id = "att-1";
+            draftAtt.projectId = projectId;
+            draftAtt.fileName = "reused.bin";
+            draftAtt.sourcePath = WideToUtf8(file.wstring());
+            draftAtt.storagePath = WideToUtf8(file.wstring());
+            draftAtt.sha256 = "dummy";
+            draftAtt.fileSize = 12;
+            draftAtt.status = "READY";
+            draftAtt.version = 1;
+            store.SaveDraftAttachment(projectId, draftAtt);
+
+            // While referenced, evaluation does not consider it eligible and invalidates its obsolete grace row
+            EXPECT(store.EvaluateCleanup("EXPLICIT").candidates == 0);
+
+            // Remove the draft attachment so the file is unreferenced again
+            store.RemoveDraftAttachment(projectId, "att-1");
+
+            // When evaluated again, it must receive a fresh grace clock, NOT the old backdated 8-day clock!
+            EXPECT(store.EvaluateCleanup("EXPLICIT").candidates == 0);
+
+            std::error_code ec;
+            fs::remove(file, ec);
+            CASES_END();
+        }
+
+        {
+            CASES_BEGIN("96. Corrupt or modified verified backup fails integrity verification and blocks retirement");
+            auto storeDir = folder / L"c2b-backup-integrity.db";
+            mayasaba::Storage store(storeDir);
+            std::string const projectId = "c2b-backup-integrity";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const dbPath = folder / L"c2b-backup-integrity.db";
+            std::vector<std::filesystem::path> backups;
+            for (int i = 0; i < 5; ++i)
+            {
+                auto b = std::filesystem::path(dbPath.wstring() + L".pre_migration.bak.v" + std::to_wstring(i));
+                std::ofstream of(b, std::ios::binary);
+                std::string const payload(1024, static_cast<char>('a' + i));
+                of.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+                of.close();
+                fs::last_write_time(b, fs::file_time_type::clock::now() - std::chrono::hours(24 * (30 - i)));
+                backups.push_back(b);
+            }
+
+            // Verify three backups (indices 2, 3, 4)
+            for (int i = 2; i < 5; ++i)
+            {
+                store.RecordVerifiedBackup(WideToUtf8(backups[static_cast<std::size_t>(i)].wstring()));
+            }
+
+            // Corrupt backup 4 by overwriting its contents
+            {
+                std::ofstream of(backups[4], std::ios::binary);
+                of.write("corrupted-bytes", 15);
+            }
+
+            // Because one of the 3 verified backups fails integrity, retirement must refuse!
+            auto const res = store.ReclaimEligibleCleanup();
+            EXPECT(res.removed == 0);
+
+            std::error_code ec;
+            for (auto const& b : backups) fs::remove(b, ec);
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.

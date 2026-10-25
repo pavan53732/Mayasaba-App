@@ -4617,3 +4617,47 @@ grace clock; the mutant is still discriminated, just not first by group 86.
   routine exists. That is the safe default, not a completed feature.
 - C3 (configurable ceiling, scheduler, evaluation-table retention), C4–C6 remain. **S2 is not
   complete.**
+
+## 2026-10-26 — C2A & C2B: Candidate discovery read-only semantics, resumable traversal, manifest integrity verification, and strict certification harness (S2-N01 to N06, S2-N08, S0-D01, S4-G01)
+
+### Candidate collection read-only enforcement (S2-N01)
+`CollectCleanupCandidates_locked` is strictly read-only. Unregistered unreferenced staging copies are recorded in `unregisteredGracePaths` rather than directly inserted via inline SQL during the directory walk. The admitted write transaction in `EvaluateCleanup` and `ReclaimEligibleCleanup` explicitly registers grace rows (`staging_grace`) under `AdmitWrite_locked()` and `BEGIN IMMEDIATE`.
+
+### Resumable staging traversal & batch bounding (S2-N02, S2-N03, S2-N06)
+- **Cursor tracking**: `lastStagedDiscoveryCursor_` records the first unexamined staged path when `kBatchLimit` (500 items) or deadline expiration bounds the collection.
+- **Resumption**: Subsequent evaluation passes locate the stored cursor and resume examination directly from that entry, ensuring forward progress across large staging directories without memory exhaustion or starvation.
+- **Backup bound**: The migration backup candidate list is bounded by `kBatchLimit` across both directory discovery and candidate admission.
+- **Post-loop error checks**: Post-loop iterator error checks (`walkEc`, `dirEc`) verify directory completeness and log note diagnostics if enumeration is interrupted.
+
+### Grace clock invalidation & manifest integrity verification (S2-N04, S2-N05, S2-N08)
+- **Grace invalidation on reference return**: When a staged copy previously marked unreferenced is observed to have a protected reference (`CountOtherProtectedReferences_locked > 0`), its entry in `staging_grace` is deleted in the evaluation/reclamation transaction via `referencedPathsToInvalidateGrace`.
+- **Manifest integrity check**: The `backup_manifest` table schema records `sha256_hex` and `file_size`. During candidate evaluation, all three retained backups must physically exist, match their recorded sizes, and match their SHA-256 digests. If any retained backup is missing or modified, backup retirement is blocked and an error note is recorded.
+- **Companion file error fail-closed**: Under the 80% capacity trigger, if SQLite companion files (`-wal`, `-shm`) cannot be accessed or read, evaluation is marked incomplete (`complete = false`) rather than being silently bypassed.
+
+### Documentation & certification harness governance (S0-D01, S4-G01)
+- **README Layer 4 / 9 alignment (S0-D01)**: `native/README.md` was updated to accurately document that Layer 4 Agent Gateway detection and Layer 9 Execution Kernel process-launch primitives exist, while truthfully noting that session adapters, CLI protocol translation, and containment remain absent.
+- **Strict certification harness (S4-G01)**: `native/tests/test_full_ui_acceptance.py` now supports `--strict` and `MAYASABA_STRICT_CERTIFICATION=1`. In strict mode or whenever incomplete/inconclusive criteria remain, the harness fails closed with exit code 1.
+
+### Tests (1–92 preserved, 93–96 added)
+
+| Group | Asserts |
+|---|---|
+| 93 | Candidate discovery is read-only; no grace rows are inserted in SQLite during candidate collection; grace registration occurs only during admitted write transaction. |
+| 94 | Resumable traversal guarantees forward progress across batch bounds (`kBatchLimit` = 500) without omitting or duplicating entries across subsequent passes. |
+| 95 | Staging grace clock is invalidated when an unreferenced file receives a protected reference. |
+| 96 | Corrupt or modified verified backup fails SHA-256/size verification and blocks backup retirement. |
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256: `b4e1e6e6f0af51f9b142931e866d098118a3be2146d8e763d8cdfcde4e014cbd`
+  **PASS: 96 of 96 executed native regression groups**, exit 0.
+- `native/Mayasaba/bin/x64/Release/Mayasaba.exe` SHA-256: `ef3e0cd2d62ea89613da8dc3fa000028b513906c2d18fabbf4a92e00b738f226`
+  Application build Release x64 v145: exit 0 (0 warnings, 0 errors).
+- Contract validator `native/tests/validate_contract_registry.py`: `PASS: 124 contract-registry and Screen 2 slice schema checks`, exit 0.
+- Strict UI acceptance harness `native/tests/test_full_ui_acceptance.py`: fails closed with exit code 1 when criteria remain incomplete, preventing misleading zero exit codes.
+- Sources:
+  - `native/Mayasaba/Storage.cpp`: `877d2b27dc8b7ecd4caf8d4eedc6f169415d5c24b3c38396796853408c89fde7`
+  - `native/Mayasaba/Storage.h`: `d2106c63bab8d12faf978de341afd7ed420c6cd9814b7dd55adc521861872fb2`
+  - `native/tests/storage_tests.cpp`: `ea7f65479887a2818a7e6a8dac26db476e56e89ff4fcb3d992edb9754112674d`
+  - `native/README.md`: `461e34baa4e61893fee5df901dd0c276763c69ce69bfdea5265da74ef4edc965`
+  - `native/tests/test_full_ui_acceptance.py`: `08ca661f352ed2b11643314ba374e44f8c1f60e322d35a439401764fcc4fddb5`
