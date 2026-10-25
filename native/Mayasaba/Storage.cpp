@@ -1869,7 +1869,9 @@ namespace mayasaba
     Storage::ManagedScopeObservation Storage::ScanManagedScope() const
     {
         ManagedScopeObservation obs;
-        managedScopeWalkEntries_ = 0;
+        // Local metrics: two concurrent scans must not interleave increments into one
+        // shared counter. The count is published once at the end.
+        std::uint64_t entriesVisited = 0;
 
         // Managed files beside the database: the WAL/SHM companions and the migration
         // backups the constructor creates. A database-plus-attachments total omits the
@@ -1894,7 +1896,7 @@ namespace mayasaba
                     obs.attachmentsReasonEn = "the store directory could not be fully enumerated (" + dirEc.message() + ")";
                     return obs;
                 }
-                ++managedScopeWalkEntries_;
+                ++entriesVisited;
                 auto const name = it->path().filename().wstring();
                 if (name.rfind(dbName, 0) != 0) continue;
                 // The three database companions are measured fresh on every write, so they
@@ -1902,7 +1904,13 @@ namespace mayasaba
                 if (name == dbName || name == dbName + L"-wal" || name == dbName + L"-shm") continue;
                 std::error_code stEc;
                 auto const st = it->symlink_status(stEc);
-                if (stEc || !std::filesystem::is_regular_file(st)) continue;
+                if (stEc)
+                {
+                    obs.attachmentsComplete = false;
+                    obs.attachmentsReasonEn = "a managed backup file's type could not be read (" + stEc.message() + ")";
+                    return obs;
+                }
+                if (!std::filesystem::is_regular_file(st)) continue;
                 std::error_code szEc;
                 auto const bytes = it->file_size(szEc);
                 if (szEc)
@@ -1912,6 +1920,13 @@ namespace mayasaba
                     return obs;
                 }
                 obs.otherManagedBytes += bytes;
+            }
+            // An increment that fails and lands on end leaves the loop without entering it.
+            if (dirEc)
+            {
+                obs.attachmentsComplete = false;
+                obs.attachmentsReasonEn = "the store directory could not be fully enumerated (" + dirEc.message() + ")";
+                return obs;
             }
         }
 
@@ -1963,7 +1978,7 @@ namespace mayasaba
                 obs.attachmentsReasonEn = "the managed attachment directory could not be fully enumerated (" + walkEc.message() + ")";
                 return obs;
             }
-            ++managedScopeWalkEntries_;
+            ++entriesVisited;
 
             std::error_code typeEc;
             auto const status = it->symlink_status(typeEc);
@@ -2022,6 +2037,7 @@ namespace mayasaba
         }
 
         obs.attachmentsComplete = true;
+        managedScopeWalkEntries_.store(entriesVisited);
         return obs;
     }
 
@@ -2030,6 +2046,17 @@ namespace mayasaba
         std::uint64_t generation = 0;
         {
             std::lock_guard lock(mutex_);
+            if (reservedBytes_ != 0)
+            {
+                // A staging copy is in flight, so the filesystem may or may not already
+                // contain its bytes. A total published now could include them while the
+                // reservation is still outstanding, and the later commit would add the same
+                // bytes a second time. Generation equality cannot catch this, because the
+                // reservation and the copy both predate the scan. Publication is therefore
+                // refused while any growth is outstanding; the ledger stays authoritative.
+                ++managedScopeStaleRejections_;
+                return;
+            }
             generation = managedScopeGeneration_;
         }
 
@@ -2038,7 +2065,7 @@ namespace mayasaba
         ManagedScopeObservation const scan = ScanManagedScope();
 
         std::lock_guard lock(mutex_);
-        if (managedScopeGeneration_ != generation)
+        if (managedScopeGeneration_ != generation || reservedBytes_ != 0)
         {
             // The ledger changed while this scan was running, so its total describes a state
             // that no longer exists. Publishing it would overwrite newer, more accurate
@@ -2113,10 +2140,15 @@ namespace mayasaba
                 "This operation would take the local project store past its 10 GiB ceiling of Mayasaba-managed "
                 "bytes (database, attachments and backups); it was refused before any byte was copied. Protected "
                 "data was retained and nothing was deleted.");
-        if (observed.freeBytes < reserve)
+        // The required reserve is not just a floor to compare against: the operation's own
+        // output, plus growth already admitted but not yet written, must fit ABOVE it.
+        // Checking only `freeBytes < reserve` let a copy consume the reserve itself.
+        std::uint64_t const required = reserve + reservedBytes_;
+        if (observed.freeBytes < required || observed.freeBytes - required < bytes)
             throw std::runtime_error(
-                "Local storage free-space reserve is below 5 GiB; the operation was refused before any byte was "
-                "copied. Protected data was retained and nothing was deleted.");
+                "This operation would consume the 5 GiB local storage free-space reserve, leaving less than the "
+                "required headroom; it was refused before any byte was copied. Protected data was retained and "
+                "nothing was deleted.");
         reservedBytes_ += bytes;
         ++managedScopeGeneration_;
     }
@@ -2166,17 +2198,19 @@ namespace mayasaba
         // BOUNDED. This runs under the store mutex on every mutation, so it must not walk
         // the managed attachment tree: that walk is unbounded in the number of entries and
         // would put a full directory traversal inside the critical section of every write.
-        // The attachment component therefore comes from the last completed observation
-        // (taken at open, and refreshed by the owner that adds or removes managed
-        // attachment bytes), while the database component is re-measured here - three
-        // stats, constant cost - so SQLite growth is never stale.
+        // The attachment component is the maintained ledger, not a snapshot: the staging
+        // path adds bytes when it copies and removal paths subtract them, so no explicit
+        // refresh is required for growth to be visible. The database companions are
+        // re-measured here - three stats, constant cost - so SQLite growth is never stale.
         //
-        // FRESHNESS AND INTERVENING CHANGE. Attachment bytes can be added between refreshes
-        // by a staging operation that has not refreshed yet. That window is bounded by the
-        // owner's own refresh, and the independent 80%-of-ceiling cleanup evaluation is the
-        // backstop; it is not silently assumed away. What is never done is substituting a
-        // guess for an observation: if any component could not be observed, admission
-        // refuses instead of counting the unreadable part as zero.
+        // PROJECTED GROWTH. Outstanding reservations are added to the total, so admission
+        // accounts for bytes an in-flight copy has been authorized to write but has not
+        // written yet. Without that, two concurrent operations could each pass the ceiling
+        // check on the same headroom.
+        //
+        // FAIL CLOSED. What is never done is substituting a guess for an observation: if any
+        // component could not be observed, admission refuses instead of counting the
+        // unreadable part as zero.
         //
         // Opening an existing store is never gated here. Inspection and recovery must remain
         // possible at the ceiling or on a low volume; only creating a brand-new store is

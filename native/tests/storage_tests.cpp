@@ -6774,6 +6774,149 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // 76. A scan that overlaps an outstanding reservation must not publish a total that
+        // already contains the in-flight copy, or the later commit counts those bytes twice.
+        // Generation equality alone does not detect this: the reservation and the copy both
+        // predate the scan.
+        {
+            CASES_BEGIN("76. A scan during an outstanding reservation cannot double count");
+            mayasaba::Storage store(folder / "r05-inflight.db");
+            std::string const projectId = "r05-inflight";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const root = store.ManagedAttachmentRoot();
+            auto const staging = root / "staging" / "inflight";
+            fs::create_directories(staging);
+            auto const inflight = staging / "inflight.bin";
+            std::uint64_t const before = store.AccountedAttachmentBytesForTesting();
+
+            // Reserve, then materialize the copy while the reservation is still outstanding.
+            store.ReserveManagedBytes(4096);
+            {
+                std::ofstream of(inflight, std::ios::binary);
+                std::string const payload(4096, 'q');
+                of.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+            }
+
+            std::uint64_t const rejectedBefore = store.ManagedScopeStaleScansRejectedForTesting();
+            store.RefreshManagedScopeObservation();
+            // The scan was refused, and the ledger did not absorb the in-flight copy.
+            EXPECT(store.ManagedScopeStaleScansRejectedForTesting() == rejectedBefore + 1);
+            EXPECT(store.AccountedAttachmentBytesForTesting() == before);
+
+            store.CommitManagedReservation(4096);
+            // Counted exactly once, not twice.
+            EXPECT(store.AccountedAttachmentBytesForTesting() == before + 4096);
+
+            // With no reservation outstanding the scan now agrees with the ledger.
+            store.RefreshManagedScopeObservation();
+            EXPECT(store.AccountedAttachmentBytesForTesting() == before + 4096);
+
+            std::error_code ec;
+            fs::remove(inflight, ec);
+            store.RefreshManagedScopeObservation();
+            EXPECT(store.AccountedAttachmentBytesForTesting() == before);
+            CASES_END();
+        }
+
+        // 77. Projected growth must fit ABOVE the required reserve, and overlapping
+        // reservations must be considered. Controlled observations, no disk is filled.
+        {
+            CASES_BEGIN("77. Projected growth cannot consume the free-space reserve");
+            mayasaba::Storage store(folder / "r05-reserve.db");
+            std::string const projectId = "r05-reserve";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            constexpr std::uint64_t reserve = 5ull << 30;
+
+            // Only 8 bytes of headroom above the reserve: a 16-byte reservation must fail.
+            store.SetCapacityProbeForTesting([] { return mayasaba::Storage::CapacityObservation{0, (5ull << 30) + 8}; });
+            bool threw = false;
+            std::string reason;
+            try { store.ReserveManagedBytes(16); }
+            catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+            EXPECT(threw);
+            EXPECT(reason.find("free-space reserve") != std::string::npos);
+            EXPECT(reason.find("before any byte was copied") != std::string::npos);
+
+            // Exactly enough headroom for the request: admitted.
+            store.SetCapacityProbeForTesting([] { return mayasaba::Storage::CapacityObservation{0, (5ull << 30) + 1024}; });
+            store.ReserveManagedBytes(1024);
+
+            // A second, overlapping reservation must see the first one's claim on the same
+            // headroom rather than measuring the same free bytes again.
+            threw = false;
+            try { store.ReserveManagedBytes(1); }
+            catch (std::exception const&) { threw = true; }
+            EXPECT(threw);
+
+            // Releasing the first frees the headroom for the second.
+            store.ReleaseManagedReservation(1024);
+            store.ReserveManagedBytes(1);
+            store.ReleaseManagedReservation(1);
+            EXPECT(reserve == 5ull << 30);
+            store.SetCapacityProbeForTesting(nullptr);
+            CASES_END();
+        }
+
+        // 78. A reservation refusal must not leak the source handle, must leave accurate
+        // durable state, and must not prevent a later successful retry.
+        {
+            CASES_BEGIN("78. Reservation refusal releases the source and the preparation record");
+            mayasaba::Storage store(folder / "r05-refusal.db");
+            std::string const projectId = "r05-refusal";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const source = folder / "r05-refusal-source.bin";
+            {
+                std::ofstream of(source, std::ios::binary);
+                std::string const payload(1024, 'r');
+                of.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+            }
+            auto sourceDeletable = [&]
+            {
+                HANDLE h = CreateFileW(source.wstring().c_str(), DELETE, 0, nullptr,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (h == INVALID_HANDLE_VALUE) return false;
+                CloseHandle(h);
+                return true;
+            };
+            EXPECT(sourceDeletable());
+
+            // Observations that ADMIT the PREPARING write but refuse the reservation: the
+            // store is under the ceiling, yet the copy's own 1024 bytes would cross it.
+            store.SetCapacityProbeForTesting(
+                [] { return mayasaba::Storage::CapacityObservation{ (10ull << 30) - 100, 100ull << 30 }; });
+
+            mayasaba::AttachmentService service(store, store.ManagedAttachmentRoot());
+            bool threw = false;
+            std::string reason;
+            try { service.PrepareBatch(projectId, {source.wstring()}); }
+            catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+            EXPECT(threw);
+            EXPECT(reason.find("past its 10 GiB ceiling") != std::string::npos);
+
+            // The source is no longer held open: DELETE access succeeds again.
+            EXPECT(sourceDeletable());
+            // No record is left claiming a preparation that cannot complete.
+            EXPECT(store.GetDraftAttachments(projectId).empty());
+
+            // Repeating the refusal is stable and still leaks nothing.
+            threw = false;
+            try { service.PrepareBatch(projectId, {source.wstring()}); }
+            catch (std::exception const&) { threw = true; }
+            EXPECT(threw);
+            EXPECT(sourceDeletable());
+            EXPECT(store.GetDraftAttachments(projectId).empty());
+
+            // Once the condition clears, the same operation succeeds.
+            store.SetCapacityProbeForTesting(nullptr);
+            auto const prepared = service.PrepareBatch(projectId, {source.wstring()});
+            EXPECT(prepared.size() == 1);
+            EXPECT(prepared[0].status == mayasaba::AttachmentStatus::Ready);
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.

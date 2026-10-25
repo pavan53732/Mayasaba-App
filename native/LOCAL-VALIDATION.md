@@ -4218,3 +4218,96 @@ freed. Both were test defects, fixed before the recorded runs above.
 - **`FAILED` journal intents are still not revisited by recovery.**
 - **Logical-client sizing/layout, strict certification and final-artifact Windows acceptance
   remain open.** No UI result from any earlier executable hash applies to `1f423724…`.
+
+## 2026-10-25 (third correction) — reservation/scan consistency, projected reserve, source ownership
+
+An independent review (`validation-5ac61c1/REVIEW.md`) accepted the access-denied correction
+and reproduced three further gaps. All three were mine.
+
+### 1. A scan during an outstanding reservation double-counted bytes (executed)
+
+`RefreshManagedScopeObservation` published the full physical attachment total whenever the
+generation was unchanged. If a reservation existed before the scan and was committed after
+publication, the scan counted the in-flight copy and `CommitManagedReservation` added the
+same bytes again: reserve 4096, materialize 4096, scan, commit → 8192 accounted for one
+4096-byte file. Generation equality cannot detect this, because the reservation and the copy
+both predate the scan.
+
+Correction: publication is refused while any reservation is outstanding, at scan start and
+again at publish. The ledger stays authoritative; a scan is reconciliation, not truth.
+
+### 2. Projected growth could consume the free-space reserve (executed)
+
+`ReserveManagedBytes` compared `freeBytes < reserve` without deducting the requested growth
+or other outstanding reservations, so a request larger than the remaining headroom was
+admitted. Correction: the request and all outstanding reservations must fit **above** the
+reserve, i.e. `freeBytes - (reserve + reservedBytes_) >= bytes`.
+
+### 3. A reservation refusal leaked the source handle (executed)
+
+`PrepareAttachment` opened `hSource`, persisted `PREPARING`, and then called
+`ReserveManagedBytes`, which can throw. Nothing owned the handle, and its sharing flags omit
+`FILE_SHARE_DELETE`, so the user's source file stayed locked against deletion for the life of
+the process. Correction: a `SourceHandleOwner` is established immediately after the first
+successful open; every existing close marks it released so nothing is closed twice. The
+refusal path also removes the `PREPARING` record, because no copy will ever happen, and then
+rethrows so the capacity refusal surfaces as a storage error rather than a silent rejection.
+
+### Source concerns also addressed
+
+- `managedScopeWalkEntries_` was a plain counter written by concurrent scans. Scans now use a
+  **local** count published once at the end through an atomic.
+- The sibling managed-backup enumeration continued past `symlink_status` errors and did not
+  check the final increment. It now reports both as incomplete, matching the attachment loop.
+- `CheckWriteCapacity` comments still described the retracted owner-refresh and 80% backstop;
+  they now describe the ledger, reservations and fail-closed behaviour.
+
+### Tests (1–75 preserved, 76–78 added)
+
+| Group | Asserts |
+|---|---|
+| 76 | Reserve → materialize → scan is refused (rejection counter advances, ledger unchanged); commit counts the bytes exactly once; a later scan agrees; removing the file returns the ledger to baseline. |
+| 77 | With 8 bytes of headroom above the reserve a 16-byte reservation is refused with the reserve diagnostic; with exactly enough headroom it is admitted; an overlapping second reservation sees the first one's claim; releasing the first frees the headroom. Controlled observations, no disk filled. |
+| 78 | Observations that admit the `PREPARING` write but refuse the reservation: the refusal surfaces, the source becomes `DELETE`-openable again, no draft record remains, the refusal repeats without leaking, and the same operation succeeds once the condition clears. |
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256
+  `be06d1ef2b7679908c3ad066c807cafab45dcedeadb88d8d94108916e057d37c`,
+  **PASS: 78 of 78 executed native regression groups**, exit 0, after `-t:Rebuild`.
+- Application build Release x64 v145: exit 0. Contract validator: `PASS: 124`, exit 0.
+- Sources: `Storage.cpp` `fb97be3f478753ca8006150a52988bf362572511150b01b9fe52c4df1ce79a48`,
+  `Storage.h` `1ad16c1e7ce106300afbcb0eb00181c91fab17729f7da07065c673ea6f5b6071`,
+  `AttachmentService.cpp` `a1506517422a8fa1d7785ea141abae3ab2f5f8ea869c47d9418879f24c2e837b`,
+  `storage_tests.cpp` `fc679b7fdd83199eb895be4d181bbafdbdd16b1cd7346d70cb538106e79a9a7d`.
+
+### Mutation evidence
+
+Under `~/.codex/visualizations/2026/10/25/mutation6/`. Each mutant forced through
+`-t:Rebuild` and restored byte-identically (verified by the recorded SHA-256).
+
+| Mutant | Reverted fix | Result |
+|---|---|---|
+| M19 | Both reservation guards around scan publication removed | FAIL group 76, double-count assertion |
+| M20 | Reserve compared without the requested growth | FAIL group 77, `threw` |
+| M21 | Source handle owner no longer closes | FAIL group 78, `sourceDeletable()` |
+
+M21's mutant run terminated abnormally (0xC0000409) **after** the assertion fired; the clean
+build is stable. The abnormal exit is recorded rather than explained away, and no cause is
+asserted for it.
+
+A process defect occurred during this work and is recorded rather than hidden: an earlier
+mutation run left a mutant in `Storage.cpp` because its restore anchor was not unique, and a
+subsequent mutant (M21) then produced a misleading failure in group 77. The fragments were
+regenerated with verified single-occurrence anchors, the file was repaired, and the results
+above come from the corrected runs. Restores now print `matches_clean` and every recorded run
+shows `true`.
+
+### Still open
+
+- **No 80% / changed-day / startup cleanup trigger.** Only the ceiling and reserve refusals.
+- **Safe bounded migration/recovery on an exhausted volume is unproven.**
+- **`FAILED` journal intents are still not revisited by recovery.**
+- **Logical-client sizing/layout, strict certification and final-artifact Windows acceptance
+  remain open.** No UI result from any earlier executable hash applies to `be06d1ef…`.
+- **R05 remains incomplete.**

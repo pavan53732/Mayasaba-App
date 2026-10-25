@@ -345,6 +345,22 @@ namespace mayasaba
         HANDLE hSource = CreateFileW(sourcePath.c_str(), GENERIC_READ,
             FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL, nullptr);
+        // Ownership from the first successful open. A later admission refusal throws, and
+        // every early return below would otherwise leak this handle - which keeps the source
+        // file locked against deletion for the lifetime of the process.
+        struct SourceHandleOwner
+        {
+            HANDLE& handle;
+            bool released{false};
+            ~SourceHandleOwner()
+            {
+                if (!released && handle != INVALID_HANDLE_VALUE)
+                {
+                    CloseHandle(handle);
+                    handle = INVALID_HANDLE_VALUE;
+                }
+            }
+        } sourceOwner{hSource};
         if (hSource == INVALID_HANDLE_VALUE)
         {
             candidate.status = AttachmentStatus::Rejected;
@@ -355,6 +371,7 @@ namespace mayasaba
         LARGE_INTEGER initialSize{};
         if (!GetFileSizeEx(hSource, &initialSize))
         {
+            sourceOwner.released = true;
             CloseHandle(hSource);
             candidate.status = AttachmentStatus::Rejected;
             candidate.errorMessage = "Cannot read source file size: " + candidate.fileName;
@@ -363,6 +380,7 @@ namespace mayasaba
 
         if (initialSize.QuadPart == 0)
         {
+            sourceOwner.released = true;
             CloseHandle(hSource);
             candidate.status = AttachmentStatus::Rejected;
             candidate.errorMessage = "File '" + candidate.fileName + "' is empty (0 bytes).";
@@ -371,6 +389,7 @@ namespace mayasaba
 
         if (static_cast<uint64_t>(initialSize.QuadPart) > MAX_FILE_SIZE_BYTES)
         {
+            sourceOwner.released = true;
             CloseHandle(hSource);
             candidate.status = AttachmentStatus::Rejected;
             candidate.errorMessage = "File '" + candidate.fileName + "' exceeds the 100 MiB limit.";
@@ -414,7 +433,19 @@ namespace mayasaba
         // that would take the managed scope past its ceiling is refused rather than
         // discovered half-way through. The guard releases the reservation on every failure
         // path below; only a completed copy converts it into accounted bytes.
-        storage_.ReserveManagedBytes(candidate.fileSize);
+        try
+        {
+            storage_.ReserveManagedBytes(candidate.fileSize);
+        }
+        catch (...)
+        {
+            // The PREPARING row was persisted above but no byte will be copied, so the record
+            // must not be left claiming a preparation that cannot complete. The source handle
+            // is released by its owner on the way out.
+            try { storage_.RemoveDraftAttachment(projectId, candidate.id); }
+            catch (...) {}
+            throw;
+        }
         struct ReservationGuard
         {
             mayasaba::Storage& storage;
@@ -430,6 +461,7 @@ namespace mayasaba
             0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hDest == INVALID_HANDLE_VALUE)
         {
+            sourceOwner.released = true;
             CloseHandle(hSource);
             storage_.RemoveDraftAttachment(projectId, candidate.id);
             candidate.status = AttachmentStatus::Rejected;
@@ -442,6 +474,7 @@ namespace mayasaba
         if (!BCRYPT_SUCCESS(status))
         {
             CloseHandle(hDest);
+            sourceOwner.released = true;
             CloseHandle(hSource);
             std::filesystem::remove(stagedFilePath, ec);
             storage_.RemoveDraftAttachment(projectId, candidate.id);
@@ -456,6 +489,7 @@ namespace mayasaba
         {
             BCryptCloseAlgorithmProvider(hAlg, 0);
             CloseHandle(hDest);
+            sourceOwner.released = true;
             CloseHandle(hSource);
             std::filesystem::remove(stagedFilePath, ec);
             storage_.RemoveDraftAttachment(projectId, candidate.id);
@@ -471,6 +505,7 @@ namespace mayasaba
         {
             BCryptCloseAlgorithmProvider(hAlg, 0);
             CloseHandle(hDest);
+            sourceOwner.released = true;
             CloseHandle(hSource);
             std::filesystem::remove(stagedFilePath, ec);
             storage_.RemoveDraftAttachment(projectId, candidate.id);
@@ -553,6 +588,7 @@ namespace mayasaba
         BCryptDestroyHash(hHash);
         BCryptCloseAlgorithmProvider(hAlg, 0);
         CloseHandle(hDest);
+        sourceOwner.released = true;
         CloseHandle(hSource);
 
         if (cancelled)

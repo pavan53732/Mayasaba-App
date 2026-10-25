@@ -663,7 +663,7 @@ namespace mayasaba
         void ReleaseManagedReservation(std::uint64_t bytes);
         // Entries visited by the most recent managed-scope scan, and scans discarded because
         // the ledger changed underneath them. Test-only.
-        std::uint64_t ManagedScopeWalkEntriesForTesting() const noexcept { return managedScopeWalkEntries_; }
+        std::uint64_t ManagedScopeWalkEntriesForTesting() const noexcept { return managedScopeWalkEntries_.load(); }
         std::uint64_t ManagedScopeStaleScansRejectedForTesting() const noexcept { return managedScopeStaleRejections_; }
         std::uint64_t AccountedAttachmentBytesForTesting();
         void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
@@ -703,7 +703,9 @@ namespace mayasaba
         // Bumped by every ledger mutation, so a scan that started earlier can be rejected.
         std::uint64_t managedScopeGeneration_{0};
         std::atomic<std::uint64_t> managedScopeStaleRejections_{0};
-        mutable std::uint64_t managedScopeWalkEntries_{0};
+        // Written only by a scan, but two concurrent scans would race on it, so it is
+        // atomic and each scan publishes its own local count at the end.
+        mutable std::atomic<std::uint64_t> managedScopeWalkEntries_{0};
         // Scans the filesystem without holding mutex_. Caller publishes the result.
         ManagedScopeObservation ScanManagedScope() const;
         // Applies a confirmed removal to the accounted total. Caller holds mutex_.
