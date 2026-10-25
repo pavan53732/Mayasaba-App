@@ -4023,3 +4023,98 @@ mutant was forced through `-t:Rebuild` and restored byte-identically, verified b
 - **R05 capacity, logical-client sizing/layout, strict certification and final-artifact
   Windows acceptance remain open.** No UI result from any earlier executable hash applies to
   `0958c2a6…`.
+
+## 2026-10-25 — R05: trustworthy, bounded capacity observation
+
+Authoritative basis: the complete system description's storage section (default 10 GiB
+per Windows user, 5 GiB required free-volume reserve, user-settable 2–100 GiB; "measure all
+Mayasaba-managed state/bytes but exclude project-root files"; cleanup evaluated at startup,
+every changed 24-hour period and at 80%). The contract asks for periodic evaluation, not a
+measurement per write, which is what makes a cached observation legitimate rather than a
+shortcut.
+
+### What changed
+
+- `Storage::RefreshManagedScopeObservation()` walks the managed attachment tree once and
+  caches a `ManagedScopeObservation`. `CheckWriteCapacity()` no longer walks: it combines
+  the cached attachment bytes with a **current** measurement of the database, WAL and SHM
+  (three stats), so SQLite growth is never stale while the unbounded part leaves the store
+  mutex.
+- Every component is tri-state. Absent attachment root = complete observation of zero.
+  An inaccessible directory, an enumeration error, an unreadable entry type, an unreadable
+  file size, or an unmeasurable volume = **incomplete**, and an incomplete observation
+  refuses the write with a diagnostic naming the cause. Unreadable data is never counted as
+  zero.
+- Reparse points (symlinks and reparse-point directories) are not followed and are counted
+  in `reparsePointsSkipped`; recursion into them is disabled. Hard links are counted per
+  directory entry, which over-counts aliases — documented, not exact.
+- `openSchemaPhase_` was reviewed and its span documented rather than widened or narrowed:
+  inspection never gated; brand-new store creation gated; existing-store opening never
+  gated; schema DDL, migration and the two bounded recovery passes exempt for the
+  constructor's span only; ordinary writes always gated; quarantine never exempt.
+- `SetCapacityObservationForOpenForTesting` installs a one-shot observation consumed by the
+  next constructor, so the creation gate is testable from a controlled observation instead
+  of a setter that only works after opening.
+
+### R05 status
+
+| Requirement | Disposition |
+|---|---|
+| Distinguish absent from inaccessible managed directory | Implemented; group 72 (path replaced by a file, reason names "not a directory") |
+| Enumeration, file-size and boundary failures are incomplete | Implemented in `RefreshManagedScopeObservation`; refusal path exercised by group 72 |
+| Never count unreadable data as zero | Implemented; incomplete observation refuses instead of under-counting |
+| Alias and reparse-point accounting defined | Implemented: not followed, counted, recursion disabled; hard-link over-count documented |
+| No unbounded walk on every write under the store mutex | Implemented; group 73 asserts the walk count is unchanged across 20 admitted writes |
+| Constructor/open behaviour testable before construction | Implemented; group 71 uses the pre-construction probe for both refusal branches |
+| Store ceiling and free-space reserve | Preserved from group 51 (probe and sparse-file branches) |
+| Refusal diagnostics | Asserted in groups 51, 71 and 72 (distinct wording per cause) |
+| Recovery after conditions improve | Group 72 repairs the managed scope, reopens and writes again |
+| `openSchemaPhase_` review; quarantine preserved | Documented span; group 51 and 72 assert no quarantine from a capacity refusal |
+
+### Tests
+
+Groups 71–73 added; groups 1–70 preserved. **One existing sub-case in group 51 was changed,
+with reason:** it asserted that managed attachment bytes are "recomputed, never cached
+across the change", i.e. exactly the per-write walk this milestone removes. It now calls
+`RefreshManagedScopeObservation()` before the write that must be refused, which is the
+documented contract for the owner that adds managed bytes. Its intent — attachment bytes
+count toward the ceiling, and removing them restores admission — is unchanged.
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256
+  `13a04a8d2b79885feff350337a52c56253c39bb0d468df4af68c9acbbbf9f0e0`,
+  **PASS: 73 of 73 executed native regression groups**, exit 0, after `-t:Rebuild`.
+- Application build Release x64 v145: exit 0. Contract validator: `PASS: 124`, exit 0.
+- Sources: `Storage.cpp` `75d638f9a1ca4ec8525bf434efeb38b8bc3e459a092d7c6cfcc342fbea49e805`,
+  `Storage.h` `d509b1bb2f7ed61ff9d95e59e9e317a6aecc1d9fe01960401db43355bd293155`,
+  `storage_tests.cpp` `1bb4a97a5cb1ca65882b25d3d7c3a21249c060976232611d6007cdd44b1f6bda`.
+
+### Mutation evidence
+
+Fragments, records and logs under `~/.codex/visualizations/2026/10/25/mutation4/`. Each
+mutant forced through `-t:Rebuild` and restored byte-identically (SHA-256 `75d638f9…`).
+
+| Mutant | Reverted fix | Result |
+|---|---|---|
+| M13 | Incomplete managed-scope observation treated as usable | FAIL group 72, `threw` |
+| M14 | Managed-scope walk reintroduced into the write path | FAIL group 73, `ManagedScopeWalkEntriesForTesting() == beforeWrites` (`:6620`) |
+| M15 | Pre-construction capacity observation ignored | FAIL group 71, `threw` |
+
+### Known limits of this slice
+
+- **Freshness window.** Attachment bytes added between refreshes are invisible to the next
+  write until the owner refreshes. The contract relies on that refresh obligation plus the
+  80%-of-ceiling cleanup evaluation. It is documented, not eliminated. A long-lived session
+  with an owner that forgets to refresh can under-estimate the attachment component.
+- **No 80% cleanup trigger is implemented here.** The contract's periodic evaluation
+  (startup, changed 24-hour period, 80%) is not wired to a scheduler in this slice; only the
+  ceiling and reserve refusals are enforced.
+- **`std::filesystem::file_size` on a sparse file reports logical size**, which is why the
+  group 51 ceiling branch works without filling the disk. That is a test technique, not a
+  claim about physical allocation.
+- **`FAILED` journal intents are still not revisited by recovery** (unchanged from the
+  previous milestone; safety does not depend on it because admission keys on any journal row
+  plus physical observation).
+- **Logical-client sizing/layout, strict certification and final-artifact Windows acceptance
+  remain open.** No UI result from any earlier executable hash applies to `13a04a8d…`.

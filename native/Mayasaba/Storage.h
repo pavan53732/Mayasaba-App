@@ -626,6 +626,33 @@ namespace mayasaba
         };
         using CapacityProbe = std::function<CapacityObservation()>;
         void SetCapacityProbeForTesting(CapacityProbe probe) { capacityProbeForTesting_ = std::move(probe); }
+        // Installs a capacity observation used by the NEXT constructor, so opening and
+        // creation behaviour can be tested against a controlled observation instead of a
+        // setter that only takes effect after the store is already open. Consumed once.
+        static void SetCapacityObservationForOpenForTesting(CapacityProbe probe);
+
+        // The Mayasaba-managed scope as it was actually observed. Completeness is tracked
+        // per component because the three components fail differently: the database files
+        // are three cheap stats, the attachment tree is a walk that can be refused part-way,
+        // and free space is a volume query. Collapsing any of them to zero would let an
+        // unreadable tree look like an empty one.
+        struct ManagedScopeObservation
+        {
+            std::uint64_t attachmentBytes{0};
+            bool attachmentsComplete{false};
+            bool attachmentsRootAbsent{false};
+            std::uint64_t reparsePointsSkipped{0};
+            std::string attachmentsReasonEn;
+        };
+        // Walks the managed attachment tree once and caches the result. Deliberately NOT
+        // called from ordinary write admission: it is unbounded in the number of entries and
+        // admission runs under the store mutex. Called when a store is opened, and by the
+        // owner that adds or removes managed attachment bytes. Not thread-safe against a
+        // concurrent mutation; call it outside a write.
+        void RefreshManagedScopeObservation();
+        // Entries visited by the most recent managed-scope walk. Test-only: it is how a
+        // regression can prove that ordinary writes do not walk the tree.
+        std::uint64_t ManagedScopeWalkEntriesForTesting() const noexcept { return managedScopeWalkEntries_; }
         void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
         void SetForcePathCanonicalizationFailureForTestingPath(std::string const& p) { forcedPathCanonicalFailurePath_ = p; }
         void ClearForcePathCanonicalizationFailureForTestingPath() { forcedPathCanonicalFailurePath_.clear(); }
@@ -650,15 +677,37 @@ namespace mayasaba
         std::function<void()> queryActionCenterSnapshotHook_;
         std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
         CapacityProbe capacityProbeForTesting_;
+        // Last completed managed-scope observation, and whether one has been taken at all.
+        // Ordinary writes read this instead of walking the tree; a store that has never
+        // observed its scope refuses writes rather than assuming it is empty.
+        ManagedScopeObservation managedScope_;
+        bool managedScopeObserved_{false};
+        mutable std::uint64_t managedScopeWalkEntries_{0};
         bool forcePathCanonicalizationFailureForTesting_{false};
         std::string forcedPathCanonicalFailurePath_;
         std::string forcedStagedPresenceFailurePath_;
         std::function<void()> clearDeletionPhaseHook_;
-        // True only while the constructor runs its idempotent schema DDL and crash
-        // reconciliation (R05): these writes are part of opening, and opening an
-        // existing store must never be capacity-gated, so the capacity check - only
-        // the capacity check; the quarantine check still applies - is suppressed for
-        // exactly this phase. Every post-open mutation is capacity-gated as before.
+        // True only while the constructor runs its idempotent schema DDL, migration and the
+        // two bounded recovery passes (crash-operation reconciliation and interrupted-cleanup
+        // recovery): these writes are part of opening, and opening an existing store must
+        // never be capacity-gated, so the capacity check - only the capacity check; the
+        // quarantine check still applies - is suppressed for exactly this span. Every
+        // post-open mutation is capacity-gated as before.
+        //
+        // The span is deliberately not wider than that, and the distinction it encodes is:
+        //   - inspection (reads)            never gated, at any time;
+        //   - creating a brand-new store    gated, as ordinary write admission;
+        //   - opening an existing store     never gated, so it stays inspectable and
+        //                                   recoverable at the ceiling or on a low volume;
+        //   - schema DDL and migration      exempt, because a migration that stops half-way
+        //                                   leaves a worse state than an over-ceiling store,
+        //                                   and it is bounded and pre-backed-up;
+        //   - bounded recovery              exempt, for the same reason: it exists to restore
+        //                                   consistency and must not be blocked by the
+        //                                   condition it is meant to describe;
+        //   - ordinary writes               gated, always.
+        // No ordinary mutation may run while this is true; it is cleared immediately after
+        // the recovery calls, before the constructor returns.
         bool openSchemaPhase_{false};
         bool forceHashFailureForTesting_{false};
         bool forceRollbackFailureForTesting_{false};

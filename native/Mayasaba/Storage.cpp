@@ -26,6 +26,18 @@ namespace mayasaba
 {
     namespace
     {
+        // Capacity observation installed for the next construction. It has to be reachable
+        // before a Storage exists, which is the point: a setter that only works after
+        // opening cannot test whether opening itself is gated correctly.
+        std::function<Storage::CapacityObservation()>& OpenCapacityProbe()
+        {
+            static std::function<Storage::CapacityObservation()> probe;
+            return probe;
+        }
+    }
+
+    namespace
+    {
         // One translation for every path that can fail because a statement was denied.
         // SQLite reports an authorizer denial as SQLITE_AUTH with the bare message
         // "not authorized"; admission and the authorizer backstop must be
@@ -1842,18 +1854,155 @@ namespace mayasaba
         return entries;
     }
 
+    void Storage::RefreshManagedScopeObservation()
+    {
+        ManagedScopeObservation obs;
+        managedScopeWalkEntries_ = 0;
+
+        auto const root = ManagedAttachmentRoot();
+        std::error_code rootEc;
+        auto const rootStatus = std::filesystem::symlink_status(root, rootEc);
+        if (rootEc && rootEc != std::errc::no_such_file_or_directory)
+        {
+            // Present-but-unreadable and absent are different facts. Only absence may be
+            // counted as zero managed bytes.
+            obs.attachmentsComplete = false;
+            obs.attachmentsReasonEn = "the managed attachment directory could not be inspected (" + rootEc.message() + ")";
+            managedScope_ = std::move(obs);
+            managedScopeObserved_ = true;
+            return;
+        }
+        if (!std::filesystem::exists(rootStatus))
+        {
+            // A store that has never staged anything has no attachment tree. That is a
+            // complete observation of zero bytes, not a failed one.
+            obs.attachmentsComplete = true;
+            obs.attachmentsRootAbsent = true;
+            managedScope_ = std::move(obs);
+            managedScopeObserved_ = true;
+            return;
+        }
+        if (!std::filesystem::is_directory(rootStatus))
+        {
+            obs.attachmentsComplete = false;
+            obs.attachmentsReasonEn = "the managed attachment path exists but is not a directory";
+            managedScope_ = std::move(obs);
+            managedScopeObserved_ = true;
+            return;
+        }
+
+        // skip_permission_denied stops an inaccessible subtree from aborting the whole walk,
+        // but it also hides data. The distinction that matters is therefore made explicitly:
+        // an iterator error is an incomplete observation, never a smaller total.
+        std::error_code walkEc;
+        std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, walkEc);
+        std::filesystem::recursive_directory_iterator const end;
+        if (walkEc)
+        {
+            obs.attachmentsComplete = false;
+            obs.attachmentsReasonEn = "the managed attachment directory could not be enumerated (" + walkEc.message() + ")";
+            managedScope_ = std::move(obs);
+            managedScopeObserved_ = true;
+            return;
+        }
+        for (; it != end; it.increment(walkEc))
+        {
+            if (walkEc)
+            {
+                obs.attachmentsComplete = false;
+                obs.attachmentsReasonEn = "the managed attachment directory could not be fully enumerated (" + walkEc.message() + ")";
+                managedScope_ = std::move(obs);
+                managedScopeObserved_ = true;
+                return;
+            }
+            ++managedScopeWalkEntries_;
+
+            std::error_code typeEc;
+            auto const status = it->symlink_status(typeEc);
+            if (typeEc)
+            {
+                obs.attachmentsComplete = false;
+                obs.attachmentsReasonEn = "a managed entry's type could not be read (" + typeEc.message() + ")";
+                managedScope_ = std::move(obs);
+                managedScopeObserved_ = true;
+                return;
+            }
+
+            // Reparse points are not followed. Following one would count the same object
+            // twice when the target is also inside the tree, and could walk outside the
+            // managed scope entirely. The skip is counted and reported rather than silently
+            // treated as zero bytes of ordinary data.
+            bool const isLink = std::filesystem::is_symlink(status);
+            bool isReparseDir = false;
+#ifdef _WIN32
+            if (!isLink && std::filesystem::is_directory(status))
+            {
+                DWORD const attributes = GetFileAttributesW(it->path().c_str());
+                if (attributes == INVALID_FILE_ATTRIBUTES)
+                {
+                    obs.attachmentsComplete = false;
+                    obs.attachmentsReasonEn = "a managed directory's attributes could not be read";
+                    managedScope_ = std::move(obs);
+                    managedScopeObserved_ = true;
+                    return;
+                }
+                isReparseDir = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+            }
+#endif
+            if (isLink || isReparseDir)
+            {
+                ++obs.reparsePointsSkipped;
+                it.disable_recursion_pending();
+                continue;
+            }
+            if (!std::filesystem::is_regular_file(status)) continue;
+
+            std::error_code sizeEc;
+            auto const bytes = it->file_size(sizeEc);
+            if (sizeEc)
+            {
+                // An unmeasurable file must not be counted as zero.
+                obs.attachmentsComplete = false;
+                obs.attachmentsReasonEn = "a managed file's size could not be read (" + sizeEc.message() + ")";
+                managedScope_ = std::move(obs);
+                managedScopeObserved_ = true;
+                return;
+            }
+            obs.attachmentBytes += bytes;
+        }
+
+        obs.attachmentsComplete = true;
+        managedScope_ = std::move(obs);
+        managedScopeObserved_ = true;
+    }
+
+    void Storage::SetCapacityObservationForOpenForTesting(CapacityProbe probe)
+    {
+        OpenCapacityProbe() = std::move(probe);
+    }
+
     void Storage::CheckWriteCapacity()
     {
-        // Normal-write admission only (R05). Opening an existing store is never gated
-        // here: inspection and recovery must stay possible when the store is at its
-        // ceiling or the volume is low on space, so the constructor no longer calls
-        // this before SQLite opens - only the creation of a brand-new store does, as
-        // ordinary write admission. The observation covers the whole Mayasaba-managed
-        // scope - database, WAL, SHM and every regular file under the managed
-        // attachment tree - not only the database files, and the two refusals name
-        // their distinct causes precisely. Nothing here deletes data: recovery and
-        // eligible cleanup belong to their owning layers, and a refusal retains every
-        // protected byte and record.
+        // Ordinary write admission (R05). Two properties are load-bearing here.
+        //
+        // BOUNDED. This runs under the store mutex on every mutation, so it must not walk
+        // the managed attachment tree: that walk is unbounded in the number of entries and
+        // would put a full directory traversal inside the critical section of every write.
+        // The attachment component therefore comes from the last completed observation
+        // (taken at open, and refreshed by the owner that adds or removes managed
+        // attachment bytes), while the database component is re-measured here - three
+        // stats, constant cost - so SQLite growth is never stale.
+        //
+        // FRESHNESS AND INTERVENING CHANGE. Attachment bytes can be added between refreshes
+        // by a staging operation that has not refreshed yet. That window is bounded by the
+        // owner's own refresh, and the independent 80%-of-ceiling cleanup evaluation is the
+        // backstop; it is not silently assumed away. What is never done is substituting a
+        // guess for an observation: if any component could not be observed, admission
+        // refuses instead of counting the unreadable part as zero.
+        //
+        // Opening an existing store is never gated here. Inspection and recovery must remain
+        // possible at the ceiling or on a low volume; only creating a brand-new store is
+        // gated as ordinary write admission.
         CapacityObservation observed{};
         if (capacityProbeForTesting_)
         {
@@ -1861,30 +2010,51 @@ namespace mayasaba
         }
         else
         {
-            observed.freeBytes = std::filesystem::space(file_.parent_path()).available;
-            uintmax_t managed = 0;
+            if (!managedScopeObserved_)
+            {
+                throw std::runtime_error(
+                    "Mayasaba-managed storage has not been observed for this store, so a write cannot be "
+                    "admitted while its size is unknown. Reopen the project store to establish the "
+                    "observation; nothing was changed and no protected data was deleted.");
+            }
+            if (!managedScope_.attachmentsComplete)
+            {
+                throw std::runtime_error(
+                    "Mayasaba-managed storage could not be fully observed (" + managedScope_.attachmentsReasonEn +
+                    "), so a write cannot be admitted while the size of the managed attachment area is unknown. "
+                    "Nothing was changed and no protected data was deleted. Make the managed attachment area "
+                    "readable, then reopen the project store.");
+            }
+
+            std::uint64_t managed = managedScope_.attachmentBytes;
             for (auto const& suffix : { L"", L"-wal", L"-shm" })
             {
-                auto path = file_.wstring() + suffix;
                 std::error_code ec;
-                auto bytes = std::filesystem::file_size(path, ec);
-                if (!ec) managed += bytes;
-            }
-            auto attachmentsRoot = ManagedAttachmentRoot();
-            std::error_code walkEc;
-            for (std::filesystem::recursive_directory_iterator it(attachmentsRoot,
-                     std::filesystem::directory_options::skip_permission_denied, walkEc), end;
-                 it != end && !walkEc; it.increment(walkEc))
-            {
-                std::error_code entryEc;
-                if (it->is_regular_file(entryEc) && !entryEc)
+                auto const bytes = std::filesystem::file_size(file_.wstring() + suffix, ec);
+                if (ec)
                 {
-                    auto bytes = it->file_size(entryEc);
-                    if (!entryEc) managed += bytes;
+                    // A missing WAL or SHM file is normal and is not a measurement failure.
+                    if (ec == std::errc::no_such_file_or_directory) continue;
+                    throw std::runtime_error(
+                        "A database file could not be measured (" + ec.message() +
+                        "), so a write cannot be admitted while the size of Mayasaba-managed storage is "
+                        "unknown. Nothing was changed and no protected data was deleted.");
                 }
+                managed += bytes;
+            }
+
+            std::error_code spaceEc;
+            auto const space = std::filesystem::space(file_.parent_path(), spaceEc);
+            if (spaceEc)
+            {
+                throw std::runtime_error(
+                    "Free space on the store's volume could not be observed (" + spaceEc.message() +
+                    "), so a write cannot be admitted. Nothing was changed and no protected data was deleted.");
             }
             observed.managedBytes = managed;
+            observed.freeBytes = space.available;
         }
+
         constexpr uintmax_t ceiling = 10ull * 1024 * 1024 * 1024;
         constexpr uintmax_t reserve = 5ull * 1024 * 1024 * 1024;
         if (observed.managedBytes >= ceiling)
@@ -1949,6 +2119,17 @@ namespace mayasaba
             std::error_code existingEc;
             bool const fileExists = std::filesystem::exists(file);
             bool const existingStore = fileExists;
+            // A capacity observation installed before construction is consumed here, so the
+            // creation gate can be exercised against a controlled observation rather than a
+            // setter that only works once the store is already open.
+            if (auto& openProbe = OpenCapacityProbe(); openProbe)
+            {
+                capacityProbeForTesting_ = openProbe;
+                openProbe = nullptr;
+            }
+            // Observe the Mayasaba-managed scope exactly once, at open. Ordinary write
+            // admission then reads this instead of walking the tree under the store mutex.
+            if (!capacityProbeForTesting_) RefreshManagedScopeObservation();
             if (!existingStore) CheckWriteCapacity();
 #ifdef _WIN32
             // Lock the actual file identity, independent of environment, case,

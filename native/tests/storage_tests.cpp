@@ -4968,13 +4968,18 @@ auto const bigManaged = attachmentsRoot / "managed-bytes.bin";
                     }
                 }
                 threw = false; reason.clear();
+                // R05 bounded observation: ordinary write admission reads the last completed
+                // managed-scope observation instead of walking the attachment tree under the
+                // store mutex. The owner that changes managed attachment bytes refreshes it,
+                // which is what makes the added bytes visible to the next write.
+                scopeStore.RefreshManagedScopeObservation();
                 try { scopeStore.TrySaveDraft("proj-cap3", "attachment bytes count"); }
                 catch (std::exception const& ex) { threw = true; reason = ex.what(); }
                 EXPECT(threw);
                 EXPECT(reason.find("10 GiB ceiling") != std::string::npos);
-                // Removing the managed attachment bytes restores ordinary admission:
-                // the observation is recomputed, never cached across the change.
+                // Removing the managed attachment bytes and refreshing restores admission.
 fs::remove(bigManaged);
+                scopeStore.RefreshManagedScopeObservation();
                 EXPECT(scopeStore.TrySaveDraft("proj-cap3", "recovered"));
                 EXPECT(!scopeStore.IsQuarantinedForTesting());
 
@@ -6479,6 +6484,144 @@ fs::remove(bigManaged);
             // Unknown identity is uncertainty, not replacement.
             EXPECT(recovered[0].state == "UNCERTAIN");
             EXPECT(!recovered[0].resolved);
+            CASES_END();
+        }
+
+        // 71. The creation gate must be testable from a capacity observation established
+        // BEFORE construction. A setter that only takes effect after opening cannot show
+        // that opening itself is gated correctly, which is why this uses a one-shot
+        // pre-construction probe.
+        {
+            CASES_BEGIN("71. Store creation is gated by a pre-construction capacity observation");
+            auto const lowDb = folder / "r05-create-low.db";
+            bool threw = false;
+            std::string reason;
+            mayasaba::Storage::SetCapacityObservationForOpenForTesting(
+                [] { return mayasaba::Storage::CapacityObservation{0, 1ull << 30}; });
+            try
+            {
+                mayasaba::Storage store(lowDb);
+            }
+            catch (std::exception const& ex)
+            {
+                threw = true;
+                reason = ex.what();
+            }
+            EXPECT(threw);
+            EXPECT(reason.find("5 GiB") != std::string::npos);
+            EXPECT(reason.find("nothing was deleted") != std::string::npos);
+            // The refusal is total: no partial store is left behind.
+            EXPECT(!fs::exists(lowDb));
+
+            // The probe is consumed once, so an ordinary construction now succeeds.
+            {
+                mayasaba::Storage store(lowDb);
+                EXPECT(store.TrySaveDraft("r05-create", "after refusal") ||
+                       !store.Project("r05-create").has_value());
+            }
+
+            // The ceiling branch is gated the same way at creation.
+            auto const highDb = folder / "r05-create-high.db";
+            threw = false;
+            reason.clear();
+            mayasaba::Storage::SetCapacityObservationForOpenForTesting(
+                [] { return mayasaba::Storage::CapacityObservation{11ull << 30, 100ull << 30}; });
+            try
+            {
+                mayasaba::Storage store(highDb);
+            }
+            catch (std::exception const& ex)
+            {
+                threw = true;
+                reason = ex.what();
+            }
+            EXPECT(threw);
+            EXPECT(reason.find("10 GiB ceiling") != std::string::npos);
+            EXPECT(!fs::exists(highDb));
+            mayasaba::Storage::SetCapacityObservationForOpenForTesting(nullptr);
+            CASES_END();
+        }
+
+        // 72. An incomplete observation must refuse, not count unreadable data as zero, and
+        // must recover once the condition is repaired. The managed attachment path is
+        // replaced by a file, so the tree genuinely cannot be enumerated.
+        {
+            CASES_BEGIN("72. Incomplete managed-scope observation refuses and recovers");
+            auto const dbPath = folder / "r05-incomplete.db";
+            std::string const projectId = "r05-inc";
+            {
+                mayasaba::Storage seed(dbPath);
+                seed.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+                EXPECT(seed.TrySaveDraft(projectId, "seed"));
+            }
+
+            auto const root = dbPath.parent_path() / "attachments";
+            fs::remove_all(root);
+            {
+                std::ofstream of(root, std::ios::binary);
+                of.write("this is not a directory", 23);
+            }
+
+            {
+                // Opening an existing store is never capacity-gated: inspection and recovery
+                // must stay possible even when the managed scope cannot be observed.
+                mayasaba::Storage store(dbPath);
+                EXPECT(!store.IsQuarantinedForTesting());
+                EXPECT(store.Project(projectId).has_value());
+
+                bool threw = false;
+                std::string reason;
+                try { store.TrySaveDraft(projectId, "must be refused"); }
+                catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+                EXPECT(threw);
+                EXPECT(reason.find("could not be fully observed") != std::string::npos);
+                EXPECT(reason.find("not a directory") != std::string::npos);
+                EXPECT(reason.find("Nothing was changed") != std::string::npos);
+                // A capacity refusal is a separate gate: it never poisons the connection.
+                EXPECT(!store.IsQuarantinedForTesting());
+                // Reads still work.
+                EXPECT(store.Project(projectId)->draft == "seed");
+            }
+
+            // Repair the managed scope and reopen: ordinary admission is restored.
+            fs::remove(root);
+            {
+                mayasaba::Storage store(dbPath);
+                EXPECT(store.TrySaveDraft(projectId, "recovered after repair"));
+                EXPECT(!store.IsQuarantinedForTesting());
+            }
+            CASES_END();
+        }
+
+        // 73. Ordinary write admission must not walk the managed tree. The walk is unbounded
+        // in entries and admission runs under the store mutex, so this asserts the walk count
+        // is unchanged across writes and only an explicit refresh visits the tree.
+        {
+            CASES_BEGIN("73. Ordinary writes do not walk the managed attachment tree");
+            mayasaba::Storage store(folder / "r05-bounded.db");
+            std::string const projectId = "r05-bound";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const root = store.ManagedAttachmentRoot();
+            auto const staging = root / "staging" / projectId;
+            fs::create_directories(staging);
+            for (int i = 0; i < 200; ++i)
+            {
+                std::ofstream of(staging / ("f" + std::to_string(i) + ".bin"), std::ios::binary);
+                of.write("x", 1);
+            }
+
+            std::uint64_t const beforeWrites = store.ManagedScopeWalkEntriesForTesting();
+            for (int i = 0; i < 20; ++i)
+            {
+                EXPECT(store.TrySaveDraft(projectId, "w" + std::to_string(i)));
+            }
+            // Twenty admitted writes, zero traversal.
+            EXPECT(store.ManagedScopeWalkEntriesForTesting() == beforeWrites);
+
+            // An explicit refresh does walk, and sees the files that were added.
+            store.RefreshManagedScopeObservation();
+            EXPECT(store.ManagedScopeWalkEntriesForTesting() >= 200);
             CASES_END();
         }
 
