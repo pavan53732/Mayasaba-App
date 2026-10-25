@@ -4460,3 +4460,80 @@ The first two launch attempts produced no window: `launch` rejects `--json`, and
 GUI process is reaped when the invoking shell command ends, so launch, focus, input and
 capture must occur in **one** command. Both are environment facts already recorded in
 `AGENTS.md` §3 and the project memory; they cost two wasted attempts here.
+
+## 2026-10-25 — C1: general reclamation hardened (S2-F01, F02, F03)
+
+From the independent S0–S4 audit of `bef23619`. Reclamation had been added next to two
+cleanup paths that already used a durable three-phase protocol, and did not reuse it.
+
+### F01 — durable intent and stable identity
+
+`ReclaimEligibleCleanup` now runs the same protocol per object as the other cleanup paths:
+
+1. **Phase 1** — `AdmitWrite_locked`, then in one transaction the reference re-check, the
+   object-identity capture and a `PENDING` journal row, committed before any effect.
+2. **Phase 2** — `RemoveVerifiedManagedFile_locked` outside any transaction: the path is
+   opened with `DELETE` access, the handle's volume serial and file index are compared
+   against the identity captured in phase 1, and only then is `FileDispositionInfo` applied
+   to that same handle. A substituted object is refused.
+3. **Phase 3** — `DELETED` or `FAILED` recorded with the reason.
+
+The identity comparison uses `BY_HANDLE_FILE_INFORMATION`, the same API and encoding as
+`CaptureStagedObjectIdentity`; an earlier draft used `FILE_ID_INFO`, whose 128-bit identifier
+does not line up with `nFileIndexHigh/Low` and would have compared two different
+representations.
+
+### F02 — quarantine admission
+
+Reclamation now calls `AdmitWrite_locked` before each object's transaction. Note the honest
+detail: `Exec("BEGIN IMMEDIATE")` already admits, so the explicit call is belt-and-braces
+rather than the sole mechanism — see the M25 note below.
+
+### F03 — storage-class-correct ledger
+
+`CleanupCandidate` carries a `CleanupStorageClass`. `AccountManagedRemoval_locked` takes the
+class and decrements `otherManagedBytes_` for a migration backup and `attachmentBytes_` for a
+staged copy. Previously every removal decremented the attachment component, so deleting a
+backup left the backup count unchanged and understated the attachment count.
+
+### Tests (1–81 preserved, 82–85 added)
+
+| Group | Asserts |
+|---|---|
+| 82 | A quarantined store (forced through the same conflicting-replay path as group 29) refuses reclamation with a "quarantined" diagnostic and leaves the eligible file untouched. |
+| 83 | A successful reclamation leaves a `DELETED` journal row with a reason for that exact path, so an interruption after the physical effect is reconcilable. |
+| 84 | An object substituted in the window between the committed intent and the removal is preserved: `removed == 0`, `retained >= 1`, the replacement survives with its own bytes. Reached through `SetReclaimRemovalPhaseHookForTesting`, so the identity check is actually exercised rather than merely present. |
+| 85 | Five migration backups: the two beyond the retained three are reclaimed, `AccountedAttachmentBytesForTesting` is unchanged, and a rescan leaves exactly three backups. |
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256
+  `33ef085c32e8c5d94a01f2ae29a5444bac9fab421e9d49232ece5f5098830272`,
+  **PASS: 85 of 85 executed native regression groups**, exit 0, after `-t:Rebuild`.
+- Application build Release x64 v145: exit 0. Contract validator: `PASS: 124`, exit 0.
+- Sources: `Storage.cpp` `c41705df17a6d1edfd7cc7df117c6c816b1973a416ee354908f862928d9e85ff`,
+  `Storage.h` `a275631e4ca6f5bc8e8b276f07443998df0ba6c86d83db839b2e479d3037fa5e`,
+  `storage_tests.cpp` `1797b1eac0b2a08eb0941233a55b965845d82c6f38b4b45922ccda6c1eee1e3c`.
+
+### Mutation evidence
+
+Under `~/.codex/visualizations/2026/10/25/mutation8/`; all restores `matches_clean: true`.
+
+| Mutant | Reverted fix | Result |
+|---|---|---|
+| M25 | Explicit `AdmitWrite_locked` removed from the reclamation loop | **PASSED — see note** |
+| M26 | Ledger update ignores the storage class | FAIL group 85 |
+| M27 | Identity comparison removed from verified removal | FAIL group 84, `result.removed == 0` |
+| M28 | Per-object intent no longer recorded | FAIL group 83, `sawEntry` |
+
+**M25 note.** Removing the explicit admission call does not fail group 82, because
+`Exec("BEGIN IMMEDIATE")` performs the same admission internally. Quarantine protection for
+reclamation is therefore **real and exercised by group 82**, but it comes from the transaction
+begin, not from the explicit call; the explicit line is retained as defence for a future edit
+that stops opening a transaction there. Not claimed as an independently proven guard.
+
+### Still open after C1
+
+C2 (verified backup set, scan completeness, bounded discovery, event-based grace), C3
+(configurable ceiling, scheduler, evaluation-table retention), C4–C6 remain. **S2 is not
+complete.**

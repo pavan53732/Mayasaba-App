@@ -1566,7 +1566,7 @@ namespace mayasaba
                 uncertain = true;
                 deletionReason = "an unknown failure occurred while removing the staged copy";
             }
-            if (removed) AccountManagedRemoval_locked(removedBytes);
+            if (removed) AccountManagedRemoval_locked(removedBytes, CleanupStorageClass::StagedAttachment);
         }
 
         // PHASE 3 - record what actually happened. The record is retired only when the
@@ -1690,7 +1690,7 @@ namespace mayasaba
             uncertain = true;
             deletionReason = "an unknown failure occurred while removing the staged copy";
         }
-        if (removed) AccountManagedRemoval_locked(removedBytes);
+        if (removed) AccountManagedRemoval_locked(removedBytes, CleanupStorageClass::StagedAttachment);
 
         // PHASE 3 - record the observed outcome.
         outcome.removed = removed;
@@ -2172,12 +2172,75 @@ namespace mayasaba
         ++managedScopeGeneration_;
     }
 
-    void Storage::AccountManagedRemoval_locked(std::uint64_t bytes)
+    void Storage::AccountManagedRemoval_locked(std::uint64_t bytes, CleanupStorageClass storageClass)
     {
         if (bytes == 0) return;
-        if (attachmentBytes_ >= bytes) attachmentBytes_ -= bytes;
-        else attachmentBytes_ = 0;
+        // Each class has its own component. Subtracting a backup from the attachment total
+        // left the backup count unchanged and the attachment count understated, which caused
+        // unnecessary capacity refusals and made later accounting decisions wrong.
+        std::uint64_t& component = storageClass == CleanupStorageClass::MigrationBackup
+            ? otherManagedBytes_
+            : attachmentBytes_;
+        if (component >= bytes) component -= bytes;
+        else component = 0;
         ++managedScopeGeneration_;
+    }
+
+    bool Storage::RemoveVerifiedManagedFile_locked(std::string const& path,
+        StagedObjectIdentity const& expected, std::string* reasonEn)
+    {
+        auto refuse = [reasonEn](std::string why)
+        {
+            if (reasonEn) *reasonEn = std::move(why);
+            return false;
+        };
+        if (path.empty()) return refuse("the recorded path is empty");
+        if (!expected.valid)
+            return refuse("the object whose eligibility was established could not be identified, so it was not removed");
+#ifdef _WIN32
+        std::wstring target;
+        try { target = Utf8ToWide(path); }
+        catch (...) { return refuse("the recorded path is not valid UTF-8"); }
+
+        // DELETE access without sharing deletion: whatever object this handle names is the
+        // only object this operation can remove.
+        HANDLE h = CreateFileW(target.c_str(), DELETE | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (h == INVALID_HANDLE_VALUE)
+            return refuse("the recorded object could not be opened for removal");
+
+        // Same API and encoding as CaptureStagedObjectIdentity, so this compares two readings
+        // of one identity rather than two different representations of it.
+        BY_HANDLE_FILE_INFORMATION info{};
+        if (!GetFileInformationByHandle(h, &info))
+        {
+            CloseHandle(h);
+            return refuse("the object's identity could not be read, so its removal was refused");
+        }
+        unsigned long long const index =
+            (static_cast<unsigned long long>(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+        if (static_cast<unsigned long long>(info.dwVolumeSerialNumber) != expected.volumeSerial ||
+            index != expected.fileIndex)
+        {
+            CloseHandle(h);
+            return refuse("the object now at that path is not the object whose eligibility was established, so it was not removed");
+        }
+        FILE_DISPOSITION_INFO disposition{};
+        disposition.DeleteFile = TRUE;
+        if (!SetFileInformationByHandle(h, FileDispositionInfo, &disposition, sizeof(disposition)))
+        {
+            CloseHandle(h);
+            return refuse("the recorded object could not be deleted");
+        }
+        CloseHandle(h);
+        return true;
+#else
+        (void)expected;
+        std::error_code ec;
+        std::filesystem::remove(std::filesystem::path(path), ec);
+        return !ec;
+#endif
     }
 
     std::uint64_t Storage::AccountedAttachmentBytesForTesting()
@@ -2274,6 +2337,8 @@ namespace mayasaba
                 CleanupCandidate candidate;
                 candidate.path = pathUtf8;
                 candidate.bytes = static_cast<std::uint64_t>(bytes);
+                candidate.storageClass = CleanupStorageClass::StagedAttachment;
+                candidate.identity = CaptureStagedObjectIdentity(pathUtf8);
                 candidates.push_back(std::move(candidate));
             }
         }
@@ -2318,6 +2383,8 @@ namespace mayasaba
             CleanupCandidate candidate;
             candidate.path = WideToUtf8(backups[i].second.wstring());
             candidate.bytes = static_cast<std::uint64_t>(bytes);
+            candidate.storageClass = CleanupStorageClass::MigrationBackup;
+            candidate.identity = CaptureStagedObjectIdentity(candidate.path);
             candidates.push_back(std::move(candidate));
         }
 
@@ -2441,31 +2508,62 @@ namespace mayasaba
                 result.bounded = true;
                 break;
             }
-            // Re-verify at the moment of removal: eligibility computed earlier is not
-            // authorization, because a record may have started referencing these bytes since.
-            int const refs = CountOtherProtectedReferences_locked(candidate.path, std::string{}, std::string{});
-            if (refs != 0)
+
+            // PHASE 1 - eligibility re-check and durable intent, committed before any effect.
+            // Eligibility computed during collection is not authorization: a record may have
+            // started referencing these bytes since, and an interruption must leave a durable
+            // record of what was about to be removed.
+            bool proceed = false;
+            StagedObjectIdentity expected;
+            AdmitWrite_locked();
+            Exec("BEGIN IMMEDIATE;");
+            try
+            {
+                int const refs = CountOtherProtectedReferences_locked(candidate.path, std::string{}, std::string{});
+                if (refs == 0)
+                {
+                    expected = CaptureStagedObjectIdentity(candidate.path);
+                    if (expected.valid)
+                    {
+                        RecordCleanupIntent_locked(candidate.projectId, candidate.path, "PENDING",
+                            "Cleanup evaluation established that no protected record references this object.");
+                        proceed = true;
+                    }
+                }
+                Exec("COMMIT;");
+            }
+            catch (...)
+            {
+                RollbackAfterFailure_locked();
+                throw;
+            }
+            if (!proceed)
             {
                 ++result.retained;
                 continue;
             }
-            std::error_code ec;
-            auto const wide = std::filesystem::path(Utf8ToWide(candidate.path));
-            std::error_code attrEc;
-            auto const attrs = std::filesystem::symlink_status(wide, attrEc);
-            if (attrEc || std::filesystem::is_symlink(attrs) || !std::filesystem::is_regular_file(attrs))
+
+            // PHASE 2 - the irreversible step, outside any transaction, on the identity that
+            // was established above rather than on whatever the path resolves to now.
+            if (reclaimRemovalPhaseHook_) reclaimRemovalPhaseHook_();
+            std::string removalReason;
+            bool const removed = RemoveVerifiedManagedFile_locked(candidate.path, expected, &removalReason);
+
+            // PHASE 3 - record what happened. The ledger component follows the candidate's
+            // storage class, so a backup does not decrement the attachment total.
+            if (removed)
+            {
+                ++result.removed;
+                AccountManagedRemoval_locked(candidate.bytes, candidate.storageClass);
+                ResolveCleanup(candidate.projectId, candidate.path, "DELETED",
+                    "The recorded object was removed by cleanup reclamation.");
+            }
+            else
             {
                 ++result.retained;
-                continue;
+                ResolveCleanup(candidate.projectId, candidate.path, "FAILED",
+                    "The object was not removed (" + removalReason + ").");
             }
-            std::filesystem::remove(wide, ec);
-            if (ec)
-            {
-                ++result.retained;
-                continue;
-            }
-            ++result.removed;
-            AccountManagedRemoval_locked(candidate.bytes);
         }
 
         if (result.removed == 0 && result.retained == 0)
@@ -5109,7 +5207,7 @@ namespace mayasaba
             if (deleteBytes(*staged, expectedIdentity, &deletionReason))
             {
                 outcome.bytesRemoved = true;
-                AccountManagedRemoval_locked(removedBytes);
+                AccountManagedRemoval_locked(removedBytes, CleanupStorageClass::StagedAttachment);
                 ResolveCleanup(projectId, *staged, "DELETED",
                     "The recorded object was removed by this cleanup.");
             }
@@ -5236,7 +5334,7 @@ namespace mayasaba
                 if (deleteBytes(path, expectedIdentity, &deletionReason))
                 {
                     outcome.stagedPaths.push_back(path);
-                    AccountManagedRemoval_locked(removedBytes);
+                    AccountManagedRemoval_locked(removedBytes, CleanupStorageClass::StagedAttachment);
                     ResolveCleanup(projectId, path, "DELETED", "The recorded object was removed by draft clear.");
                 }
                 else

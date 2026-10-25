@@ -7064,6 +7064,182 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // 82. Reclamation must not perform a physical effect on a quarantined connection.
+        // Quarantine protects SQLite writes; it does not automatically stop a C++ method from
+        // calling a filesystem delete, so the admission gate has to be explicit.
+        {
+            CASES_BEGIN("82. Reclamation refuses while the store is quarantined");
+            mayasaba::Storage store(folder / "c1-quarantine.db");
+            std::string const projectId = "c1-quar";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+            auto const aged = staging / "aged.bin";
+            {
+                std::ofstream of(aged, std::ios::binary);
+                of.write("aged-bytes", 10);
+            }
+            fs::last_write_time(aged, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            EXPECT(store.EvaluateCleanup("EXPLICIT").candidates >= 1);
+
+            // Poison the connection through the same path group 29 uses: a conflicting replay
+            // reaches the rollback, and the rollback cannot be proven.
+            EXPECT(store.StageSubmission(projectId, "sub-c1", "pending body") == "sub-c1");
+            store.SetForceRollbackFailureForTesting(true);
+            mayasaba::SaveContributionDetail failDetail;
+            auto const disposition = store.SaveContribution(projectId, "sub-c1", "different body", {}, failDetail);
+            EXPECT(disposition == mayasaba::SaveDisposition::Unknown);
+            EXPECT(store.IsQuarantinedForTesting());
+            store.SetForceRollbackFailureForTesting(false);
+
+            bool refused = false;
+            std::string reason;
+            try { (void)store.ReclaimEligibleCleanup(); }
+            catch (std::exception const& ex) { refused = true; reason = ex.what(); }
+            EXPECT(refused);
+            EXPECT(reason.find("quarantined") != std::string::npos);
+            // The eligible object is untouched: no physical effect on a quarantined store.
+            EXPECT(fs::exists(aged));
+
+            std::error_code ec;
+            fs::remove(aged, ec);
+            CASES_END();
+        }
+
+        // 83. A successful reclamation leaves a durable per-object record, so an interruption
+        // after the physical effect is reconcilable instead of unexplained.
+        {
+            CASES_BEGIN("83. Reclamation records a durable intent and outcome per object");
+            mayasaba::Storage store(folder / "c1-journal.db");
+            std::string const projectId = "c1-journal";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+            auto const aged = staging / "journaled.bin";
+            {
+                std::ofstream of(aged, std::ios::binary);
+                of.write("journaled-bytes", 15);
+            }
+            fs::last_write_time(aged, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            std::string const agedUtf8 = WideToUtf8(aged.wstring());
+
+            auto const result = store.ReclaimEligibleCleanup();
+            EXPECT(result.removed >= 1);
+            EXPECT(!fs::exists(aged));
+
+            bool sawEntry = false;
+            for (auto const& entry : store.CleanupJournal())
+            {
+                if (entry.stagedPath == agedUtf8)
+                {
+                    sawEntry = true;
+                    EXPECT(entry.state == "DELETED");
+                    EXPECT(!entry.reasonEn.empty());
+                }
+            }
+            EXPECT(sawEntry);
+            CASES_END();
+        }
+
+        // 84. An object substituted after the intent was committed is not the object removed.
+        // The hook runs in exactly that window, so the identity comparison is exercised rather
+        // than merely present.
+        {
+            CASES_BEGIN("84. Reclamation preserves an object substituted after its intent");
+            mayasaba::Storage store(folder / "c1-substitute.db");
+            std::string const projectId = "c1-subst";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+            auto const path = staging / "victim.bin";
+            {
+                std::ofstream of(path, std::ios::binary);
+                of.write("original-bytes", 14);
+            }
+            fs::last_write_time(path, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            EXPECT(store.EvaluateCleanup("EXPLICIT").candidates >= 1);
+
+            bool substituted = false;
+            store.SetReclaimRemovalPhaseHookForTesting([&]
+            {
+                std::error_code ec;
+                fs::remove(path, ec);
+                {
+                    std::ofstream of(path, std::ios::binary);
+                    of.write("replacement-bytes", 17);
+                }
+                substituted = true;
+            });
+
+            auto const result = store.ReclaimEligibleCleanup();
+            store.SetReclaimRemovalPhaseHookForTesting(nullptr);
+
+            EXPECT(substituted);
+            // The replacement is not the object whose eligibility was established.
+            EXPECT(result.removed == 0);
+            EXPECT(result.retained >= 1);
+            EXPECT(fs::exists(path));
+            std::error_code sizeEc;
+            EXPECT(fs::file_size(path, sizeEc) == 17 && !sizeEc);
+
+            std::error_code ec;
+            fs::remove(path, ec);
+            CASES_END();
+        }
+
+        // 85. Reclaiming a migration backup must update the backup component, not the
+        // attachment component. With no attachment bytes at all, the old code saturated the
+        // attachment total at zero and left the backup count unchanged.
+        {
+            CASES_BEGIN("85. Backup reclamation updates the backup ledger component");
+            mayasaba::Storage store(folder / "c1-backup.db");
+            std::string const projectId = "c1-backup";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            // Five migration backups beside the store; the two oldest are beyond the retained
+            // three and therefore eligible.
+            auto const dbPath = folder / "c1-backup.db";
+            std::vector<std::filesystem::path> backups;
+            for (int i = 0; i < 5; ++i)
+            {
+                auto b = std::filesystem::path(dbPath.wstring() + L".pre_migration.bak.v" + std::to_wstring(i));
+                std::ofstream of(b, std::ios::binary);
+                std::string const payload(2048, 'b');
+                of.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+                of.close();
+                fs::last_write_time(b, fs::file_time_type::clock::now() - std::chrono::hours(24 * (30 - i)));
+                backups.push_back(b);
+            }
+
+            // Observe so the backup component is populated.
+            store.RefreshManagedScopeObservation();
+            std::uint64_t const attachmentBefore = store.AccountedAttachmentBytesForTesting();
+
+            auto const result = store.ReclaimEligibleCleanup();
+            EXPECT(result.removed >= 1);
+
+            // Attachment accounting is untouched by a backup removal.
+            EXPECT(store.AccountedAttachmentBytesForTesting() == attachmentBefore);
+
+            // And a rescan agrees with the filesystem: exactly three backups remain.
+            store.RefreshManagedScopeObservation();
+            int remaining = 0;
+            for (auto const& b : backups)
+            {
+                std::error_code ec;
+                if (fs::exists(b, ec)) ++remaining;
+            }
+            EXPECT(remaining == 3);
+            EXPECT(store.AccountedAttachmentBytesForTesting() == attachmentBefore);
+
+            std::error_code ec;
+            for (auto const& b : backups) fs::remove(b, ec);
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.

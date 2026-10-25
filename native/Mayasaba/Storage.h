@@ -702,6 +702,15 @@ namespace mayasaba
             std::string reasonEn;
         };
         CleanupReclaimResult ReclaimEligibleCleanup();
+
+        // Which ledger component a reclaimed object belongs to. Staged attachment bytes and
+        // migration backups are accounted separately, and decrementing the wrong one
+        // silently corrupts both totals.
+        enum class CleanupStorageClass
+        {
+            StagedAttachment,
+            MigrationBackup
+        };
         void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
         void SetForcePathCanonicalizationFailureForTestingPath(std::string const& p) { forcedPathCanonicalFailurePath_ = p; }
         void ClearForcePathCanonicalizationFailureForTestingPath() { forcedPathCanonicalFailurePath_.clear(); }
@@ -715,6 +724,10 @@ namespace mayasaba
         // justified eligibility and the identity used for removal, so a test can attempt a
         // substitution there rather than only inside the deleter. Test-only.
         void SetClearDeletionPhaseHookForTesting(std::function<void()> hook) { clearDeletionPhaseHook_ = std::move(hook); }
+        // Runs after a reclamation intent has been committed and before the verified removal,
+        // so a test can attempt a substitution in exactly the window the identity check
+        // exists to cover. Test-only.
+        void SetReclaimRemovalPhaseHookForTesting(std::function<void()> hook) { reclaimRemovalPhaseHook_ = std::move(hook); }
 
     private:
         sqlite3* db_{nullptr};
@@ -745,13 +758,22 @@ namespace mayasaba
         // Scans the filesystem without holding mutex_. Caller publishes the result.
         ManagedScopeObservation ScanManagedScope() const;
         // Applies a confirmed removal to the accounted total. Caller holds mutex_.
-        void AccountManagedRemoval_locked(std::uint64_t bytes);
+        void AccountManagedRemoval_locked(std::uint64_t bytes, CleanupStorageClass storageClass);
+        // Deletes a managed file only after proving it is still the object whose eligibility
+        // was established: the handle is opened first, its identity compared, and the removal
+        // performed on that same handle. Caller holds mutex_.
+        bool RemoveVerifiedManagedFile_locked(std::string const& path,
+            StagedObjectIdentity const& expected, std::string* reasonEn);
         // One reclaimable object considered by cleanup evaluation.
         struct CleanupCandidate
         {
             std::string path;
             std::string projectId;
             std::uint64_t bytes{0};
+            CleanupStorageClass storageClass{CleanupStorageClass::StagedAttachment};
+            // Identity captured when this object became eligible; the removal phase compares
+            // against it so an object swapped in after eligibility is not the one deleted.
+            StagedObjectIdentity identity;
         };
         // Collects eligible objects under mutex_, bounded to the contract's batch size.
         std::vector<CleanupCandidate> CollectCleanupCandidates_locked(bool* bounded, std::string* reasonEn);
@@ -761,6 +783,7 @@ namespace mayasaba
         std::string forcedPathCanonicalFailurePath_;
         std::string forcedStagedPresenceFailurePath_;
         std::function<void()> clearDeletionPhaseHook_;
+        std::function<void()> reclaimRemovalPhaseHook_;
         // True only while the constructor runs its idempotent schema DDL, migration and the
         // two bounded recovery passes (crash-operation reconciliation and interrupted-cleanup
         // recovery): these writes are part of opening, and opening an existing store must
