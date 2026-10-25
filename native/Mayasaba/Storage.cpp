@@ -1725,7 +1725,7 @@ namespace mayasaba
             // The recorded identity is selected with the path: a current pathname proves
             // nothing about which object an intent was recorded for.
             Statement q(db_, "SELECT project_id,staged_path,volume_serial,file_index FROM staged_cleanup_journal "
-                             "WHERE state IN ('PENDING','UNCERTAIN');");
+                             "WHERE state IN ('PENDING','UNCERTAIN','FAILED');");
             int rc = SQLITE_OK;
             while ((rc = sqlite3_step(q.value)) == SQLITE_ROW)
             {
@@ -2191,6 +2191,295 @@ namespace mayasaba
         OpenCapacityProbe() = std::move(probe);
     }
 
+
+    bool Storage::LastCleanupEvaluationDay_locked(std::string* day)
+    {
+        Statement q(db_, "SELECT day_key FROM cleanup_evaluations ORDER BY evaluation_id DESC LIMIT 1;");
+        int const rc = sqlite3_step(q.value);
+        if (rc == SQLITE_ROW)
+        {
+            if (day) *day = Text(q.value, 0);
+            return true;
+        }
+        Check(rc, db_);
+        return false;
+    }
+
+    void Storage::RecordCleanupEvaluation_locked(CleanupEvaluation const& evaluation)
+    {
+        Statement q(db_, "INSERT INTO cleanup_evaluations(trigger_name,evaluated_at,day_key,candidates,candidate_bytes,disposition) "
+                         "VALUES(?1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),strftime('%Y-%m-%d','now'),?2,?3,?4);");
+        Bind(q.value, 1, evaluation.trigger);
+        sqlite3_bind_int64(q.value, 2, static_cast<sqlite3_int64>(evaluation.candidates));
+        sqlite3_bind_int64(q.value, 3, static_cast<sqlite3_int64>(evaluation.candidateBytes));
+        Bind(q.value, 4, evaluation.dispositionEn);
+        Check(sqlite3_step(q.value), db_);
+    }
+
+    std::vector<Storage::CleanupCandidate> Storage::CollectCleanupCandidates_locked(bool* bounded, std::string* reasonEn)
+    {
+        std::vector<CleanupCandidate> candidates;
+        if (bounded) *bounded = false;
+        if (reasonEn) reasonEn->clear();
+
+        constexpr std::uint64_t kStagingGraceDays = 7;
+        constexpr std::uint64_t kBatchLimit = 500;
+
+        auto const now = std::filesystem::file_time_type::clock::now();
+        auto const grace = std::chrono::hours(24 * static_cast<int>(kStagingGraceDays));
+
+        // Class 1: staged copies past the staging grace with no protected reference. The
+        // reference query runs here, under the same mutex admission uses, and an uncertain
+        // observation (INT_MAX) counts as protected.
+        auto const stagingRoot = ManagedAttachmentRoot() / "staging";
+        std::error_code rootEc;
+        auto const rootStatus = std::filesystem::symlink_status(stagingRoot, rootEc);
+        if (!rootEc && std::filesystem::is_directory(rootStatus))
+        {
+            std::error_code walkEc;
+            std::filesystem::recursive_directory_iterator it(stagingRoot, walkEc);
+            std::filesystem::recursive_directory_iterator const end;
+            if (walkEc)
+            {
+                if (reasonEn) *reasonEn = "the staging tree could not be enumerated (" + walkEc.message() + ")";
+                return candidates;
+            }
+            for (; it != end; it.increment(walkEc))
+            {
+                if (walkEc) break;
+                std::error_code typeEc;
+                auto const status = it->symlink_status(typeEc);
+                if (typeEc) continue;
+                if (std::filesystem::is_symlink(status)) { it.disable_recursion_pending(); continue; }
+                if (!std::filesystem::is_regular_file(status)) continue;
+
+                std::error_code timeEc;
+                auto const written = it->last_write_time(timeEc);
+                if (timeEc) continue;
+                if (now - written < grace) continue;
+
+                auto const pathUtf8 = WideToUtf8(it->path().wstring());
+                int const refs = CountOtherProtectedReferences_locked(pathUtf8, std::string{}, std::string{});
+                if (refs != 0) continue;   // referenced, or unknown: retained
+
+                std::error_code sizeEc;
+                auto const bytes = it->file_size(sizeEc);
+                if (sizeEc) continue;
+
+                if (candidates.size() >= kBatchLimit)
+                {
+                    if (bounded) *bounded = true;
+                    break;
+                }
+                CleanupCandidate candidate;
+                candidate.path = pathUtf8;
+                candidate.bytes = static_cast<std::uint64_t>(bytes);
+                candidates.push_back(std::move(candidate));
+            }
+        }
+
+        // Class 2: migration backups beyond the three most recent the contract requires.
+        auto const storeDir = file_.parent_path();
+        auto const dbName = file_.filename().wstring();
+        std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> backups;
+        {
+            std::error_code dirEc;
+            std::filesystem::directory_iterator it(storeDir, dirEc);
+            std::filesystem::directory_iterator const dirEnd;
+            if (!dirEc)
+            {
+                for (; it != dirEnd; it.increment(dirEc))
+                {
+                    if (dirEc) break;
+                    auto const name = it->path().filename().wstring();
+                    if (name.rfind(dbName + L".pre_migration.bak", 0) != 0) continue;
+                    std::error_code stEc;
+                    auto const st = it->symlink_status(stEc);
+                    if (stEc || !std::filesystem::is_regular_file(st)) continue;
+                    std::error_code timeEc;
+                    auto const written = it->last_write_time(timeEc);
+                    if (timeEc) continue;
+                    backups.emplace_back(written, it->path());
+                }
+            }
+        }
+        std::sort(backups.begin(), backups.end(),
+            [](auto const& a, auto const& b) { return a.first > b.first; });
+        for (std::size_t i = 3; i < backups.size(); ++i)
+        {
+            if (candidates.size() >= kBatchLimit)
+            {
+                if (bounded) *bounded = true;
+                break;
+            }
+            std::error_code sizeEc;
+            auto const bytes = std::filesystem::file_size(backups[i].second, sizeEc);
+            if (sizeEc) continue;
+            CleanupCandidate candidate;
+            candidate.path = WideToUtf8(backups[i].second.wstring());
+            candidate.bytes = static_cast<std::uint64_t>(bytes);
+            candidates.push_back(std::move(candidate));
+        }
+
+        return candidates;
+    }
+
+    Storage::CleanupEvaluation Storage::EvaluateCleanup(std::string const& trigger)
+    {
+        std::lock_guard lock(mutex_);
+        CleanupEvaluation evaluation;
+        evaluation.trigger = trigger;
+
+        // Trigger gating: STARTUP always evaluates; CHANGED_DAY only when the recorded day
+        // differs from today; EIGHTY_PERCENT only when the ledger is at or past 80%.
+        if (trigger == "CHANGED_DAY")
+        {
+            std::string lastDay;
+            if (LastCleanupEvaluationDay_locked(&lastDay))
+            {
+                Statement q(db_, "SELECT strftime('%Y-%m-%d','now');");
+                Check(sqlite3_step(q.value), db_);
+                if (Text(q.value, 0) == lastDay)
+                {
+                    evaluation.dispositionEn = "Cleanup was not evaluated: the current 24-hour period has already been evaluated.";
+                    return evaluation;
+                }
+            }
+        }
+        else if (trigger == "EIGHTY_PERCENT")
+        {
+            std::uint64_t managed = attachmentBytes_ + otherManagedBytes_;
+            for (auto const& suffix : { L"", L"-wal", L"-shm" })
+            {
+                std::error_code ec;
+                auto const bytes = std::filesystem::file_size(file_.wstring() + suffix, ec);
+                if (!ec) managed += bytes;
+            }
+            constexpr std::uint64_t ceiling = 10ull * 1024 * 1024 * 1024;
+            if (managed * 10 < ceiling * 8)
+            {
+                evaluation.dispositionEn = "Cleanup was not evaluated: Mayasaba-managed storage is below 80% of its ceiling.";
+                return evaluation;
+            }
+        }
+
+        bool bounded = false;
+        std::string collectReason;
+        auto const candidates = CollectCleanupCandidates_locked(&bounded, &collectReason);
+        evaluation.evaluated = true;
+        evaluation.candidates = candidates.size();
+        for (auto const& candidate : candidates) evaluation.candidateBytes += candidate.bytes;
+
+        if (!collectReason.empty())
+        {
+            evaluation.dispositionEn = "Cleanup could not be fully evaluated: " + collectReason +
+                ". Nothing was deleted. Make the managed staging area readable and evaluate again.";
+        }
+        else if (candidates.empty())
+        {
+            // Nothing safely reclaimable. Say exactly what that means and what to do next,
+            // rather than reporting success.
+            evaluation.dispositionEn =
+                "No disposable data is currently eligible: every managed byte is protected history, a pending or "
+                "uncertain submission, a draft, required evidence, or a staged copy still inside its grace period. "
+                "Nothing was deleted. Protected data is retained; free space on the store's volume, or move the "
+                "store to a volume with more room, before writing again.";
+        }
+        else if (bounded)
+        {
+            evaluation.dispositionEn = "Cleanup evaluated the first 500 eligible objects and stopped at the batch bound; "
+                "nothing was deleted. Reclaim and evaluate again to continue.";
+        }
+        else
+        {
+            evaluation.dispositionEn = "Cleanup identified disposable data. Nothing was deleted by evaluation; "
+                "reclamation is a separate, explicit operation.";
+        }
+        if (evaluation.dispositionEn.find("30-day") == std::string::npos)
+        {
+            evaluation.dispositionEn += " Not covered by this evaluation: the 30-day operational log window, the "
+                "seven-day unreferenced-blob grace after a durable scan, and opt-in history retirement.";
+        }
+
+        // The record is a normal admitted write, in its own transaction: an evaluation must
+        // not be silently lost, and must not be reported as recorded if it was not.
+        AdmitWrite_locked();
+        Exec("BEGIN IMMEDIATE;");
+        try
+        {
+            RecordCleanupEvaluation_locked(evaluation);
+            Exec("COMMIT;");
+        }
+        catch (...)
+        {
+            RollbackAfterFailure_locked();
+            throw;
+        }
+        return evaluation;
+    }
+
+    Storage::CleanupReclaimResult Storage::ReclaimEligibleCleanup()
+    {
+        std::lock_guard lock(mutex_);
+        CleanupReclaimResult result;
+        auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+
+        bool bounded = false;
+        std::string collectReason;
+        auto const candidates = CollectCleanupCandidates_locked(&bounded, &collectReason);
+        result.bounded = bounded;
+        if (!collectReason.empty())
+        {
+            result.reasonEn = "Reclamation did not run: " + collectReason + ". Nothing was deleted.";
+            return result;
+        }
+
+        for (auto const& candidate : candidates)
+        {
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                result.bounded = true;
+                break;
+            }
+            // Re-verify at the moment of removal: eligibility computed earlier is not
+            // authorization, because a record may have started referencing these bytes since.
+            int const refs = CountOtherProtectedReferences_locked(candidate.path, std::string{}, std::string{});
+            if (refs != 0)
+            {
+                ++result.retained;
+                continue;
+            }
+            std::error_code ec;
+            auto const wide = std::filesystem::path(Utf8ToWide(candidate.path));
+            std::error_code attrEc;
+            auto const attrs = std::filesystem::symlink_status(wide, attrEc);
+            if (attrEc || std::filesystem::is_symlink(attrs) || !std::filesystem::is_regular_file(attrs))
+            {
+                ++result.retained;
+                continue;
+            }
+            std::filesystem::remove(wide, ec);
+            if (ec)
+            {
+                ++result.retained;
+                continue;
+            }
+            ++result.removed;
+            AccountManagedRemoval_locked(candidate.bytes);
+        }
+
+        if (result.removed == 0 && result.retained == 0)
+        {
+            result.reasonEn = "No disposable data was eligible, so nothing was deleted. Protected data was retained.";
+        }
+        else if (result.bounded)
+        {
+            result.reasonEn = "Reclamation stopped at the contract bound (500 objects or 30 seconds). "
+                "Run it again to continue; protected data was retained.";
+        }
+        return result;
+    }
+
     void Storage::CheckWriteCapacity()
     {
         // Ordinary write admission (R05). Two properties are load-bearing here.
@@ -2572,6 +2861,16 @@ namespace mayasaba
                  "PRIMARY KEY(project_id, path_key));");
             Exec("CREATE INDEX IF NOT EXISTS staged_cleanup_path ON staged_cleanup_journal(path_key);");
 
+            // Durable record of each cleanup evaluation. The changed-day trigger is decided
+            // from the last recorded day, so it survives a restart; the row also makes an
+            // evaluation auditable after the fact instead of a transient log line.
+            Exec("CREATE TABLE IF NOT EXISTS cleanup_evaluations("
+                 "evaluation_id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                 "trigger_name TEXT NOT NULL, evaluated_at TEXT NOT NULL,"
+                 "day_key TEXT NOT NULL, candidates INTEGER NOT NULL, candidate_bytes INTEGER NOT NULL,"
+                 "disposition TEXT NOT NULL DEFAULT '');");
+            Exec("CREATE INDEX IF NOT EXISTS cleanup_evaluations_day ON cleanup_evaluations(day_key);");
+
             {
                 bool hasDraftVersion = false;
                 Statement info(db_, "PRAGMA table_info(draft_attachments);");
@@ -2716,6 +3015,10 @@ namespace mayasaba
             // its recorded outcome is settled here, before any caller can observe the
             // store. It never deletes bytes.
             RecoverInterruptedCleanups();
+            // Startup cleanup evaluation. It computes eligibility, records the result and
+            // deletes nothing, so it is safe to run while opening; reclamation stays an
+            // explicit separate operation.
+            EvaluateCleanup("STARTUP");
             openSchemaPhase_ = false;
         }
         catch (...)

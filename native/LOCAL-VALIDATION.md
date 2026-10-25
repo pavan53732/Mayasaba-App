@@ -4311,3 +4311,88 @@ shows `true`.
 - **Logical-client sizing/layout, strict certification and final-artifact Windows acceptance
   remain open.** No UI result from any earlier executable hash applies to `be06d1ef…`.
 - **R05 remains incomplete.**
+
+## 2026-10-25 — R05 cleanup evaluation, separated from deletion
+
+Contract basis (line 818): operational logs/diagnostics 30 days; staging waits for verified
+publication/recovery plus 7 days; an unreferenced blob's 7-day grace begins only after a
+durable unreferenced scan; keep three verified backups; evaluate at startup, every changed
+24-hour period and at 80%, in crash-safe batches of at most 500 objects or 30 seconds.
+
+### What was implemented
+
+- `Storage::EvaluateCleanup(trigger)` — computes eligibility, records the evaluation durably
+  in `cleanup_evaluations` (trigger, timestamp, day key, candidate count and bytes,
+  disposition) and **deletes nothing**. Triggers: `STARTUP` (invoked by the constructor,
+  after recovery), `CHANGED_DAY` (suppressed when the recorded day is today), `EIGHTY_PERCENT`
+  (suppressed below 80% of the ceiling), `EXPLICIT`.
+- `Storage::ReclaimEligibleCleanup()` — a **separate, explicit** operation. It re-collects
+  candidates, re-verifies references per object immediately before removal, refuses symlinks
+  and non-regular files, and stops at the contract bound (500 objects / 30 s).
+- Eligibility classes implemented: staged copies under the managed staging tree past the
+  seven-day grace with zero protected references (an uncertain reference observation counts
+  as protected), and migration backups beyond the three most recent.
+- No-eligible outcome reports precisely what is retained and what to do next ("every managed
+  byte is protected history, a pending or uncertain submission, a draft, required evidence,
+  or a staged copy still inside its grace period ... Nothing was deleted ... free space on the
+  store's volume, or move the store ..."), and every disposition states which classes the
+  evaluation does **not** cover.
+- `FAILED` journal intents are now selected by `RecoverInterruptedCleanups`. Recovery never
+  deletes, so re-examining them yields a disposition (`ABSENT`/`RETAINED`/`REPLACED`/
+  `UNCERTAIN`) without repeating a physical effect.
+
+### Not implemented — declared gaps
+
+- The 30-day operational log/diagnostic window.
+- The seven-day unreferenced-blob grace gated on a durable unreferenced scan.
+- Opt-in 365-day history retirement with its 30/7-day warnings.
+- A scheduled evaluation loop. `STARTUP` runs at open; `CHANGED_DAY` and `EIGHTY_PERCENT`
+  are correct and tested but nothing in the UI calls them yet.
+- Safe admission for migration/backup/recovery on an exhausted volume: **still unproven**.
+  The constructor exemption remains a documented decision, not evidence.
+
+### Tests (1–78 preserved, 79–81 added)
+
+| Group | Asserts |
+|---|---|
+| 79 | Startup evaluated during open; `CHANGED_DAY` is suppressed for the same period; `EIGHTY_PERCENT` is suppressed below 80%; `EXPLICIT` always evaluates and names the uncovered classes; a restart preserves the day record and still evaluates at startup. |
+| 80 | Empty scope reports the precise no-eligible disposition and claims no deletion; an aged unreferenced staged copy is eligible and evaluation deletes nothing; reclamation removes it; a copy inside the grace window is retained; a referenced aged copy is retained with its record intact. |
+| 81 | A protected reference created after evaluation prevents removal: reclamation re-collects, the raced object is retained and the file survives. |
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256
+  `27f131a294f12124911f75bba1dc61f60fd69ba96234e6382978c0f6bcc41468`,
+  **PASS: 81 of 81 executed native regression groups**, exit 0, after `-t:Rebuild`.
+- Application build Release x64 v145: exit 0. Contract validator: `PASS: 124`, exit 0.
+- Sources: `Storage.cpp` `1142bcb15a01bedc44c405ab4c007a82db85f81cc468a09a1de5b779a4997787`,
+  `Storage.h` `46ec786f9dc4413ea91d56f2fc110f44c03c8b76c5ce821bb7eb720b654aea4d`,
+  `storage_tests.cpp` `4ae295d9c8ec5fd017f12a1f9b7dc83c8280361f8df86634af8b8cb8020a6488`.
+
+### Mutation evidence
+
+Under `~/.codex/visualizations/2026/10/25/mutation7/`; all restores reported
+`matches_clean: true`.
+
+| Mutant | Reverted fix | Result |
+|---|---|---|
+| M22 | Per-object reference re-verification removed from reclamation | **PASSED — test-adequacy finding, see below** |
+| M23 | Seven-day staging grace ignored | FAIL group 80, `empty.candidates == 0` |
+| M24 | Changed-day suppression removed | FAIL group 79, `!sameDay.evaluated` |
+
+**Test-adequacy finding (M22).** Removing the per-object re-verification inside
+`ReclaimEligibleCleanup` does **not** fail any group. Group 81 proves that a reference
+created after evaluation prevents removal, but it does so through the re-collection inside
+reclamation, not through the per-object check: by the time the loop runs, the raced object is
+no longer a candidate. The per-object check is therefore currently **undiscriminated
+defence**. It is retained because it is cheap and correct, but no test proves it is
+load-bearing, and a hook to insert a reference between collection and deletion would deadlock
+(the collection runs under the store mutex, and inserting a record needs the same mutex).
+This is recorded rather than presented as verified coverage.
+
+### Still open
+
+- Logical-client sizing/layout, strict certification and final-artifact Windows acceptance
+  remain unstarted. No UI result from any earlier executable hash applies to `27f131a2…`.
+- **R05 remains incomplete**: the retention classes and the scheduling loop above are
+  missing, and migration/recovery admission on an exhausted volume is unproven.

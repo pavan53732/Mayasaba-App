@@ -6917,6 +6917,153 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // 79. The three contract triggers, and idempotence across a restart. Evaluation never
+        // deletes, so it is safe to run on every trigger.
+        {
+            CASES_BEGIN("79. Cleanup triggers evaluate once per day and at startup");
+            auto const dbPath = folder / "r05-triggers.db";
+            {
+                mayasaba::Storage store(dbPath);
+                store.BindProject("r05-trig", "r05-trig", "C:/Projects/r05-trig");
+
+                // Startup already evaluated while opening; the changed-day trigger therefore
+                // has nothing left to do in this period.
+                auto const sameDay = store.EvaluateCleanup("CHANGED_DAY");
+                EXPECT(!sameDay.evaluated);
+                EXPECT(sameDay.dispositionEn.find("already been evaluated") != std::string::npos);
+
+                // Below 80% of the ceiling, the capacity trigger does not evaluate.
+                auto const notFull = store.EvaluateCleanup("EIGHTY_PERCENT");
+                EXPECT(!notFull.evaluated);
+                EXPECT(notFull.dispositionEn.find("below 80%") != std::string::npos);
+
+                // An explicit evaluation always runs and reports what it covers.
+                auto const explicitRun = store.EvaluateCleanup("EXPLICIT");
+                EXPECT(explicitRun.evaluated);
+                EXPECT(explicitRun.dispositionEn.find("Not covered by this evaluation") != std::string::npos);
+            }
+            {
+                // Restart: startup evaluates again, and the changed-day record survived.
+                mayasaba::Storage reopened(dbPath);
+                auto const sameDay = reopened.EvaluateCleanup("CHANGED_DAY");
+                EXPECT(!sameDay.evaluated);
+                auto const explicitRun = reopened.EvaluateCleanup("EXPLICIT");
+                EXPECT(explicitRun.evaluated);
+            }
+            CASES_END();
+        }
+
+        // 80. Eligibility and the no-eligible disposition. Evaluation is separate from
+        // deletion, and protected data is never eligible.
+        {
+            CASES_BEGIN("80. Cleanup separates eligibility from deletion and retains protected data");
+            mayasaba::Storage store(folder / "r05-eligibility.db");
+            std::string const projectId = "r05-elig";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            // Nothing reclaimable: the disposition must say so precisely and claim no deletion.
+            auto const empty = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(empty.evaluated);
+            EXPECT(empty.candidates == 0);
+            EXPECT(empty.dispositionEn.find("No disposable data is currently eligible") != std::string::npos);
+            EXPECT(empty.dispositionEn.find("Nothing was deleted") != std::string::npos);
+
+            // An old, unreferenced staged copy past the seven-day grace is eligible.
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+            auto const orphan = staging / "aged-orphan.bin";
+            {
+                std::ofstream of(orphan, std::ios::binary);
+                of.write("aged-bytes", 10);
+            }
+            fs::last_write_time(orphan, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+
+            auto const found = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(found.candidates >= 1);
+            EXPECT(fs::exists(orphan));   // evaluation deletes nothing
+
+            // A staged copy inside its grace period is not eligible, even unreferenced.
+            auto const fresh = staging / "fresh-orphan.bin";
+            {
+                std::ofstream of(fresh, std::ios::binary);
+                of.write("fresh-bytes", 11);
+            }
+
+            auto const reclaim = store.ReclaimEligibleCleanup();
+            EXPECT(reclaim.removed >= 1);
+            EXPECT(!fs::exists(orphan));
+            EXPECT(fs::exists(fresh));    // inside the grace window: retained
+
+            // A referenced old staged copy is protected even though it is past the grace.
+            auto const protectedPath = staging / "protected.bin";
+            {
+                std::ofstream of(protectedPath, std::ios::binary);
+                of.write("protected-bytes", 15);
+            }
+            fs::last_write_time(protectedPath, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            mayasaba::AttachmentRecord rec;
+            rec.id = "r05-elig-protected";
+            rec.projectId = projectId;
+            rec.fileName = "protected.bin";
+            rec.fileSize = 15;
+            rec.sha256 = std::string(64, 'e');
+            rec.detectedType = "application/octet-stream";
+            rec.storagePath = WideToUtf8(protectedPath.wstring());
+            rec.sourcePath = "C:/source/protected.bin";
+            rec.status = "READY";
+            store.SaveDraftAttachment(projectId, rec);
+
+            auto const guarded = store.ReclaimEligibleCleanup();
+            EXPECT(fs::exists(protectedPath));
+            EXPECT(store.GetDraftAttachments(projectId).size() == 1);
+
+            std::error_code ec;
+            fs::remove(fresh, ec);
+            fs::remove(protectedPath, ec);
+            CASES_END();
+        }
+
+        // 81. An eligibility race: a record begins referencing the bytes between evaluation
+        // and reclamation. Eligibility computed earlier is not authorization.
+        {
+            CASES_BEGIN("81. Reclamation re-verifies references and retains a raced object");
+            mayasaba::Storage store(folder / "r05-race.db");
+            std::string const projectId = "r05-race";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+            auto const raced = staging / "raced.bin";
+            {
+                std::ofstream of(raced, std::ios::binary);
+                of.write("raced-bytes", 11);
+            }
+            fs::last_write_time(raced, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+
+            auto const evaluated = store.EvaluateCleanup("EXPLICIT");
+            EXPECT(evaluated.candidates >= 1);
+            EXPECT(fs::exists(raced));
+
+            // A protected reference appears after evaluation.
+            mayasaba::AttachmentRecord rec;
+            rec.id = "r05-race-rec";
+            rec.projectId = projectId;
+            rec.fileName = "raced.bin";
+            rec.fileSize = 11;
+            rec.sha256 = std::string(64, 'f');
+            rec.detectedType = "application/octet-stream";
+            rec.storagePath = WideToUtf8(raced.wstring());
+            rec.sourcePath = "C:/source/raced.bin";
+            rec.status = "READY";
+            store.SaveDraftAttachment(projectId, rec);
+
+            auto const reclaim = store.ReclaimEligibleCleanup();
+            EXPECT(reclaim.removed == 0);
+            EXPECT(fs::exists(raced));
+            EXPECT(store.GetDraftAttachments(projectId).size() == 1);
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.

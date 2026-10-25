@@ -666,6 +666,42 @@ namespace mayasaba
         std::uint64_t ManagedScopeWalkEntriesForTesting() const noexcept { return managedScopeWalkEntries_.load(); }
         std::uint64_t ManagedScopeStaleScansRejectedForTesting() const noexcept { return managedScopeStaleRejections_; }
         std::uint64_t AccountedAttachmentBytesForTesting();
+
+        // ------------------------------------------------------------------
+        // Cleanup evaluation and reclamation (R05).
+        //
+        // EVALUATION AND DELETION ARE SEPARATE OPERATIONS. Evaluation computes what the
+        // retention policy would allow, records the result durably and deletes nothing; it
+        // is safe to run on every trigger. Reclamation is a distinct, explicit call that
+        // re-verifies each candidate's references immediately before removing it.
+        //
+        // Implemented eligibility classes: staged copies under the managed staging tree that
+        // are older than the seven-day staging grace and carry no protected reference, and
+        // migration backups beyond the three most recent. NOT implemented: the 30-day
+        // operational-log/diagnostic window, the seven-day unreferenced-blob grace after a
+        // durable scan, and opt-in history retirement. Those are declared gaps, not silent
+        // omissions - evaluation reports the classes it does not cover.
+        struct CleanupEvaluation
+        {
+            std::string trigger;
+            bool evaluated{false};
+            std::uint64_t candidates{0};
+            std::uint64_t candidateBytes{0};
+            std::string dispositionEn;
+        };
+        // Runs the policy for one trigger. `trigger` is STARTUP, CHANGED_DAY,
+        // EIGHTY_PERCENT or EXPLICIT. Never deletes.
+        CleanupEvaluation EvaluateCleanup(std::string const& trigger);
+        // Removes exactly what evaluation considered eligible, bounded to 500 objects or 30
+        // seconds, re-verifying references per object. Never removes protected data.
+        struct CleanupReclaimResult
+        {
+            std::uint64_t removed{0};
+            std::uint64_t retained{0};
+            bool bounded{false};
+            std::string reasonEn;
+        };
+        CleanupReclaimResult ReclaimEligibleCleanup();
         void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
         void SetForcePathCanonicalizationFailureForTestingPath(std::string const& p) { forcedPathCanonicalFailurePath_ = p; }
         void ClearForcePathCanonicalizationFailureForTestingPath() { forcedPathCanonicalFailurePath_.clear(); }
@@ -710,6 +746,17 @@ namespace mayasaba
         ManagedScopeObservation ScanManagedScope() const;
         // Applies a confirmed removal to the accounted total. Caller holds mutex_.
         void AccountManagedRemoval_locked(std::uint64_t bytes);
+        // One reclaimable object considered by cleanup evaluation.
+        struct CleanupCandidate
+        {
+            std::string path;
+            std::string projectId;
+            std::uint64_t bytes{0};
+        };
+        // Collects eligible objects under mutex_, bounded to the contract's batch size.
+        std::vector<CleanupCandidate> CollectCleanupCandidates_locked(bool* bounded, std::string* reasonEn);
+        void RecordCleanupEvaluation_locked(CleanupEvaluation const& evaluation);
+        bool LastCleanupEvaluationDay_locked(std::string* day);
         bool forcePathCanonicalizationFailureForTesting_{false};
         std::string forcedPathCanonicalFailurePath_;
         std::string forcedStagedPresenceFailurePath_;
