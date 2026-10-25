@@ -68,6 +68,13 @@ namespace mayasaba
 #endif
     }
 
+    static std::size_t g_faultInjectionMaxBytes = 0;
+
+    void SetSha256FileFaultInjectionMaxBytesForTesting(std::size_t maxBytes)
+    {
+        g_faultInjectionMaxBytes = maxBytes;
+    }
+
     std::optional<std::string> Sha256HexFile(std::filesystem::path const& path,
         std::chrono::steady_clock::time_point deadline)
     {
@@ -104,14 +111,23 @@ namespace mayasaba
         if (!file.is_open()) return std::nullopt;
 
         std::vector<char> buffer(65536);
+        std::size_t totalBytesHashed = 0;
         while (file.read(buffer.data(), buffer.size()) || file.gcount() > 0)
         {
             if (std::chrono::steady_clock::now() >= deadline)
                 return std::nullopt;
 
             auto const bytesRead = static_cast<ULONG>(file.gcount());
+            if (g_faultInjectionMaxBytes > 0 && (totalBytesHashed + bytesRead) > g_faultInjectionMaxBytes)
+            {
+                // Inject interrupted-read failure mid-stream
+                return std::nullopt;
+            }
+
             if (!BCRYPT_SUCCESS(BCryptHashData(hash, reinterpret_cast<PBYTE>(buffer.data()), bytesRead, 0)))
                 return std::nullopt;
+
+            totalBytesHashed += bytesRead;
         }
 
         if (file.bad()) return std::nullopt;

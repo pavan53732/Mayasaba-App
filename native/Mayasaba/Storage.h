@@ -382,7 +382,17 @@ namespace mayasaba
             bool valid{false};
             unsigned long volumeSerial{0};
             unsigned long long fileIndex{0};
+
+            bool operator==(StagedObjectIdentity const& o) const noexcept
+            {
+                return valid && o.valid && volumeSerial == o.volumeSerial && fileIndex == o.fileIndex;
+            }
+            bool operator!=(StagedObjectIdentity const& o) const noexcept
+            {
+                return !(*this == o);
+            }
         };
+
 
         struct DraftAttachmentRemoval
         {

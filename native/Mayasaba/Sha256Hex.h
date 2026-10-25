@@ -20,5 +20,9 @@ namespace mayasaba
     std::optional<std::string> Sha256Hex(std::string_view input);
     std::optional<std::string> Sha256HexFile(std::filesystem::path const& path,
         std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max());
+
+    // Test hook for fault injection: if set > 0, Sha256HexFile will abort with std::nullopt
+    // after hashing at most this many bytes, simulating a partial/interrupted read failure.
+    void SetSha256FileFaultInjectionMaxBytesForTesting(std::size_t maxBytes);
 }
 

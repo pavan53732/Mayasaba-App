@@ -7772,21 +7772,49 @@ fs::remove(bigManaged);
         }
 
         {
-            CASES_BEGIN("100. Streaming hash of backup file computes authoritative digest");
+            CASES_BEGIN("100. Streaming hash of backup file computes authoritative digest and matches NIST vectors");
             auto storeDir = folder / L"stream-hash.db";
             mayasaba::Storage store(storeDir);
+
+            // 1. Verify standard NIST SHA-256 test vectors
+            struct NistVector { std::string_view input; std::string expected; };
+            NistVector vectors[] = {
+                { "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+                { "abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" },
+                { "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+                  "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1" }
+            };
+
+            for (auto const& v : vectors)
+            {
+                auto const strHash = mayasaba::Sha256Hex(v.input);
+                EXPECT(strHash.has_value());
+                EXPECT(*strHash == v.expected);
+
+                auto vecFile = folder / L"nist_vec.bin";
+                {
+                    std::ofstream of(vecFile, std::ios::binary);
+                    if (!v.input.empty()) of.write(v.input.data(), v.input.size());
+                }
+                auto const fileHash = mayasaba::Sha256HexFile(vecFile);
+                EXPECT(fileHash.has_value());
+                EXPECT(*fileHash == v.expected);
+                std::error_code ec;
+                fs::remove(vecFile, ec);
+            }
+
+            // 2. Multi-chunk streaming verification (> 2 chunks of 64 KiB buffer)
             auto backupPath = folder / L"backup-stream.bak";
             {
                 std::ofstream of(backupPath, std::ios::binary);
-                for (int i = 0; i < 2000; ++i)
-                {
-                    of.write("chunk-of-deterministic-backup-data-1234567890", 45);
-                }
+                std::string const chunk(65536, 'X');
+                of.write(chunk.data(), chunk.size());
+                of.write(chunk.data(), chunk.size());
+                of.write("final-trailing-chunk", 20);
             }
             auto const pathUtf8 = WideToUtf8(backupPath.wstring());
             store.RecordVerifiedBackup(pathUtf8);
 
-            // Compute direct hash using Sha256HexFile and verify it matches what was stored
             auto const expected = mayasaba::Sha256HexFile(backupPath);
             EXPECT(expected.has_value());
 
@@ -7813,14 +7841,29 @@ fs::remove(bigManaged);
         }
 
         {
-            CASES_BEGIN("101. Injected unreadable backup fails verification and is not marked verified");
+            CASES_BEGIN("101. Injected unreadable or interrupted backup fails verification and is not marked verified");
             auto storeDir = folder / L"unreadable-backup.db";
             mayasaba::Storage store(storeDir);
+
+            // 1. Missing file fails open
             auto missingPath = folder / L"nonexistent-backup.bak";
-            auto const pathUtf8 = WideToUtf8(missingPath.wstring());
+            store.RecordVerifiedBackup(WideToUtf8(missingPath.wstring()));
 
-            store.RecordVerifiedBackup(pathUtf8);
+            // 2. Interrupted read halfway through multi-chunk file
+            auto largeBackup = folder / L"interrupted-backup.bak";
+            {
+                std::ofstream of(largeBackup, std::ios::binary);
+                std::string const chunk(65536, 'A');
+                of.write(chunk.data(), chunk.size());
+                of.write(chunk.data(), chunk.size());
+                of.write("end", 3);
+            }
+            // Set fault injection to fail after 70000 bytes (during chunk 2)
+            mayasaba::SetSha256FileFaultInjectionMaxBytesForTesting(70000);
+            store.RecordVerifiedBackup(WideToUtf8(largeBackup.wstring()));
+            mayasaba::SetSha256FileFaultInjectionMaxBytesForTesting(0);
 
+            // Verify that NEITHER failed backup recorded a verified row
             int count = 0;
             sqlite3* rawDb = nullptr;
             EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &rawDb) == SQLITE_OK);
@@ -7833,6 +7876,9 @@ fs::remove(bigManaged);
             sqlite3_finalize(stmt);
             sqlite3_close(rawDb);
             EXPECT(count == 0);
+
+            std::error_code ec;
+            fs::remove(largeBackup, ec);
             CASES_END();
         }
 
@@ -7841,38 +7887,73 @@ fs::remove(bigManaged);
             auto storeDir = folder / L"legacy-manifest.db";
             mayasaba::Storage store(storeDir);
 
-            // Insert a legacy backup manifest row with verified=1 but empty sha256_hex
-            auto backupPath = folder / L"legacy.bak";
+            // Create 3 legacy backup files
+            auto leg1 = folder / L"legacy1.bak";
+            auto leg2 = folder / L"legacy2.bak";
+            auto leg3 = folder / L"legacy3.bak";
             {
-                std::ofstream of(backupPath, std::ios::binary);
-                of.write("legacy-backup-bytes", 19);
+                std::ofstream o1(leg1, std::ios::binary); o1.write("leg1-data", 9);
+                std::ofstream o2(leg2, std::ios::binary); o2.write("leg2-data", 9);
+                std::ofstream o3(leg3, std::ios::binary); o3.write("leg3-data", 9);
             }
-            auto const pathUtf8 = WideToUtf8(backupPath.wstring());
 
+            // Insert 3 legacy backup manifest rows with verified=1 but empty sha256_hex
             sqlite3* rawDb = nullptr;
             EXPECT(sqlite3_open16(storeDir.wstring().c_str(), &rawDb) == SQLITE_OK);
             sqlite3_exec(rawDb, "BEGIN IMMEDIATE;", nullptr, nullptr, nullptr);
-            sqlite3_stmt* stmt = nullptr;
-            sqlite3_prepare_v2(rawDb, "INSERT INTO backup_manifest(path_key,verified,verified_at,sha256_hex,file_size) "
-                                      "VALUES(?1,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),'',0);", -1, &stmt, nullptr);
-            sqlite3_bind_text(stmt, 1, pathUtf8.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_step(stmt);
-            sqlite3_finalize(stmt);
+            auto insertLegacy = [&](std::string const& pathKey) {
+                sqlite3_stmt* stmt = nullptr;
+                sqlite3_prepare_v2(rawDb, "INSERT INTO backup_manifest(path_key,verified,verified_at,sha256_hex,file_size) "
+                                          "VALUES(?1,1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),'',0);", -1, &stmt, nullptr);
+                sqlite3_bind_text(stmt, 1, pathKey.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_step(stmt);
+                sqlite3_finalize(stmt);
+            };
+            insertLegacy(WideToUtf8(leg1.wstring()));
+            insertLegacy(WideToUtf8(leg2.wstring()));
+            insertLegacy(WideToUtf8(leg3.wstring()));
             sqlite3_exec(rawDb, "COMMIT;", nullptr, nullptr, nullptr);
             sqlite3_close(rawDb);
 
-            // Run evaluation: because the legacy row has empty digest, it must NOT count as a verified backup!
-            // With 0 valid verified backups (< 3), retirement cannot run.
-            auto const res = store.ReclaimEligibleCleanup();
-            EXPECT(res.removed == 0);
+            // Create 2 disposable backups matching store pre-migration pattern
+            auto disp1 = folder / (storeDir.filename().wstring() + L".pre_migration.bak1");
+            auto disp2 = folder / (storeDir.filename().wstring() + L".pre_migration.bak2");
+            {
+                std::ofstream d1(disp1, std::ios::binary); d1.write("disp1", 5);
+                std::ofstream d2(disp2, std::ios::binary); d2.write("disp2", 5);
+            }
+
+            // Run evaluation: because the 3 legacy rows lack valid digests, they are REJECTED from the verified set.
+            // With 0 valid verified backups (< 3), retirement MUST be refused (removed == 0).
+            // If the bug were present (empty digests accepted), it would retire the 2 disposable backups.
+            auto const res1 = store.ReclaimEligibleCleanup();
+            EXPECT(res1.removed == 0);
+            EXPECT(fs::exists(disp1));
+            EXPECT(fs::exists(disp2));
+
+            // Now properly verify the 3 legacy backups with real digests and sizes
+            store.RecordVerifiedBackup(WideToUtf8(leg1.wstring()));
+            store.RecordVerifiedBackup(WideToUtf8(leg2.wstring()));
+            store.RecordVerifiedBackup(WideToUtf8(leg3.wstring()));
+
+            // Now that 3 genuine verified backups exist, reclamation succeeds and retires the 2 unverified disposable backups!
+            auto const res2 = store.ReclaimEligibleCleanup();
+            EXPECT(res2.removed == 2);
+            EXPECT(!fs::exists(disp1));
+            EXPECT(!fs::exists(disp2));
+            EXPECT(fs::exists(leg1));
+            EXPECT(fs::exists(leg2));
+            EXPECT(fs::exists(leg3));
 
             std::error_code ec;
-            fs::remove(backupPath, ec);
+            fs::remove(leg1, ec);
+            fs::remove(leg2, ec);
+            fs::remove(leg3, ec);
             CASES_END();
         }
 
         {
-            CASES_BEGIN("103. Removed cursor file between passes fails closed and clears cursor");
+            CASES_BEGIN("103. Removed cursor file between passes resumes forward progress at next file");
             auto storeDir = folder / L"deleted-cursor.db";
             mayasaba::Storage store(storeDir);
             std::string const projectId = "deleted-cursor-proj";
@@ -7895,13 +7976,15 @@ fs::remove(bigManaged);
             EXPECT(pass1.bounded);
             EXPECT(pass1.examined == 500);
 
-            // Now delete all files in the directory so the stored cursor file no longer exists!
+            // Delete file 1500 (the exact cursor file), leaving files 1501 to 1504
             std::error_code ec;
-            for (auto const& f : files) fs::remove(f, ec);
+            fs::remove(files[500], ec);
 
-            // Pass 2 seeks the deleted cursor. It must fail closed (complete == false) rather than reporting false completeness!
+            // Pass 2 seeks cursor: since file 1500 is gone, it resumes at file 1501 (the first entry > cursor)
+            // and examines the remaining 4 files, completing the scan!
             auto const pass2 = store.EvaluateCleanup("EXPLICIT");
-            EXPECT(!pass2.complete);
+            EXPECT(pass2.examined == 4);
+            EXPECT(pass2.complete);
             CASES_END();
         }
 
@@ -7919,15 +8002,64 @@ fs::remove(bigManaged);
             for (int i = 0; i < 2100; ++i)
             {
                 fs::create_directories(staging / ("subdir_" + std::to_string(1000 + i)));
-            }
-
-            store.ResetStagedDiscoveryCursorForTesting();
+            }            store.ResetStagedDiscoveryCursorForTesting();
             auto const eval = store.EvaluateCleanup("EXPLICIT");
             // The directory traversal must be bounded by visitedEntries >= kBatchLimit * 4 (2000 entries)
             EXPECT(eval.bounded);
 
+            std::error_code ec;
+            fs::remove_all(staging, ec);
             CASES_END();
         }
+
+        {
+            CASES_BEGIN("105. Large directory traversal with 3500 entries guarantees monotonic forward progress across 2000-entry bounds");
+            auto testFolder = folder / L"large_traversal";
+            fs::create_directories(testFolder);
+            auto storeDir = testFolder / L"large-traversal.db";
+            mayasaba::Storage store(storeDir);
+            std::string const projectId = "large-traversal-proj";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / projectId;
+            fs::create_directories(staging);
+
+            // Create 3500 files
+            for (int i = 0; i < 3500; ++i)
+            {
+                auto f = staging / ("cfile_" + std::to_string(10000 + i) + ".bin");
+                std::ofstream of(f, std::ios::binary);
+                of.write("data", 4);
+            }
+
+            store.ResetStagedDiscoveryCursorForTesting();
+            std::size_t totalExamined = 0;
+
+            // Pass 1..6 examine 500 files each; Pass 7 examines the final 500 files and completes
+            for (int pass = 1; pass <= 7; ++pass)
+            {
+                auto const eval = store.EvaluateCleanup("EXPLICIT");
+                EXPECT(eval.examined == 500);
+                totalExamined += eval.examined;
+
+                if (pass < 7)
+                {
+                    EXPECT(eval.bounded);
+                }
+                else
+                {
+                    EXPECT(eval.complete);
+                }
+            }
+
+            // All 3500 files reached across passes, verifying forward progress past 2000 visited entries
+            EXPECT(totalExamined == 3500);
+
+            std::error_code ec;
+            fs::remove_all(testFolder, ec);
+            CASES_END();
+        }
+
 
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw

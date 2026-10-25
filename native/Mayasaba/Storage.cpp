@@ -2321,7 +2321,16 @@ namespace mayasaba
             else
             {
                 bool seekingCursor = !lastStagedDiscoveryCursor_.empty();
-                std::size_t visitedEntries = 0;
+                std::filesystem::path const cursorPath = seekingCursor
+                    ? std::filesystem::path(Utf8ToWide(lastStagedDiscoveryCursor_))
+                    : std::filesystem::path();
+                std::filesystem::path const cursorParent = seekingCursor
+                    ? cursorPath.parent_path()
+                    : std::filesystem::path();
+
+                std::size_t examinedInPass = 0;
+                std::size_t visitedEntriesInPass = 0;
+
                 for (; it != end; it.increment(walkEc))
                 {
                     if (walkEc)
@@ -2330,11 +2339,14 @@ namespace mayasaba
                         break;
                     }
 
-                    ++visitedEntries;
-                    if (std::chrono::steady_clock::now() >= deadline || visitedEntries >= kBatchLimit * 4)
+                    if (std::chrono::steady_clock::now() >= deadline)
                     {
                         out.bounded = true;
-                        if (!seekingCursor)
+                        if (seekingCursor)
+                        {
+                            noteError("traversal search reached deadline before reaching cursor; cursor preserved for next pass");
+                        }
+                        else
                         {
                             auto const curPathUtf8 = WideToUtf8(it->path().wstring());
                             lastStagedDiscoveryCursor_ = curPathUtf8;
@@ -2349,34 +2361,63 @@ namespace mayasaba
                         noteError("a staged entry's type could not be read (" + typeEc.message() + ")");
                         continue;
                     }
+
                     if (std::filesystem::is_symlink(status))
                     {
                         it.disable_recursion_pending();
                         continue;
                     }
-                    if (!std::filesystem::is_regular_file(status)) continue;
 
-                    auto const pathUtf8 = WideToUtf8(it->path().wstring());
-                    if (seekingCursor)
+                    // Skip subdirectories that are strictly before the cursor's directory
+                    if (seekingCursor && std::filesystem::is_directory(status))
                     {
-                        if (pathUtf8 == lastStagedDiscoveryCursor_)
+                        auto const curPath = it->path();
+                        if (curPath.parent_path() == cursorParent.parent_path() && curPath < cursorParent)
                         {
-                            seekingCursor = false;
-                        }
-                        else
-                        {
+                            it.disable_recursion_pending();
                             continue;
                         }
                     }
 
-                    // The budget covers discovery, not only deletion: walking a large tree
-                    // while holding the store mutex is exactly what the bound exists to stop.
-                    if (std::chrono::steady_clock::now() >= deadline || out.examined >= kBatchLimit)
+                    if (!std::filesystem::is_regular_file(status))
+                    {
+                        if (!seekingCursor)
+                        {
+                            ++visitedEntriesInPass;
+                            if (visitedEntriesInPass >= kBatchLimit * 4)
+                            {
+                                out.bounded = true;
+                                auto const curPathUtf8 = WideToUtf8(it->path().wstring());
+                                lastStagedDiscoveryCursor_ = curPathUtf8;
+                                break;
+                            }
+                        }
+                        continue;
+                    }
+
+                    auto const pathUtf8 = WideToUtf8(it->path().wstring());
+
+                    if (seekingCursor)
+                    {
+                        if (pathUtf8 < lastStagedDiscoveryCursor_)
+                        {
+                            // Entry is strictly before the cursor; skip without consuming pass budget
+                            continue;
+                        }
+
+                        // Reached cursor (==) or cursor was deleted/renamed (>); resume discovery here
+                        seekingCursor = false;
+                    }
+
+                    ++visitedEntriesInPass;
+                    if (visitedEntriesInPass >= kBatchLimit * 4 || examinedInPass >= kBatchLimit)
                     {
                         out.bounded = true;
                         lastStagedDiscoveryCursor_ = pathUtf8;
                         break;
                     }
+
+                    ++examinedInPass;
                     ++out.examined;
 
                     auto const key = CleanupPathKey(pathUtf8);
@@ -2450,8 +2491,8 @@ namespace mayasaba
                 }
                 if (seekingCursor)
                 {
+                    // Reached end while seeking; all entries in tree were < cursor, so scan is complete
                     lastStagedDiscoveryCursor_.clear();
-                    noteError("the staged discovery cursor was invalidated by file removal or rename; traversal restarted from beginning");
                 }
                 else if (!out.bounded && it == end)
                 {
@@ -2587,15 +2628,35 @@ namespace mayasaba
 
     void Storage::RecordVerifiedBackup(std::string const& path)
     {
-        std::lock_guard lock(mutex_);
-        auto const key = CleanupPathKey(path);
-        if (key.empty()) return;
         std::error_code ec;
-        auto const size = std::filesystem::file_size(std::filesystem::path(path), ec);
-        if (ec || size == 0) return;
-        auto hex = Sha256HexFile(std::filesystem::path(path),
+        auto const fsPath = std::filesystem::path(Utf8ToWide(path));
+        auto const sizeBefore = std::filesystem::file_size(fsPath, ec);
+        if (ec || sizeBefore == 0) return;
+
+        // Capture physical object identity before hashing to detect concurrent file replacement
+        auto const identityBefore = CaptureStagedObjectIdentity(path);
+
+        // Stream SHA-256 OUTSIDE the Storage mutex so multi-gigabyte files do not monopolize store operations
+        auto hex = Sha256HexFile(fsPath,
             std::chrono::steady_clock::now() + std::chrono::seconds(30));
         if (!hex || hex->empty()) return;
+
+        // Reacquire lock to record verified manifest entry
+        std::lock_guard lock(mutex_);
+
+        // Re-verify that the file was not deleted, substituted, or modified during hashing
+        if (identityBefore.valid)
+        {
+            auto const identityAfter = CaptureStagedObjectIdentity(path);
+            if (!identityAfter.valid || identityAfter != identityBefore) return;
+        }
+
+
+        auto const sizeAfter = std::filesystem::file_size(fsPath, ec);
+        if (ec || sizeAfter != sizeBefore) return;
+
+        auto const key = CleanupPathKey(path);
+        if (key.empty()) return;
 
         AdmitWrite_locked();
         Exec("BEGIN IMMEDIATE;");
@@ -2607,7 +2668,7 @@ namespace mayasaba
                              "sha256_hex=excluded.sha256_hex, file_size=excluded.file_size;");
             Bind(q.value, 1, key);
             Bind(q.value, 2, *hex);
-            sqlite3_bind_int64(q.value, 3, static_cast<sqlite3_int64>(size));
+            sqlite3_bind_int64(q.value, 3, static_cast<sqlite3_int64>(sizeAfter));
             Check(sqlite3_step(q.value), db_);
             Exec("COMMIT;");
         }

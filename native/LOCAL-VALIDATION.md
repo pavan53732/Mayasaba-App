@@ -4648,7 +4648,7 @@ grace clock; the mutant is still discriminated, just not first by group 86.
 | 89 | Effective ceiling drives admission, not a hardcoded 10 GiB; store admits up to configured ceiling. |
 | 90 | Out-of-range ceiling values (< 2 GiB or > 100 GiB) are refused before any write admission. |
 | 91 | Configured ceiling persists across store reopen and restarts. |
-| 92 | Scheduled maintenance executes changed-day and 80%-capacity triggers, bounding evaluation records to 100 entries. |
+| 92 | Scheduled maintenance executes changed-day and 80%-capacity triggers, bounding evaluation records to 200 entries. |
 | 93 | Candidate discovery is read-only; no grace rows are inserted in SQLite during candidate collection; grace registration occurs only during admitted write transaction. |
 | 94 | Resumable traversal guarantees forward progress across batch bounds (`kBatchLimit` = 500) without omitting or duplicating entries across subsequent passes. |
 | 95 | Staging grace clock is invalidated when an unreferenced file receives a protected reference. |
@@ -4666,48 +4666,56 @@ grace clock; the mutant is still discriminated, just not first by group 86.
 Lowering the storage ceiling is now validated against currently accounted usage.
 - **Fix**: `SetStorageCeilingGiB` invokes `ObserveCapacity_locked()` and refuses any ceiling reduction where `newCeilingBytes < observed.managedBytes` or where the new ceiling is lower than active staging byte reservations (`stagingReservationBytes_`). Protected bytes are never deleted or jeopardized to force-fit a lower ceiling.
 
-### Bounded streaming backup integrity hashing (S2-F03)
-`RecordVerifiedBackup` and backup candidate evaluation previously loaded entire backup files into a `std::string` buffer in memory while holding the store mutex, posing an out-of-memory risk for multi-gigabyte databases.
-- **Fix**: Implemented `Sha256HexFile(path, deadline)` in `Sha256Hex.h` / `Sha256Hex.cpp` using a heap-allocated fixed 64 KiB buffer (`std::vector<char> buffer(65536)`) and BCrypt streaming hash API (`BCryptHashData`). Storage mutex is held only for transaction operations; file hashing streams in bounded chunks checking deadlines between chunks.
+### Bounded streaming backup integrity hashing outside storage lock (S2-F03)
+`RecordVerifiedBackup` previously loaded entire backup files into a `std::string` buffer in memory while holding the store mutex, posing an out-of-memory risk and holding the lock during multi-gigabyte file reads.
+- **Fix**: Implemented `Sha256HexFile(path, deadline)` in `Sha256Hex.h` / `Sha256Hex.cpp` using a heap-allocated fixed 64 KiB buffer (`std::vector<char> buffer(65536)`) and BCrypt streaming hash API (`BCryptHashData`). `RecordVerifiedBackup` performs file hashing completely OUTSIDE the Storage mutex. When reacquiring the lock, it verifies `StagedObjectIdentity` (volume serial and file index) and size before committing the verified record, preventing substitution races from adopting stale verification evidence.
 
-### Legacy backup verification records re-validation (S2-F04)
+### Legacy backup verification records re-validation & discriminating tests (S2-F04)
 Legacy `backup_manifest` records created before hash columns were added defaulted to empty `sha256_hex` and `file_size = 0`.
-- **Fix**: In `CollectCleanupCandidates_locked`, any manifest row where `expectedSha.empty() || expectedSize == 0` is rejected from the retained verified backup count and marked as needing re-verification. Retirement remains refused until three fully verified, digest-matched backups exist.
+- **Fix**: In `CollectCleanupCandidates_locked`, any manifest row where `expectedSha.empty() || expectedSize == 0` is rejected from the retained verified backup count and marked as needing re-verification. Retirement remains refused until three fully verified, digest-matched backups exist. Hardened test group 102 constructs 3 empty-digest legacy rows alongside disposable backup files to strictly discriminate the guard, proving that unverified rows cannot authorize cleanup.
 
-### Resumable traversal cursor recovery and fail-closed completeness (S2-F06)
-If a cursor file was deleted or renamed between discovery passes, the directory iterator reached the end without finding the cursor, clearing `lastStagedDiscoveryCursor_` and potentially reporting a false complete pass.
-- **Fix**: If `seekingCursor` remains true at iterator completion (`it == end`), the pass records `out.noteError("Traversal cursor not found in staging directory; failing closed and resetting cursor.")`, sets `out.complete = false`, and resets `lastStagedDiscoveryCursor_.clear()`.
+### Resumable traversal cursor recovery, subdirectory pruning, and forward progress past 2000 entries (S2-F06, S2-F07)
+Previously, directory traversal restarted from the root for each batch and counted skipped entries toward the 2,000 visited-entry work limit. In directories with >2,000 files, the search limit was exhausted before reaching the cursor, causing cyclic failure.
+- **Fix**:
+  1. Entries strictly before the cursor (`pathUtf8 < lastStagedDiscoveryCursor_`) are skipped without consuming the current pass's examined or visited-entry work budget.
+  2. Subdirectories lexicographically strictly before the cursor's directory are pruned via `it.disable_recursion_pending()`.
+  3. If the exact cursor file was deleted or renamed, matching the first entry with `pathUtf8 >= lastStagedDiscoveryCursor_` resumes forward progress immediately at the next surviving file without restarting from the beginning.
+  4. Work budgets (`visitedEntriesInPass >= 2000` and `examinedInPass >= 500`) bound the work performed during candidate examination in the active pass.
+  5. Tested in regression group 105 across 3,500 entries over 7 consecutive passes with 100% complete traversal.
 
-### Directory tree traversal entry work budget (S2-F07)
-Directory entries and non-regular files were previously traversed without incrementing `out.examined` or checking the batch limit.
-- **Fix**: In `CollectCleanupCandidates_locked`, a `visitedEntries` counter tracks every visited filesystem entry (directories, non-regular files, and files). Total visited entries are bounded at `kBatchLimit * 4` (2000 entries), ensuring large directory trees cannot cause unbounded CPU loops while holding the store lock.
+### Streaming read fault injection & authoritative test vectors (P2)
+Added `SetSha256FileFaultInjectionMaxBytesForTesting` hook in `Sha256Hex.h` / `Sha256Hex.cpp` to simulate partial/interrupted reads mid-stream during multi-chunk hashing.
+- Regression group 100 validates `Sha256Hex` and `Sha256HexFile` against authoritative NIST test vectors and multi-chunk files (>2 chunks of 64 KiB).
+- Regression group 101 verifies that an interrupted read mid-stream fails closed with `std::nullopt` and creates no verified manifest row.
 
-### Tests (1–96 preserved, 97–104 added)
+### Tests (1–96 preserved, 97–105 added)
 
 | Group | Asserts |
 |---|---|
 | 97 | Raising the storage ceiling is admitted when store has reached the old ceiling (fixes S2-F01). |
 | 98 | Lowering ceiling below currently protected bytes is refused and leaves setting unchanged (fixes S2-F02). |
 | 99 | Lowering ceiling below outstanding reservations is refused (fixes S2-F02). |
-| 100 | Streaming hash of backup file computes authoritative digest using fixed 64 KiB chunks (fixes S2-F03). |
-| 101 | Injected unreadable backup fails verification and is not marked verified (fixes S2-F03). |
+| 100 | Streaming hash of backup file computes authoritative digest and matches NIST vectors (fixes S2-F03). |
+| 101 | Injected unreadable or interrupted backup fails verification and is not marked verified (fixes S2-F03). |
 | 102 | Legacy verified backup record with empty hash is rejected from retained verified set (fixes S2-F04). |
-| 103 | Removed cursor file between passes fails closed and clears cursor, preventing false clean verdicts (fixes S2-F06). |
+| 103 | Removed cursor file between passes resumes forward progress at next file (fixes S2-F06). |
 | 104 | Traversal over directory trees respects visited entry budget (fixes S2-F07). |
+| 105 | Large directory traversal with 3500 entries guarantees monotonic forward progress across 2000-entry bounds (fixes S2-F06/F07). |
 
 ### Executed results
 
-- `native/tests/bin/storage_tests.exe` SHA-256: `74c897a4c44e933ff179b3cd2e6fbb96ee1d2c1c9ed7dcebe7406178a23b72fd`
-  **PASS: 104 of 104 executed native regression groups**, exit 0.
-- `native/Mayasaba/bin/x64/Release/Mayasaba.exe` SHA-256: `8c88d610b0b2ddf8c4dbad8cca26515a065fb23b6d963a2795ffcc776dfa000c`
+- `native/tests/bin/storage_tests.exe` SHA-256: `c575a1f9091353d835299675bd35d9f1b98cb9ebfbcadca56b6e385717265590`
+  **PASS: 105 of 105 executed native regression groups**, exit 0.
+- `native/Mayasaba/bin/x64/Release/Mayasaba.exe` SHA-256: `b07e1f111be0742f50a8dd981d65ed472ca820b71faf8a2c0e81b77faafb24ad`
   Application build Release x64 v145: exit 0 (0 warnings, 0 errors).
 - `native/Mayasaba/bin/x64/Release/App.xbf` SHA-256: `8ff36d87df831e09c799fa65e7f0d59cb48ceefc89fedd5a8fc6bd5cbc018b46`
 - `native/Mayasaba/bin/x64/Release/MainWindow.xbf` SHA-256: `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a`
 - Contract validator `native/tests/validate_contract_registry.py`: `PASS: 124 contract-registry and Screen 2 slice schema checks`, exit 0.
 - Sources:
-  - `native/Mayasaba/Storage.cpp`: `13f4168337d46ada1c4efb41ce49fb01c10c78e5f77f9423e7788f430309649f`
-  - `native/Mayasaba/Storage.h`: `67707e0f8076ad82f76eb64ba73a66b5193c5a276a6182ff7ac5453ac9612a99`
-  - `native/Mayasaba/Sha256Hex.cpp`: `4d9d9cad98c24b6f15a7c62d21298e5c3bcd1f1bd3f284d525dc6c5a884bd37c`
-  - `native/Mayasaba/Sha256Hex.h`: `a21161b5645a792c8840d231182e9ce3b63ee03d412667c52271d49d2ff7749e`
-  - `native/tests/storage_tests.cpp`: `682b46d6a50792398a43ec5fc7e4492077553e2aa5bb04b7f981a08f1e1b970f`
+  - `native/Mayasaba/Storage.cpp`: `a56407e23711ac99eec81a08bbf4f389526eba311bd71ba6be8f23d76860c8cc`
+  - `native/Mayasaba/Storage.h`: `1d42a115c71817a09f6b790d57a96ab0990f9994fff5ebf73b9f6f9dab0c205d`
+  - `native/Mayasaba/Sha256Hex.cpp`: `10b9b7551c1c6409612ab25ad48f4eaf17d9cd893161b7758943fa24ee872784`
+  - `native/Mayasaba/Sha256Hex.h`: `ea0999836d056c1232b68341521927fd1aa27da0e901235a45f9ff65aff9e6f2`
+  - `native/tests/storage_tests.cpp`: `f8506a3ab6021e0be4e1d8d83abe73861fc31c3615c82ab35448d42c1f66cf32`
+
 
