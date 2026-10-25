@@ -4118,3 +4118,103 @@ mutant forced through `-t:Rebuild` and restored byte-identically (SHA-256 `75d63
   plus physical observation).
 - **Logical-client sizing/layout, strict certification and final-artifact Windows acceptance
   remain open.** No UI result from any earlier executable hash applies to `13a04a8d…`.
+
+## 2026-10-25 (correction) — R05 freshness, access-denied scans, and a retracted backstop
+
+**This section retracts two claims from the R05 section above.** That section said the
+attachment component was refreshed by "the owner that adds or removes managed attachment
+bytes" and that the 80%-of-ceiling cleanup evaluation was the backstop for staleness.
+Neither was true: no production staging or removal path called the refresh, and no 80%
+trigger existed. An independent review (`validation-1fad9be/REVIEW.md`) reproduced the
+consequences.
+
+### Failure 1: stale-ceiling admission (executed by the review)
+
+The cached observation was taken once at open and never maintained. Growth inside the
+managed attachment root after that point was invisible, so admission compared a stale total
+against the ceiling and admitted writes that the identical operation refuses after an
+explicit refresh.
+
+Correction — the cached total became a **ledger**:
+- `AttachmentService::PrepareAttachment` calls `ReserveManagedBytes(fileSize)` **before**
+  creating the destination, so projected growth is refused before a byte is copied, and a
+  scope-guarded reservation is released on every failure path or converted to accounted
+  bytes with `CommitManagedReservation` on success.
+- The four removal paths (`RemoveDraftAttachmentGuarded`, `ClearDraftAttachmentsGuarded`,
+  `RetireInterruptedPreparationGuarded`, `RemoveUntrackedStagedFileGuarded`) subtract the
+  confirmed removal through `AccountManagedRemoval_locked`.
+- Admission now combines the ledger, outstanding reservations and the fresh database
+  companion sizes. No production path needs an explicit refresh to stay current.
+
+### Failure 2: access-denied subtree silently omitted (executed by the review)
+
+The scan constructed `recursive_directory_iterator` with `skip_permission_denied`, which
+suppresses the access-denied error the scan exists to detect: the walk completed
+"successfully" with a smaller total. Checking the error code did not help, because the
+option prevents the error from being reported at all.
+
+Correction: the option is gone, so an inaccessible directory surfaces on construction or on
+increment. The error is now checked on construction, inside the loop, **and once more after
+the loop** — an increment that fails and lands on end never enters the loop body, so the
+final failure was previously lost.
+
+### Additional corrections
+
+- **Thread safety and generations.** `RefreshManagedScopeObservation` no longer publishes
+  blindly: it records the ledger generation, scans outside the mutex, then publishes only if
+  the generation is unchanged, discarding a stale completion instead of overwriting newer
+  accounting. The ledger is the authority; the scan is reconciliation. Owner and background
+  callers are therefore safe, which they were not before.
+- **Complete scope.** The scan now inventories managed files beside the database —
+  `.pre_migration.bak` and its `.v2.<uuid>` variants — because "database plus attachments"
+  omitted bytes the constructor itself creates.
+- **Migration/recovery capacity policy** is retained as an explicit decision, not a proof:
+  the constructor exemption is documented and justified, and safe bounded
+  migration/recovery on an exhausted volume remains unproven.
+
+### Tests (1–73 preserved, 74–75 added)
+
+| Group | Asserts |
+|---|---|
+| 74 | Staging accounts 4096 bytes with **no** refresh call; `ReserveManagedBytes` refuses 11 GiB before any copy and consumes no reservation; removal returns the ledger to its baseline. |
+| 75 | A nested directory with a deny `FILE_LIST_DIRECTORY` ACE for the current user: the denial is verified to take effect, the scan reports incomplete, the write is refused, and restoring the original DACL makes the scope observable and admission succeed again. |
+
+Group 75 restores the DACL through an exception-safe guard, because an assertion failure
+would otherwise leave a deny ACE on a test directory.
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256
+  `1f42372483d4acf18f2108635adaf4b5350e23e913fb4f424c336c944262fe27`,
+  **PASS: 75 of 75 executed native regression groups**, exit 0, after `-t:Rebuild`.
+- Application build Release x64 v145: exit 0. Contract validator: `PASS: 124`, exit 0.
+- Sources: `Storage.cpp` `81c06e8a4505c3d72f90832eba60adb2a23a239ef8d63890859cb76c9c644eef`,
+  `Storage.h` `7f6e3c7bf8bc6d798c9ee8e91aef1381304782a91cd884cd8d6cceefebf2e424`,
+  `AttachmentService.cpp` `882dfe16efcceed469b1c91f6b44e33039c88a29089c871a6f9a57a1e85778e5`,
+  `storage_tests.cpp` `8cbefe6c4f4184cedbf368341fb79847c0510e2af33dbc78f1d8fbf83c46e1da`.
+
+### Mutation evidence
+
+Under `~/.codex/visualizations/2026/10/25/mutation5/`. Each mutant forced through
+`-t:Rebuild` and restored byte-identically.
+
+| Mutant | Reverted fix | Result |
+|---|---|---|
+| M16 | `skip_permission_denied` restored on the attachment walk | FAIL group 75, `threw` |
+| M17 | Ceiling refusal in `ReserveManagedBytes` removed | FAIL group 74, `threw` |
+| M18 | Committed reservation no longer added to the ledger | FAIL group 74, ledger total |
+
+A first run of M16 crashed the process (0xC0000374) after the assertion fired: the deny ACE
+was never restored on the throw path and the test freed a security descriptor the guard also
+freed. Both were test defects, fixed before the recorded runs above.
+
+### Still open
+
+- **The 80% / changed-day / startup cleanup trigger is not implemented.** Only the ceiling
+  and free-space-reserve refusals exist. This is now stated as a gap rather than cited as a
+  backstop.
+- **Safe bounded migration/recovery on an exhausted volume is unproven.** The constructor
+  exemption is a documented decision, not evidence.
+- **`FAILED` journal intents are still not revisited by recovery.**
+- **Logical-client sizing/layout, strict certification and final-artifact Windows acceptance
+  remain open.** No UI result from any earlier executable hash applies to `1f423724…`.

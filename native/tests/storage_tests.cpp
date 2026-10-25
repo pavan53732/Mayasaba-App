@@ -25,6 +25,7 @@
 #include <vector>
 
 #include <windows.h>
+#include <aclapi.h>
 #include <bcrypt.h>
 
 #define EXPECT(cond) \
@@ -6622,6 +6623,154 @@ fs::remove(bigManaged);
             // An explicit refresh does walk, and sees the files that were added.
             store.RefreshManagedScopeObservation();
             EXPECT(store.ManagedScopeWalkEntriesForTesting() >= 200);
+            CASES_END();
+        }
+
+        // 74. Production freshness. The ledger must be maintained by the production staging
+        // and removal paths, not by a test calling refresh. Nothing here calls
+        // RefreshManagedScopeObservation: the accounting has to come from the service.
+        {
+            CASES_BEGIN("74. Staging and removal maintain the managed ledger without a refresh");
+            mayasaba::Storage store(folder / "r05-ledger.db");
+            std::string const projectId = "r05-ledger";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+            // The managed attachment root is shared by every store created in this test
+            // folder, so this measures the change this case causes, not an absolute total.
+            std::uint64_t const accountedBefore = store.AccountedAttachmentBytesForTesting();
+
+            auto const source = folder / "r05-source.bin";
+            {
+                std::ofstream of(source, std::ios::binary);
+                std::string const payload(4096, 'z');
+                of.write(payload.data(), static_cast<std::streamsize>(payload.size()));
+            }
+
+            mayasaba::AttachmentService service(store, store.ManagedAttachmentRoot());
+            auto const prepared = service.PrepareBatch(projectId, {source.wstring()});
+            EXPECT(prepared.size() == 1);
+            EXPECT(prepared[0].status == mayasaba::AttachmentStatus::Ready);
+
+            // No refresh was called: the staging path accounted the bytes itself.
+            EXPECT(store.AccountedAttachmentBytesForTesting() == accountedBefore + 4096);
+
+            // Projected growth is refused before any byte is copied.
+            bool threw = false;
+            std::string reason;
+            try { store.ReserveManagedBytes(11ull << 30); }
+            catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+            EXPECT(threw);
+            EXPECT(reason.find("past its 10 GiB ceiling") != std::string::npos);
+            EXPECT(reason.find("before any byte was copied") != std::string::npos);
+            // A refused reservation consumes nothing.
+            EXPECT(store.AccountedAttachmentBytesForTesting() == accountedBefore + 4096);
+
+            // Removal takes the bytes back out of the ledger.
+            auto const removal = service.RemoveDraftAttachment(projectId, prepared[0].id);
+            EXPECT(removal.recordRemoved);
+            EXPECT(store.AccountedAttachmentBytesForTesting() == accountedBefore);
+            CASES_END();
+        }
+
+        // 75. An access-denied subtree must make the scan incomplete. The previous scan used
+        // skip_permission_denied, which suppresses exactly this error, so the walk completed
+        // with a smaller total and the store admitted writes against a size it had not seen.
+        {
+            CASES_BEGIN("75. Access-denied subtree makes the managed scope incomplete");
+            mayasaba::Storage store(folder / "r05-denied.db");
+            std::string const projectId = "r05-denied";
+            store.BindProject(projectId, projectId, "C:/Projects/" + projectId);
+
+            auto const root = store.ManagedAttachmentRoot();
+            auto const hidden = root / "staging" / projectId / "hidden";
+            fs::create_directories(hidden);
+            {
+                std::ofstream of(hidden / "inside.bin", std::ios::binary);
+                std::ofstream of2(hidden.parent_path() / "visible.bin", std::ios::binary);
+                of.write("hidden-bytes", 12);
+                of2.write("visible-bytes", 13);
+            }
+
+            // Deny directory listing to the current user on the nested directory only.
+            auto currentUserSid = [](std::vector<BYTE>& storage) -> PSID
+            {
+                HANDLE token = nullptr;
+                if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return nullptr;
+                DWORD size = 0;
+                GetTokenInformation(token, TokenUser, nullptr, 0, &size);
+                storage.assign(size, 0);
+                PSID sid = nullptr;
+                if (GetTokenInformation(token, TokenUser, storage.data(), size, &size))
+                    sid = reinterpret_cast<TOKEN_USER*>(storage.data())->User.Sid;
+                CloseHandle(token);
+                return sid;
+            };
+            std::vector<BYTE> sidStorage;
+            PSID const sid = currentUserSid(sidStorage);
+            EXPECT(sid != nullptr);
+
+            PACL originalDacl = nullptr;
+            PSECURITY_DESCRIPTOR descriptor = nullptr;
+            EXPECT(GetNamedSecurityInfoW(hidden.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                       nullptr, nullptr, &originalDacl, nullptr, &descriptor) == ERROR_SUCCESS);
+
+            // Exception-safe restore: if an assertion below throws, the deny ACE must still
+            // be removed or the test folder is left inaccessible for later runs.
+            struct DaclRestorer
+            {
+                std::wstring path;
+                PACL original{nullptr};
+                PSECURITY_DESCRIPTOR descriptor{nullptr};
+                ~DaclRestorer()
+                {
+                    if (original && !path.empty())
+                    {
+                        SetNamedSecurityInfoW(const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT,
+                            DACL_SECURITY_INFORMATION, nullptr, nullptr, original, nullptr);
+                    }
+                    if (descriptor) LocalFree(descriptor);
+                }
+            } daclRestorer{hidden.wstring(), originalDacl, descriptor};
+
+            EXPLICIT_ACCESSW deny{};
+            deny.grfAccessPermissions = FILE_LIST_DIRECTORY;
+            deny.grfAccessMode = DENY_ACCESS;
+            deny.grfInheritance = NO_INHERITANCE;
+            deny.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+            deny.Trustee.TrusteeType = TRUSTEE_IS_USER;
+            deny.Trustee.ptstrName = static_cast<LPWSTR>(sid);
+            PACL deniedDacl = nullptr;
+            EXPECT(SetEntriesInAclW(1, &deny, originalDacl, &deniedDacl) == ERROR_SUCCESS);
+            EXPECT(SetNamedSecurityInfoW(const_cast<LPWSTR>(hidden.c_str()), SE_FILE_OBJECT,
+                       DACL_SECURITY_INFORMATION, nullptr, nullptr, deniedDacl, nullptr) == ERROR_SUCCESS);
+
+            // Confirm the denial actually takes effect, so the case cannot pass vacuously.
+            {
+                std::error_code listEc;
+                std::filesystem::directory_iterator probe(hidden, listEc);
+                EXPECT(static_cast<bool>(listEc));
+            }
+
+            store.RefreshManagedScopeObservation();
+            bool threw = false;
+            std::string reason;
+            try { store.TrySaveDraft(projectId, "must be refused"); }
+            catch (std::exception const& ex) { threw = true; reason = ex.what(); }
+            EXPECT(threw);
+            EXPECT(reason.find("could not be fully observed") != std::string::npos);
+
+            // Restore the original DACL and prove the scope becomes observable again.
+            EXPECT(SetNamedSecurityInfoW(const_cast<LPWSTR>(hidden.c_str()), SE_FILE_OBJECT,
+                       DACL_SECURITY_INFORMATION, nullptr, nullptr, originalDacl, nullptr) == ERROR_SUCCESS);
+            if (deniedDacl) LocalFree(deniedDacl);
+            // `descriptor` is owned by daclRestorer, which frees it on scope exit; freeing it
+            // here as well corrupts the heap.
+            {
+                std::error_code listEc;
+                std::filesystem::directory_iterator probe(hidden, listEc);
+                EXPECT(!listEc);
+            }
+            store.RefreshManagedScopeObservation();
+            EXPECT(store.TrySaveDraft(projectId, "recovered after DACL restore"));
             CASES_END();
         }
 

@@ -1290,6 +1290,14 @@ namespace mayasaba
         return identity;
     }
 
+    std::uint64_t Storage::CaptureStagedFileSize(std::string const& path) const
+    {
+        if (path.empty()) return 0;
+        std::error_code ec;
+        auto const bytes = std::filesystem::file_size(std::filesystem::path(Utf8ToWide(path)), ec);
+        return ec ? 0 : static_cast<std::uint64_t>(bytes);
+    }
+
     void Storage::RecordCleanupIntent_locked(std::string const& projectId, std::string const& stagedPath, std::string const& state, std::string const& reason)
     {
         auto const key = CleanupPathKey(stagedPath);
@@ -1543,6 +1551,7 @@ namespace mayasaba
         std::string deletionReason;
         if (mustRemove && deleteBytes)
         {
+            std::uint64_t const removedBytes = CaptureStagedFileSize(*staged);
             try
             {
                 removed = deleteBytes(*staged, expectedIdentity, &deletionReason);
@@ -1557,6 +1566,7 @@ namespace mayasaba
                 uncertain = true;
                 deletionReason = "an unknown failure occurred while removing the staged copy";
             }
+            if (removed) AccountManagedRemoval_locked(removedBytes);
         }
 
         // PHASE 3 - record what actually happened. The record is retired only when the
@@ -1665,6 +1675,7 @@ namespace mayasaba
         bool removed = false;
         bool uncertain = false;
         std::string deletionReason;
+        std::uint64_t const removedBytes = CaptureStagedFileSize(stagedPath);
         try
         {
             removed = deleteBytes(stagedPath, expectedIdentity, &deletionReason);
@@ -1679,6 +1690,7 @@ namespace mayasaba
             uncertain = true;
             deletionReason = "an unknown failure occurred while removing the staged copy";
         }
+        if (removed) AccountManagedRemoval_locked(removedBytes);
 
         // PHASE 3 - record the observed outcome.
         outcome.removed = removed;
@@ -1854,10 +1866,54 @@ namespace mayasaba
         return entries;
     }
 
-    void Storage::RefreshManagedScopeObservation()
+    Storage::ManagedScopeObservation Storage::ScanManagedScope() const
     {
         ManagedScopeObservation obs;
         managedScopeWalkEntries_ = 0;
+
+        // Managed files beside the database: the WAL/SHM companions and the migration
+        // backups the constructor creates. A database-plus-attachments total omits the
+        // backups entirely, which is why they are inventoried here.
+        auto const storeDir = file_.parent_path();
+        auto const dbName = file_.filename().wstring();
+        {
+            std::error_code dirEc;
+            std::filesystem::directory_iterator it(storeDir, dirEc);
+            std::filesystem::directory_iterator const dirEnd;
+            if (dirEc)
+            {
+                obs.attachmentsComplete = false;
+                obs.attachmentsReasonEn = "the store directory could not be enumerated (" + dirEc.message() + ")";
+                return obs;
+            }
+            for (; it != dirEnd; it.increment(dirEc))
+            {
+                if (dirEc)
+                {
+                    obs.attachmentsComplete = false;
+                    obs.attachmentsReasonEn = "the store directory could not be fully enumerated (" + dirEc.message() + ")";
+                    return obs;
+                }
+                ++managedScopeWalkEntries_;
+                auto const name = it->path().filename().wstring();
+                if (name.rfind(dbName, 0) != 0) continue;
+                // The three database companions are measured fresh on every write, so they
+                // are not counted twice here.
+                if (name == dbName || name == dbName + L"-wal" || name == dbName + L"-shm") continue;
+                std::error_code stEc;
+                auto const st = it->symlink_status(stEc);
+                if (stEc || !std::filesystem::is_regular_file(st)) continue;
+                std::error_code szEc;
+                auto const bytes = it->file_size(szEc);
+                if (szEc)
+                {
+                    obs.attachmentsComplete = false;
+                    obs.attachmentsReasonEn = "a managed backup file's size could not be read (" + szEc.message() + ")";
+                    return obs;
+                }
+                obs.otherManagedBytes += bytes;
+            }
+        }
 
         auto const root = ManagedAttachmentRoot();
         std::error_code rootEc;
@@ -1868,9 +1924,7 @@ namespace mayasaba
             // counted as zero managed bytes.
             obs.attachmentsComplete = false;
             obs.attachmentsReasonEn = "the managed attachment directory could not be inspected (" + rootEc.message() + ")";
-            managedScope_ = std::move(obs);
-            managedScopeObserved_ = true;
-            return;
+            return obs;
         }
         if (!std::filesystem::exists(rootStatus))
         {
@@ -1878,32 +1932,28 @@ namespace mayasaba
             // complete observation of zero bytes, not a failed one.
             obs.attachmentsComplete = true;
             obs.attachmentsRootAbsent = true;
-            managedScope_ = std::move(obs);
-            managedScopeObserved_ = true;
-            return;
+            return obs;
         }
         if (!std::filesystem::is_directory(rootStatus))
         {
             obs.attachmentsComplete = false;
             obs.attachmentsReasonEn = "the managed attachment path exists but is not a directory";
-            managedScope_ = std::move(obs);
-            managedScopeObserved_ = true;
-            return;
+            return obs;
         }
 
-        // skip_permission_denied stops an inaccessible subtree from aborting the whole walk,
-        // but it also hides data. The distinction that matters is therefore made explicitly:
-        // an iterator error is an incomplete observation, never a smaller total.
+        // NO skip_permission_denied. That option suppresses exactly the errors this scan
+        // must report: with it, an access-denied subtree is skipped and the walk completes
+        // successfully with a smaller total, which is the failure this observation exists to
+        // prevent. Without it, an inaccessible directory surfaces as an error on construction
+        // or on increment, and the scan is reported incomplete.
         std::error_code walkEc;
-        std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, walkEc);
+        std::filesystem::recursive_directory_iterator it(root, walkEc);
         std::filesystem::recursive_directory_iterator const end;
         if (walkEc)
         {
             obs.attachmentsComplete = false;
             obs.attachmentsReasonEn = "the managed attachment directory could not be enumerated (" + walkEc.message() + ")";
-            managedScope_ = std::move(obs);
-            managedScopeObserved_ = true;
-            return;
+            return obs;
         }
         for (; it != end; it.increment(walkEc))
         {
@@ -1911,9 +1961,7 @@ namespace mayasaba
             {
                 obs.attachmentsComplete = false;
                 obs.attachmentsReasonEn = "the managed attachment directory could not be fully enumerated (" + walkEc.message() + ")";
-                managedScope_ = std::move(obs);
-                managedScopeObserved_ = true;
-                return;
+                return obs;
             }
             ++managedScopeWalkEntries_;
 
@@ -1923,15 +1971,13 @@ namespace mayasaba
             {
                 obs.attachmentsComplete = false;
                 obs.attachmentsReasonEn = "a managed entry's type could not be read (" + typeEc.message() + ")";
-                managedScope_ = std::move(obs);
-                managedScopeObserved_ = true;
-                return;
+                return obs;
             }
 
-            // Reparse points are not followed. Following one would count the same object
-            // twice when the target is also inside the tree, and could walk outside the
-            // managed scope entirely. The skip is counted and reported rather than silently
-            // treated as zero bytes of ordinary data.
+            // Reparse points are not followed: following one would count the same object
+            // twice when its target is also inside the tree, and could walk outside the
+            // managed scope. The skip is counted and reported rather than treated as zero
+            // bytes of ordinary data.
             bool const isLink = std::filesystem::is_symlink(status);
             bool isReparseDir = false;
 #ifdef _WIN32
@@ -1942,9 +1988,7 @@ namespace mayasaba
                 {
                     obs.attachmentsComplete = false;
                     obs.attachmentsReasonEn = "a managed directory's attributes could not be read";
-                    managedScope_ = std::move(obs);
-                    managedScopeObserved_ = true;
-                    return;
+                    return obs;
                 }
                 isReparseDir = (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
             }
@@ -1964,16 +2008,150 @@ namespace mayasaba
                 // An unmeasurable file must not be counted as zero.
                 obs.attachmentsComplete = false;
                 obs.attachmentsReasonEn = "a managed file's size could not be read (" + sizeEc.message() + ")";
-                managedScope_ = std::move(obs);
-                managedScopeObserved_ = true;
-                return;
+                return obs;
             }
             obs.attachmentBytes += bytes;
         }
+        // An increment that fails AND lands on end exits the loop without entering it, so
+        // the error has to be checked once more here or the final failure is lost.
+        if (walkEc)
+        {
+            obs.attachmentsComplete = false;
+            obs.attachmentsReasonEn = "the managed attachment directory could not be fully enumerated (" + walkEc.message() + ")";
+            return obs;
+        }
 
         obs.attachmentsComplete = true;
-        managedScope_ = std::move(obs);
+        return obs;
+    }
+
+    void Storage::RefreshManagedScopeObservation()
+    {
+        std::uint64_t generation = 0;
+        {
+            std::lock_guard lock(mutex_);
+            generation = managedScopeGeneration_;
+        }
+
+        // The scan runs outside the mutex so it never blocks writes for the length of a
+        // tree walk.
+        ManagedScopeObservation const scan = ScanManagedScope();
+
+        std::lock_guard lock(mutex_);
+        if (managedScopeGeneration_ != generation)
+        {
+            // The ledger changed while this scan was running, so its total describes a state
+            // that no longer exists. Publishing it would overwrite newer, more accurate
+            // accounting with older data; the incremental ledger is the authority and the
+            // stale scan is discarded.
+            ++managedScopeStaleRejections_;
+            return;
+        }
+        attachmentBytes_ = scan.attachmentBytes;
+        otherManagedBytes_ = scan.otherManagedBytes;
         managedScopeObserved_ = true;
+        managedScopeComplete_ = scan.attachmentsComplete;
+        managedScopeReasonEn_ = scan.attachmentsComplete ? std::string{} : scan.attachmentsReasonEn;
+    }
+
+    void Storage::ReserveManagedBytes(std::uint64_t bytes)
+    {
+        if (bytes == 0) return;
+        std::lock_guard lock(mutex_);
+        // Projected growth is admitted against the same ceiling as bytes already on disk, so
+        // an operation cannot start copying when its own output would breach the limit.
+        CapacityObservation observed{};
+        if (capacityProbeForTesting_)
+        {
+            observed = capacityProbeForTesting_();
+        }
+        else
+        {
+            if (!managedScopeObserved_)
+            {
+                throw std::runtime_error(
+                    "Mayasaba-managed storage has not been observed for this store, so a storage operation "
+                    "cannot be admitted while its size is unknown. Reopen the project store; nothing was changed.");
+            }
+            if (!managedScopeComplete_)
+            {
+                throw std::runtime_error(
+                    "Mayasaba-managed storage could not be fully observed (" + managedScopeReasonEn_ +
+                    "), so a storage operation cannot be admitted while the size of the managed attachment area "
+                    "is unknown. Nothing was changed and no protected data was deleted.");
+            }
+            std::uint64_t managed = attachmentBytes_ + otherManagedBytes_ + reservedBytes_;
+            for (auto const& suffix : { L"", L"-wal", L"-shm" })
+            {
+                std::error_code ec;
+                auto const onDisk = std::filesystem::file_size(file_.wstring() + suffix, ec);
+                if (ec)
+                {
+                    if (ec == std::errc::no_such_file_or_directory) continue;
+                    throw std::runtime_error(
+                        "A database file could not be measured (" + ec.message() +
+                        "), so a storage operation cannot be admitted. Nothing was changed.");
+                }
+                managed += onDisk;
+            }
+            observed.managedBytes = managed;
+            std::error_code spaceEc;
+            auto const space = std::filesystem::space(file_.parent_path(), spaceEc);
+            if (spaceEc)
+            {
+                throw std::runtime_error(
+                    "Free space on the store's volume could not be observed (" + spaceEc.message() +
+                    "), so a storage operation cannot be admitted. Nothing was changed.");
+            }
+            observed.freeBytes = space.available;
+        }
+
+        constexpr uintmax_t ceiling = 10ull * 1024 * 1024 * 1024;
+        constexpr uintmax_t reserve = 5ull * 1024 * 1024 * 1024;
+        if (observed.managedBytes + bytes >= ceiling)
+            throw std::runtime_error(
+                "This operation would take the local project store past its 10 GiB ceiling of Mayasaba-managed "
+                "bytes (database, attachments and backups); it was refused before any byte was copied. Protected "
+                "data was retained and nothing was deleted.");
+        if (observed.freeBytes < reserve)
+            throw std::runtime_error(
+                "Local storage free-space reserve is below 5 GiB; the operation was refused before any byte was "
+                "copied. Protected data was retained and nothing was deleted.");
+        reservedBytes_ += bytes;
+        ++managedScopeGeneration_;
+    }
+
+    void Storage::CommitManagedReservation(std::uint64_t bytes)
+    {
+        if (bytes == 0) return;
+        std::lock_guard lock(mutex_);
+        if (reservedBytes_ >= bytes) reservedBytes_ -= bytes;
+        else reservedBytes_ = 0;
+        attachmentBytes_ += bytes;
+        ++managedScopeGeneration_;
+    }
+
+    void Storage::ReleaseManagedReservation(std::uint64_t bytes)
+    {
+        if (bytes == 0) return;
+        std::lock_guard lock(mutex_);
+        if (reservedBytes_ >= bytes) reservedBytes_ -= bytes;
+        else reservedBytes_ = 0;
+        ++managedScopeGeneration_;
+    }
+
+    void Storage::AccountManagedRemoval_locked(std::uint64_t bytes)
+    {
+        if (bytes == 0) return;
+        if (attachmentBytes_ >= bytes) attachmentBytes_ -= bytes;
+        else attachmentBytes_ = 0;
+        ++managedScopeGeneration_;
+    }
+
+    std::uint64_t Storage::AccountedAttachmentBytesForTesting()
+    {
+        std::lock_guard lock(mutex_);
+        return attachmentBytes_;
     }
 
     void Storage::SetCapacityObservationForOpenForTesting(CapacityProbe probe)
@@ -2017,16 +2195,19 @@ namespace mayasaba
                     "admitted while its size is unknown. Reopen the project store to establish the "
                     "observation; nothing was changed and no protected data was deleted.");
             }
-            if (!managedScope_.attachmentsComplete)
+            if (!managedScopeComplete_)
             {
                 throw std::runtime_error(
-                    "Mayasaba-managed storage could not be fully observed (" + managedScope_.attachmentsReasonEn +
+                    "Mayasaba-managed storage could not be fully observed (" + managedScopeReasonEn_ +
                     "), so a write cannot be admitted while the size of the managed attachment area is unknown. "
                     "Nothing was changed and no protected data was deleted. Make the managed attachment area "
                     "readable, then reopen the project store.");
             }
 
-            std::uint64_t managed = managedScope_.attachmentBytes;
+            // Accounted attachment bytes, managed backups, and growth that has been admitted
+            // but is not on disk yet. Reservations are what stop a staging operation from
+            // being admitted when its own output would breach the ceiling.
+            std::uint64_t managed = attachmentBytes_ + otherManagedBytes_ + reservedBytes_;
             for (auto const& suffix : { L"", L"-wal", L"-shm" })
             {
                 std::error_code ec;
@@ -4586,10 +4767,12 @@ namespace mayasaba
         // a record or deletes a different object.
         if (staged && !staged->empty() && deleteBytes)
         {
+            std::uint64_t const removedBytes = CaptureStagedFileSize(*staged);
             std::string deletionReason;
             if (deleteBytes(*staged, expectedIdentity, &deletionReason))
             {
                 outcome.bytesRemoved = true;
+                AccountManagedRemoval_locked(removedBytes);
                 ResolveCleanup(projectId, *staged, "DELETED",
                     "The recorded object was removed by this cleanup.");
             }
@@ -4711,10 +4894,12 @@ namespace mayasaba
                 auto const expectedIdentity = i < toDeleteIdentities.size()
                     ? toDeleteIdentities[i]
                     : StagedObjectIdentity{};
+                std::uint64_t const removedBytes = CaptureStagedFileSize(path);
                 std::string deletionReason;
                 if (deleteBytes(path, expectedIdentity, &deletionReason))
                 {
                     outcome.stagedPaths.push_back(path);
+                    AccountManagedRemoval_locked(removedBytes);
                     ResolveCleanup(projectId, path, "DELETED", "The recorded object was removed by draft clear.");
                 }
                 else

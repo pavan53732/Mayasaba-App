@@ -632,27 +632,40 @@ namespace mayasaba
         static void SetCapacityObservationForOpenForTesting(CapacityProbe probe);
 
         // The Mayasaba-managed scope as it was actually observed. Completeness is tracked
-        // per component because the three components fail differently: the database files
-        // are three cheap stats, the attachment tree is a walk that can be refused part-way,
-        // and free space is a volume query. Collapsing any of them to zero would let an
+        // per component because the components fail differently: the database companions
+        // are cheap stats, the attachment tree is a walk that can be refused part-way, and
+        // free space is a volume query. Collapsing any of them to zero would let an
         // unreadable tree look like an empty one.
         struct ManagedScopeObservation
         {
             std::uint64_t attachmentBytes{0};
+            // Managed files that live beside the database rather than inside the attachment
+            // tree: migration backups and their variants. A database-plus-attachments total
+            // silently omits them.
+            std::uint64_t otherManagedBytes{0};
             bool attachmentsComplete{false};
             bool attachmentsRootAbsent{false};
             std::uint64_t reparsePointsSkipped{0};
             std::string attachmentsReasonEn;
         };
-        // Walks the managed attachment tree once and caches the result. Deliberately NOT
-        // called from ordinary write admission: it is unbounded in the number of entries and
-        // admission runs under the store mutex. Called when a store is opened, and by the
-        // owner that adds or removes managed attachment bytes. Not thread-safe against a
-        // concurrent mutation; call it outside a write.
+        // Reconciles the accounted attachment total against the filesystem. The scan runs
+        // WITHOUT the store mutex, so a concurrent mutation can make it stale; publication
+        // is therefore guarded by an observation generation and a scan whose generation no
+        // longer matches is discarded rather than published over newer accounting. This is
+        // what makes it safe for owner and background callers, not just the constructor.
         void RefreshManagedScopeObservation();
-        // Entries visited by the most recent managed-scope walk. Test-only: it is how a
-        // regression can prove that ordinary writes do not walk the tree.
+        // Projected growth. A storage operation that is about to add managed bytes reserves
+        // them first, so admission accounts for bytes that are not on disk yet; the
+        // reservation becomes accounted bytes on success and is released on failure. Both
+        // are idempotent per amount and safe to call from the owning service.
+        void ReserveManagedBytes(std::uint64_t bytes);
+        void CommitManagedReservation(std::uint64_t bytes);
+        void ReleaseManagedReservation(std::uint64_t bytes);
+        // Entries visited by the most recent managed-scope scan, and scans discarded because
+        // the ledger changed underneath them. Test-only.
         std::uint64_t ManagedScopeWalkEntriesForTesting() const noexcept { return managedScopeWalkEntries_; }
+        std::uint64_t ManagedScopeStaleScansRejectedForTesting() const noexcept { return managedScopeStaleRejections_; }
+        std::uint64_t AccountedAttachmentBytesForTesting();
         void SetForcePathCanonicalizationFailureForTesting(bool force) noexcept { forcePathCanonicalizationFailureForTesting_ = force; }
         void SetForcePathCanonicalizationFailureForTestingPath(std::string const& p) { forcedPathCanonicalFailurePath_ = p; }
         void ClearForcePathCanonicalizationFailureForTestingPath() { forcedPathCanonicalFailurePath_.clear(); }
@@ -677,12 +690,24 @@ namespace mayasaba
         std::function<void()> queryActionCenterSnapshotHook_;
         std::function<void(size_t index, std::string const& id)> saveDraftAttachmentsItemHook_;
         CapacityProbe capacityProbeForTesting_;
-        // Last completed managed-scope observation, and whether one has been taken at all.
-        // Ordinary writes read this instead of walking the tree; a store that has never
-        // observed its scope refuses writes rather than assuming it is empty.
-        ManagedScopeObservation managedScope_;
+        // Accounted Mayasaba-managed bytes. `attachmentBytes_` is maintained incrementally
+        // by the operations that add and remove managed attachment bytes, and reconciled by
+        // a scan; `reservedBytes_` is growth that has been admitted but is not on disk yet.
+        // Both are guarded by mutex_ so write admission reads a consistent snapshot.
+        std::uint64_t attachmentBytes_{0};
+        std::uint64_t otherManagedBytes_{0};
+        std::uint64_t reservedBytes_{0};
         bool managedScopeObserved_{false};
+        bool managedScopeComplete_{false};
+        std::string managedScopeReasonEn_;
+        // Bumped by every ledger mutation, so a scan that started earlier can be rejected.
+        std::uint64_t managedScopeGeneration_{0};
+        std::atomic<std::uint64_t> managedScopeStaleRejections_{0};
         mutable std::uint64_t managedScopeWalkEntries_{0};
+        // Scans the filesystem without holding mutex_. Caller publishes the result.
+        ManagedScopeObservation ScanManagedScope() const;
+        // Applies a confirmed removal to the accounted total. Caller holds mutex_.
+        void AccountManagedRemoval_locked(std::uint64_t bytes);
         bool forcePathCanonicalizationFailureForTesting_{false};
         std::string forcedPathCanonicalFailurePath_;
         std::string forcedStagedPresenceFailurePath_;
@@ -758,6 +783,7 @@ namespace mayasaba
         // the eligibility section. `valid` is false when no regular object could be
         // opened, which makes every later identity comparison fail closed.
         StagedObjectIdentity CaptureStagedObjectIdentity(std::string const& path) const;
+        std::uint64_t CaptureStagedFileSize(std::string const& path) const;
         void RecordCleanupIntent_locked(std::string const& projectId, std::string const& stagedPath, std::string const& state, std::string const& reason);
         void ResolveCleanupIntent_locked(std::string const& projectId, std::string const& stagedPath, std::string const& state, std::string const& reason);
         // Records the observed outcome of a cleanup whose physical effect has already

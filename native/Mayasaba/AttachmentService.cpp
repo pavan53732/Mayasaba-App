@@ -410,6 +410,22 @@ namespace mayasaba
         intentRec.status = "PREPARING";
         storage_.SaveDraftAttachment(projectId, intentRec);
 
+        // Projected growth is admitted BEFORE any byte is copied, so a staging operation
+        // that would take the managed scope past its ceiling is refused rather than
+        // discovered half-way through. The guard releases the reservation on every failure
+        // path below; only a completed copy converts it into accounted bytes.
+        storage_.ReserveManagedBytes(candidate.fileSize);
+        struct ReservationGuard
+        {
+            mayasaba::Storage& storage;
+            std::uint64_t bytes;
+            bool committed{false};
+            ~ReservationGuard()
+            {
+                if (!committed) storage.ReleaseManagedReservation(bytes);
+            }
+        } reservation{storage_, candidate.fileSize};
+
         HANDLE hDest = CreateFileW(stagedFilePath.c_str(), GENERIC_WRITE,
             0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (hDest == INVALID_HANDLE_VALUE)
@@ -580,6 +596,9 @@ namespace mayasaba
         }
         candidate.sha256 = ss.str();
         candidate.fileSize = totalBytesRead;
+        // The copy and its verification succeeded: the reservation becomes accounted bytes.
+        reservation.committed = true;
+        storage_.CommitManagedReservation(candidate.fileSize);
         candidate.status = AttachmentStatus::Ready;
 
         AttachmentRecord readyRec = intentRec;
