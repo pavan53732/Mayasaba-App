@@ -227,24 +227,33 @@ namespace mayasaba::ui
     {
         if (olderEntries.empty()) return 0;
 
-        // Insert at the beginning - newest of the older entries first
-        std::size_t count = olderEntries.size();
+        std::size_t const count = olderEntries.size();
+
+        // Insert entries at the beginning, oldest first
         entries_.insert(entries_.begin(), std::make_move_iterator(olderEntries.begin()), std::make_move_iterator(olderEntries.end()));
         shown_.insert(shown_.begin(), count, true); // restored history = no entrance motion
-        tokens_.insert(tokens_.begin(), count, 0);
+
+        // Generate new tokens for prepended entries only; existing tokens stay unchanged
+        std::vector<int64_t> newTokens(count);
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            newTokens[i] = nextToken_++;
+        }
+        tokens_.insert(tokens_.begin(), newTokens.begin(), newTokens.end());
+
+        // Rebuild token index: every existing position shifted by count
         tokenIndex_.clear();
-        tokens_.resize(entries_.size());
         for (std::size_t index = 0; index < entries_.size(); ++index)
         {
-            auto const token = nextToken_++;
-            tokens_[index] = token;
-            tokenIndex_[token] = index;
+            tokenIndex_[tokens_[index]] = index;
         }
-        items_.Clear();
-        for (std::size_t index = 0; index < entries_.size(); ++index)
+
+        // Insert observable items at the front, in reverse order so oldest ends up at position 0
+        for (std::size_t i = count; i-- > 0;)
         {
-            items_.Append(box_value(tokens_[index]));
+            items_.InsertAt(0, winrt::box_value(tokens_[i]));
         }
+
         return count;
     }
 

@@ -796,7 +796,8 @@ namespace winrt::Mayasaba::implementation
         ShowActionCenterDetailsButton().Visibility(Visibility::Collapsed);
         CollapseActionCenterDetails();
 
-        // Convert the page to timeline entries (newest first from storage = oldest first in timeline)
+        // Convert the page to timeline entries. Storage now returns oldest-first,
+// matching timeline presentation order (oldest at top).
         std::vector<mayasaba::Contribution> history;
         history.reserve(historyPage.items.size());
         for (auto& item : historyPage.items)
@@ -859,6 +860,11 @@ namespace winrt::Mayasaba::implementation
         // The Dock runs only for the one confirmed first save that set the flag.
         bool const dock = showChatDockTransition_;
         showChatDockTransition_ = false;
+        // Force a full timeline rebuild: historyCache_ has been entirely replaced,
+        // and identity may have changed even when the count stays the same (e.g.
+        // a new message pushes the oldest off a full 50-message page).
+        renderedProject_.clear();
+        renderedConditionKind_ = -1;
         RenderHistory(dock);
         if (!chatAlreadyVisible)
         {
@@ -879,6 +885,14 @@ namespace winrt::Mayasaba::implementation
             co_return;
         }
 
+        // Capture UI-owned values before the thread switch. activeProject_,
+        // historyOldestRowId_ and selectorGeneration_ must not be read after
+        // co_await because they can change on the UI thread while we are
+        // suspended (project switch, reload, etc.).
+        std::string const projectId = activeProject_;
+        std::int64_t const beforeRowId = historyOldestRowId_;
+        uint64_t const genAtStart = selectorGeneration_.load();
+
         // Increment sequence so only the latest load applies its results
         uint64_t const loadSeq = ++historyLoadSeq_;
         historyLoading_ = true;
@@ -892,18 +906,30 @@ namespace winrt::Mayasaba::implementation
         {
             co_await selectorQueue_.Background();
             mayasaba::ContributionsQuery query;
-            query.projectId = activeProject_;
+            query.projectId = projectId;
             query.limit = 50;
-            query.beforeRowId = historyOldestRowId_;
+            query.beforeRowId = beforeRowId;
             olderPage = storage_->ContributionsPaged(query);
         }
         catch (std::exception const& e) { error = e.what(); }
 
         if (!co_await resume_foreground(uiQueue)) co_return;
-        if (windowClosed_ || selectorGeneration_ != gen || historyLoadSeq_ != loadSeq) co_return;
-        if (!error.empty()) { ShowNotice(L"Older history load failed: " + Utf16(error), true); historyLoading_ = false; co_return; }
+        if (windowClosed_) { historyLoading_ = false; co_return; }
+        if (selectorGeneration_.load() != genAtStart || selectorGeneration_.load() != gen || historyLoadSeq_ != loadSeq)
+        {
+            // A newer load or project switch superseded this result. Leave the
+            // loading flag clear so a subsequent load can proceed.
+            historyLoading_ = false;
+            co_return;
+        }
+        if (!error.empty())
+        {
+            ShowNotice(L"Older history load failed: " + Utf16(error), true);
+            historyLoading_ = false;
+            co_return;
+        }
 
-        // Convert to timeline entries (newest first from storage)
+        // Storage now returns oldest-first, matching timeline presentation order.
         std::vector<mayasaba::ui::TimelineEntry> olderEntries;
         olderEntries.reserve(olderPage.items.size());
         for (auto& item : olderPage.items)
@@ -911,7 +937,7 @@ namespace winrt::Mayasaba::implementation
             olderEntries.push_back(ContributionEntry(item));
         }
 
-        // Prepend to timeline - this preserves the reading anchor
+        // Prepend to timeline - preserves existing item identities and reading anchor
         if (!olderEntries.empty())
         {
             timeline_->PrependOlder(std::move(olderEntries));
@@ -920,6 +946,7 @@ namespace winrt::Mayasaba::implementation
                 std::make_move_iterator(olderPage.items.end()));
             historyOldestRowId_ = olderPage.oldestRowId;
             historyHasMore_ = olderPage.hasMore;
+            renderedCount_ += olderPage.items.size();
         }
 
         historyLoading_ = false;
@@ -4746,11 +4773,21 @@ namespace winrt::Mayasaba::implementation
         auto indexOpt = timeline_->FindIndexByIdentity(submissionId);
         if (!indexOpt)
         {
-            ShowNotice(L"Saved message is not present in the current timeline view.", false);
+            // The result is real but outside the currently loaded page. Do not
+            // answer "not present in the current timeline view": resolve the
+            // message's storage row identity and load one bounded window centered
+            // on it, then reveal it there. The project is captured now; a switch
+            // between the search click and the load is refused by the coroutine.
+            if (activeProject_.empty() || !storage_ || windowClosed_) return;
+            RevealMessageFromHistory(submissionId, activeProject_, selectorGeneration_.load());
             return;
         }
 
-        int32_t index = static_cast<int32_t>(*indexOpt);
+        RevealMessageAtIndex(static_cast<int32_t>(*indexOpt));
+    }
+
+    void MainWindow::RevealMessageAtIndex(int32_t index)
+    {
         try
         {
             auto element = HistoryRepeater().GetOrCreateElement(index);
@@ -4805,6 +4842,95 @@ namespace winrt::Mayasaba::implementation
         catch (std::exception const& e)
         {
             ShowNotice(L"Navigation failed: " + Utf16(e.what()), true);
+        }
+    }
+
+    // Search navigation into history the current page does not hold. The
+    // submission's row identity is resolved, one bounded window centered on it is
+    // loaded, the timeline is rebuilt from that window, and the message is then
+    // revealed by its exact submission identity. Values the operation depends on
+    // (project, generation) are captured before the thread switch; stale or
+    // foreign results are refused rather than guessed at.
+    winrt::fire_and_forget MainWindow::RevealMessageFromHistory(std::string submissionId, std::string projectId, uint64_t gen)
+    {
+        auto keepAlive = get_strong();
+        auto uiQueue = DispatcherQueue();
+
+        std::optional<std::int64_t> rowId;
+        mayasaba::ContributionsPage window;
+        std::string error;
+        try
+        {
+            co_await selectorQueue_.Background();
+            rowId = storage_->RowIdForSubmission(projectId, submissionId);
+            if (rowId)
+            {
+                mayasaba::ContributionsWindowQuery win;
+                win.projectId = projectId;
+                win.centerRowId = *rowId;
+                win.beforeCount = 25;
+                win.afterCount = 25;
+                window = storage_->ContributionsWindow(win);
+            }
+        }
+        catch (std::exception const& e) { error = e.what(); }
+
+        if (!co_await resume_foreground(uiQueue)) co_return;
+        if (windowClosed_ || selectorGeneration_.load() != gen) co_return;
+        if (activeProject_ != projectId)
+        {
+            // The project changed while the load ran. Never interleave a window of
+            // one project into another project's timeline.
+            co_return;
+        }
+        if (!error.empty())
+        {
+            ShowNotice(L"Saved message navigation failed: " + Utf16(error), true);
+            co_return;
+        }
+        if (!rowId)
+        {
+            ShowNotice(L"That saved message is no longer part of this project's recorded history.", false);
+            co_return;
+        }
+        if (!window.errorMessage.empty() || window.items.empty())
+        {
+            ShowNotice(L"That saved message could not be opened: " + Utf16(window.errorMessage), true);
+            co_return;
+        }
+
+        // Rebuild the timeline from the windowed page. The page is oldest-first
+        // and the center submission is guaranteed present, so the reveal below
+        // must find it.
+        historyCache_.clear();
+        historyCache_.reserve(window.items.size());
+        for (auto& item : window.items)
+        {
+            historyCache_.push_back(std::move(item));
+        }
+        if (!window.hasMore)
+        {
+            // The window already includes the oldest recorded row.
+            historyOldestRowId_ = 0;
+            historyHasMore_ = false;
+        }
+        else
+        {
+            historyOldestRowId_ = window.oldestRowId;
+            historyHasMore_ = true;
+        }
+        historyLoading_ = false;
+
+        // Force the full rebuild path even though the project identity is
+        // unchanged: the whole page was replaced, not appended.
+        renderedProject_.clear();
+        renderedConditionKind_ = -1;
+        RenderHistory(false);
+
+        auto indexOpt = timeline_->FindIndexByIdentity(submissionId);
+        if (indexOpt)
+        {
+            RevealMessageAtIndex(static_cast<int32_t>(*indexOpt));
         }
     }
 

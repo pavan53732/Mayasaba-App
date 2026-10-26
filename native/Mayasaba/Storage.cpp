@@ -5669,9 +5669,21 @@ namespace mayasaba
     }
 
     // Helper: fetch attachments for a batch of submission IDs in one query.
+// Returns false (without throwing) if the statement cannot be prepared; callers
+// treat that as "no attachment info available" for those submissions, which is
+// the safe degrade-closed behavior for a read-only projection. A stepping
+// failure throws so it cannot be silently mistaken for an empty result set.
 // Uses raw SQLite C API so it can be a free function (not a Storage member).
-    static void FetchAttachmentsForSubmissions(sqlite3* db, const std::vector<std::string>& submissionIds, std::unordered_map<std::string, std::vector<AttachmentRecord>>& outAttachments)
+    static bool FetchAttachmentsForSubmissions(sqlite3* db, const std::vector<std::string>& submissionIds, std::unordered_map<std::string, std::vector<AttachmentRecord>>& outAttachments)
     {
+        if (submissionIds.empty()) return true;
+
+        struct StatementCloser
+        {
+            sqlite3_stmt* stmt{nullptr};
+            ~StatementCloser() { if (stmt) sqlite3_finalize(stmt); }
+        };
+
         auto columnText = [](sqlite3_stmt* stmt, int column) -> std::string
         {
             auto const* ptr = sqlite3_column_text(stmt, column);
@@ -5680,7 +5692,6 @@ namespace mayasaba
             return {reinterpret_cast<char const*>(ptr), static_cast<size_t>(length)};
         };
 
-        if (submissionIds.empty()) return;
         std::string placeholders;
         placeholders.reserve(submissionIds.size() * 2);
         for (size_t i = 0; i < submissionIds.size(); ++i)
@@ -5689,29 +5700,39 @@ namespace mayasaba
             placeholders += "?";
         }
         std::string sql = "SELECT attachment_id,project_id,submission_id,file_name,file_size,sha256,detected_type,storage_path,source_path,status,error_message,version,created_at FROM attachments WHERE submission_id IN (" + placeholders + ") ORDER BY rowid;";
-        sqlite3_stmt* stmt = nullptr;
-        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK) return;
+
+        StatementCloser closer{};
+        if (sqlite3_prepare_v2(db, sql.c_str(), -1, &closer.stmt, nullptr) != SQLITE_OK)
+        {
+            return false;
+        }
+
         for (size_t i = 0; i < submissionIds.size(); ++i)
         {
-            sqlite3_bind_text(stmt, static_cast<int>(i + 1), submissionIds[i].c_str(), -1, SQLITE_TRANSIENT);
+            int bindRc = sqlite3_bind_text(closer.stmt, static_cast<int>(i + 1), submissionIds[i].c_str(), -1, SQLITE_TRANSIENT);
+            if (bindRc != SQLITE_OK)
+            {
+                throw std::runtime_error(sqlite3_errmsg(db));
+            }
         }
+
         int attRc = SQLITE_OK;
-        while ((attRc = sqlite3_step(stmt)) == SQLITE_ROW)
+        while ((attRc = sqlite3_step(closer.stmt)) == SQLITE_ROW)
         {
             AttachmentRecord attRec{
-                columnText(stmt, 0),
-                columnText(stmt, 1),
-                columnText(stmt, 2),
-                columnText(stmt, 3),
-                static_cast<uint64_t>(sqlite3_column_int64(stmt, 4)),
-                columnText(stmt, 5),
-                columnText(stmt, 6),
-                columnText(stmt, 7),
-                columnText(stmt, 8),
-                columnText(stmt, 9),
-                columnText(stmt, 10),
-                static_cast<uint64_t>(sqlite3_column_int64(stmt, 11)),
-                columnText(stmt, 12)
+                columnText(closer.stmt, 0),
+                columnText(closer.stmt, 1),
+                columnText(closer.stmt, 2),
+                columnText(closer.stmt, 3),
+                static_cast<uint64_t>(sqlite3_column_int64(closer.stmt, 4)),
+                columnText(closer.stmt, 5),
+                columnText(closer.stmt, 6),
+                columnText(closer.stmt, 7),
+                columnText(closer.stmt, 8),
+                columnText(closer.stmt, 9),
+                columnText(closer.stmt, 10),
+                static_cast<uint64_t>(sqlite3_column_int64(closer.stmt, 11)),
+                columnText(closer.stmt, 12)
             };
             outAttachments[attRec.submissionId].push_back(std::move(attRec));
         }
@@ -5719,7 +5740,7 @@ namespace mayasaba
         {
             throw std::runtime_error(sqlite3_errmsg(db));
         }
-        sqlite3_finalize(stmt);
+        return true;
     }
 
     ContributionsPage Storage::ContributionsPaged(ContributionsQuery const& query)
@@ -5784,11 +5805,20 @@ namespace mayasaba
 
         // Fetch all attachments for this page in one batched query
         std::unordered_map<std::string, std::vector<AttachmentRecord>> attachmentsBySubmission;
-        FetchAttachmentsForSubmissions(db_, submissionIds, attachmentsBySubmission);
 
-        // Attach to contributions (they're already newest-first)
-        for (auto& c : contributions)
+        // Attach to contributions. SQL returns newest-first; reverse to
+        // oldest-first for presentation so the timeline reads chronologically
+        // top-to-bottom. oldestRowId is the row_id of the oldest item in the
+        // page (the first item after reversal) and serves as the keyset cursor
+        // for fetching even older messages.
+        bool attachmentsOk = true;
+        if (!FetchAttachmentsForSubmissions(db_, submissionIds, attachmentsBySubmission))
         {
+            attachmentsOk = false;
+        }
+        for (std::size_t i = contributions.size(); i-- > 0;)
+        {
+            auto& c = contributions[i];
             auto it = attachmentsBySubmission.find(c.submissionId);
             if (it != attachmentsBySubmission.end())
             {
@@ -5797,10 +5827,11 @@ namespace mayasaba
             page.items.push_back(std::move(c));
         }
 
-        // Determine if there are more older messages
-        if (page.items.size() == limit)
+        // oldestRowId must be the row_id of the oldest item in this page.
+        // We already walked newest-first, so track the last rowId seen.
+        // Determine if there are more older messages before this page's oldest.
+        if (page.items.size() == limit && !page.items.empty())
         {
-            // Check if there are more rows before the oldest we fetched
             std::string countSql = "SELECT 1 FROM contributions WHERE project_id = ?1 AND row_id < ?2 LIMIT 1;";
             Statement countStmt(db_, countSql.c_str());
             Bind(countStmt.value, 1, query.projectId);
@@ -5814,24 +5845,169 @@ namespace mayasaba
             Check(countRc, db_);
         }
 
+        if (!attachmentsOk)
+        {
+            page.errorMessage = "Attachment records could not be read for this page.";
+        }
+
         return page;
     }
 
-    // Legacy full-load kept for compatibility; NOT recommended for production use with large histories.
-    std::vector<Contribution> Storage::Contributions(std::string const& id)
-    {
-        ContributionsQuery query;
-        query.projectId = id;
-        query.limit = 10000; // hard cap to prevent unbounded load
-        ContributionsPage page = ContributionsPaged(query);
-        std::vector<Contribution> result;
-        result.reserve(page.items.size());
-        for (auto& c : page.items)
+    // Legacy full-load kept for compatibility; NOT recommended for production use
+        // with large histories. Pages through ContributionsPaged until complete so
+        // callers get every contribution rather than a silently truncated page.
+        std::vector<Contribution> Storage::Contributions(std::string const& id)
         {
-            result.push_back(std::move(c));
+            std::vector<Contribution> result;
+            std::int64_t beforeRowId = 0;
+            bool hasMore = true;
+            while (hasMore)
+            {
+                ContributionsQuery query;
+                query.projectId = id;
+                query.limit = 200;
+                query.beforeRowId = beforeRowId;
+                ContributionsPage page = ContributionsPaged(query);
+                if (!page.errorMessage.empty())
+                {
+                    break;
+                }
+                result.insert(result.begin(), std::make_move_iterator(page.items.begin()), std::make_move_iterator(page.items.end()));
+                hasMore = page.hasMore;
+                beforeRowId = page.oldestRowId;
+                if (!hasMore || page.items.empty())
+                {
+                    break;
+                }
+            }
+            return result;
         }
-        return result;
-    }
+
+    // Resolves the storage row identity of one saved contribution. Reads only;
+    // no transaction: the value is a cursor for a subsequent bounded read, so a
+    // racing save merely means the resolved window is built from the ordering
+    // that existed at that query's own time.
+        std::optional<std::int64_t> Storage::RowIdForSubmission(std::string const& projectId, std::string const& submissionId)
+        {
+            if (projectId.empty() || submissionId.empty()) return std::nullopt;
+            Statement q(db_, "SELECT row_id FROM contributions WHERE project_id=?1 AND submission_id=?2 LIMIT 1;");
+            Bind(q.value, 1, projectId);
+            Bind(q.value, 2, submissionId);
+            int rc = sqlite3_step(q.value);
+            if (rc == SQLITE_ROW)
+            {
+                return std::optional<std::int64_t>{sqlite3_column_int64(q.value, 0)};
+            }
+            Check(rc, db_);
+            return std::nullopt;
+        }
+
+    // Loads a bounded window centered on a row identity already resolved for the
+    // same project. The older half is fetched newest-first (rows <= center) and
+    // reversed, the same keyset discipline as ContributionsPaged; the newer half
+    // is fetched ascending (rows > center). The halves are disjoint by row_id, so
+    // the concatenation holds exactly one entry per row with no duplicates and no
+    // gap. The center row itself is always included, so the caller navigates by
+    // the exact submission id and finds it in the rebuilt timeline.
+        ContributionsPage Storage::ContributionsWindow(ContributionsWindowQuery const& query)
+        {
+            ContributionsPage page;
+            if (query.projectId.empty() || query.centerRowId <= 0 || query.beforeCount == 0)
+            {
+                page.errorMessage = "The history window request is not valid.";
+                return page;
+            }
+
+            std::int64_t oldestRowId = query.centerRowId;
+            std::vector<Contribution> older; // fetched newest-first; rows <= center
+            bool centerRowSeen = false;
+            {
+                Statement p(db_, "SELECT row_id,submission_id,body,created_at FROM contributions WHERE project_id=?1 AND row_id<=?2 ORDER BY row_id DESC LIMIT ?3;");
+                Bind(p.value, 1, query.projectId);
+                sqlite3_bind_int64(p.value, 2, query.centerRowId);
+                sqlite3_bind_int64(p.value, 3, static_cast<sqlite3_int64>(query.beforeCount));
+                int rc = SQLITE_OK;
+                while ((rc = sqlite3_step(p.value)) == SQLITE_ROW)
+                {
+                    std::int64_t rowId = sqlite3_column_int64(p.value, 0);
+                    if (rowId == query.centerRowId) centerRowSeen = true;
+                    older.push_back(Contribution{Text(p.value, 1), Text(p.value, 2), Text(p.value, 3)});
+                    oldestRowId = rowId; // rows walk down to the oldest included
+                }
+                Check(rc, db_);
+            }
+
+            // The center row must belong to this project; a foreign or vanished
+            // row identity is an explicit refusal, never an arbitrary window.
+            if (!centerRowSeen)
+            {
+                page.errorMessage = "That saved message is no longer part of this project's recorded history.";
+                return page;
+            }
+
+            std::vector<std::string> olderIds;
+            olderIds.reserve(older.size());
+            for (auto const& c : older) olderIds.push_back(c.submissionId);
+            std::unordered_map<std::string, std::vector<AttachmentRecord>> olderAtts;
+            bool attachmentsOk = FetchAttachmentsForSubmissions(db_, olderIds, olderAtts);
+            // Merge attachments while still newest-first, then reverse to ascending.
+            for (auto& c : older)
+            {
+                auto it = olderAtts.find(c.submissionId);
+                if (it != olderAtts.end()) c.attachments = std::move(it->second);
+            }
+            std::reverse(older.begin(), older.end());
+
+            std::vector<Contribution> newer; // ascending; rows > center
+            {
+                Statement p(db_, "SELECT row_id,submission_id,body,created_at FROM contributions WHERE project_id=?1 AND row_id>?2 ORDER BY row_id ASC LIMIT ?3;");
+                Bind(p.value, 1, query.projectId);
+                sqlite3_bind_int64(p.value, 2, query.centerRowId);
+                sqlite3_bind_int64(p.value, 3, static_cast<sqlite3_int64>(query.afterCount));
+                int rc = SQLITE_OK;
+                while ((rc = sqlite3_step(p.value)) == SQLITE_ROW)
+                {
+                    newer.push_back(Contribution{Text(p.value, 1), Text(p.value, 2), Text(p.value, 3)});
+                }
+                Check(rc, db_);
+            }
+
+            std::vector<std::string> newerIds;
+            newerIds.reserve(newer.size());
+            for (auto const& c : newer) newerIds.push_back(c.submissionId);
+            std::unordered_map<std::string, std::vector<AttachmentRecord>> newerAtts;
+            if (!FetchAttachmentsForSubmissions(db_, newerIds, newerAtts)) attachmentsOk = false;
+            for (auto& c : newer)
+            {
+                auto it = newerAtts.find(c.submissionId);
+                if (it != newerAtts.end()) c.attachments = std::move(it->second);
+            }
+
+            page.items = std::move(older);
+            for (auto& c : newer) page.items.push_back(std::move(c));
+
+            // hasMore reports whether even older rows exist, so a jumped-to window
+            // continues the ordinary older-history keyset cursor without a special case.
+            {
+                Statement p(db_, "SELECT 1 FROM contributions WHERE project_id=?1 AND row_id<?2 LIMIT 1;");
+                Bind(p.value, 1, query.projectId);
+                sqlite3_bind_int64(p.value, 2, oldestRowId);
+                int rc = sqlite3_step(p.value);
+                if (rc == SQLITE_ROW)
+                {
+                    page.hasMore = true;
+                    page.oldestRowId = oldestRowId;
+                }
+                Check(rc, db_);
+            }
+
+            if (!attachmentsOk)
+            {
+                page.errorMessage = "Attachment records could not be read for this history window.";
+            }
+
+            return page;
+        }
 
     MessageSearchResult Storage::SearchUserMessages(MessageSearchQuery const& query)
     {

@@ -140,8 +140,10 @@ namespace mayasaba
     };
 
     // Bounded history paging for scalable Chat restoration.
-    // Keyset pagination uses row_id as the authoritative monotonic continuation token.
-    // The page is returned newest-first to match the Chat timeline order.
+    // Keyset pagination uses row_id alone as the authoritative monotonic
+    // continuation token (row_id is unique and strictly increasing, so it is a
+    // complete cursor by itself). Pages are returned oldest-first, in timeline
+    // presentation order.
     struct ContributionsQuery
     {
         std::string projectId;
@@ -151,10 +153,22 @@ namespace mayasaba
 
     struct ContributionsPage
     {
-        std::vector<Contribution> items; // newest first
+        std::vector<Contribution> items; // oldest-first, matching timeline presentation
         bool hasMore{false};
         std::int64_t oldestRowId{0}; // continuation token for next older page
         std::string errorMessage;
+    };
+
+    // A bounded window of history centered on a row identity, fetched when a
+    // saved-message search result points at a message the current page does not
+    // hold. The window is small (tens of items), so jumping to an old message
+    // never loads the whole history between it and the newest page.
+    struct ContributionsWindowQuery
+    {
+        std::string projectId;
+        std::int64_t centerRowId{0};
+        size_t beforeCount{25}; // messages at or older than centerRowId, inclusive
+        size_t afterCount{25};  // messages newer than centerRowId, in ascending order
     };
 
     // ------------------------------------------------------------------
@@ -357,6 +371,17 @@ namespace mayasaba
         SaveDisposition SaveContribution(std::string const& projectId, std::string const& submissionId, std::string const& body, std::vector<AttachmentRecord> const& attachments, SaveContributionDetail& detail);
         ContributionsPage ContributionsPaged(ContributionsQuery const& query);
         std::vector<Contribution> Contributions(std::string const& projectId); // legacy full-load, kept for compatibility
+        // Resolves the storage row identity of one saved contribution inside a
+        // project, so a search result whose page is not currently loaded can be
+        // located and a bounded window containing it fetched. std::nullopt means
+        // "no such contribution in this project" — an exact negative, never a guess.
+        std::optional<std::int64_t> RowIdForSubmission(std::string const& projectId, std::string const& submissionId);
+        // Loads a bounded window of history centered on a row identity. The items
+        // are returned oldest-first like ContributionsPaged, with hasMore and
+        // oldestRowId continuing the same keyset cursor semantics, so ordinary
+        // older-history paging works from a jumped-to window without special cases.
+        // An unknown or foreign centerRowId yields an explicit errorMessage.
+        ContributionsPage ContributionsWindow(ContributionsWindowQuery const& query);
         MessageSearchResult SearchUserMessages(MessageSearchQuery const& query);
         std::optional<std::string> LastBoundProject();
         std::filesystem::path const& FilePath() const noexcept { return file_; }

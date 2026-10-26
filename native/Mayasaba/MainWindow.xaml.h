@@ -195,6 +195,15 @@ namespace winrt::Mayasaba::implementation
         winrt::fire_and_forget ExecuteSearchAsync(mayasaba::SearchPageRequest req);
         void RenderSearchResults(bool isAppend);
         void NavigateToMessage(std::string const& submissionId);
+        // Reveals one message already realized in the timeline: bring into view,
+        // keyboard focus and a timed elevation highlight. The navigation coroutine
+        // calls this after a windowed history load as well.
+        void RevealMessageAtIndex(int32_t index);
+        // Search-navigation into history the current page does not hold: resolves
+        // the submission's storage row identity, loads one bounded window centered
+        // on it, rebuilds the timeline from that window, and then reveals it. Loads
+        // at most one; superseded or foreign results are refused with a notice.
+        winrt::fire_and_forget RevealMessageFromHistory(std::string submissionId, std::string projectId, uint64_t gen);
 
         std::optional<mayasaba::SelectionRequest> collisionRequest_, createRequest_;
         std::string parentIdentity_;

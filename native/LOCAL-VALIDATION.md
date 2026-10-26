@@ -4738,3 +4738,118 @@ Physical object identity verification in `RecordVerifiedBackup` was previously s
   - `native/tests/storage_tests.vcxproj`: `05e4201ba87585f19eccc81a38f5d0dc8973ce8e9b26d19442bec5cbb96b9822`
 
 
+## 2026-10-26 - F4-PAGING-CORRECTION: bounded history paging correctness hardening (UI-01 review)
+
+A source review of commit `154359e8dfe1ee151ba29af4c875be1d7ddc5d91` found four P0/P1
+correctness defects in the first paging slice. All were corrected in source, and the
+rest of the review's findings were either implemented or recorded with their exact
+status below. A successful Release build alone is not acceptance: the verdicts below
+name the artifact that produced each observation.
+
+### Confirmed source defects corrected
+
+- **P0 reversed chronology.** `ContributionsPaged` fetched newest-first and the
+  window's `LoadChatAsync` copied that order straight into the timeline, so restored
+  Chat read newest-at-top. Every paged array is now reversed into oldest-first
+  presentation order before it reaches the timeline (`Storage.cpp`), and the same
+  reversal applies to `ContributionsWindow`'s older half and to the legacy
+  `Contributions` walk. Regression group 50 asserts the exact sequence across three
+  page boundaries (125 messages, spanning rows ordered "Message 76".."Message 125",
+  then "Message 26".."Message 75", then "Message 1".."Message 25", all 125
+  identities unique).
+- **P0 prepend corrupts incremental rendering.** `LoadOlderHistoryAsync` prepended
+  to the timeline and `historyCache_` without advancing `renderedCount_`, so the
+  next `RenderHistory` could re-append the same older rows. The load now advances
+  `renderedCount_` by the prepended size on the success path only.
+- **P0 new message may not appear.** After a confirmed save, `ShowChat` →
+  `LoadChatAsync` reloaded the newest page, but `RenderHistory` compared only the
+  project and cache size, so a same-count page with different identities could skip
+  the rebuild. Any reload that replaces the whole cache now clears `renderedProject_`
+  (and `renderedConditionKind_`) to force the identity-correct full rebuild.
+- **P1 stale-load state.** Generation mismatch returned without clearing
+  `historyLoading_`, wedging later loads, and the operation read `activeProject_` and
+  `historyOldestRowId_` after the thread switch. The coroutine now captures the
+  project id, cursor and generation before `co_await`, revalidates against the
+  captured generation, and clears `historyLoading_` on every exit path (window
+  closed, superseded, project changed, error, success).
+- **P1 prepend invalidated all realized items.** `TimelineRenderer::PrependOlder`
+  cleared the observable collection and re-appended every token. It now inserts the
+  new entries at the front, generates fresh tokens for only the new entries, keeps
+  every existing token (and thus realized element identity) unchanged, and rebuilds
+  only the token→index map.
+- **P1 batched attachment fetch failure was silent.** `FetchAttachmentsForSubmissions`
+  returned `void` and dropped prepare failures. It now returns a tri-reportable
+  `bool` (prepare failure ⇒ `false`, which `ContributionsPaged`/`ContributionsWindow`
+  convert into an explicit page `errorMessage`; bind and step failures throw), with
+  RAII finalization (`StatementCloser`) so a stepping throw cannot leak the
+  statement. Duplicate invocation inside `ContributionsPaged` was removed.
+- **P1 legacy cap.** `Contributions()` requested 10,000 items but the paged clamp
+  returned exactly one 200-item page, silently. It is now a deliberate full load
+  that walks every 200-item page and prepends each page's blocks so the composite
+  result is oldest-first. Group 51 asserts 250 messages cross two pages.
+- **P1 search into unloaded history.** `NavigateToMessage` answered "not present in
+  the current timeline view" for any result outside the loaded page. It now resolves
+  the submission's storage row identity (`RowIdForSubmission`, exact negative for
+  foreign identities) and loads one bounded window centered on that row
+  (`ContributionsWindow`, `beforeCount` includes the center row), then navigates by
+  the exact submission identity. `ContributionsWindow` returns the same keyset
+  cursor semantics as `ContributionsPaged`, so ordinary upward paging continues from
+  a jumped-to window without a special case. The window is loaded through the
+  background storage lane; project switches between click and load are refused.
+
+### Controlling mutation (group 54)
+
+Group 54 "Row identity resolution and bounded centered window" was exercised with a
+controlling mutation: the newer-half predicate was changed from `row_id>?2` to
+`row_id>=?2`, which duplicates the center row into the window. The mutated build
+failed at `window.items.back().body == "Nav message 26"` — the assertion that encodes
+the defect — and the restored source (SHA-256 verified byte-identical) was rebuilt
+with `/t:Rebuild` and re-run green. This proves the assertion discriminates the
+duplication defect. Note: `/t:Build` after restoring the source left the mutant
+object in place and failed identically; only `/t:Rebuild` produced the restored
+behavior (see §17.9 of AGENTS.md).
+
+### Executed results
+
+- `native/tests/bin/storage_tests.exe` SHA-256: `d6ce39a6d5cb349318987623d02c0bc8c1cd8097112c98528ddc4f938b8030bd`
+  **PASS: 112 of 112 executed native regression groups**, exit 0. Groups 50-54 are
+  new in this milestone (three-page keyset boundary sequence, legacy full-load
+  across pages, invalid query refusal, stable identities across boundaries,
+  window/resolver semantics including the 1,000-message search-jump case).
+- `native/Mayasaba/bin/x64/Release/Mayasaba.exe` SHA-256: `7a53f9bdd542ebc99b129c853565930c0a52c1370e76c9db5191d81b39e51b71`
+- `native/Mayasaba/bin/x64/Release/MainWindow.xbf` SHA-256: `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a`
+  (unchanged from the previous build: no XAML was modified by this correction).
+- Application build Release x64 v145: exit 0. Test build Release x64 v143: exit 0.
+- Native UI acceptance run (evidence dir `native/tests/evidence/f4-correction-run`,
+  store `f4-correction-run/store.db` from the fixture backup, artifact identity JSON
+  recorded): **21 criteria | Passed 12 | Inconclusive 0 | Failed 0 | Not run 9** —
+  the identical executed set and outcomes as the pre-correction baseline run. The 9
+  NOT_RUN criteria are the pre-existing Phase 9 Action Center / OLE drop / seeded
+  attachment / CLI-readiness / performance blocks, none of which this correction
+  touches. Search-navigation parts of Phase 3 (navigate to a loaded result, timed
+  highlight at `highlighted_14dp`, reset to `resting_8dp`, query-change reset,
+  truthful SQL-failure display) all passed on the corrected binary.
+- UI-thread pump: 1047 samples, p50 0.11 ms, p95 1.34 ms, max 20.55 ms; zero samples
+  over 250 ms outside a harness UIA walk.
+
+### Sources
+
+- `native/Mayasaba/Storage.cpp`: `9a05542a19820a329145f53fb13803c806c9e4a780f13fb3b8afea93bb4e02ca`
+- `native/Mayasaba/Storage.h`: `be746fbdf9a991d297ca395b5def5d51ed40cda9834d488b819fd01071952bc3`
+- `native/Mayasaba/MainWindow.xaml.cpp`: `6a815314f04773c5109ec12ffe1edaa184f6da38b0f6aa9fe578cf1f419d4f57`
+- `native/Mayasaba/Timeline.cpp`: `18dde9d066132af86e61934b75524a769e694fc62209b2ea38a44ebe98af1ffb`
+- `native/tests/storage_tests.cpp`: `0eeabc51dc55faf154f62a829f8d2d363ba1f9abbaca5f7ae3f26935e600376d`
+
+### What remains unverified (named explicitly)
+
+- **Scroll-anchor preservation of prepend** (review sequence step 3's verification
+  half): the structural fix — stable tokens, `InsertAt` instead of clear-and-re-append
+  — is in the product and the collection model no longer invalidates realized items,
+  but no harness leg measures "same content at the same reading offset" during a
+  prepend while the reader is mid-scroll. Unobserved; criteria remain
+  not-yet-verified rather than passed.
+- **"Save message 51 renders once" and "prepend during a pending load" UI legs**: the
+  rebuild-forcing and bookkeeping are implemented and the source paths were reviewed,
+  but the UI harness does not compose these scenarios. Unobserved natively.
+- The 9 NOT_RUN acceptance criteria from before this milestone remain NOT_RUN; this
+  correction neither claims nor defers them.

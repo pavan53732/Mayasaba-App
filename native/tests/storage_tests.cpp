@@ -8241,6 +8241,266 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // ------------------------------------------------------------------
+        // F4-PAGING: bounded Chat history paging (UI-01 fix).
+        // ------------------------------------------------------------------
+
+        // 50. Paged retrieval returns messages in chronological (oldest-first)
+        // order within each page, and keyset cursors work across page boundaries.
+        {
+            CASES_BEGIN("50. Paged retrieval returns oldest-first entries with valid keyset cursor");
+            auto const dbFile = folder / "paging_order.db";
+            mayasaba::Storage store(dbFile);
+            auto proj = store.BindProject(mayasaba::NewUuid(), "Paging Project", "C:/Projects/Paging", "id_paging");
+
+            auto saveHelper = [&](std::string const& id, std::string const& body) {
+                store.StageSubmission(proj, id, body);
+                auto disp = store.SaveContribution(proj, id, body);
+                EXPECT(disp == mayasaba::SaveDisposition::Saved);
+            };
+
+            // Save 125 messages with ordered bodies so we can verify sequence.
+            for (int i = 1; i <= 125; ++i)
+            {
+                saveHelper(mayasaba::NewUuid(), "Message " + std::to_string(i));
+            }
+
+            // Page 1: newest 50
+            mayasaba::ContributionsQuery q1;
+            q1.projectId = proj;
+            q1.limit = 50;
+            q1.beforeRowId = 0;
+            auto page1 = store.ContributionsPaged(q1);
+            EXPECT(page1.errorMessage.empty());
+            EXPECT(page1.items.size() == 50);
+            EXPECT(page1.hasMore);
+            EXPECT(page1.oldestRowId != 0);
+
+            // Page 1 should be oldest-first: Message 76 at position 0, Message 125 at position 49
+            EXPECT(page1.items[0].body == "Message 76");
+            EXPECT(page1.items[49].body == "Message 125");
+
+            // Page 2: next 50 older
+            mayasaba::ContributionsQuery q2;
+            q2.projectId = proj;
+            q2.limit = 50;
+            q2.beforeRowId = page1.oldestRowId;
+            auto page2 = store.ContributionsPaged(q2);
+            EXPECT(page2.errorMessage.empty());
+            EXPECT(page2.items.size() == 50);
+            EXPECT(page2.hasMore);
+
+            // Page 2: Message 26 at position 0, Message 75 at position 49
+            EXPECT(page2.items[0].body == "Message 26");
+            EXPECT(page2.items[49].body == "Message 75");
+
+            // Page 3: final 25 older
+            mayasaba::ContributionsQuery q3;
+            q3.projectId = proj;
+            q3.limit = 50;
+            q3.beforeRowId = page2.oldestRowId;
+            auto page3 = store.ContributionsPaged(q3);
+            EXPECT(page3.errorMessage.empty());
+            EXPECT(page3.items.size() == 25);
+            EXPECT(!page3.hasMore);
+
+            // Page 3: Message 1 at position 0, Message 25 at position 24
+            EXPECT(page3.items[0].body == "Message 1");
+            EXPECT(page3.items[24].body == "Message 25");
+
+            // All 125 unique identities across three pages
+            std::set<std::string> allIds;
+            for (auto const& c : page1.items) allIds.insert(c.submissionId);
+            for (auto const& c : page2.items) allIds.insert(c.submissionId);
+            for (auto const& c : page3.items) allIds.insert(c.submissionId);
+            EXPECT(allIds.size() == 125);
+            CASES_END();
+        }
+
+        // 51. Legacy Contributions() pages through all results, not just one page.
+        {
+            CASES_BEGIN("51. Legacy Contributions() returns all messages beyond one page");
+            auto const dbFile = folder / "legacy_cap.db";
+            mayasaba::Storage store(dbFile);
+            auto proj = store.BindProject(mayasaba::NewUuid(), "Legacy Cap Project", "C:/Projects/Legacy", "id_legacy");
+
+            // 250 messages with the same body - each StageSubmission/SaveContribution pair
+            // clears its own pending submission before the next iteration begins.
+            for (int i = 1; i <= 250; ++i)
+            {
+                auto id = mayasaba::NewUuid();
+                store.StageSubmission(proj, id, "Legacy message");
+                auto disp = store.SaveContribution(proj, id, "Legacy message");
+                EXPECT(disp == mayasaba::SaveDisposition::Saved);
+            }
+
+            auto all = store.Contributions(proj);
+            EXPECT(all.size() == 250);
+            CASES_END();
+        }
+
+        // 52. Invalid query returns an error instead of empty results.
+        {
+            CASES_BEGIN("52. Invalid paged query returns explicit error");
+            auto const dbFile = folder / "invalid_query.db";
+            mayasaba::Storage store(dbFile);
+
+            mayasaba::ContributionsQuery q;
+            q.projectId = "";
+            q.limit = 50;
+            auto page = store.ContributionsPaged(q);
+            EXPECT(!page.errorMessage.empty());
+            EXPECT(page.items.empty());
+            CASES_END();
+        }
+
+        // 53. Paged retrieval returns stable identities across page boundaries.
+        {
+            CASES_BEGIN("53. Paged retrieval returns stable identities across page boundaries");
+            auto const dbFile = folder / "paging_ids.db";
+            mayasaba::Storage store(dbFile);
+            auto proj = store.BindProject(mayasaba::NewUuid(), "Paging IDs Project", "C:/Projects/PagingIds", "id_pagingids");
+
+            for (int i = 1; i <= 75; ++i)
+            {
+                auto id = mayasaba::NewUuid();
+                store.StageSubmission(proj, id, "Message " + std::to_string(i));
+                auto disp = store.SaveContribution(proj, id, "Message " + std::to_string(i));
+                EXPECT(disp == mayasaba::SaveDisposition::Saved);
+            }
+
+            // Page 1: 50 newest (messages 26-75), oldest-first
+            mayasaba::ContributionsQuery q1;
+            q1.projectId = proj;
+            q1.limit = 50;
+            q1.beforeRowId = 0;
+            auto page1 = store.ContributionsPaged(q1);
+            EXPECT(page1.errorMessage.empty());
+            EXPECT(page1.items.size() == 50);
+            EXPECT(page1.hasMore);
+            EXPECT(page1.items[0].body == "Message 26");
+            EXPECT(page1.items[49].body == "Message 75");
+
+            // Page 2: 25 older (messages 1-25)
+            mayasaba::ContributionsQuery q2;
+            q2.projectId = proj;
+            q2.limit = 50;
+            q2.beforeRowId = page1.oldestRowId;
+            auto page2 = store.ContributionsPaged(q2);
+            EXPECT(page2.errorMessage.empty());
+            EXPECT(page2.items.size() == 25);
+            EXPECT(!page2.hasMore);
+            EXPECT(page2.items[0].body == "Message 1");
+            EXPECT(page2.items[24].body == "Message 25");
+
+            // All 75 unique identities
+            std::set<std::string> allIds;
+            for (auto const& c : page1.items) allIds.insert(c.submissionId);
+            for (auto const& c : page2.items) allIds.insert(c.submissionId);
+            EXPECT(allIds.size() == 75);
+            CASES_END();
+        }
+
+        // 54. Row identity resolution and bounded history window for search
+        // navigation into unloaded pages (review finding: windowed jump).
+        {
+            CASES_BEGIN("54. Row identity resolution and bounded centered window");
+            auto const dbFile = folder / "window_nav.db";
+            mayasaba::Storage store(dbFile);
+            auto proj = store.BindProject(mayasaba::NewUuid(), "Window Nav Project", "C:/Projects/WindowNav", "id_windownav");
+
+            // 1,000 messages; the message the search result points to is the first
+            // (oldest) one. Row ids are assigned in insertion order.
+            std::vector<std::string> ids;
+            for (int i = 1; i <= 1000; ++i)
+            {
+                auto id = mayasaba::NewUuid();
+                ids.push_back(id);
+                store.StageSubmission(proj, id, "Nav message " + std::to_string(i));
+                auto disp = store.SaveContribution(proj, id, "Nav message " + std::to_string(i));
+                EXPECT(disp == mayasaba::SaveDisposition::Saved);
+            }
+
+            // The exact identity resolves to a row; row_id increases with insertion.
+            auto firstId = ids.front();
+            auto firstRow = store.RowIdForSubmission(proj, firstId);
+            EXPECT(firstRow.has_value());
+            EXPECT(*firstRow > 0);
+
+            // A foreign submission identity resolves to nothing — an exact negative.
+            EXPECT(!store.RowIdForSubmission(proj, mayasaba::NewUuid()).has_value());
+            EXPECT(!store.RowIdForSubmission(proj, "").has_value());
+
+            // Window centered on the oldest row: at most 25 older ⇒ only 1 item in the
+            // older half (the center itself), 25 newer items after it.
+            mayasaba::ContributionsWindowQuery win;
+            win.projectId = proj;
+            win.centerRowId = *firstRow;
+            win.beforeCount = 25;
+            win.afterCount = 25;
+            auto window = store.ContributionsWindow(win);
+            EXPECT(window.errorMessage.empty());
+            EXPECT(window.items.size() == 26);
+            EXPECT(window.items.front().submissionId == firstId);
+            EXPECT(window.items.front().body == "Nav message 1");
+            EXPECT(window.items.back().body == "Nav message 26");
+
+            // Ordering inside the window is ascending and contiguous.
+            EXPECT(window.items[12].body == "Nav message 13");
+            EXPECT(window.items[25].body == "Nav message 26");
+
+            // The window is at the oldest boundary: no more older messages.
+            EXPECT(!window.hasMore);
+            EXPECT(window.oldestRowId == 0);
+
+            // A window centered mid-history continues the ordinary keyset cursor:
+            // hasMore is true and oldestRowId names the oldest included row.
+            auto midRow = store.RowIdForSubmission(proj, ids[499]);
+            EXPECT(midRow.has_value());
+            mayasaba::ContributionsWindowQuery mid;
+            mid.projectId = proj;
+            mid.centerRowId = *midRow;
+            mid.beforeCount = 25;
+            mid.afterCount = 25;
+            auto midWindow = store.ContributionsWindow(mid);
+            EXPECT(midWindow.errorMessage.empty());
+            // beforeCount counts the center row itself: rows 476..500 (25 items,
+            // center at index 24) plus 25 newer items = 50 in total.
+            EXPECT(midWindow.items.size() == 50);
+            EXPECT(midWindow.items[24].submissionId == ids[499]); // center in the older half's newest slot
+            EXPECT(midWindow.items[0].submissionId == ids[475]); // oldest included
+            EXPECT(midWindow.items[49].body == "Nav message 525");
+            EXPECT(midWindow.hasMore);
+            // The older half holds rows midRow-24..midRow (25 rows, center included).
+            EXPECT(midWindow.oldestRowId == *midRow - 24);
+
+            // Continued paging from the window's cursor reaches unique older rows.
+            mayasaba::ContributionsQuery cont;
+            cont.projectId = proj;
+            cont.limit = 50;
+            cont.beforeRowId = midWindow.oldestRowId;
+            auto contPage = store.ContributionsPaged(cont);
+            EXPECT(contPage.errorMessage.empty());
+            EXPECT(contPage.items.size() == 50);
+            std::set<std::string> seenIds;
+            for (auto const& c : midWindow.items)
+            {
+                seenIds.insert(c.submissionId);
+            }
+            for (auto const& c : contPage.items)
+            {
+                EXPECT(seenIds.find(c.submissionId) == seenIds.end());
+            }
+
+            // An invalid center refuses explicitly.
+            mayasaba::ContributionsWindowQuery bad;
+            bad.projectId = proj;
+            bad.centerRowId = 0;
+            bad.beforeCount = 25;
+            auto badWin = store.ContributionsWindow(bad);
+            EXPECT(!badWin.errorMessage.empty());
+            CASES_END();
+        }
 
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
