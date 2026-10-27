@@ -130,6 +130,9 @@ namespace winrt::Mayasaba::implementation
                     double const extent = scroller.ScrollableHeight();
                     if (extent > 0.0 && (extent - scroller.VerticalOffset()) > 24.0)
                     {
+                        self->UiTraceEvent("layout-stl",
+                            "off=" + std::to_string(scroller.VerticalOffset()) +
+                            " sh=" + std::to_string(extent));
                         self->pendingScrollToEnd_ = true;
                         self->TryScrollToEnd();
                     }
@@ -147,6 +150,10 @@ namespace winrt::Mayasaba::implementation
             {
                 if (self->timeline_ && args.Index() >= static_cast<int>(self->timeline_->Count()) - 1)
                 {
+                    self->UiTraceEvent("elem-prep",
+                        "index=" + std::to_string(args.Index()) +
+                        " count=" + std::to_string(self->timeline_->Count()) +
+                        " fol=" + std::to_string(self->following_ ? 1 : 0));
                     if (self->following_)
                     {
                         self->ScrollToEnd();
@@ -256,6 +263,7 @@ namespace winrt::Mayasaba::implementation
         InitializeStoreAsync();
         InitPerfMeasurement();
         InitLayoutTrace();
+        InitUiTrace();
     }
 
     MainWindow::~MainWindow()
@@ -768,6 +776,7 @@ namespace winrt::Mayasaba::implementation
     {
         auto keepAlive = get_strong();
         auto uiQueue = DispatcherQueue();
+        UiTraceEvent("loadchat-begin", "gen=" + std::to_string(gen));
         std::optional<mayasaba::ProjectRecord> project;
         std::optional<mayasaba::PendingSubmission> pending;
         mayasaba::ContributionsPage historyPage;
@@ -785,7 +794,17 @@ namespace winrt::Mayasaba::implementation
         catch (std::exception const& e) { error = e.what(); }
         if (!co_await resume_foreground(uiQueue)) co_return;
         if (windowClosed_ || selectorGeneration_ != gen) co_return;
-        if (!error.empty() || !project) { ShowNotice(L"Chat restoration blocked: " + Utf16(error), true); co_return; }
+        if (!error.empty() || !project) { UiTraceEvent("loadchat-abort", "errlen=" + std::to_string(error.size())); ShowNotice(L"Chat restoration blocked: " + Utf16(error), true); co_return; }
+        if (!historyPage.errorMessage.empty())
+        {
+            // A page whose attachment batch could not be read is incomplete:
+            // installing it would show attachment-bearing contributions as
+            // attachment-free. Fail closed; the newest page is not adopted.
+            UiTraceEvent("loadchat-refuse", "errlen=" + std::to_string(historyPage.errorMessage.size()));
+            ShowNotice(L"Chat history could not be read completely: " + Utf16(historyPage.errorMessage) +
+                L" History was not installed; select the project again to retry.", true);
+            co_return;
+        }
         activeProject_=id;
         projectClosed_=project->closed;
         actionCenterPresenter_.BindProject(id, selectorGeneration_.load());
@@ -808,6 +827,12 @@ namespace winrt::Mayasaba::implementation
 
         historyOldestRowId_ = historyPage.oldestRowId;
         historyHasMore_ = historyPage.hasMore;
+        UiTraceEvent("loadchat-adopt", "items=" + std::to_string(historyPage.items.size()) +
+            " oldest=" + std::to_string(historyPage.oldestRowId) +
+            " more=" + std::to_string(historyPage.hasMore ? 1 : 0));
+        // The newest-page load is authoritative for "latest": the whole page ends
+        // at the project's newest saved contribution.
+        historyIsNewestWindow_ = true;
 
         draftTimer_.Stop();
         motion_.CancelAll();
@@ -882,6 +907,21 @@ namespace winrt::Mayasaba::implementation
     {
         if (historyLoading_ || !historyHasMore_ || historyOldestRowId_ == 0 || activeProject_.empty() || !storage_)
         {
+            UiTraceEvent("older-decline",
+                std::string("why=") +
+                (historyLoading_ ? "loading" :
+                 !historyHasMore_ ? "hasMore" :
+                 historyOldestRowId_ == 0 ? "oldest" :
+                 activeProject_.empty() ? "noProject" : "noStore"));
+            co_return;
+        }
+        if (pendingScrollToEnd_ || scrollingToEnd_)
+        {
+            // A scroll-to-end pass is owed or running: the reader is being
+            // driven to the bottom, so the top read that routed here cannot
+            // be a settled user intention (rebuild transients report one
+            // such sample). Decline instead of racing the pass.
+            UiTraceEvent("older-decline", "why=scrollToEnd");
             co_return;
         }
 
@@ -892,6 +932,26 @@ namespace winrt::Mayasaba::implementation
         std::string const projectId = activeProject_;
         std::int64_t const beforeRowId = historyOldestRowId_;
         uint64_t const genAtStart = selectorGeneration_.load();
+        // Reading-anchor inputs, captured on the UI thread before the load: the
+        // scroller's offset and extent as the reader left them. Inserting content
+        // above the viewport does not move content by itself — the offset stays at
+        // its top value and WinUI shows the freshly inserted rows — so after the
+        // prepend the offset must be re-advanced by the extent the insert adds,
+        // measured from a settled layout pass.
+        double anchorOffset = 0.0;
+        double anchorExtent = 0.0;
+        try
+        {
+            auto const scroller = HistoryScroller();
+            anchorOffset = scroller.VerticalOffset();
+            anchorExtent = scroller.ExtentHeight();
+        }
+        catch (...) {}
+        UiTraceEvent("older-capture",
+            "before=" + std::to_string(beforeRowId) +
+            " off=" + std::to_string(anchorOffset) +
+            " ext=" + std::to_string(anchorExtent) +
+            " gen=" + std::to_string(gen));
 
         // Increment sequence so only the latest load applies its results
         uint64_t const loadSeq = ++historyLoadSeq_;
@@ -924,10 +984,24 @@ namespace winrt::Mayasaba::implementation
         }
         if (!error.empty())
         {
+            UiTraceEvent("older-error", "errlen=" + std::to_string(error.size()));
             ShowNotice(L"Older history load failed: " + Utf16(error), true);
             historyLoading_ = false;
             co_return;
         }
+        if (!olderPage.errorMessage.empty())
+        {
+            // A page whose attachment batch failed to read is incomplete: adopting
+            // it would present attachment-bearing contributions as attachment-free.
+            // Fail closed and leave the already-loaded page authoritative.
+            UiTraceEvent("older-refuse", "errlen=" + std::to_string(olderPage.errorMessage.size()));
+            ShowNotice(L"Older history could not be read completely: " + Utf16(olderPage.errorMessage) + L" The loaded history is unchanged.", true);
+            historyLoading_ = false;
+            co_return;
+        }
+        UiTraceEvent("older-page", "items=" + std::to_string(olderPage.items.size()) +
+            " oldest=" + std::to_string(olderPage.oldestRowId) +
+            " more=" + std::to_string(olderPage.hasMore ? 1 : 0));
 
         // Storage now returns oldest-first, matching timeline presentation order.
         std::vector<mayasaba::ui::TimelineEntry> olderEntries;
@@ -937,9 +1011,20 @@ namespace winrt::Mayasaba::implementation
             olderEntries.push_back(ContributionEntry(item));
         }
 
-        // Prepend to timeline - preserves existing item identities and reading anchor
+        // Prepend while keeping the reader on the same content. PrependOlder
+        // keeps every existing token, so realized elements stay the same items;
+        // the anchor row (the row that was first before the prepend) then sits
+        // at index olderEntries.size(), and ITS slot in the new content names
+        // how far the content above the viewport grew. The scroll extent does
+        // NOT: ExtentHeight() counts the inserted rows at the panel's
+        // unrealized estimate (f4r5-run11/12 measured 81.12 px/row in the
+        // extent against ~89 px/row in the positioning model), so the old
+        // extent-based target landed the reader ~4 rows short of the anchor
+        // (measured topmost 68 instead of 72; criterion 23 FAIL, run11).
         if (!olderEntries.empty())
         {
+            UiTraceEvent("older-prepend", "items=" + std::to_string(olderEntries.size()));
+            int32_t const anchorIndex = static_cast<int32_t>(olderEntries.size());
             timeline_->PrependOlder(std::move(olderEntries));
             historyCache_.insert(historyCache_.begin(),
                 std::make_move_iterator(olderPage.items.begin()),
@@ -947,9 +1032,331 @@ namespace winrt::Mayasaba::implementation
             historyOldestRowId_ = olderPage.oldestRowId;
             historyHasMore_ = olderPage.hasMore;
             renderedCount_ += olderPage.items.size();
+            // Invalidate the published top row the instant the timeline mutates:
+            // the pre-prepend value names a row that is about to move, and a
+            // stale read would let criterion 23's oracle pass on a value this
+            // prepend has already displaced. It stays `pending` until the
+            // reconcile publishes the post-settle row.
+            PublishTopVisibleRow(L"pending");
+
+            try
+            {
+                auto const scroller = HistoryScroller();
+                scroller.UpdateLayout();
+                // Measure the growth from the anchor row's slot, not the
+                // extent (see the comment above this block). Realizing the
+                // anchor row and reading its position in the repeater's
+                // content space gives the true distance the prepend pushed
+                // the anchor content down.
+                double y1 = -1.0;
+                std::string instrument = "extent-fallback";
+                // r0 is the anchor card's top relative to the SCROLLER viewport
+                // (physical frame, same-process transform). y1's frame is the
+                // open question between two readings of the settled state; r is
+                // the frame the reader actually experiences: ~anchorOffset
+                // means the anchor card contains the viewport top exactly as
+                // the reader left it, a large positive value means the anchor
+                // sits that far below the top (content short), and a value near
+                // -anchorOffset means the measured container is not the
+                // rendered one. Recorded in the compensate/recomp traces.
+                double r0 = -1.0;
+                try
+                {
+                    auto anchorElement = HistoryRepeater().GetOrCreateElement(anchorIndex);
+                    HistoryRepeater().UpdateLayout();
+                    if (anchorElement)
+                    {
+                        y1 = anchorElement.TransformToVisual(HistoryRepeater())
+                            .TransformBounds(winrt::Windows::Foundation::Rect{0, 0, 0, 0}).Y;
+                        r0 = anchorElement.TransformToVisual(scroller)
+                            .TransformBounds(winrt::Windows::Foundation::Rect{0, 0, 0, 0}).Y;
+                    }
+                }
+                catch (...) {}
+                // anchorOffset is the reader's within-row position at capture:
+                // the older-trigger only fires inside the at-top zone, so the
+                // anchor row spans the content top and the reader was
+                // anchorOffset px into it.
+                double target = (y1 > 0.0) ? y1 + anchorOffset : -1.0;
+                if (target > 0.0)
+                {
+                    instrument = "anchor-row";
+                }
+                else
+                {
+                    // The row measure failed: fall back to the extent so the
+                    // reader still gets the old best-effort compensation. The
+                    // reconcile re-measures the row on each pass and corrects
+                    // if the instrument recovers.
+                    double const extentAfter = scroller.ExtentHeight();
+                    double const grown = extentAfter - anchorExtent;
+                    if (grown > 0.0) target = anchorOffset + grown;
+                    UiTraceEvent("anchor-measure-fail",
+                        "extAfter=" + std::to_string(extentAfter) +
+                        " grown=" + std::to_string(grown));
+                }
+                // Disable the animation: a jump greater than the viewport must
+                // not glide through the prepended content.
+                if (target > 0.0)
+                {
+                    if (pendingScrollToEnd_)
+                    {
+                        // A scroll-to-end pass is still owed: the reader is
+                        // being driven to the bottom, so restoring the reader
+                        // to its pre-prepend position would fight that pass
+                        // and land the view somewhere in between (measured,
+                        // f4r5-run4: compensate target=5044.8 landed after
+                        // stl-landed off=10228.0). The pass owns the view.
+                        UiTraceEvent("older-compensate-skip",
+                            "target=" + std::to_string(target) +
+                            " pendST=1");
+                    }
+                    else
+                    {
+                        UiTraceEvent("older-compensate",
+                            "instrument=" + instrument +
+                            " y1=" + std::to_string(y1) +
+                            " r=" + std::to_string(r0) +
+                            " off=" + std::to_string(anchorOffset) +
+                            " target=" + std::to_string(target));
+                        scroller.ChangeView(nullptr, target, nullptr, true);
+                        // The immediate ChangeView is the first positioning
+                        // act, not the final one: the panel refines the
+                        // inserted rows' slot heights as layout settles, so
+                        // the bounded reconcile re-measures the anchor row
+                        // and re-applies the target while the view is ours.
+                        ReconcileHistoryAnchorAsync(gen, loadSeq, anchorOffset, anchorIndex, target);
+                    }
+                }
+                else
+                {
+                    UiTraceEvent("older-nogrow",
+                        "y1=" + std::to_string(y1) +
+                        " target=" + std::to_string(target));
+                }
+            }
+            catch (...) {}
+        }
+        else
+        {
+            UiTraceEvent("older-empty", "");
         }
 
         historyLoading_ = false;
+    }
+
+    // The extent-based compensation was measured wrong twice over: run12 read
+    // ExtentHeight() at 250 ms and 600 ms after the insert and it never left
+    // 8398.400391 (the estimate-based value), while run11's realized-identity
+    // read at the compensated offset placed the top edge at message 68 -- the
+    // panel's POSITIONING model had refined the inserted rows to ~89 px each
+    // where the extent still counted them at 81.12 px. An extent-based target
+    // therefore cannot see the gap it creates. This bounded reconcile uses the
+    // only honest instrument available: the anchor row itself. Each pass
+    // re-realizes the anchor row (the row that was first before the prepend,
+    // now at index anchorIndex), re-reads its slot in the repeater's content
+    // space, and re-applies target = slot + the reader's within-row offset,
+    // while the view is still the anchor's. Each pass runs on the UI thread;
+    // the loop ends at the first of: the view settled (the slot unchanged
+    // between passes AND the offset on the recomputed target), the view is
+    // away from the last requested position (the reader scrolled and their
+    // position wins), a scroll-to-end or jump-to-latest pass owns the view,
+    // the load was superseded, or the pass budget ran out.
+    winrt::fire_and_forget MainWindow::ReconcileHistoryAnchorAsync(uint64_t gen, uint64_t loadSeq,
+        double anchorOffset, int32_t anchorIndex, double target)
+    {
+        if (windowClosed_) co_return;
+        auto keepAlive = get_strong();
+        auto uiQueue = DispatcherQueue();
+
+        // Pass delays after the immediate compensation: 250, 600, 1100 and
+        // 1700 ms cumulative. The first delay lets the immediate ChangeView
+        // land; the growing gaps follow the panel's refinement cadence
+        // without polling faster than layout can update a slot.
+        double constexpr kPassDelaysMs[] = { 250.0, 350.0, 500.0, 600.0 };
+        double previousY1 = -1.0;
+        for (int pass = 1; pass <= 4; ++pass)
+        {
+            co_await winrt::resume_after(
+                std::chrono::milliseconds(static_cast<int64_t>(kPassDelaysMs[pass - 1])));
+            if (!co_await resume_foreground(uiQueue)) co_return;
+            if (windowClosed_ || selectorGeneration_.load() != gen || historyLoadSeq_ != loadSeq)
+            {
+                // A newer load or project switch owns the view now.
+                UiTraceEvent("older-recomp-abort",
+                    "pass=" + std::to_string(pass) + " reason=superseded");
+                co_return;
+            }
+            if (pendingScrollToEnd_ || scrollingToEnd_ || following_)
+            {
+                // A scroll-to-end or jump-to-latest pass owns the view (the
+                // same ownership rule the compensation itself follows).
+                UiTraceEvent("older-recomp-abort",
+                    "pass=" + std::to_string(pass) + " reason=view-owned");
+                co_return;
+            }
+            try
+            {
+                auto const scroller = HistoryScroller();
+                double const offsetNow = scroller.VerticalOffset();
+                // The view only stays ours while it sits where the last
+                // positioning act left it. A reader scroll moves it by far more
+                // than a ChangeView landing tolerance; their position wins and
+                // the anchor is not re-applied over it.
+                double const driftFromTarget = offsetNow - target;
+                if (driftFromTarget > 128.0 || driftFromTarget < -128.0)
+                {
+                    UiTraceEvent("older-recomp-abort",
+                        "pass=" + std::to_string(pass) +
+                        " reason=view-not-on-target off=" + std::to_string(offsetNow) +
+                        " target=" + std::to_string(target));
+                    co_return;
+                }
+                // Re-measure the anchor row's slot: the panel refines the
+                // inserted rows' heights as layout settles, so the slot the
+                // last positioning act used can still move.
+                auto anchorElement = HistoryRepeater().GetOrCreateElement(anchorIndex);
+                HistoryRepeater().UpdateLayout();
+                if (!anchorElement)
+                {
+                    UiTraceEvent("older-recomp-abort",
+                        "pass=" + std::to_string(pass) + " reason=anchor-unrealized");
+                    co_return;
+                }
+                double const y1 = anchorElement.TransformToVisual(HistoryRepeater())
+                    .TransformBounds(winrt::Windows::Foundation::Rect{0, 0, 0, 0}).Y;
+                // r is the same anchor card in the SCROLLER's frame (see the
+                // compensate block): the reading the reader experiences.
+                double const r = anchorElement.TransformToVisual(scroller)
+                    .TransformBounds(winrt::Windows::Foundation::Rect{0, 0, 0, 0}).Y;
+                double const settled = y1 + anchorOffset;
+                // Settled means the slot stopped changing between passes AND
+                // the offset already sits on the recomputed target; either
+                // alone is not enough -- a moving slot can put the current
+                // offset on a target that is itself about to move.
+                double const yDelta = y1 - previousY1;
+                bool const yStable = previousY1 >= 0.0
+                    && yDelta <= 0.5 && yDelta >= -0.5;
+                double const offsetDelta = offsetNow - settled;
+                bool const onTarget = offsetDelta <= 1.0 && offsetDelta >= -1.0;
+                UiTraceEvent("older-recomp",
+                    "pass=" + std::to_string(pass) +
+                    " off=" + std::to_string(offsetNow) +
+                    " y1=" + std::to_string(y1) +
+                    " r=" + std::to_string(r) +
+                    " target=" + std::to_string(settled));
+                if (yStable && onTarget)
+                {
+                    UiTraceEvent("older-recomp-done",
+                        "pass=" + std::to_string(pass) +
+                        " off=" + std::to_string(offsetNow) +
+                        " y1=" + std::to_string(y1) +
+                        " r=" + std::to_string(r));
+                    // The restore has settled on this project's instrument; publish
+                    // the physically visible top row for the oracle to read.
+                    PublishTopVisibleRow(L"");
+                    co_return;
+                }
+                if (!onTarget)
+                {
+                    scroller.ChangeView(nullptr, settled, nullptr, true);
+                    target = settled;
+                }
+                previousY1 = y1;
+            }
+            catch (...)
+            {
+                UiTraceEvent("older-recomp-abort",
+                    "pass=" + std::to_string(pass) + " reason=exception");
+                co_return;
+            }
+        }
+        UiTraceEvent("older-recomp-abort", "pass=4 reason=budget");
+        // Budget exhausted without a pass-2 confirm. Publish the current physical
+        // top row rather than leave a stale `pending`: an honest read of wherever
+        // the view actually settled. Criterion 23's PASS still requires the exact
+        // anchor identity, so this cannot manufacture a pass.
+        PublishTopVisibleRow(L"");
+    }
+
+    // Publishes the physically visible top row on HistoryScroller's ItemStatus.
+    // See the declaration comment for why. Runs entirely on the UI thread, is
+    // bounded to a small probe window, and never throws: a failed observation
+    // publishes `unknown` rather than a stale or invented identity.
+    void MainWindow::PublishTopVisibleRow(std::wstring const& status)
+    {
+        try
+        {
+            auto const scroller = HistoryScroller();
+            if (!scroller) return;
+            if (!status.empty())
+            {
+                Automation::AutomationProperties::SetItemStatus(scroller, L"top-visible=" + status);
+                return;
+            }
+            auto const timeline = timeline_.get();
+            auto const count = timeline ? static_cast<int32_t>(timeline->Count()) : 0;
+            if (count <= 0)
+            {
+                Automation::AutomationProperties::SetItemStatus(scroller, L"top-visible=unknown");
+                return;
+            }
+            // The visible row, under the confirmed +-3-row realization buffer
+            // (f4r5-run14), sits a few rows around the estimated one. Probe a
+            // bounded window and pick the realized row whose scroller-frame
+            // span contains the viewport top (y in [0, height)).
+            double const est = scroller.VerticalOffset() / 83.0;
+            int32_t lo = static_cast<int32_t>(est) - 30;
+            int32_t hi = static_cast<int32_t>(est) * 2 + 60;
+            if (lo < 0) lo = 0;
+            if (hi > count - 1) hi = count - 1;
+            std::wstring result = L"unknown";
+            int32_t examined = 0;
+            for (int32_t i = lo; i <= hi && examined < 400; ++i)
+            {
+                UIElement element{ nullptr };
+                // TryGetElement, NOT GetOrCreateElement: this publication runs on
+                // every scroll-idle tick and a diagnostic must never mutate the
+                // layout it observes. GetOrCreateElement forces realization of
+                // unrealized rows, so each tick inflated the extent, the
+                // virtualizer released it again, and the feedback loop tripped
+                // WinUI's cycle detection (E_LAYOUTCYCLE 0x802B0014 -> fail-fast
+                // 0xC000027B; recorded 2026-10-27T04:46:39 in
+                // %LocalAppData%\Mayasaba\unhandled-exception.log, f4r5-run15b).
+                // The visible row is always realized inside the +-3-row buffer,
+                // so the read-only probe always finds it.
+                try { element = HistoryRepeater().TryGetElement(i); } catch (...) {}
+                if (!element) continue;
+                ++examined;
+                double y = 0.0;
+                double h = 0.0;
+                try
+                {
+                    auto const fe = element.try_as<FrameworkElement>();
+                    if (fe) h = fe.ActualHeight();
+                    y = element.TransformToVisual(scroller)
+                        .TransformBounds(winrt::Windows::Foundation::Rect{0, 0, 0, 0}).Y;
+                }
+                catch (...) { continue; }
+                if (y <= 0.0 && 0.0 < y + h)
+                {
+                    auto const* entry = timeline->At(static_cast<std::size_t>(i));
+                    if (entry && !entry->identity.empty())
+                        result = winrt::to_hstring(entry->identity);
+                    break;
+                }
+            }
+            Automation::AutomationProperties::SetItemStatus(scroller, L"top-visible=" + result);
+        }
+        catch (...)
+        {
+            try
+            {
+                if (auto const scroller = HistoryScroller())
+                    Automation::AutomationProperties::SetItemStatus(scroller, L"top-visible=unknown");
+            }
+            catch (...) {}
+        }
     }
 
     winrt::fire_and_forget MainWindow::LoadDraftAttachmentsAsync(std::string projectId, uint64_t gen)
@@ -1105,6 +1512,10 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::RenderHistory(bool dockTransition)
     {
         bool const rebuild = (activeProject_ != renderedProject_) || (historyCache_.size() < renderedCount_);
+        UiTraceEvent(rebuild ? "render-rebuild" : "render-increment",
+            "cache=" + std::to_string(historyCache_.size()) +
+            " rendered=" + std::to_string(renderedCount_) +
+            " condKind=" + std::to_string(renderedConditionKind_));
         if (rebuild)
         {
             std::vector<mayasaba::ui::TimelineEntry> entries;
@@ -1321,6 +1732,7 @@ namespace winrt::Mayasaba::implementation
     {
         pendingScrollToEnd_ = true;
         lastScrollTarget_ = -1.0;
+        UiTraceEvent("scrolltoend-call", "");
         TryScrollToEnd();
     }
 
@@ -1329,6 +1741,10 @@ namespace winrt::Mayasaba::implementation
         if (windowClosed_ || !pendingScrollToEnd_ || scrollingToEnd_) return;
         scrollingToEnd_ = true;
         auto const scroller = HistoryScroller();
+        UiTraceEvent("stl-enter",
+            "off=" + std::to_string(scroller.VerticalOffset()) +
+            " count=" + std::to_string(timeline_ ? timeline_->Count() : 0) +
+            " fol=" + std::to_string(following_ ? 1 : 0));
 
         if (timeline_ && !timeline_->Empty())
         {
@@ -1362,11 +1778,20 @@ namespace winrt::Mayasaba::implementation
         if (extent > 0.0 && extent != lastScrollTarget_)
         {
             lastScrollTarget_ = extent;
+            UiTraceEvent("stl-changeview",
+                "target=" + std::to_string(extent) +
+                " offNow=" + std::to_string(scroller.VerticalOffset()));
             scroller.ChangeView(nullptr, extent, nullptr, true);
         }
 
         if (extent > 0.0 && (extent - scroller.VerticalOffset()) <= 24.0)
         {
+            if (pendingScrollToEnd_)
+            {
+                UiTraceEvent("stl-landed",
+                    "off=" + std::to_string(scroller.VerticalOffset()) +
+                    " sh=" + std::to_string(extent));
+            }
             pendingScrollToEnd_ = false;
             lastScrollTarget_ = -1.0;
         }
@@ -1376,6 +1801,15 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnJumpToLatest(IInspectable const&, RoutedEventArgs const&)
     {
         if (windowClosed_) return;
+        // The loaded history may be a bounded search window whose bottom is not
+        // the project's newest saved contribution. Scrolling to its end would
+        // present the window's bottom as "latest". Restore the newest page
+        // instead; its rebuild lands on the true newest message.
+        if (!historyIsNewestWindow_)
+        {
+            ShowChat();
+            return;
+        }
         following_ = true;
         unseen_ = 0;
         ScrollToEnd();
@@ -1419,6 +1853,10 @@ namespace winrt::Mayasaba::implementation
                     {
                         self->scrollIdleTimer_.Stop();
                         self->lastScrollQpc_.QuadPart = 0;
+                        // Any view change that settles outside the reconcile keeps the
+                        // published top row truthful (a later user scroll, a bring-into-
+                        // view). Evidence only; never read by a verdict while pending.
+                        self->PublishTopVisibleRow(L"");
                     }
                 });
             }
@@ -1431,8 +1869,34 @@ namespace winrt::Mayasaba::implementation
 
         // Check if user is scrolling near the top to load older messages
         bool const atTop = extent > 0.0 && scroller.VerticalOffset() <= 48.0;
-        if (atTop && !historyLoading_ && historyHasMore_)
+        bool const stlActive = pendingScrollToEnd_ || scrollingToEnd_;
+        bool const agreeTop = atTop && lastViewAtTop_;
+        lastViewAtTop_ = atTop;
+        UiTraceEvent("view",
+            "off=" + std::to_string(scroller.VerticalOffset()) +
+            " extentH=" + std::to_string(scroller.ExtentHeight()) +
+            " sh=" + std::to_string(extent) +
+            " top=" + std::to_string(atTop ? 1 : 0) +
+            " end=" + std::to_string(atEnd ? 1 : 0) +
+            " inter=" + std::to_string(e.IsIntermediate() ? 1 : 0) +
+            " fol=" + std::to_string(following_ ? 1 : 0) +
+            " pendST=" + std::to_string(pendingScrollToEnd_ ? 1 : 0) +
+            " anim=" + std::to_string(scrollingToEnd_ ? 1 : 0) +
+            " agreeTop=" + std::to_string(agreeTop ? 1 : 0));
+        // A prepend is issued only on a settled at-top read. Two agreeing
+        // samples are required because the rebuild pass reports one transient
+        // at-top view (offset 0) before the pending scroll-to-end lands, and
+        // the prepend's own compensation can produce a second one; a trigger
+        // on either sample prepends pages the reader never asked for, and the
+        // deferred compensation then drags the reader off the bottom (both
+        // measured, f4r5-run4). A scroll-to-end pass in flight or still owed
+        // means the reader's intent is the bottom, so the top is meaningless
+        // while it runs.
+        if (agreeTop && !stlActive && !historyLoading_ && historyHasMore_)
         {
+            UiTraceEvent("older-trigger",
+                "pendST=" + std::to_string(pendingScrollToEnd_ ? 1 : 0) +
+                " anim=" + std::to_string(scrollingToEnd_ ? 1 : 0));
             LoadOlderHistoryAsync(selectorGeneration_.load());
         }
 
@@ -3363,6 +3827,9 @@ namespace winrt::Mayasaba::implementation
 
         if (result == mayasaba::SaveDisposition::Saved || result == mayasaba::SaveDisposition::Duplicate)
         {
+            UiTraceEvent("send-saved",
+                "dup=" + std::to_string(result == mayasaba::SaveDisposition::Duplicate ? 1 : 0) +
+                " first=" + std::to_string(wasFirstContribution ? 1 : 0));
             pendingAttemptId_.clear(); pendingAttemptProject_.clear(); pendingAttemptBody_.clear();
             draftAttachments_.clear();
             RenderAttachmentChips();
@@ -4921,6 +5388,11 @@ namespace winrt::Mayasaba::implementation
         }
         historyLoading_ = false;
 
+        // The windowed load replaced the newest page: the window's bottom is not
+        // necessarily the project's newest saved message, so Jump to Latest must
+        // restore the newest page instead of scrolling inside this window.
+        historyIsNewestWindow_ = false;
+
         // Force the full rebuild path even though the project identity is
         // unchanged: the whole page was replaced, not appended.
         renderedProject_.clear();
@@ -5018,6 +5490,41 @@ namespace winrt::Mayasaba::implementation
             layoutTraceFile_.flush();
         }
         catch (...) { layoutTraceTimer_.Stop(); }
+    }
+
+    void MainWindow::InitUiTrace()
+    {
+        wchar_t path[4096]{};
+        auto const length = GetEnvironmentVariableW(L"MAYASABA_UI_TRACE", path, 4096);
+        if (length == 0 || length >= 4096) return;
+        uiTraceFile_.open(std::filesystem::path(std::wstring{path, static_cast<size_t>(length)}),
+            std::ios::out | std::ios::trunc);
+        if (!uiTraceFile_) return;
+        QueryPerformanceFrequency(&uiTraceFrequency_);
+        QueryPerformanceCounter(&uiTraceStart_);
+        UiTraceEvent("trace-open");
+    }
+
+    void MainWindow::UiTraceEvent(char const* label, std::string const& fields)
+    {
+        // The cap exists so the opt-in diagnostic cannot grow without bound
+        // (AGENTS.md storage-boundedness) while still remaining intact across
+        // an entire acceptance run: f4r5-run10 measured a 3-notch wheel batch
+        // at 14.0 px (plateau offsets settled at ~0.84 s cycles) and the whole
+        // bottom-to-top journey filled 3000 lines with inertia `view` events
+        // alone around batch ~74. The harness's own contact signal then read a
+        // silent file and stopped with "wheel contact lost" while the window
+        // was in fact still scrolling. 30000 lines (~3 MB upper bound) keeps
+        // the diagnostic bounded AND alive for the ~500 event journey the
+        // paging leg drives.
+        if (!uiTraceFile_ || ++uiTraceLines_ > 30000) return;
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        auto const ms = (now.QuadPart - uiTraceStart_.QuadPart) * 1000.0 / uiTraceFrequency_.QuadPart;
+        uiTraceFile_ << "t+" << ms << "ms " << label;
+        if (!fields.empty()) uiTraceFile_ << ' ' << fields;
+        uiTraceFile_ << '\n';
+        uiTraceFile_.flush();
     }
 
     void MainWindow::InitPerfMeasurement()

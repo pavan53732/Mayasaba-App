@@ -1661,6 +1661,8 @@ def main():
     criterion_hero_perspective = "NOT_RUN"
     criterion_overlay_reduced_motion = "NOT_RUN"
     criterion_cli_readiness = "NOT_RUN"
+    criterion_paging_save = "NOT_RUN"
+    criterion_reading_anchor = "NOT_RUN"
 
     report_done = False
 
@@ -1687,6 +1689,8 @@ def main():
             "19. Empty-Chat Hero Perspective Preserved": criterion_hero_perspective,
             "20. Reduced-Motion Change Leaves The Overlay Flat": criterion_overlay_reduced_motion,
             "21. CLI Readiness Projection & Non-Gating": criterion_cli_readiness,
+            "22. Bounded History Paging Save & Newest Rendering": criterion_paging_save,
+            "23. Reading Anchor Preserved Across Older Prepend": criterion_reading_anchor,
         }
 
     def emit_report():
@@ -1814,6 +1818,12 @@ def main():
         env = os.environ.copy()
         env["MAYASABA_STORE_PATH"] = STORE_PATH
         env["MAYASABA_PERF_LOG"] = PERF_LOG_PATH
+        # The dev-diagnostic chat-trace opt-in: the application records page
+        # adoption, prepend triggers/compensation and scroll-to-end passes into
+        # <evidence-dir>/ui-trace.log. Metadata only (counts, offsets, row ids),
+        # so the 3B paging legs can name the exact asynchronous sequence instead
+        # of inferring it through UIA walks.
+        env["MAYASABA_UI_TRACE"] = os.path.join(os.path.dirname(STORE_PATH), "ui-trace.log")
 
         proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env)
         log(f"Launched Mayasaba.exe (PID {proc.pid})")
@@ -3158,6 +3168,1299 @@ def main():
             f"{criterion_overlay_flat}/{criterion_overlay_bounds}/"
             f"{criterion_overlay_repeat}/{criterion_hero_perspective}/"
             f"{criterion_overlay_reduced_motion}.")
+
+        # =========================================================================
+        # PHASE 3B: BOUNDED HISTORY PAGING & READING-ANCHOR PRESERVATION (22/23)
+        #
+        # Projected AFTER PHASE 5B deliberately: the probe project is bound only
+        # after 5B's cleanup has already moved the window back to alpha, so every
+        # later phase still observes the alpha state it expects. The "3B" name
+        # keeps the F4-R5 finding numbering; the position keeps the state
+        # invariants the suite relies on.
+        #
+        # WHAT IS BEING OBSERVED. A 121-message project must page like the review
+        # asked: the newest 50-item page renders (72..121 after the send), a
+        # message composed and sent through the REAL composer persists exactly
+        # one contribution and renders exactly once, and scrolling to the top
+        # loads one older page and -- the F4-R5 product correction -- returns
+        # the reader to the content that was at the top edge when the load
+        # triggered, instead of presenting the freshly inserted oldest rows.
+        #
+        # WHY THE REVIEWER'S LITERAL SNAPSHOT PROTOCOL IS ADAPTED. The scroll to
+        # the top that triggers the prepend is itself a reader-position change,
+        # and a cross-process UIA walk cannot reliably sample the sub-50 ms
+        # window between "arrived at offset 0" and "prepend applied" -- the walk
+        # itself is what §17.6 measured at hundreds of milliseconds. The
+        # equivalent deterministic check is stronger and identity-derived: a
+        # confirmed save reloads the newest page (SendCurrent -> SubmitAsync ->
+        # ShowChat -> LoadChatAsync), so for a 121-message project the rendered
+        # window is exactly 72..121 and the item that sits at the top edge at
+        # offset 0 is "Paging message 72". If the compensation works, the
+        # settled post-prepend top edge shows that same identity again at about
+        # the same small delta; the pre-fix behavior instead leaves "Paging
+        # message 22" -- the first inserted older row -- at the top edge. That
+        # read cannot pass by coincidence, and a VerticalViewSize shrink proves
+        # the older page was really loaded rather than the window repainting.
+        #
+        # ORACLE CORRECTION (f4r5-run7). The pixel basis of the original
+        # wording ("within 40 px of the top edge") rested on the scroller's
+        # UIA BoundingRectangle, which this control does not report
+        # truthfully as its viewport (run7: L-13326, T-12265 with the window
+        # at 64,64 -- 13,000 px off-screen while realized cards report sane
+        # rects), and the ScrollPattern percent frame is not the extent
+        # frame the trace measures (viewsize 0.58 % where extent/frame
+        # arithmetic says ~10 %). The oracle therefore reads identities: the
+        # compensated top edge is "message 72 is realized with at most one
+        # boundary row above it and the first inserted row (message 22)
+        # never realized", the load is confirmed by the product's own trace
+        # chain (older-page/older-prepend), and the hold read repeats the
+        # identity after 1.2 s.
+        #
+        # STIMULUS CORRECTION (f4r5-run8 + f4r5-run9-probe). run8 aimed each
+        # wheel batch at the bottom-most realized card's UIA rect and
+        # measured six batches with zero view events (a correct stimulus-
+        # failure stop, recorded INCONCLUSIVE). The probe measured why: the
+        # realized scrolled-subtree rects do not correspond to their
+        # physical screen locations -- ElementFromPoint at a card's own
+        # rect center names SearchMessagesButton -- while the fixed
+        # header/composer rects are truthful and a band-center wheel
+        # produced 31 view events and moved the ScrollPattern percent in
+        # the same probe run. The gesture is therefore aimed at the
+        # verified band center, preflighted once via ElementFromPoint
+        # ancestry reaching HistoryScroller, and each batch's contact is
+        # still verified from new view events in the trace.
+        # =========================================================================
+        log("\n--- PHASE 3B: Bounded History Paging & Reading-Anchor Preservation ---")
+        paging_reason = ""
+        paging_anchor_reason = ""
+        paging_probe_id = "00000000-0000-4000-8000-00000000c11a"
+        paging_probe_name = "zz-paging-probe"
+        paging_probe_path = os.path.join(os.path.dirname(STORE_PATH), "paging-probe")
+        paging_bound = False
+        paging_row_created = False
+        # ProjectHeading's read at the moment the probe bound (None until then).
+        # Guards compare against this baseline, never against the seeded display
+        # name: Select re-derives displayName from the observed folder, so the
+        # two differ by design (f4r5-run12 guard false positive).
+        paging_heading_baseline = None
+
+        def paging_count(body):
+            """Realized elements whose accessible name is exactly this body text."""
+            n = 0
+            for node in win.descendants():
+                if (node.element_info.name or "") == body:
+                    n += 1
+            return n
+
+        def paging_read_top_visible(timeout=6.0):
+            """Reads HistoryScroller's published `top-visible` ItemStatus.
+
+            The product publishes the physically visible top row there
+            (see PublishTopVisibleRow in MainWindow.xaml.cpp). Polls until it
+            is neither empty nor `pending`; returns whatever it last saw (a
+            stale `pending` at timeout surfaces as 'pending', which the caller
+            maps to INCONCLUSIVE).
+
+            READ PATH CORRECTED (f4r5-run15c; oracle-adequacy finding recorded
+            in LOCAL-VALIDATION.md before this change). The previous version
+            read `raw.GetCurrentPropertyValue(30104)` and did
+            `(val or "").strip()`. The comtypes wrapper for IUIAutomationElement
+            declares that method's retval as `POINTER(VARIANT)`
+            (comtypes/gen/_944DE083...py), which comtypes hands back as an
+            opaque `POINTER(IUnknown)` rather than a Python string. `.strip()`
+            therefore raised AttributeError on every poll, the except arm
+            recorded `<read-error AttributeError>`, and the oracle returned
+            INCONCLUSIVE unconditionally -- including under run15's controlling
+            mutation, where the product had genuinely published the wrong row.
+            A read that cannot return a value is not an observation of the
+            product, so that verdict carried no evidence for or against the
+            corrected oracle either way.
+
+            `CurrentItemStatus` is the typed accessor for the identical UIA
+            property (30104 == UIA_ItemStatusPropertyId) and returns a str; it
+            is the accessor this harness's own `get_item_status()` uses
+            (line 847), whose reads are proven by criteria that pass on it. The
+            verdict chain below is unchanged: an unreadable, empty, `unknown` or
+            `pending` read still maps to INCONCLUSIVE, and only a genuine
+            identity mismatch can FAIL.
+            """
+            deadline = time.time() + timeout
+            last = None
+            while time.time() < deadline:
+                scroller = find_by_aid(win, "HistoryScroller")
+                if scroller is not None:
+                    try:
+                        val = getattr(scroller.element_info.element,
+                                       "CurrentItemStatus", "")
+                        last = val.strip() if isinstance(val, str) \
+                            else f"<read-error non-str {type(val).__name__}>"
+                    except Exception as exc:
+                        last = f"<read-error {type(exc).__name__}>"
+                    if last and last != "top-visible=pending":
+                        return last
+                time.sleep(0.25)
+            return last if last else ""
+
+        def paging_expected_anchor_id():
+            """submission_id of the row the prepend anchored on (msg 72).
+
+            The `older-capture` trace line records `before=<row_id>`, the oldest
+            loaded row id at capture (msg 72 <-> row 129, pinned in
+            LOCAL-VALIDATION.md run13). Maps it through contributions.submission_id.
+            """
+            try:
+                import re as _re
+                trace_path = os.path.join(os.path.dirname(STORE_PATH), "ui-trace.log")
+                before_row = None
+                with open(trace_path, "r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        m = _re.search(r"older-capture before=(\d+)", line)
+                        if m:
+                            before_row = int(m.group(1))
+                if before_row is None:
+                    return (None, "no older-capture before= field found in ui-trace.log")
+                conn = sqlite3.connect(STORE_PATH)
+                try:
+                    row = conn.execute(
+                        "SELECT submission_id FROM contributions WHERE row_id=?",
+                        (before_row,)).fetchone()
+                finally:
+                    conn.close()
+                if row is None:
+                    return (None, f"no contributions row for row_id={before_row}")
+                return (row[0], None)
+            except Exception as exc:
+                return (None, f"expected-id lookup raised {type(exc).__name__}: {exc}")
+
+        def paging_scroll_state():
+            """(VerticalViewSize %, VerticalScrollPercent %) of the history scroller."""
+            scroller = find_by_aid(win, "HistoryScroller")
+            if scroller is None:
+                return None
+            try:
+                sp = scroller.iface_scroll
+                return (float(sp.CurrentVerticalViewSize),
+                        float(sp.CurrentVerticalScrollPercent))
+            except Exception:
+                return None
+
+        def paging_top():
+            """(body, delta_px) of the topmost fully-visible 'Paging message N' node.
+
+            The delta is measured against the history scroller's top edge, so it
+            is stable under window moves. Nodes clipped above the edge are only
+            used when nothing else is visible.
+            """
+            scroller = find_by_aid(win, "HistoryScroller")
+            if scroller is None:
+                return (None, None)
+            srect = scroller.rectangle()
+            best = None
+            fallback = None
+            for node in scroller.descendants():
+                name = node.element_info.name or ""
+                if not name.startswith("Paging message "):
+                    continue
+                try:
+                    rect = node.rectangle()
+                except Exception:
+                    continue
+                delta = rect.top - srect.top
+                if fallback is None or delta < fallback[1]:
+                    fallback = (name, delta)
+                if delta > -2 and (best is None or delta < best[1]):
+                    best = (name, delta)
+            return best or fallback or (None, None)
+
+        def paging_physical_samples():
+            """Physical top-edge sampling of the settled timeline - evidence
+            only, never a verdict input.
+
+            WHY (f4r5-run13 open question, phi1 vs phi2): the verdict reads
+            the topmost REALIZED message (69, where the oracle wants 72), and
+            that reading is compatible with two different physical states - a
+            timeline whose visible top row really is 69 (product 3 rows short,
+            phi2), and a timeline whose visible top row is 72 with a 3-row
+            realization buffer above the viewport top (product correct,
+            realized != visible, phi1). Realized-set membership cannot
+            separate them. This samples the physical frame instead: for each
+            screen y, ElementFromPoint (the machinery paging_wheel_target
+            verified as contact-truthful) with the ancestry walked to
+            HistoryScroller, reading `^Paging message (\\d+)$` from the point
+            element or its ancestors' subtree - what is UNDER that pixel, not
+            what the virtualizing panel has materialized.
+
+            Returns a dict:
+              samples      [(y, msg), ...] top-down, heading.bottom+16 to
+                           +300 px, x candidates [cx, cx-160, cx+160]
+              cover        [(y, top_desc), ...] points whose ancestry did NOT
+                           reach HistoryScroller (the notice/problem-cards
+                           overlay band; run13 layout: notice=50.4 px,
+                           cardsActual=115.2 px over the band top)
+              bottom       (y, msg) or None - first reach scanning up from
+                           the composer (the wheel-target direction)
+              pitch_px     distinct-(y, msg) span / row count, or None
+              dpi          GetDpiForWindow, to convert screen px to DIPs
+              msg_at_floor fitted message number at the band floor (the
+                           overlay hides the true viewport top, so the
+                           physical top row is extrapolated to it)
+              nomsg        [(y, why), ...] points that reached the scroller
+                           but resolved no message name (the run14 gap: a
+                           zero-row sample now names its cause)
+            """
+            import re as _re
+            from pywinauto.uia_defines import IUIA
+            import ctypes.wintypes as _wt
+            out = {"samples": [], "cover": [], "nomsg": [], "bottom": None,
+                   "pitch_px": None, "dpi": 0, "msg_at_floor": None,
+                   "reason": ""}
+            try:
+                heading = find_by_aid(win, "ProjectHeading")
+                composer = find_by_aid(win, "ComposerBox")
+                if heading is None or composer is None:
+                    out["reason"] = "project header/composer not found"
+                    return out
+                hrect = heading.rectangle()
+                crect = composer.rectangle()
+                winrect = win.rectangle()
+                floor_y = hrect.bottom + 16
+                if crect.top - 16 <= floor_y:
+                    out["reason"] = "chat band has no scan height"
+                    return out
+                try:
+                    out["dpi"] = int(ctypes.windll.user32.GetDpiForWindow(
+                        int(win.handle)))
+                except Exception:
+                    out["dpi"] = 0
+                cx = (winrect.left + winrect.right) // 2
+                xs = [cx, cx - 160, cx + 160]
+                uia = IUIA().iuia
+                walker = uia.ControlViewWalker
+                msg_re = _re.compile(r"^Paging message (\d+)$")
+
+                def probe(px, py):
+                    """(msg|None, scroller_reached, top_desc) at one point."""
+                    try:
+                        ele = uia.ElementFromPoint(_wt.POINT(px, py))
+                    except Exception as exc:
+                        return (None, False,
+                                f"ElementFromPoint: {type(exc).__name__}")
+                    chain = []
+                    cur = ele
+                    reached = False
+                    for _ in range(12):
+                        if cur is None:
+                            break
+                        aid = ""
+                        name = ""
+                        try:
+                            aid = cur.CurrentAutomationId or ""
+                        except Exception:
+                            pass
+                        try:
+                            name = (cur.CurrentName or "")[:64]
+                        except Exception:
+                            pass
+                        chain.append((cur, aid, name))
+                        if aid == "HistoryScroller":
+                            reached = True
+                            break
+                        try:
+                            cur = walker.GetParentElement(cur)
+                        except Exception:
+                            break
+                    if not reached:
+                        top = "?"
+                        if chain:
+                            top = chain[0][2] or chain[0][1] or "?"
+                        return (None, False, top)
+                    # Message under the point: nearest chain node whose own
+                    # name matches, else the nearest non-scroller node whose
+                    # SUBTREE holds a matching text node (the card container
+                    # case). The scroller itself is excluded from the
+                    # subtree walk: its subtree holds every realized
+                    # message, so a match there would report a message the
+                    # point is nowhere near.
+                    for _ele, _aid, name in chain:
+                        m = msg_re.match(name or "")
+                        if m:
+                            return (int(m.group(1)), True, "")
+                    for _ele, _aid, _name in chain:
+                        if _aid == "HistoryScroller":
+                            break
+                        try:
+                            arr = _ele.FindAll(2, uia.CreateTrueCondition())
+                        except Exception:
+                            continue
+                        n = 0
+                        while n < min(60, arr.Length):
+                            n += 1
+                            try:
+                                sname = arr.GetAt(n - 1).CurrentName or ""
+                            except Exception:
+                                continue
+                            m = msg_re.match(sname)
+                            if m:
+                                return (int(m.group(1)), True, "")
+                    return (None, True, "scroller reached, no message name")
+
+                y = floor_y
+                while y <= floor_y + 300:
+                    got = None
+                    cover = None
+                    nomsg = None
+                    for x in xs:
+                        msg, reached, desc = probe(x, y)
+                        if msg is not None and reached:
+                            got = msg
+                            break
+                        if not reached and cover is None:
+                            cover = desc
+                        # Reached the scroller but no message name resolved:
+                        # record why, so a zero-row sample names its cause
+                        # instead of losing the descriptor (run14 gap).
+                        if reached and msg is None and nomsg is None:
+                            nomsg = desc
+                    if got is not None:
+                        out["samples"].append((y, got))
+                    elif cover is not None:
+                        out["cover"].append((y, cover))
+                    elif nomsg is not None:
+                        out.setdefault("nomsg", []).append((y, nomsg))
+                    y += 10
+
+                y = crect.top - 16
+                while y > floor_y:
+                    msg, reached, _d = probe(cx, y)
+                    if msg is not None and reached:
+                        out["bottom"] = (y, msg)
+                        break
+                    y -= 10
+
+                first_y = {}
+                for y, m in out["samples"]:
+                    if m not in first_y:
+                        first_y[m] = y
+                if len(first_y) >= 2:
+                    ms = sorted(first_y)
+                    lo, hi = ms[0], ms[-1]
+                    pitch = (first_y[hi] - first_y[lo]) / float(hi - lo)
+                    if pitch > 0:
+                        out["pitch_px"] = pitch
+                        # Fit the topmost sample back to the band floor: the
+                        # overlay hides the viewport's true top rows, so the
+                        # physical top row is only reachable by extrapolation
+                        # (this is the number that separates phi1 ~72 from
+                        # phi2 ~69 at the floor line).
+                        out["msg_at_floor"] = ms[0] - (
+                            (first_y[ms[0]] - floor_y) / pitch)
+                if not out["samples"] and not out["cover"] and not out["nomsg"]:
+                    out["reason"] = "no point in the band resolved"
+            except Exception as exc:
+                out["reason"] = f"{type(exc).__name__}: {exc}"
+            return out
+
+        def classify_named(body):
+            """Diagnostics: identity detail of every realized node named `body`.
+
+            Used when an assertion fails, so the evidence names the element that
+            disappeared (bubble text node vs composer content vs stray node)
+            instead of leaving the verdict resting on a bare count of 0.
+            """
+            out = []
+            try:
+                for n in win.descendants():
+                    try:
+                        name = n.element_info.name or ""
+                    except Exception:
+                        continue
+                    if name != body:
+                        continue
+                    detail = {"class": "?", "ct": "?", "aid": "?", "rect": "?",
+                              "parent": "?"}
+                    for key, getter in (("class", lambda: n.class_name()),
+                                        ("ct", lambda: n.element_info.control_type),
+                                        ("aid", lambda: n.element_info.automation_id),
+                                        ("rect", lambda: "%dx%d@%d,%d" % (
+                                            n.rectangle().width(), n.rectangle().height(),
+                                            n.rectangle().left, n.rectangle().top))):
+                        try:
+                            detail[key] = getter()
+                        except Exception as exc:
+                            detail[key] = "ERR:%s:%s" % (type(exc).__name__, exc)
+                    try:
+                        detail["parent"] = n.parent().element_info.name
+                    except Exception as exc:
+                        detail["parent"] = "ERR:%s" % type(exc).__name__
+                    out.append(detail)
+            except Exception as exc:
+                out.append({"walk": "ERR:%s:%s" % (type(exc).__name__, exc)})
+            return out
+
+        def timeline_tail():
+            """The lowest realized saved-message bubbles with their body nodes."""
+            try:
+                bubbles = []
+                for n in win.descendants():
+                    try:
+                        name = n.element_info.name or ""
+                    except Exception:
+                        continue
+                    if name.startswith("Your saved message."):
+                        try:
+                            rect = n.rectangle()
+                        except Exception:
+                            continue
+                        body = "?"
+                        for c in n.descendants():
+                            if (c.element_info.name or "").startswith("Paging message"):
+                                body = c.element_info.name
+                                break
+                        bubbles.append((rect.bottom, body))
+                return sorted(bubbles)[-6:]
+            except Exception as exc:
+                return ["ERR:%s" % exc]
+
+        def window_geometry_note():
+            try:
+                r = win.rectangle()
+                return "window %dx%d@%d,%d" % (r.width(), r.height(), r.left, r.top)
+            except Exception as exc:
+                return "window unreadable: %s" % type(exc).__name__
+
+
+        try:
+            os.makedirs(paging_probe_path, exist_ok=True)
+            paging_identity = folder_stable_identity(paging_probe_path)
+            log(f"  paging-probe folder identity: {paging_identity}")
+        except Exception as exc:
+            paging_identity = ""
+            paging_reason = f"the probe folder could not be prepared: {exc}"
+            log(f"  {paging_reason}")
+
+        if paging_identity:
+            try:
+                conn = sqlite3.connect(STORE_PATH)
+                mark_store_write("INSERT: the temporary paging-probe project and 120 seeded contributions")
+                # Leftovers of an earlier aborted 3B leg would shift the row-id
+                # arithmetic this leg's identity claims rest on, so start clean.
+                conn.execute("DELETE FROM contributions WHERE project_id = ?;", (paging_probe_id,))
+                conn.execute("DELETE FROM selection_events WHERE project_id = ?;", (paging_probe_id,))
+                conn.execute("DELETE FROM selection_receipts WHERE project_id = ?;", (paging_probe_id,))
+                conn.execute("DELETE FROM pending_submissions WHERE project_id = ?;", (paging_probe_id,))
+                conn.execute(
+                    "INSERT OR REPLACE INTO projects (id, display_name, canonical_path, draft,"
+                    " closed, version, last_opened_at, filesystem_identity, domain_id) "
+                    "VALUES (?, ?, ?, '', 0, 0, '', ?, ?);",
+                    (paging_probe_id, paging_probe_name, paging_probe_path, paging_identity,
+                     paging_probe_id))
+                for i in range(1, 121):
+                    # row_id is allocated in insert order, so message numbers
+                    # increase with row_id and the newest 50-item page for a
+                    # 121-message project is exactly 72..121.
+                    conn.execute(
+                        "INSERT INTO contributions (project_id, submission_id, body)"
+                        " VALUES (?, ?, ?);",
+                        (paging_probe_id, f"seeded-paging-{i:05d}", f"Paging message {i}"))
+                conn.commit()
+                conn.close()
+                paging_row_created = True
+            except Exception as exc:
+                paging_reason = f"the probe project could not be seeded: {exc}"
+                log(f"  3B setup: {paging_reason}")
+
+        if paging_row_created:
+            try:
+                if open_switch_project(win):
+                    open_probe = poll_until(lambda: find_by_name(win, f"Open project {paging_probe_name}"),
+                                            timeout=8.0, interval=0.2)
+                    if open_probe is not None:
+                        open_probe.iface_invoke.Invoke()
+                        # The Chat load is asynchronous across the storage lane.
+                        composer_ready = poll_until(lambda: find_by_aid(win, "ComposerBox"),
+                                                    timeout=30.0, interval=0.2)
+                        if composer_ready is None:
+                            paging_reason = "the probe project's chat did not open after binding"
+                            log(f"  FAIL->setup: {paging_reason}")
+                        else:
+                            paging_bound = True
+                            # Baseline identity capture. `Select` re-derives
+                            # displayName from the observed folder, so the
+                            # heading reads the FOLDER name ('paging-probe'),
+                            # not the seeded display name ('zz-paging-probe')
+                            # (f4r5-run12 guard false positive; the re-derivation
+                            # is confirmed at storage_tests.cpp:764). The guard
+                            # must therefore compare against what the heading
+                            # reads right after this bind, not against the seed.
+                            _bound_heading = find_by_aid(win, "ProjectHeading")
+                            paging_heading_baseline = (_bound_heading.element_info.name
+                                                       if _bound_heading is not None else None)
+                            log(f"  identity baseline captured at bind: "
+                                f"ProjectHeading={paging_heading_baseline!r}")
+                            newest_seen = poll_until(
+                                lambda: paging_count("Paging message 120") >= 1,
+                                timeout=20.0, interval=0.3)
+                            if newest_seen is None:
+                                paging_reason = ("the newest seeded message 'Paging message 120' never "
+                                                 "appeared in the rendered timeline")
+                                log(f"  FAIL: {paging_reason}")
+                                criterion_paging_save = "FAIL"
+                            else:
+                                log("  newest page rendered: 'Paging message 120' is visible")
+                                composer_probe = find_by_aid(win, "ComposerBox")
+                                composer_probe.set_edit_text("Paging message 121")
+                                send_probe = find_by_aid(win, "SendButton")
+                                if not send_probe:
+                                    paging_reason = "SendButton not found in the probe chat"
+                                    log(f"  FAIL: {paging_reason}")
+                                    criterion_paging_save = "FAIL"
+                                else:
+                                    log("  sending 'Paging message 121' through the real composer...")
+                                    send_probe.iface_invoke.Invoke()
+                                    # A background guard samples what the timeline
+                                    # realizes for the 12 seconds after the send so a
+                                    # collapse is recorded the moment it happens,
+                                    # with the tail that replaced the sent message.
+                                    stable_reader = []
+                                    guard_stop = threading.Event()
+
+                                    def _tail_guard():
+                                        t0 = time.time()
+                                        while not guard_stop.is_set() and (time.time() - t0) < 12.0:
+                                            ts = round(time.time() - t0, 2)
+                                            n121 = paging_count("Paging message 121")
+                                            tail = timeline_tail()
+                                            note = ""
+                                            if n121:
+                                                note += "121-yes"
+                                            guard = "Paging message 120" if paging_count("Paging message 120") else ""
+                                            stable_reader.append((ts, n121, guard, tail[-3:],
+                                                                  window_geometry_note()))
+                                            time.sleep(0.3)
+
+                                    guard_thread = threading.Thread(
+                                        target=_tail_guard, daemon=True)
+                                    guard_thread.start()
+                                    sent_once = poll_until(
+                                        lambda: paging_count("Paging message 121") == 1,
+                                        timeout=25.0, interval=0.3)
+                                    first_occurrences = paging_count("Paging message 121")
+                                    log(f"  {window_geometry_note()}")
+                                    if sent_once is None:
+                                        first_detail = classify_named("Paging message 121")
+                                        log(f"  3B DIAG on never-rendered: {first_detail}")
+                                        log(f"  3B DIAG timeline tail: {timeline_tail()}")
+                                        paging_reason = (f"the composed message 'Paging message 121' never "
+                                                         f"rendered (count {first_occurrences} after 25 s)")
+                                        log(f"  FAIL: {paging_reason}")
+                                        criterion_paging_save = "FAIL"
+                                    else:
+                                        # A settle wait so a late duplicate render
+                                        # (a double save) cannot hide behind the
+                                        # moment of first realization.
+                                        time.sleep(1.5)
+                                        late_occurrences = paging_count("Paging message 121")
+                                        log(f"  'Paging message 121' occurrences after settle: "
+                                            f"{late_occurrences}")
+                                        if late_occurrences != 1:
+                                            late_detail = classify_named("Paging message 121")
+                                            log(f"  3B DIAG on settled count {late_occurrences}: "
+                                                f"{late_detail}")
+                                            log(f"  3B DIAG timeline tail: {timeline_tail()}")
+                                            # A second bounded window in case the
+                                            # realized element is genuinely still
+                                            # settling. If it returns, the render was
+                                            # transient rather than absent, and both
+                                            # shapes are recorded instead of guessed.
+                                            regressed = poll_until(
+                                                lambda: paging_count("Paging message 121") == 1,
+                                                timeout=10.0, interval=0.3)
+                                            log(f"  3B DIAG post-regression recount: "
+                                                f"{paging_count('Paging message 121')} "
+                                                f"(returned={regressed is not None})")
+                                            paging_reason = (f"'Paging message 121' rendered "
+                                                             f"{late_occurrences} times after settle "
+                                                             f"(first poll saw {first_occurrences})")
+                                            log(f"  FAIL: {paging_reason}")
+                                            criterion_paging_save = "FAIL"
+                                        else:
+                                            log("PASS: send #121 through the real composer rendered exactly once.")
+                                            criterion_paging_save = "PASS"
+                                    # Record the guard's whole observation, so a
+                                    # collapse the point reads missed is still in
+                                    # the evidence verbatim.
+                                    guard_stop.set()
+                                    guard_thread.join(timeout=16.0)
+                                    for entry in stable_reader:
+                                        log("  3B SENTINEL t=%.2f count=%s set120=%r tail=%s %s"
+                                            % entry)
+                    else:
+                        paging_reason = "the probe project did not appear in the recent list"
+                        log(f"  FAIL->setup: {paging_reason}")
+                else:
+                    paging_reason = "the project switch did not reach Screen 2"
+                    log(f"  FAIL->setup: {paging_reason}")
+            except Exception as exc:
+                paging_reason = f"3B paging leg raised {type(exc).__name__}: {exc}"
+                log(f"  INCONCLUSIVE: {paging_reason}")
+
+            # --- Reading-anchor measurement (criterion 23) ----------------------
+            if paging_bound and criterion_paging_save == "PASS":
+                try:
+                    state_before = paging_scroll_state()
+                    vvs_before = state_before[0] if state_before else None
+                    log(f"  pre-prepend viewsize {vvs_before} %, scroll "
+                        f"{state_before[1] if state_before else '?'} %")
+                    scroller_probe = find_by_aid(win, "HistoryScroller")
+                    # Two measured facts drive the design of this leg
+                    # (f4r5-run6 and f4r5-run7 traces):
+                    #
+                    # 1. The UIA Scroll-pattern set is rejected by the
+                    #    provider (COMError 0x80131509) while the pattern's
+                    #    reads work, so the stimulus must be the real wheel
+                    #    gesture the product's trigger declares.
+                    # 2. The scroller element's BoundingRectangle is NOT its
+                    #    viewport: every phase measured it far off-screen
+                    #    (run7: L-13326, T-12265, R540, B1693 with the window
+                    #    at 64,64) while its realized children report sane
+                    #    rects. A point taken from the scroller's own rect
+                    #    is off-screen, and in run7 120 wheel batches landed
+                    #    there with zero `view` events in the trace. The
+                    #    gesture is therefore aimed at a realized message
+                    #    card, and the oracle reads identities, not the
+                    #    scroller's rect.
+                    try:
+                        _r = scroller_probe.rectangle()
+                        log(f"  scroller UIA rect {_r.left},{_r.top}..{_r.right},{_r.bottom} "
+                            "(viewport-unreliable; not used for aiming)")
+                    except Exception:
+                        pass
+                    heading = find_by_aid(win, "ProjectHeading")
+                    header_floor = (heading.rectangle().bottom + 16
+                                    if heading is not None
+                                    else win.rectangle().top + 300)
+                    composer = find_by_aid(win, "ComposerBox")
+                    composer_ceiling = (composer.rectangle().top - 12
+                                        if composer is not None
+                                        else win.rectangle().bottom - 240)
+                    trace_path = os.path.join(os.path.dirname(STORE_PATH),
+                                              "ui-trace.log")
+
+                    def ui_trace_label_counts():
+                        counts = {}
+                        try:
+                            with open(trace_path, "r", encoding="utf-8",
+                                      errors="replace") as fh:
+                                for line in fh:
+                                    if not line.startswith("t+"):
+                                        continue
+                                    parts = line.split(None, 2)
+                                    if len(parts) >= 2:
+                                        counts[parts[1]] = counts.get(parts[1], 0) + 1
+                                    elif len(parts) == 1:
+                                        counts[parts[0]] = counts.get(parts[0], 0) + 1
+                        except OSError:
+                            pass
+                        return counts
+
+                    def paging_realized():
+                        """Sorted indices of the realized 'Paging message N' bodies.
+
+                        Identity-based: the scroller's own rect is not used
+                        because it is not the viewport (comment at the top of
+                        this leg), and the ScrollPattern percent frame is not
+                        the extent frame the trace measures (run7: viewsize
+                        0.58 % where extent/frame arithmetic says ~10 %), so
+                        identity is the only basis both readable and true.
+                        """
+                        indices = []
+                        for node in win.descendants():
+                            name = node.element_info.name or ""
+                            if name.startswith("Paging message "):
+                                tail = name[len("Paging message "):].split(".")[0]
+                                try:
+                                    indices.append(int(tail))
+                                except ValueError:
+                                    pass
+                        return sorted(set(indices))
+
+                    def paging_wheel_target():
+                        """Verified wheel point inside the chat band.
+
+                        MEASURED BASIS (f4r5-run9-probe/wheel-focus-probe.py,
+                        against the live app). The earlier versions aimed at
+                        the bottom-most realized card's UIA rect; the probe
+                        delivered the refutation: ElementFromPoint at the
+                        card's own rect center named SearchMessagesButton,
+                        not the card -- the realized scrolled-subtree rects
+                        do not correspond to their physical screen locations
+                        in this application (the same artifact class as
+                        HistoryScroller's BoundingRectangle, run7), so six
+                        such batches in run8 landed on the header/tool row
+                        and produced zero view events. Realized-card rects
+                        must not aim a wheel.
+
+                        The basis is the band between the two rect sources
+                        the probe measured as truthful: ProjectHeading
+                        (fixed header) and ComposerBox (composer). run9
+                        added the second measured constraint: the notice
+                        banner and the CLI-problem-cards block overlay the
+                        TOP portion of that band (run9's preflight
+                        ancestry: 'Chat, folder selection...' notice text,
+                        then 'Claude Code CLI needs a decision: CHECKING',
+                        then ChatProblemCardsScroller), so a fixed band
+                        middle can be covered by overlays. This function
+                        therefore scans candidate y positions from just
+                        above the composer upward and returns the first
+                        point whose ElementFromPoint ancestry reaches
+                        HistoryScroller (the contact the probe verified
+                        gives 31 view events and moves the ScrollPattern
+                        percent). The point is recomputed per batch so
+                        layout movement cannot desync the aim. A truthfully
+                        unverified aim returns None with the reason
+                        recorded in aim_reason, and the caller stops the
+                        stimulus instead of wheeling blind.
+                        """
+                        winrect = win.rectangle()
+                        heading = find_by_aid(win, "ProjectHeading")
+                        composer = find_by_aid(win, "ComposerBox")
+                        if heading is None or composer is None:
+                            aim_reason.append("project header/composer not"
+                                              " found")
+                            return None
+                        try:
+                            hrect = heading.rectangle()
+                            crect = composer.rectangle()
+                        except Exception as exc:
+                            aim_reason.append(f"header/composer rect failed: "
+                                              f"{type(exc).__name__}")
+                            return None
+                        floor_y = hrect.bottom + 16
+                        ceil_y = crect.top - 12
+                        if ceil_y - floor_y < 40:
+                            aim_reason.append(f"band {floor_y}..{ceil_y} too"
+                                              " small")
+                            return None
+                        cx = (winrect.left + winrect.right) // 2
+                        candidates = []
+                        y = ceil_y - 24
+                        while y > floor_y + 12:
+                            candidates.append(y)
+                            y -= 24
+                        if not candidates:
+                            candidates = [floor_y + 12]
+                        from pywinauto.uia_defines import IUIA
+                        import ctypes.wintypes as _wt
+                        uia = IUIA().iuia
+                        walker = uia.ControlViewWalker
+                        last_reason = ""
+                        for cy in candidates:
+                            try:
+                                ele = uia.ElementFromPoint(
+                                    _wt.POINT(cx, cy))
+                            except Exception as exc:
+                                last_reason = (f"ElementFromPoint at "
+                                               f"({cx},{cy}) raised "
+                                               f"{type(exc).__name__}")
+                                continue
+                            reached = False
+                            chain = []
+                            walk_ok = True
+                            for _ in range(10):
+                                if ele is None:
+                                    walk_ok = False
+                                    break
+                                aid = ""
+                                name = ""
+                                try:
+                                    aid = ele.CurrentAutomationId or ""
+                                except Exception:
+                                    pass
+                                try:
+                                    name = (ele.CurrentName or "")[:48]
+                                except Exception:
+                                    pass
+                                chain.append(f"aid='{aid or '-'}'"
+                                             + (f"/'{name}'" if name else ""))
+                                if aid == "HistoryScroller":
+                                    reached = True
+                                    break
+                                try:
+                                    ele = walker.GetParentElement(ele)
+                                except Exception:
+                                    walk_ok = False
+                                    break
+                            if reached:
+                                if not aim_logged[0]:
+                                    aim_logged[0] = True
+                                    log(f"  aim verified at ({cx},{cy}): "
+                                        "ancestry " + " -> ".join(chain))
+                                return (cx, cy)
+                            if walk_ok and not last_reason:
+                                # A stop before the scroller was read, not
+                                # an error: the topmost elements are the
+                                # overlay cards/notice on top of the band.
+                                last_reason = (f"topmost at ({cx},{cy}): "
+                                               + "; ".join(chain[:3]))
+                        aim_reason.append(last_reason or
+                                          "no candidate point in the chat "
+                                          "band verified as the history "
+                                          "scroller")
+                        return None
+
+                    aim_reason = []
+                    aim_logged = [False]
+                    batches = 0
+                    misses = 0
+                    stim_reason = ""
+                    trigger_count = ui_trace_label_counts().get("older-trigger", 0)
+                    # CONTACT BASIS CORRECTION (f4r5-run10). run10 verified the
+                    # aim and delivered all 80 batches with confirmed
+                    # foreground, streaming view events throughout -- yet the
+                    # leg stopped with "no view-change events for 6 consecutive
+                    # batches". The trace went silent because the product's
+                    # UiTraceEvent line cap (then 3000) was exhausted by the
+                    # inertia streaming itself (each 3-notch batch at
+                    # pause=0.02 nets a measured 14.0 px and emits dozens of
+                    # intermediate view lines). A file the diagnostic cap had
+                    # finished writing is not a statement about the window.
+                    # Contact and progress are therefore read from the
+                    # truthful, cheap ScrollPattern percent
+                    # (paging_scroll_state(), the same read the probe
+                    # validated), with the trace kept as recorded evidence and
+                    # the trace cap itself raised on the product side
+                    # (MainWindow.xaml.cpp) so the older-trigger chain remains
+                    # observable for the whole journey.
+                    #
+                    # JOURNEY BASIS (f4r5-run10 measured unit): one 3-notch
+                    # burst at pause=0.02 nets 14.0 px, ~330 batches for the
+                    # ~4530 px bottom-to-top journey. The notches are spaced
+                    # (pause=0.25) so each notch's inertia completes instead
+                    # of replacing the previous animation, and each batch
+                    # settles 0.35 s so the at-top gate sees agreeing settled
+                    # reads. The remaining-batches estimate is logged per
+                    # batch from the measured deltas; the cap is an 800-batch
+                    # backstop, not the plan.
+                    BATCH_CAP = 800
+                    MISS_BUDGET = 8
+                    while trigger_count == 0 and batches < BATCH_CAP:
+                        target = paging_wheel_target()
+                        if target is None:
+                            stim_reason = ("band aim not verified: "
+                                           + "; ".join(aim_reason[-2:])
+                                           if aim_reason else
+                                           "no verified band point")
+                            log(f"  wheel batching {batches}: stopped before "
+                                f"any wheel at batch {batches + 1} - {stim_reason}")
+                            break
+                        batches += 1
+                        state_before = paging_scroll_state()
+                        if not send_wheel_at_point(win, target[0], target[1], 120,
+                                                   steps=3, pause=0.25):
+                            stim_reason = ("foreground could not be established; "
+                                           "stimulus stopped")
+                            log(f"  wheel batching {batches}: stopped - {stim_reason}")
+                            break
+                        time.sleep(0.35)
+                        counts = ui_trace_label_counts()
+                        trigger_count = counts.get("older-trigger", 0)
+                        state_after = paging_scroll_state()
+                        pct_before = state_before[1] if state_before else None
+                        pct_after = state_after[1] if state_after else None
+                        if pct_before is None or pct_after is None:
+                            misses += 1
+                            if misses >= MISS_BUDGET:
+                                stim_reason = (f"the scroller's ScrollPattern "
+                                               f"percent could not be read for "
+                                               f"{misses} consecutive batches; "
+                                               "contact unverifiable")
+                                log(f"  wheel batching {batches}: stopped - "
+                                    f"{stim_reason}")
+                                break
+                            continue
+                        delta = pct_before - pct_after
+                        if delta <= 0.05:
+                            misses += 1
+                            if misses >= MISS_BUDGET:
+                                stim_reason = (f"no scroll progress for {misses} "
+                                               "consecutive batches "
+                                               f"(pct {pct_after:.3f} from "
+                                               f"{pct_before:.3f}); wheel contact "
+                                               "lost")
+                                log(f"  wheel batching {batches}: stopped - "
+                                    f"{stim_reason}")
+                                break
+                        else:
+                            misses = 0
+                            if batches % 10 == 0 or batches <= 3 or pct_after <= 5.0:
+                                est = (f" est-remaining~{pct_after / delta * 1.1:.0f}"
+                                       if delta > 0 else "")
+                                log(f"  wheel batch {batches}: pct {pct_before:.3f}"
+                                    f" -> {pct_after:.3f} (delta {delta:.3f}){est}")
+                        if not trigger_count and pct_after is not None and pct_after <= 0.9:
+                            # The reader is at the top; the settled at-top
+                            # gate needs the agreeing reads this loop already
+                            # stops to allow, so keep wheeling until the
+                            # trigger fires or the budgets exhaust.
+                            pass
+                    log(f"  prepending wheel batches: {batches} "
+                        f"(older-trigger events: {trigger_count})")
+                    if trigger_count:
+                        # The compensation is the final positioning act of the
+                        # prepend chain (nothing users see moves after it).
+                        # Bounded wait so the settle window starts on the
+                        # compensated position rather than mid-transition.
+                        comp_deadline = time.time() + 15.0
+                        comp_labels = ("older-compensate",
+                                       "older-compensate-skip",
+                                       "older-nogrow")
+                        comp_now = {}
+                        while time.time() < comp_deadline:
+                            comp_now = ui_trace_label_counts()
+                            if any(comp_now.get(l, 0) > 0 for l in comp_labels):
+                                break
+                            time.sleep(0.2)
+                        comp_now = ui_trace_label_counts()
+                        log("  prepend chain events observed: " + ", ".join(
+                            l for l in ("older-trigger", "older-capture",
+                                        "older-page", "older-prepend",
+                                        "older-compensate",
+                                        "older-compensate-skip",
+                                        "older-nogrow", "older-decline",
+                                        "older-nopage", "older-error",
+                                        "older-empty")
+                            if comp_now.get(l, 0) > 0))
+                    # Settle: two consecutive agreeing identity reads, spaced
+                    # enough that a mid-transition sample is not mistaken for
+                    # a settled one (the load, prepend and compensation are
+                    # asynchronous across lanes). The ScrollPattern percent is
+                    # in a frame the trace contradicts, so it only contributes
+                    # settle-stability, not a pass/fail comparison.
+                    deadline = time.time() + 45.0
+                    last_sig = None
+                    stable = None
+                    while time.time() < deadline:
+                        time.sleep(0.4)
+                        indices_now = paging_realized()
+                        state_now = paging_scroll_state()
+                        sig = (tuple(indices_now),
+                               state_now[1] if state_now else None,
+                               state_now[0] if state_now else None)
+                        if state_now is None:
+                            last_sig = sig
+                            continue
+                        if (last_sig is not None
+                                and sig[0] == last_sig[0]
+                                and abs((sig[1] or 0.0) - (last_sig[1] or 0.0)) <= 5.0):
+                            stable = sig
+                            break
+                        last_sig = sig
+                    # Project-identity guard, read after the settle window: the
+                    # identity reads below measure THIS project's prepended
+                    # state, and a bound-project change replaces the timeline
+                    # with another project's content. run11 measured how close
+                    # that sits to the verdict: the settle/FAIL read preceded
+                    # the leg's own return-to-alpha cleanup by only ~0.1-0.2 s
+                    # (the post-verdict `loadchat-begin gen=18` adopt of alpha
+                    # in f4r5-run11's trace IS that cleanup -- harness log:
+                    # "Switch Project: foreground established", "returned to
+                    # alpha after the paging probe: True", store-write DELETE
+                    # at run-clock 616.605 s, selection receipt for alpha
+                    # committed 2026-10-26T02:59:27.483Z). Had the settle
+                    # window needed two more polls, the reads below would have
+                    # measured alpha's timeline and the verdict would have
+                    # asserted a defect against content the criterion never
+                    # observed. ProjectHeading names the bound project, so a
+                    # change fail-closes to INCONCLUSIVE with the reason
+                    # recorded instead.
+                    guard_heading = find_by_aid(win, "ProjectHeading")
+                    guard_name = (guard_heading.element_info.name
+                                  if guard_heading is not None else None)
+                    if stable is None:
+                        paging_anchor_reason = ("the prepended state never settled into "
+                                                "two agreeing identity reads within 45 s")
+                        criterion_reading_anchor = "INCONCLUSIVE"
+                        log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                    elif not trigger_count:
+                        # The observation the criterion needs never happened.
+                        # The recorded state is a truth about the reader, but
+                        # the prepend-and-compensation behaviour was never
+                        # exercised, so a FAIL would assert a defect the
+                        # evidence does not show.
+                        paging_anchor_reason = (stim_reason or
+                                                ("wheel batching exhausted without "
+                                                 "the product's older-trigger event"))
+                        criterion_reading_anchor = "INCONCLUSIVE"
+                        log(f"  INCONCLUSIVE: no prepend was triggered during batching "
+                            f"({trigger_count} older-trigger events); {paging_anchor_reason}")
+                    elif paging_heading_baseline is None:
+                        paging_anchor_reason = (
+                            "the identity baseline was never captured at probe "
+                            "bind (ProjectHeading was not found then), so no "
+                            "bound-identity comparison can be made and a "
+                            "mid-run change cannot be excluded")
+                        criterion_reading_anchor = "INCONCLUSIVE"
+                        log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                    elif guard_name != paging_heading_baseline:
+                        paging_anchor_reason = (
+                            "the bound project changed during the settle window "
+                            f"(ProjectHeading reads {guard_name!r}, bound baseline "
+                            f"{paging_heading_baseline!r}); a mid-run selection replaced "
+                            "the prepended state, so no identity read afterwards "
+                            "measures this project")
+                        criterion_reading_anchor = "INCONCLUSIVE"
+                        log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                    else:
+                        indices_after, pct_after, vvs_after = stable
+                        topmost = indices_after[0] if indices_after else None
+                        log(f"  settled post-prepend: realized indices {indices_after[:8]}"
+                            f"{'...' if len(indices_after) > 8 else ''} "
+                            f"(topmost {topmost}, {len(indices_after)} cards), "
+                            f"scroll {pct_after:.1f} %, viewsize {vvs_after:.1f} %")
+                        # Physical-frame sample (evidence only; the verdict
+                        # chain below is unchanged by it). The realized-index
+                        # read cannot separate "genuinely 3 rows short" from
+                        # "correct with a 3-row realization buffer above the
+                        # viewport top" -- both show topmost 69 where the
+                        # oracle wants 72. ElementFromPoint over the band
+                        # reads what is physically under each pixel; pitch and
+                        # the fitted message at the band floor decide which
+                        # reading of the settled state is true.
+                        try:
+                            phys = paging_physical_samples()
+                            if phys.get("reason"):
+                                log(f"  physical sample unavailable: {phys['reason']}")
+                            else:
+                                rows = {}
+                                for _y, _m in phys["samples"]:
+                                    rows.setdefault(_m, _y)
+                                pitch = phys["pitch_px"]
+                                fit = phys["msg_at_floor"]
+                                log("  physical rows (first y per msg): "
+                                    + ", ".join(f"m{m}@{y}" for m, y in
+                                                sorted(rows.items(), key=lambda kv: kv[1]))
+                                    + (f"; pitch={pitch:.3f} px/row, "
+                                       f"msg_at_floor={fit:.2f}"
+                                       if pitch else "; pitch undetermined"))
+                                if phys["dpi"]:
+                                    log(f"  physical dpi={phys['dpi']}")
+                                if phys["bottom"]:
+                                    log(f"  physical bottom reach: {phys['bottom']}")
+                                if phys["cover"]:
+                                    tops = sorted({d for _y, d in phys["cover"]})
+                                    ys = [y for y, _d in phys["cover"]]
+                                    log(f"  physical cover: {len(ys)} points "
+                                        f"y={min(ys)}..{max(ys)} topmost="
+                                        + "; ".join(tops[:3]))
+                                if phys.get("nomsg"):
+                                    whys = sorted({w for _y, w in phys["nomsg"]})
+                                    nys = [y for y, _w in phys["nomsg"]]
+                                    log(f"  physical reached-no-message: {len(nys)} points "
+                                        f"y={min(nys)}..{max(nys)} why="
+                                        + "; ".join(whys[:3]))
+                        except Exception as exc:
+                            log(f"  physical sample raised {type(exc).__name__}: {exc}")
+                        # ORACLE-ADEQUACY CORRECTION (§13, documented in
+                        # LOCAL-VALIDATION.md before this change). The old oracle
+                        # decided the top edge from the topmost REALIZED card index
+                        # (`topmost < 71 or 72 not in indices`). Under the confirmed
+                        # +-3-row realization buffer (run14), that clause measured
+                        # the buffer's top edge, not the physical top edge: it was
+                        # satisfiable ONLY when the visible row sat 2 BELOW the
+                        # anchor, making PASS unreachable at the one correct state
+                        # and reachable at a 2-row overshoot. The corrected oracle
+                        # reads the product's published top-visible ItemStatus (the
+                        # physical top edge, same instrument as the reconcile `r`)
+                        # and compares it to the anchored row's own submission_id.
+                        # The realized-index reading stays logged above as evidence
+                        # but no longer decides the verdict; `topmost is None` and
+                        # the uncompensated symptom (22 realized) still FAIL because
+                        # they are true product defects independent of the buffer.
+                        page_loaded = (comp_now.get("older-prepend", 0) > 0
+                                       and comp_now.get("older-page", 0) > 0)
+                        _exp_id, _exp_err = paging_expected_anchor_id()
+                        _tv = paging_read_top_visible()
+                        _tv_val = _tv.split("=", 1)[1] if "=" in _tv else _tv
+                        log(f"  top-visible published: {_tv!r} "
+                            f"(expected anchored submission_id {_exp_id!r}; "
+                            f"realized topmost {topmost} is buffer evidence only)")
+                        if topmost is None:
+                            criterion_reading_anchor = "FAIL"
+                            log("  FAIL: no realized message cards after the settle window "
+                                "(the timeline realized nothing at the anchored position).")
+                        elif 22 in indices_after:
+                            criterion_reading_anchor = "FAIL"
+                            log(f"  FAIL: the uncompensated symptom is present: the "
+                                f"prepended rows are realized at the reading position "
+                                f"(message 22 realized; topmost {topmost}). This is the "
+                                "reader losing the content that was at the top edge.")
+                        elif _exp_err:
+                            criterion_reading_anchor = "INCONCLUSIVE"
+                            paging_anchor_reason = (
+                                "the anchored submission_id could not be resolved "
+                                f"from the trace/store: {_exp_err}")
+                            log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                        elif (not _tv or _tv_val in ("pending", "unknown")
+                                or _tv.startswith("<read-error")):
+                            criterion_reading_anchor = "INCONCLUSIVE"
+                            paging_anchor_reason = (
+                                "the product's published top-visible ItemStatus was "
+                                f"{_tv!r}, so the physical top edge was never observed "
+                                "(pending at timeout, an unknown row, or a read "
+                                "failure) and no identity claim can be made")
+                            log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                        elif _tv_val != _exp_id:
+                            criterion_reading_anchor = "FAIL"
+                            log(f"  FAIL: the anchored top-edge identity did not hold: "
+                                f"published top-visible is {_tv_val!r}, expected the "
+                                f"anchored row {_exp_id!r} (realized topmost was "
+                                f"{topmost}; the physical top edge must read the "
+                                "anchored row, not a buffer row).")
+                        elif not page_loaded:
+                            criterion_reading_anchor = "FAIL"
+                            log("  FAIL: the trace recorded no older-page prepend chain "
+                                "(older-prepend/older-page missing), so the identity read "
+                                "cannot certify a prepend whose load was never recorded.")
+                        elif comp_now.get("older-trigger", 0) != trigger_count:
+                            criterion_reading_anchor = "FAIL"
+                            log(f"  FAIL: a second prepend chain started during the settle "
+                                f"window ({trigger_count} -> "
+                                f"{comp_now.get('older-trigger', 0)} older-trigger events).")
+                        else:
+                            # Hold read: the compensated position must persist,
+                            # with no oscillation and no additional prepend pass.
+                            time.sleep(1.2)
+                            hold_indices = paging_realized()
+                            hold_state = paging_scroll_state()
+                            hold_counts = ui_trace_label_counts()
+                            hold_topmost = hold_indices[0] if hold_indices else None
+                            hold_tv = paging_read_top_visible()
+                            hold_tv_val = (hold_tv.split("=", 1)[1]
+                                           if "=" in hold_tv else hold_tv)
+                            log(f"  hold read: realized indices {hold_indices[:8]}"
+                                f"{'...' if len(hold_indices) > 8 else ''} "
+                                f"(topmost {hold_topmost}), scroll "
+                                f"{hold_state[1] if hold_state else '?'} %, "
+                                f"top-visible {hold_tv!r}")
+                            # Same identity guard at the hold read: the hold
+                            # must measure this project's timeline, not the
+                            # timeline of a project a mid-run selection bound.
+                            hold_heading = find_by_aid(win, "ProjectHeading")
+                            hold_name = (hold_heading.element_info.name
+                                         if hold_heading is not None else None)
+                            if paging_heading_baseline is None:
+                                paging_anchor_reason = (
+                                    "the identity baseline was never captured at "
+                                    "probe bind, so the hold read's bound identity "
+                                    "cannot be compared")
+                                criterion_reading_anchor = "INCONCLUSIVE"
+                                log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                            elif hold_name != paging_heading_baseline:
+                                paging_anchor_reason = (
+                                    "the bound project changed during the hold "
+                                    f"read (ProjectHeading reads {hold_name!r}, "
+                                    f"bound baseline {paging_heading_baseline!r}); "
+                                    "the hold would measure another project's timeline")
+                                criterion_reading_anchor = "INCONCLUSIVE"
+                                log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                            elif (hold_tv_val == _exp_id
+                                    and hold_counts.get("older-trigger", 0) == trigger_count
+                                    and 22 not in hold_indices):
+                                log("PASS: the reading anchor is preserved across the "
+                                    "older-page prepend (the published physical top edge "
+                                    f"read the anchored row {_exp_id!r} before and after "
+                                    f"the hold, the prepended row 22 was never realized, "
+                                    f"the older page loaded "
+                                    f"({comp_now.get('older-page', 0)} older-page events), "
+                                    "and no second prepend chain started).")
+                                criterion_reading_anchor = "PASS"
+                            else:
+                                criterion_reading_anchor = "FAIL"
+                                log(f"  FAIL: anchor did not hold (top-visible "
+                                    f"{_tv_val!r} -> {hold_tv_val!r}, expected "
+                                    f"{_exp_id!r}; message 22 realized="
+                                    f"{22 in hold_indices}, older-trigger "
+                                    f"{trigger_count} -> "
+                                    f"{hold_counts.get('older-trigger', 0)})")
+                except Exception as exc:
+                    paging_anchor_reason = f"anchor leg raised {type(exc).__name__}: {exc}"
+                    criterion_reading_anchor = "INCONCLUSIVE"
+                    log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+        else:
+            paging_reason = paging_reason or ("the probe project could not be prepared")
+
+        # Cleanup: move the application off the probe BEFORE removing its rows
+        # (the same ordering the 5B leg documents), because leaving a project
+        # saves a draft that must resolve to a live record.
+        if paging_row_created:
+            returned = False
+            if paging_bound:
+                try:
+                    if open_switch_project(win):
+                        open_alpha = poll_until(lambda: find_by_name(win, "Open project alpha"),
+                                                timeout=8.0, interval=0.2)
+                        if open_alpha is not None:
+                            open_alpha.iface_invoke.Invoke()
+                            restored = poll_until(lambda: find_by_aid(win, "ComposerBox"),
+                                                  timeout=25.0, interval=0.2)
+                            returned = restored is not None
+                            log(f"  returned to alpha after the paging probe: {returned}")
+                except Exception as exc:
+                    log(f"  could not return to alpha: {type(exc).__name__}: {exc}")
+                if not returned:
+                    paging_reason = (paging_reason + "; " if paging_reason else "") \
+                        + "the application could not be returned to alpha afterwards"
+            try:
+                conn = sqlite3.connect(STORE_PATH)
+                mark_store_write("DELETE: the temporary paging-probe project and seeded messages")
+                conn.execute("DELETE FROM contributions WHERE project_id = ?;", (paging_probe_id,))
+                conn.execute("DELETE FROM selection_events WHERE project_id = ?;", (paging_probe_id,))
+                conn.execute("DELETE FROM selection_receipts WHERE project_id = ?;", (paging_probe_id,))
+                conn.execute("DELETE FROM pending_submissions WHERE project_id = ?;", (paging_probe_id,))
+                conn.execute("DELETE FROM projects WHERE id = ?;", (paging_probe_id,))
+                conn.commit()
+                conn.close()
+            except Exception as exc:
+                log(f"  could not remove the paging-probe rows: {exc}")
+            try:
+                os.rmdir(paging_probe_path)
+            except Exception:
+                pass
+        if criterion_paging_save == "NOT_RUN":
+            criterion_paging_save = "INCONCLUSIVE"
+        if criterion_reading_anchor == "NOT_RUN" and not (paging_bound and criterion_paging_save == "PASS"):
+            criterion_reading_anchor = "INCONCLUSIVE"
+        if paging_reason and criterion_paging_save not in ("PASS", "FAIL"):
+            log(f"INCONCLUSIVE (22): {paging_reason}.")
+        # Read the product-side event trace into the evidence. Whatever verdicts
+        # the legs recorded, the trace names the actual asynchronous sequence the
+        # application executed (page adoption, prepend triggers and their
+        # compensation, scroll-to-end passes), which is the artifact a defect or
+        # a green pass must be explained against.
+        try:
+            trace_path = os.path.join(os.path.dirname(STORE_PATH), "ui-trace.log")
+            if os.path.exists(trace_path):
+                with open(trace_path, "r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        log("  UI-TRACE " + line.rstrip())
+                try:
+                    os.remove(trace_path)
+                except OSError as exc:
+                    # The application still holds the trace file open (it is
+                    # terminated in the phase-9 cleanup, never before 3B's
+                    # readback), and the sharing grant on the write side makes
+                    # the deletion fail while the reader succeeds. Leftover
+                    # trace files are evidence-directory contents, not run
+                    # blockers; report it rather than discarding the file.
+                    log(f"  UI-TRACE: file left in place after readback "
+                        f"(delete failed: {exc})")
+            else:
+                log("  UI-TRACE: file not present next to the store")
+        except Exception as exc:
+            log(f"  UI-TRACE: could not be read: {exc}")
+        log(f"PHASE 3B complete - criteria 22/23 recorded as "
+            f"{criterion_paging_save}/{criterion_reading_anchor}.")
+
 
         # =========================================================================
         # PHASE 6: WM_DPICHANGED MESSAGE HANDLING (150% & 200% SIMULATION)

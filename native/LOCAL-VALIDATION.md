@@ -4853,3 +4853,1100 @@ behavior (see §17.9 of AGENTS.md).
   but the UI harness does not compose these scenarios. Unobserved natively.
 - The 9 NOT_RUN acceptance criteria from before this milestone remain NOT_RUN; this
   correction neither claims nor defers them.
+
+## 2026-10-26 - F4-R: bounded history paging collapse, root-cause fix, and acceptance (remediation F4-R1..R5, runs 1-12 + contact-loss probe)
+
+Artifact identity. All application builds in this section are Release x64, VS 18
+Enterprise MSBuild, `/p:PlatformToolset=v145`. The decisive instruments:
+
+- run4 binary (trace instrumentation, pre-fix logic):
+  exe SHA-256 `e5742cd4c5ef4a7efd0cac551830976d62e0a5599aa2efc8dd2ca69625cbf790`,
+  `MainWindow.xbf` `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a`.
+- run5/run6/run7/run8 binary (same instrumentation + the fix):
+  exe SHA-256 `733273b76e030dc25779cc3cf13671fea23ece76701ac69d6a018462529ecdac`,
+  XBF unchanged (`8db43c7e…`) — every change in the fix is C++ control flow; no
+  XAML moved. Runs 9 and 10 executed this same binary.
+- trace-cap binary (run11; `UiTraceEvent` cap 3000 → 30000 with the
+  boundedness rationale recorded as a comment at the site): exe SHA-256
+  `cee40529dee5b4fc814426922462dd9fd5cfad7aa621b6ef28e157ff56171ad2`,
+  XBF unchanged (`8db43c7e…`). Run 11 executed it.
+- extent-reconcile v1 binary (run12; one-shot extent compensation + a bounded
+  extent re-measure loop): exe SHA-256
+  `7f05ccdb5a9f3d4f5066e4105840777be119ec0fb58bf51c5fb4bdbe3aea4020`,
+  XBF unchanged (`8db43c7e…`). Run 12 executed it; the run's own
+  `artifact-identity.json` carries these hashes.
+- anchor-row binary (run13; content-based target `y1 + anchorOffset` from the
+  anchor row's repeater slot + the baseline identity guard): exe SHA-256
+  `38cca87cc1d400f09fcd1415302c6d06db41dfc22d93f23c04ca210006d53ebf`,
+  XBF unchanged (`8db43c7e…`). Run 13 executed it.
+- r-instrumentation + physical-sampler binary (run14; the same anchor-row
+  logic with the anchor card's scroller-frame `r` recorded in the
+  compensate/recomp traces, plus the harness-side ElementFromPoint sampler):
+  exe SHA-256
+  `7e9db3a646bf2fbae70f1f1a5087de229d4fb09336ccc28789800d002a932cb3`,
+  XBF unchanged (`8db43c7e…`). Run 14 executes it.
+
+### Why a product-side event trace was needed (and what it is)
+
+Four acceptance runs (1-4) failed criterion 22 against four different binaries of the
+same source lineage with the same symptom: after composing message 121 in the 120-item
+paging probe, the newest bubble realized once and then vanished within ~0.6 s; the
+settled timeline tail read messages 8-11. UIA sampling alone could not name the
+asynchronous chain that produced that state, only its endpoints. A diagnostic
+precedent already existed (`MAYASABA_LAYOUT_TRACE`, §17.9 work); the same shape was
+added for chat history control flow:
+
+- `MAYASABA_UI_TRACE` (value = file path) opens a line-capped (3000) event trace
+  beside the store: `loadchat-*` page adoption/refusal, `render-rebuild`/
+  `render-increment`, every `HistoryScrollViewer` view event with its offset, extent,
+  at-top, at-end, intermediate, `following_`, pending-scroll-to-end gate values, the
+  older-page `older-trigger`/`older-capture`/`older-page`/`older-prepend`/
+  `older-compensate` chain, and the scroll-to-end `stl-*` passes. Metadata only
+  (counts, offsets, row ids); never message text. `InitUiTrace`/`UiTraceEvent` in
+  `MainWindow.xaml.cpp`, next to `InitLayoutTrace`.
+- The acceptance harness launches the app with the trace on and reads its contents
+  into the 3B section of the evidence at the end of Phase 3B
+  (`ui-trace.log` beside the probe store).
+
+### The collapse, named by the run4 trace (evidence dir `f4r5-run4`)
+
+This excerpt is from the run4 event trace (`f4r5-run4/ui-trace.log`). Runs 1-3
+recorded only this chain's endpoints in their UIA samples; the trace names the
+chain itself.
+
+```
+t+53127.8ms send-saved dup=0 first=0
+t+53127.9ms loadchat-begin gen=15
+t+53128.6ms loadchat-adopt items=50 oldest=129 more=1
+t+53130ms   render-rebuild cache=50 rendered=50 condKind=-1
+t+53133.2ms scrolltoend-call ... stl-landed off=5308.8 (bottom)
+t+53139.5ms view off=0.000000 extentH=5340.0 top=1 pendST=1 anim=1   <- transient
+t+53139.6ms older-trigger                        (on the transient sample)
+t+53139.6ms older-capture before=129 off=0.000000 ext=5340.0 gen=15
+t+53140.1ms stl-changeview target=5308.8 offNow=0.0 (scroll-to-end still owed)
+t+53140.4ms older-page items=50 oldest=79 more=1
+t+53141.6ms older-prepend items=50
+...stl lands off=10228.0... layout-stl grows sh again... stl lands 10353.6
+t+53147.5ms older-compensate extAfter=10384.8 grown=5044.8 target=5044.8
+t+53184.6ms view off=5044.8  <- reader yanked off the bottom, mid-content
+t+53195.7ms view off=0.0 top=1  <- jump to zero; second spurious trigger
+t+53195.7ms older-trigger / older-prepend items=21 / compensate target=774.4
+t+53208.6ms view off=775.2 <- settled collapsed state
+...
+```
+
+So the spurious `older-trigger` #1 was issued while the post-save
+reload-rebuild was mid-transition: the previous sample had read
+off=5308.8 at the actual bottom, and the sample reporting off=0
+was a single transient mid-transition report, not a settled
+reader position.
+
+The chain's defect is that the trigger fires when a single
+sample reads at-top, that sample being a transient
+mid-transition report produced during the reload's unfolding (the same reload for which
+the scroll-to-end
+gate was also still pending, so the at-top reading did not even
+name a reader intention). Each of the three prepend+compensation
+passes then anchored *on the transient sample itself*, i.e. the
+compensation restored a position the reader never deliberately
+chose. The settled collapsed state is exactly what the four
+earlier acceptance runs observed as messages 8-11 near the top
+and the newest message absent.
+
+### The fix (evidence directives)
+
+**Gate 1 — settled at-top evidence** (`OnHistoryViewChanged`,
+MainWindow.xaml.cpp):
+
+```
+agreeTop = atTop && lastViewAtTop_      // two agreeing samples
+trigger if agreeTop && !stlActive && !historyLoading_ && historyHasMore_
+```
+
+where stlActive = `pendingScrollToEnd_ || scrollingToEnd_`. A real
+user gesture produces a stream of at-top samples; the reload
+transition produced a single transient. The
+previous-sample value (`lastViewAtTop_`) is updated on every
+view event, before any early return in the handler.
+
+**Gate 2 — scroll-to-end owns the view when it is owed**
+(`LoadOlderHistoryAsync` entry and the compensation block): a pending or
+running scroll-to-end pass means the reader is being driven to the bottom; the
+decline is recorded as `older-decline why=scrollToEnd`, and the anchor
+compensation is skipped with `older-compensate-skip` when it would have run
+after an intervening scroll-to-end pass (the run4 shape, recorded exactly in
+run5: same transient, blocked by gate 1's `agreeTop=0`).
+
+The compensation race is not resolved by "reordering" the passes:
+no ordering makes a compensation whose anchor was captured from a
+mid-transition report restore a position a reader would have
+chosen. If a scroll-to-end pass owns the view, the reader's
+intention is the bottom and the pass keeps the view; if none is
+owed or running, the compensation restores the reader's position.
+
+### Run 5 (fix applied, criterion 22 first measurable PASS)
+
+`f4r5-run5`, binary 733273b7. The same loadchat transient reproduced exactly
+(`view off=0.000000 top=1 pendST=1 anim=1` at t+53139.5ms) and was refused by
+gate 1 (`agreeTop=0`; the previous sample read off=5308.8 = bottom):
+
+- no `older-trigger`, no `older-capture`, no `older-prepend`, no
+  `older-compensate` anywhere in the post-save sequence;
+- scroll-to-end settles the reader at the true bottom of the 50-item newest
+  page; sentinel holds count=1 and tail=(234, 'Paging message 121') for the
+  full 12 s observation window;
+- verdicts: criterion 22 `PASS` ("send #121 through the real composer rendered
+  exactly once"), no regression in criteria 1-7 or 16-20 (12->13 pass, 0 fail).
+
+Also visible in run5's trace: the return-to-alpha reload went through the same
+transient shape (t+55352.2ms, `view off=0.0 top=1 pendST=1 anim=1`,
+`agreeTop=0`) and likewise did not trigger. The invariant, both directions.
+
+### Run 6 (fix verified a second time; criterion 23 stimulus refuted)
+
+`f4r5-run6`, the same binary 733273b7 and unchanged XBF. Criterion 22 `PASS`
+again (2/2 on the fix binary): no regression in criteria 1-7 or 16-20, the
+same post-save transient refused with `agreeTop=0`. The anchor leg then
+failed differently, and the diff against run5 is the finding: with both
+`SetScrollPercent` arguments supplied the call reached the provider and was
+rejected with `COMError -2146233079 (0x80131509)`, where run5 had stopped
+earlier with the missing-argument `TypeError`. The standalone probe
+`f4r5-run6/scroll-pattern-probe.py` (launched against a live app on a fresh
+fixture copy) established the mechanism case by case:
+
+- `SetScrollPercent(0.0, 0.4)`, `(0.0, 0.0)`: raised by the provider with the
+  same `COMError 0x80131509`;
+- the `UIA_ScrollPatternNoScroll` (-1) horizontal forms:
+  `TypeError: 'float' object is not callable` inside pywinauto's wrapper,
+  before reaching COM;
+- the pattern *reads* (`CurrentVerticalScrollPercent`,
+  `CurrentVerticalViewSize`) work fine.
+
+Conclusion recorded at the time: the UIA Scroll-pattern **set** is not a
+valid stimulus against this control; only the scroll *gesture* is. The leg's
+stimulus was replaced accordingly for run7.
+
+### Run 7 (criterion 23 first measurable run: FAIL, cause in the stimulus)
+
+`f4r5-run7`, same binary. Criterion 22 `PASS` for the third consecutive run.
+Criterion 23's first measurable run recorded `FAIL`, and the run's own
+evidence shows the cause is the leg's stimulus, not the prepend logic: the
+wheel point was taken from the scroller's UIA `BoundingRectangle`, whose
+midpoint in this run is an off-screen point (`L-13326, T-12265, R540, B1693`
+with the window at 64,64 — the rect is not the viewport). All 120 wheel
+batches reported the window foreground, yet the trace contains **zero `view`
+events** between t+54970ms and t+127259ms: no wheel reached the scroller, so
+no prepend was ever triggered. The settled oracle then compared a meaningless
+delta ('Paging message 121' at 19128 px, computed against the broken rect).
+The measured facts taken from this run into the leg's redesign:
+
+- the scroller's rect cannot aim the gesture and cannot serve as a delta
+  basis (it also stands behind the ScrollPattern's percent frame reading
+  0.58 % viewsize where extent arithmetic says ~10 %);
+- verdict discipline: a run whose stimulus provably failed to produce the
+  observation is a statement about the probe. The leg now distinguishes
+  "no prepend was triggered" (`INCONCLUSIVE`, with the specific stimulus
+  reason) from a measured post-prepend state, and re-aims the gesture at a
+  realized message card inside the header/composer band instead of the
+  scroller's rect.
+
+Run summary: 13 PASS / 0 INCONCLUSIVE / 1 FAIL / 9 NOT_RUN, all criteria
+executed except the pre-existing Phase 9 abort set.
+
+### Run 8 (card-aimed stimulus refuted; correct INCONCLUSIVE discipline)
+
+`f4r5-run8`, same binary (exe `733273b7...`, XBF `8db43c7e...`). Criterion 22
+`PASS` for the fourth consecutive run (runs 5-8), the post-save transient
+again refused with `agreeTop=0`. The anchor leg then executed the stimulus
+discipline run7 established, and the run's own numbers show it worked
+correctly as instrumentation even though it still did not trigger:
+
+- the stimulus aimed per batch at the bottom-most realized "Paging message N"
+  card inside the header/composer band, verified the window foreground every
+  batch (`established=True` repeated), and stopped after 6 batches with the
+  reason "no view-change events for 6 consecutive batches; wheel contact
+  lost" rather than exhausting 120 blind batches;
+- verdict: criterion 23 `INCONCLUSIVE` with the specific stimulus reason, 13
+  PASS / 1 INCONCLUSIVE / 9 NOT_RUN - the honest discipline replacement for a
+  FAIL that would have attributed a probe defect to the product.
+
+Run summary: 13 PASS / 1 INCONCLUSIVE / 9 NOT_RUN, all criteria executed
+except the pre-existing Phase 9 abort set.
+
+### Run 9 (verified aiming before the first wheel)
+
+`f4r5-run9`, same binary. Criterion 22 `PASS` for the fifth consecutive
+run (runs 5-9). The anchor leg gained a preflight: before any wheel,
+`ElementFromPoint` at the band-middle aim point must name an element whose
+ancestry reaches `HistoryScroller`. This run recorded the preflight doing
+its job - refusing to wheel blind - and named what it found:
+
+- the ancestry at the aim point was the notice banner text ("Chat, folder
+  selection and every existing project are unaffe..."), then 'Claude Code
+  CLI needs a decision: CHECKING', then `ChatProblemCardsScroller`: the
+  notice and CLI-problem-cards block overlay the top portion of the chat
+  band, so the fixed band middle is covered in this project's state.
+- a probe defect of the leg's own (recorded, not hidden): the ancestry
+  walk continued past the desktop root and raised
+  `COMError -2147467261` ('Invalid pointer'), so the stop reason mixed
+  the overlay reading with the walk failure.
+- no wheel was sent; criterion 23 `INCONCLUSIVE` with the stimulus
+  reason; 13 PASS / 1 INCONCLUSIVE / 9 NOT_RUN.
+
+### Contact-loss root cause measured (probe, `f4r5-run9-probe`)
+
+A standalone probe (`f4r5-run9-probe/wheel-focus-probe.py`, launched against
+a live app on a fresh alpha fixture copy, results in
+`probe-log.txt` beside the source) measured the three links run8 left open:
+
+- **The aimed card rect does not locate the card.** At the bottom-most
+  realized card's own UIA `BoundingRectangle` center (1077,341),
+  `ElementFromPoint` named `SearchMessagesButton` (`aid=SearchMessagesButton`,
+  `cls=Button`), not the card - the realized scrolled-subtree rects do not
+  correspond to their physical screen locations in this application (the
+  same artifact class as `HistoryScroller`'s off-screen `BoundingRectangle`
+  in run7). The ancestry at that point reaches the content
+  `Microsoft.UI.Content.DesktopChildSiteBridge`, so the wheel physically
+  entered the app window; it simply landed on the header/tool row, where no
+  scroll-capable element sits. This refutes, with a measurement, the
+  assumption run8's stimulus was built on.
+- **The fixed header/composer rects are truthful, and the band between them
+  is the scroller's visible area.** At the band center (912,491),
+  `ElementFromPoint` named an in-timeline card whose ancestry reaches
+  `HistoryScroller` (`aid=HistoryScroller`, `cls=ScrollViewer`).
+- **A wheel at the band center contacts the scroller.** One notch produced
+  31 `view` events in the trace and moved the truthfully-read ScrollPattern
+  percent from 99.854 to 99.507 (~0.35 % of the ~5340 px extent per notch,
+  i.e. ~18.6 px), while one notch at the card-rect point produced 0 events.
+
+The harness stimulus was corrected accordingly: aim at the band center
+(recomputed per batch from the two truthful rect sources), preflight once
+that `ElementFromPoint`'s ancestry reaches `HistoryScroller`, and keep the
+per-batch view-event contact verification. The stimulus remains a real
+wheel gesture; the product-side prepend behavior is what run9 measures.
+
+### Run 10 (aim verified, contact streamed, diagnostic cap ended the read)
+
+`f4r5-run10`, same binary (exe `733273b7...`, XBF `8db43c7e...`). Criterion
+22 `PASS` for the sixth consecutive run (runs 5-10). The candidate-scan
+stimulus worked and the run names the next two constraints with
+measurements:
+
+- the per-batch aim was verified: the first scan batch logged
+  "aim verified at (816,516): ancestry aid='-'/'Controller card. Saved
+  only... -> aid='HistoryScroller'", and every one of the 80 executed
+  batches delivered with the window foreground confirmed.
+- contact worked and streamed the trace: `view` events with `inter=1`
+  inertia descend continuously (offsets 3696.4 -> 3531.4 in the recorded
+  excerpt). Each 3-notch batch at `pause=0.02` settles at offsets exactly
+  14.0 px apart (e.g. 3635.800537 -> 3621.800537 -> 3607.800537), with a
+  ~0.84 s settle cycle per batch, so the measured unit of the journey is
+  **14.0 px/batch** - not the ~18.6 px/notch the probe's spaced single
+  notch measured (burst notches replace each other's inertia animation
+  rather than adding).
+- the leg stopped at batch 80 with "no view-change events for 6
+  consecutive batches; wheel contact lost" - and the trace shows the
+  window was still scrolling at that point. The cause is measured in the
+  product side: `UiTraceEvent` capped the trace at 3000 lines
+  (`MainWindow.xaml.cpp:5222`), and each batch's inertia stream is dozens
+  of lines, so the trace exhausted its cap around batch ~74 and went
+  silent; the leg's contact signal (trace line counts) then read a file
+  the diagnostic had finished writing and stopped exactly as designed. A
+  silent diagnostic file is not a statement about the window.
+- the budget was also arithmetically short: the journey needs ~4,530 px
+  bottom-to-top (~4,560 px extent minus the 48 px at-top zone), and at
+  the measured 14.0 px/batch that is ~330 batches against a 120-batch
+  budget.
+
+Verdict: criterion 23 `INCONCLUSIVE` with the named stimulus/instrument
+cause; 13 PASS / 1 INCONCLUSIVE / 9 NOT_RUN.
+
+Corrections taken from run10 into the leg and product: the trace cap is
+raised to 30000 lines (still bounded; the cap rule in the residual
+limitations is unchanged in kind), the leg's contact and progress are now
+read from the truthful ScrollPattern percent instead of trace line
+counts, the notches are spaced (`pause=0.25`) so each notch's inertia
+completes instead of replacing the previous animation, each batch
+settles 0.35 s, and the batch budget is an 800-batch backstop sized
+against the measured unit with a per-batch remaining estimate logged
+from actual deltas.
+
+Run summary: 13 PASS / 1 INCONCLUSIVE / 9 NOT_RUN, all criteria executed
+except the pre-existing Phase 9 abort set.
+
+### Run 11 (criterion 23 FAIL - the product defect, root-caused)
+
+`f4r5-run11`, trace-cap binary (exe `cee40529…`, XBF `8db43c7e…`, recorded
+2026-10-26T08:19:08). First run whose stimulus made full contact: the journey
+ran 285 batches and produced the complete prepend chain in the product's own
+trace:
+
+```
+t+616046ms older-trigger pendST=0 anim=0
+t+616046ms older-capture before=129 off=47.794067 ext=4342.399902 gen=15
+t+616047ms older-page items=50 oldest=79 more=1
+t+616047ms older-prepend items=50
+t+616057ms older-compensate extAfter=8398.400391 grown=4056.000488 target=4103.794556
+```
+
+Criterion 22 `PASS` (seventh consecutive, runs 5-11). **Criterion 23 `FAIL`**
+— the first FAIL attributable to the product rather than the stimulus:
+
+```
+settled post-prepend: realized indices (68, 69, 70, 71, 72, 73, 74)
+  (topmost 68, 7 cards), scroll 49.0 %
+FAIL: topmost realized message is 68 and 72 is realized elsewhere
+```
+
+Run summary: 13 PASS / 1 FAIL / 9 NOT_RUN.
+
+Root cause, measured and **revised** from the first-pass theory. The 16 `view`
+events in the post-compensate window (t+616057..t+618460) show `extentH`
+constant at `8398.400391` for the whole window, and run12 read
+`ExtentHeight()` directly at 250 ms and 600 ms — still `8398.400391`. The
+extent therefore never grew after the insert: the panel counts the 50 inserted
+rows at its unrealized estimate 81.12 px/row (4056.0 / 50), while the panel's
+POSITIONING model refines the realized rows to ~89.19 px/row (run11's topmost
+68 = row 46's top at offset 4102.8 → 4102.8 / 46 = 89.19). An extent-based
+target computed as `anchorOffset + (extentAfter − anchorExtent)` therefore
+lands ~4 rows (≈356 px) short of the anchor and, because the extent is stable,
+can never see the gap. The earlier "(a) ScrollPattern 49.0 % ↔ extent ≈8802"
+confirmation in the pre-run11 analysis was built on the percent frame the leg's
+own comments call untrustworthy; it is **withdrawn** as an extent confirmation.
+
+Two attribution corrections taken from this run:
+
+- **The gen=18 reload was the harness's own post-verdict cleanup, not an
+  operator.** Between the FAIL verdict and the trace dump the harness logs
+  `Switch Project: foreground established=True [attempt 1: already
+  foreground]` → `returned to alpha after the paging probe: True` → store-write
+  DELETE at run-clock 616.605 s; the last selection receipt is alpha
+  `02:59:27.483Z` (matching `projects.last_opened_at`). Increments 16/17/18 =
+  `ShowFolder` → `SelectAsync` entry (`uint64_t gen=++selectorGeneration_;`,
+  `MainWindow.xaml.cpp`) → success `LoadChat` — the same return-to-alpha rebind
+  path the F4-R4 bullet names for runs 5-7. The FAIL was decided ~0.1-0.2 s
+  before the cleanup clicked, so the verdict is untainted; the margin is
+  nevertheless exactly what the identity guard exists to protect.
+- The root-cause defect itself (extent-vs-positioning divergence) is the
+  product finding carried into the fix below.
+
+### Run 12 (extent-reconcile v1: mechanism worked, instrument wrong; guard false positive)
+
+`f4r5-run12`, extent-reconcile v1 binary (exe `7f05ccdb…`, XBF `8db43c7e…`,
+recorded 2026-10-27T02:23:00). v1 added a bounded extent re-measure loop after
+the one-shot compensation. Journey 285 batches; prepend chain at t+560266 with
+the same numbers (ext 4342.399902 → extAfter 8398.400391, target 4103.812622).
+The loop ran exactly as designed:
+
+```
+t+560536ms older-recomp pass=1 off=4102.801270 ext=8398.400391 target=4103.812622
+t+560894ms older-recomp pass=2 off=4103.812622 ext=8398.400391 target=4103.812622
+t+560894ms older-recomp-done pass=2 off=4103.812622 ext=8398.400391
+```
+
+— and corrected nothing: the extent never left `8398.400391`, so the
+recomputed target equaled the wrong original target and the loop declared done
+on a stable-but-stale instrument. This is the direct measurement that
+supersedes the extent theory and motivates the content-based fix (measure the
+anchor row's slot in the repeater's content space, not the scroll extent).
+
+Criterion 22 `PASS` (eighth consecutive, runs 5-12). Criterion 23
+**INCONCLUSIVE — a guard false positive, not a product reading**: the new
+bound-identity guard compared `ProjectHeading` against the seeded display name
+`zz-paging-probe`, but the heading reads `paging-probe` — `Select` re-derives
+`displayName` from the observed folder (confirmed by
+`storage_tests.cpp:764`, where a Select against a folder observed as
+"observed" yields `displayName=="observed"`), so the seeded name never reaches
+the heading. The guard's premise (a bound-identity change fail-closes to
+INCONCLUSIVE) is correct; its baseline was wrong. The correction, applied
+before run13: baseline-capture the heading immediately after the probe binds
+and compare every later read against that capture, with a never-captured
+baseline itself fail-closing to INCONCLUSIVE.
+
+Run summary: 13 PASS / 1 INCONCLUSIVE / 9 NOT_RUN. The run's identity reads
+after the guard were not used for a verdict, so it establishes no reading for
+criterion 23 either way; its durable result is the extent-never-grew
+measurement above.
+
+### Run 13 (anchor-row target v2: improved but still FAIL; guard fixed)
+
+`f4r5-run13`, anchor-row binary (exe `38cca87c…`, XBF `8db43c7e…`, recorded
+2026-10-27T02:50:05). The baseline identity guard worked exactly as
+corrected: `identity baseline captured at bind: ProjectHeading='paging-probe'`
+and no guard fired — the run12 false positive is gone. Journey 285 batches,
+1 older-trigger, full chain observed.
+
+Criterion 22 `PASS` (ninth consecutive, runs 5–13). **Criterion 23 `FAIL`**,
+improved by exactly one row over run11:
+
+```
+settled post-prepend: realized indices (69, 70, 71, 72, 73, 74, 75)
+  (topmost 69, 7 cards), scroll 50.2 %
+FAIL: topmost realized message is 69 and 72 is realized elsewhere
+```
+
+The v2 compensation ran cleanly and stabilized on its own instrument:
+
+```
+t+560062ms older-capture before=129 off=47.848755 ext=4342.399902 gen=15
+t+560063ms older-page items=50 oldest=79 more=1
+t+560064ms older-prepend items=50
+t+560069ms older-compensate instrument=anchor-row y1=4150.399902 off=47.848755 target=4198.248657
+t+560320ms older-recomp pass=1 off=4197.200684 y1=4150.399902 target=4198.248657
+t+560678ms older-recomp pass=2 off=4198.248657 y1=4150.399902 target=4198.248657
+t+560678ms older-recomp-done pass=2 off=4198.248657 y1=4150.399902
+```
+
+— extent constant at 8398.400391 throughout, y1 constant at 4150.399902
+across passes (the instrument believes it has settled), offset landed exactly
+on the recomputed target.
+
+Run summary: 13 PASS / 1 FAIL / 9 NOT_RUN.
+
+Row mapping pinned for all later readings: capture `before=129` is the oldest
+loaded **row id** (msg 72 ↔ row 129 — the pre-prepend page is msgs 72..121,
+50 items) and `oldest=79` is the prepended page's oldest row id (msg 22).
+The oracle's expectations (72 at the top edge, 22 never realized) match this
+mapping.
+
+**Two live hypotheses for the remaining 3-row shortfall, not yet
+discriminated:**
+
+- **Φ1 — the product is physically correct and the oracle is buffer-blind.**
+  One model explains every logged number: arrangement ≈83.008 px/row
+  (y1 = 50 × 83.008), extent growth 81.12 px/row, their difference × 50 =
+  94.4 px = the exact run11→run13 target delta (4103.79 → 4198.25), and a
+  systematic 3-row realization buffer above the viewport top makes the
+  topmost-*realized* read 68/69 while the *visible* top row is msg 72. Under
+  Φ1 the extent was correct all along (8398.4 / 100 rows = 83.984 px/row)
+  and the realized-index oracle never measured the property it claims to
+  (physical top row).
+- **Φ2 — the product is genuinely 3 rows short.** Positioning model
+  ~89–94 px/row, y1 a ghost/stale arrangement, extent lying. Needs more
+  assumptions and is not refuted by any measurement, so it cannot be
+  dismissed.
+
+Run14 discriminates with two independent instruments: the app-side `r`
+(anchor card's `TransformToVisual(scroller).Y` per pass — Φ1 ⇒ ≈47.85,
+Φ2 ⇒ ≈+260, ghost container ⇒ ≈−47.85) and the harness-side physical
+ElementFromPoint sampler (top-down pitch over the band — Φ1 ⇒ ~83 px/row,
+Φ2 ⇒ ~94 px/row — plus the fitted message number at the band floor, which
+under Φ1 reads ≈72 and under Φ2 reads ≈69). Run14's verdict logic is
+unchanged (still realized-index based, so FAIL is expected either way).
+
+### Run 14 (Φ1 confirmed: the restore is exact; the oracle reads the buffer)
+
+`f4r5-run14`, r-instrumentation binary (exe `7e9db3a6…`, XBF `8db43c7e…`,
+recorded 2026-10-27T03:37:10). Guard healthy, full chain, 285 batches,
+1 older-trigger. Criterion 22 `PASS` (tenth consecutive, runs 5–14);
+criterion 23 `FAIL` on the unchanged realized-index oracle; totals 13 PASS /
+1 FAIL / 9 NOT_RUN.
+
+The `r` instrument settles the question:
+
+```
+older-compensate instrument=anchor-row y1=4150.399902 r=-27.688965 off=47.812134 target=4198.212036
+older-recomp pass=1 off=4197.200684 y1=4150.399902 r=-26.800781 target=4198.212036
+older-recomp-done pass=2 off=4198.212036 y1=4150.399902 r=-27.812012
+```
+
+`r ≈ −27.8` is the anchor row's top in the **scroller's** frame — 27.8 px
+above the viewport top, stable across passes. The extent arithmetic closes
+the reading: `sh` (= `ScrollableHeight()` = extent − viewport) = 8367.200390
+and extent = 8398.400391, so the **viewport is 31.2 px** at settle (the
+`ChatTopSpacer` `*` row — HistoryScroller is a sliver at this window size;
+its UIA BoundingRectangle being off by 13,000 px, run7, is the same class).
+The anchor row 50 (msg 72) spans [−27.8, 55.2] in that frame and therefore
+contains [0, 31.2] — the visible top row **is** msg 72. The realized set
+47..53 is the panel's ±3-row realization buffer around row 50, so the
+topmost-realized read of 69 (row 47) is 3 buffer rows above the visible
+edge, not 3 rows short of it. One model explains every run: under Φ1 the
+visible row = 50 (run13/14) or 49 (run11, extent target 94.4 px lower ⇒
+anchor frame top +66.6 ⇒ row 49 = msg 71 — exactly the one-row-short
+observed), and the buffer top reads 47 or 46 (msgs 69 / 68) — matching all
+three FAIL reads. Φ2 would need `r` wrong by ~270 px on a UIA-confirmed
+realized element.
+
+**The ElementFromPoint sampler was inconclusive and stays INCONCLUSIVE.**
+At this window size the chat band is covered by the notice + CLI problem
+cards: 27 cover points y=250..550 (topmost descriptors `?`, "Bound · No
+working CLI session admitted", the canonical-path card), and the reachable
+timeline points returned no message text (the aim point (816,516) resolved
+to a controller card two levels above HistoryScroller). That is a harness
+aim/coverage limitation, **not** a reading of the timeline; the sampler now
+logs its per-point reached-no-message descriptor so the gap is visible
+(run15+). The verdict above rests on the app-side `r`/extent arithmetic,
+not on the sampler.
+
+### Oracle-adequacy finding for criterion 23 (recorded BEFORE the oracle change; §13)
+
+Criterion 23's acceptance statement is about the **visible** top edge: after
+the older page is prepended, the reading anchor (msg 72) must remain at the
+top of the conversation area, with at most one boundary row above it. The
+run5–14 oracle read the topmost **realized** card index and demanded
+`topmost >= 71` with 72 realized.
+
+Under the confirmed ±3-row realization buffer, `topmost >= 71` is
+satisfiable only when the visible row is ≥ row 74's position — i.e. only
+when the reader has been scrolled **two rows below** the anchor. At the one
+correct state (visible row = anchor row) the oracle *cannot* pass: it reads
+anchor−3. It would also pass a two-row overshoot (visible row 74 ⇒ topmost
+71). So the oracle as written (a) made PASS unreachable at the acceptance
+state, (b) made PASS reachable at a wrong state, and (c) measured the
+realization buffer's top edge while claiming to measure the physical top
+edge. That is an **oracle-adequacy defect**: the product reached the
+acceptance state in runs 13–14 (r-model above) and the FAIL verdicts there
+are misattributions. §13 requires the finding to be recorded before any
+oracle edit and the corrected oracle to be proven by a controlling mutation
+— not a silent weakening.
+
+**Correction (product restore logic unchanged).** The product publishes the
+physically visible top row on `HistoryScroller` via
+`AutomationProperties.ItemStatus` as `top-visible=<submissionId>`, computed
+from the realized rows' scroller-frame transforms (the same instrument as
+`r`), reading `top-visible=pending` while a prepend compensation is in
+flight (so a stale pre-prepend value can never satisfy the check) and
+`top-visible=unknown` when no realized row intersects the viewport top. The
+harness reads ItemStatus and demands exactly the prepended page's oldest
+row id (`seeded-paging-00072`, from `older-capture before=` →
+`contributions.submission_id`), with `seeded-paging-00022` never realized;
+the realized-index reading stays logged as evidence. Chain, one-trigger,
+guard, and no-second-trigger clauses are unchanged. Because the oracle now
+consumes a product publication, run15 is the **controlling mutation**:
+revert the compensation target to the extent formula (run11 behavior) with
+the re-landing neutralized — published value must read
+`seeded-paging-00071` (one row above the anchor) and the criterion must
+FAIL at the ItemStatus assertion; run16 then restores byte-identically,
+rebuilds, and must PASS with the product unchanged.
+
+### Run 15 (controlling mutation, first attempt): INCONCLUSIVE — window lost, not a product reading
+
+`f4r5-run15`, mutant binary (exe `cbdd7ade…`, XBF `8db43c7e…`, recorded
+2026-10-27T04:27:47 — the run's own `artifact-identity.json` confirms the
+correct mutant executed). The mutation is in force in the source and the
+binary (`MUTANT-extent` tag present, recomp re-landing neutralized to
+`settled = target`), verified by hash after the run. The backup of the
+pre-mutation source is `MainWindow.xaml.cpp.mutation-backup` (`0c6db922…`,
+byte-identical to the source at mutation time).
+
+Criterion 22 `PASS`. **Criterion 23 `INCONCLUSIVE`** — not FAIL, not PASS,
+and *not* a discriminating result. Totals 12 PASS / 1 INCONCLUSIVE /
+0 FAIL / 10 NOT_RUN.
+
+**What actually happened (this is a harness/environment flake, not an
+oracle or product reading).** The PHASE 3B wheel journey ran only to batch
+40 (scroll 99.806 % → 89.718 %) and never reached the at-top trigger zone
+(the older-page prepend fires only near the top; the journey needs ~285
+batches). No `older-capture` / `older-compensate` / `top-visible` line was
+ever emitted, so the mutant never reached the publish point and the
+ItemStatus oracle never ran. The leg then aborted on
+`COMError (-2147220991, 'An event was unable to invoke any of the
+subscribers')` — the UIA client's reaction to its target window going away —
+with the diagnostics recording `window_destroyed`, `foreground holder:
+... JioHotstar - Google Chrome`, and the application window gone. There is
+**no WER crash event** for Mayasaba in the window, so the app did not fault;
+the window was closed or destroyed by the environment (the Chrome foreground
+takeover is consistent with an external focus grab). Criterion 23's leg
+caught the COMError and recorded the precise reason instead of fabricating a
+verdict, which is the intended fail-closed behaviour.
+
+**Disposition (amended after run15b).** The binary was correct, so the same
+mutant was re-run as **run15b** on a fresh store. That re-run did not obtain
+the discriminating reading — it exposed a **product defect in the newly added
+publication code** (E_LAYOUTCYCLE fail-fast; full root cause in the run15b
+entry below). The run15 classification stands on one artifact: its window was
+gone at ~04:29–04:30 with **no `unhandled-exception.log` entry** in that
+window, so the loss was environmental, not the product fault that killed
+run15b. The same lost-window signature therefore has two distinct causes here
+and must be classified from the exception record, never from the repetition.
+The discriminating reading is attempted in **run15c** after the defect fix.
+
+### Run 15b: a product E_LAYOUTCYCLE fail-fast, not a flake — the publication probe was mutating layout
+
+`f4r5-run15b`, same mutant binary as run15 (exe `cbdd7ade…`, XBF
+`8db43c7e…`, recorded 2026-10-27T04:32:38 via the run's own
+`artifact-identity.json`). Totals 12 PASS / 1 INCONCLUSIVE / 0 FAIL /
+10 NOT_RUN; criterion 23 recorded `INCONCLUSIVE: anchor leg raised COMError
+(-2147220991, 'An event was unable to invoke any of the subscribers')`.
+
+**The mutant again never reached the publish point.** The wheel journey ran
+250 logged batches to pct 13.296 (batch 1 estimated ~393 batches; run11/13/14
+all reached the at-top trigger at batch 284, pct 1.433, then emitted
+`older-capture before=129`). run15b's 9,359-line log contains **no
+`older-trigger` / `older-capture` / `older-compensate` / `top-visible` /
+`older-recomp` line at all** — the journey ended in a ~1.3 s oscillation of
+the scroller itself (`extentH=4342.399902 ↔ 4344.000000`,
+`off=541.601013 ↔ 543.201050`, a fixed 1.6 px delta, ~25 ms period) and then
+`PHASE 3B complete`. End-of-leg diagnostics: the UIA tree enumerated **empty**
+(`menu elements in the tree now: []`), `GetForegroundWindow()` returned **0**
+while the application window handle still existed, and the message pump
+**answered** WM_NULL in 1.160 s with `IsHungAppWindow=False` — an alive
+process whose window no longer answers UIA.
+
+**The decisive artifact: the app fail-fasted.**
+`%LocalAppData%\Mayasaba\unhandled-exception.log` (the path
+`App.xaml.cpp:20–31` uses — LocalAppData, **not** beside the store; the
+evidence directories contain no copy) carries one new entry:
+
+```
+[2026-10-27T04:46:39] hresult=0x802B0014 | message=Layout cycle detected.  Layout could not complete.
+```
+
+04:46:39 falls inside run15b's window (04:32:38 → stdout last written
+04:46:42), and it is the only entry after the historical 2026-10-21
+attachment-preview cycles. E_LAYOUTCYCLE (`0x802B0014`) surfaces in this
+application as fail-fast `0xC000027B`, after which every UIA call fails —
+which is exactly why the anchor leg and Phase 6 died on COMErrors and why the
+window looked "destroyed". run15 (04:27:47 → 04:30:32) wrote **no** entry, so
+run15's window loss remains environmental while run15b's is a product fault.
+
+**Root cause (CODE_OR_TEST, in this work's own new code).**
+`PublishTopVisibleRow(L"")` — the idle-tick path run by `scrollIdleTimer_`
+200 ms after every scroll settle, i.e. constantly throughout the wheel
+journey — probed for the visible row with
+
+```cpp
+for (int32_t i = lo; i <= hi && examined < 400; ++i)
+    element = HistoryRepeater().GetOrCreateElement(i);   // forces realization
+```
+
+`ItemsRepeater::GetOrCreateElement` **realizes** an unrealized row. A
+diagnostic that runs on every idle tick and forces realization of up to
+several dozen rows outside the virtualizer's window mutates the very layout
+it observes: the extent inflates, the virtualizer releases the forced
+elements, the extent drops, the change dirties layout and re-fires view
+events, which re-arm the idle timer — a feedback loop until WinUI's cycle
+detection trips. The corroborating readings are all in the trace: periodic
+`elem-prep index=50 count=51` events with +112.8 px extent spikes throughout
+the journey (one element forced beyond the 50-row window), and the terminal
+1.6 px extent/offset oscillation immediately before the fail-fast. run14 ran
+the identical journey **without** this code and was clean through Phase 6.
+
+**Fix.** Read-only over realized state:
+`HistoryRepeater().TryGetElement(i)` (`MainWindow.xaml.cpp:1345`) returns an
+element only if already realized and never creates one. The visible row is
+always realized inside the ±3-row buffer, so the probe always finds it; an
+unrealized index is skipped at negligible cost. The invariant is stated at
+the call site: *a diagnostic must never mutate the layout it observes*.
+
+**What is not claimed.** The exact per-tick realization mechanics are not
+micro-measured (the extent spikes were +112.8 px, one row, not the full probe
+span — the forced elements are released within the same layout pass). The
+causal chain rests on the exception record, the code path, and the absence of
+any other new layout-mutating code; **run15c** is its falsifiable test: with
+the fix built in (exe `1d43bfd8…`), the journey must again reach the trigger
+(~batch 284) and the mutant must publish `seeded-paging-00071` ⇒ criterion 23
+FAIL at the ItemStatus assertion. If the cycle recurs, the hypothesis is
+refuted and the diagnosis reopens.
+
+### Run 15c: layout-cycle fix confirmed and the mutation executed; the oracle could not read its own property
+
+`f4r5-run15c`, mutant + `TryGetElement` fix (exe `1d43bfd8…`, XBF
+`8db43c7e…`). Totals **13 PASS / 1 INCONCLUSIVE / 0 FAIL / 9 NOT_RUN**.
+Criterion 23 `INCONCLUSIVE`.
+
+**The layout-cycle fix is confirmed.** The app survived the entire run — the
+first mutant run to do so. Criterion 7 (DPI) **PASS**, the first time since
+run14, and the sampler was clean end to end: **11190 samples, p95 1.25 ms, max
+35.71 ms, 0 over 250 ms** (run15b's dead window produced the COMErrors and the
+`window_destroyed` samples; this run produced neither). `%LocalAppData%\Mayasaba\unhandled-exception.log`
+gained **no** entry in this run's window — the only 2026-10-27 entry remains
+run15b's `04:46:39`. The `TryGetElement` read-only probe removed the feedback
+loop without removing the publication.
+
+**The mutation executed exactly as designed.** The wheel journey reached the
+at-top trigger cleanly (batch 285, pct 1.433 — matching run11/13/14), and the
+trace carries the whole chain:
+
+```
+older-trigger pendST=0 anim=0
+older-capture before=129 off=47.758423 ext=4342.399902 gen=15
+older-page items=50 oldest=79 more=1
+older-prepend items=50
+older-compensate instrument=MUTANT-extent y1=4150.399902 r=-27.542480 off=47.758423 target=4103.758911
+older-recomp-mutant-settled settled=4103.758911 anchorRowWouldBe=4198.158325
+older-recomp-done pass=2 off=4102.801270 y1=4150.399902 r=67.598633
+```
+
+`settled == target` on both passes with `anchorRowWouldBe` ~94 px (one row)
+away is the extent-formula defect reproduced deterministically: the reader
+lands one row short of the anchor. The publish point was reached, so the
+observation the corrected oracle needs now exists.
+
+**Criterion 23 recorded INCONCLUSIVE because the oracle's read is broken, not
+because the product was unreadable.** The detail line:
+
+```
+top-visible published: '<read-error AttributeError>' (expected anchored
+submission_id 'seeded-paging-00072'; realized topmost 68 is buffer evidence
+only)
+INCONCLUSIVE: the product's published top-visible ItemStatus was
+'<read-error AttributeError>', so the physical top edge was never observed
+```
+
+The `except` arm recorded the error, so the read returned on the **first**
+poll — it never polled the 6 s budget and never observed the product at all.
+A `top-visible` label is absent from the trace, which proves nothing:
+`PublishTopVisibleRow` publishes through `AutomationProperties::SetItemStatus`,
+not a trace event, and the product-side call sites are all present
+(`MainWindow.xaml.cpp:1040` pending-invalidate on prepend, `:1284` on
+recomp-done, `:1306` on budget exhaustion, `:1886` idle tick).
+
+**Root cause of the read failure (harness, not product).** The read was
+
+```python
+val = raw.GetCurrentPropertyValue(30104)   # UIA_ItemStatusProperty
+last = (val or "").strip()
+```
+
+The comtypes wrapper for `IUIAutomationElement` declares that method's retval
+as `POINTER(VARIANT)`
+(`comtypes/gen/_944DE083_8FB8_45CF_BCB7_C477ACB2F897_0_1_0.py`), and comtypes
+hands it back as an opaque `POINTER(IUnknown)`, not a Python string. Measured
+against a live element:
+
+```
+type: POINTER(IUnknown)    is str: False
+harness expr raised: AttributeError : 'POINTER(IUnknown)' object has no attribute 'strip'
+CurrentItemStatus -> str ''
+```
+
+So `.strip()` raised on **every** poll, unconditionally, regardless of what
+the product published. The corrected oracle therefore had never once observed
+the published value — in run15 or run15c. Per §13 this is an **oracle-adequacy
+defect**: a read that cannot return a value is not an observation of the
+product, so run15c's INCONCLUSIVE carries no evidence for or against the
+corrected oracle, and it is *not* a refutation of the run15b diagnosis.
+
+**Correction (documented before the change).** `CurrentItemStatus` is the
+typed accessor for the identical property (30104 ==
+`UIA_ItemStatusPropertyId`) and returns a `str`; it is the accessor this
+harness's own `get_item_status()` uses (line 847), whose reads are proven by
+criteria that pass on it. `paging_read_top_visible` now reads
+`getattr(scroller.element_info.element, "CurrentItemStatus", "")`. The verdict
+chain is **unchanged**: an unreadable, empty, `unknown` or `pending` read still
+maps to INCONCLUSIVE, and only a genuine identity mismatch can FAIL. This
+repairs the read so the existing comparison can execute; it does not weaken
+the oracle.
+
+**Falsifiable test.** With the read repaired and the mutation still in force,
+**run15d** must FAIL at the ItemStatus assertion with published
+`seeded-paging-00071` against expected `seeded-paging-00072`. That is the
+discriminating mutation proof run15 and run15c could not produce.
+
+**What is not claimed.** No verdict about the corrected oracle's discriminating
+power has been earned yet — run15, run15b and run15c each failed before the
+comparison for a different reason (lost window, product fail-fast, broken
+read). The run15b layout-cycle root cause is **not** weakened by this entry:
+it rests on the exception record and the code path, and run15c's clean sampler
+plus absent exception entry confirm its fix.
+
+### Run 16: PASS leg closed - restored product, repaired read, criterion 23 PASS
+
+`f4r5-run16`, restored product (mutation absent, `TryGetElement` fix present;
+exe `36d7dd1b3f436d797c13535bc3cbe2591d45947b281ff6f3f5aa1520914b2813`,
+XBF `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a` —
+unchanged from run15c, confirming the read correction was C++-only and
+`source_commit 8079e60d` per `artifact-identity.json`). Totals **14 PASS /
+0 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 9 NOT_RUN**. Criterion 23 **PASS**;
+criterion 7 (DPI) **PASS** again; criterion 22 **PASS** as on every run since
+run5. The 9 NOT_RUN remain the pre-existing Phase 9 `ActionCenterPanel not
+found in UIA tree` abort (criteria 8–15, 21), unrelated to F4-R5.
+
+Decisive criterion-23 detail, all read through the repaired
+`CurrentItemStatus` accessor:
+
+```
+top-visible published: 'top-visible=seeded-paging-00072' (expected anchored
+  submission_id 'seeded-paging-00072'; realized topmost 69 is buffer evidence
+  only)
+hold read: realized indices [69..75] (topmost 69), scroll 50.16 %,
+  top-visible 'top-visible=seeded-paging-00072'
+prepend chain: older-trigger (1), older-capture, older-page, older-prepend,
+  older-compensate
+older-compensate instrument=anchor-row y1=4150.399902 r=-27.688965
+  off=47.794067 target=4198.193970
+older-recomp-done pass=2 off=4197.200684 y1=4150.399902 r=-26.800781
+wheel journey: 285 batches to the at-top trigger (matching runs 11/13/14/15c)
+```
+
+Three facts close the PASS leg at once. (1) The product's corrected
+anchor-row path publishes the anchored row identity, and the oracle reads a
+**real, matching value** — run15c's `<read-error AttributeError>` is therefore
+attributed purely to the broken comtypes accessor, exactly as diagnosed. (2)
+The identity survives the hold read, so the anchor is stable, not a
+transitional sample. (3) The `TryGetElement` fix holds: sampler **11154
+samples, 11152 answered, p50 0.15 ms, p95 1.34 ms, p99 5.98 ms, max 31.50 ms,
+0 over 250 ms**, and criterion 7 PASS — the repaired probe never re-entered
+the layout-cycle loop.
+
+**What is not claimed.** A PASS on the restored product does not by itself
+prove the oracle *discriminates* — a broken read that always returned the
+expected value would also pass here. The discriminating half is run15d: the
+controlling mutation forced back to the extent-formula landing must make this
+same oracle FAIL with `seeded-paging-00071`. That run was launched against
+mutant exe `d6157a2479ff9506a9c1d4559a127035ec5fe2c9d069ca987ef88210fbea5553`
+(XBF unchanged) and is recorded next.
+
+### Run 15d: controlling mutation discriminates - criterion 23 FAIL at the predicted identity
+
+`f4r5-run15d`, mutant product (both halves of the controlling mutation; exe
+`d6157a2479ff9506a9c1d4559a127035ec5fe2c9d069ca987ef88210fbea5553`, XBF
+`8db43c7e…` unchanged — C++-only mutation) with the **repaired
+`CurrentItemStatus` read**. Totals **13 PASS / 0 INCONCLUSIVE / 1 FAIL /
+0 BLOCKED / 9 NOT_RUN**. Criterion 23 **FAIL** — at the assertion and the
+identity predicted in advance. Criterion 7 (DPI) PASS and criterion 22 PASS.
+
+Decisive detail:
+
+```
+top-visible published: 'top-visible=seeded-paging-00071' (expected anchored
+  submission_id 'seeded-paging-00072'; realized topmost 68 is buffer evidence
+  only)
+FAIL: the anchored top-edge identity did not hold: published top-visible is
+  'seeded-paging-00071', expected the anchored row 'seeded-paging-00072'
+  (realized topmost was 68; the physical top edge must read the anchored row,
+  not a buffer row).
+older-compensate instrument=MUTANT-extent y1=4150.399902 r=-27.605957
+  off=47.706177 target=4103.706665
+older-recomp-mutant-settled settled=4103.706665 anchorRowWouldBe=4198.106079
+older-recomp pass=1 off=4102.801270 y1=4150.399902 r=67.598633
+older-recomp-mutant-settled settled=4103.706665 anchorRowWouldBe=4198.106079
+older-recomp-done pass=2 off=4102.801270 y1=4150.399902 r=67.598633
+wheel journey: 285 batches to the at-top trigger (identical to runs 11/13/14/15c/16)
+```
+
+The ~94 px (one row) gap between `settled` and `anchorRowWouldBe`, held
+constant across both reconcile passes with `r=+67.6` (the anchor row's top
+sitting 67.6 px *below* the viewport top), is the run11 extent-formula defect
+reproduced deterministically — and this time the oracle was able to *read*
+the consequence. The read returned a real, wrong identity and the verdict
+chain failed exactly once, at the top-visible comparison.
+
+**Discrimination proof, completed.** Same repaired read path, two products:
+
+| run | product | published top-visible | expected | criterion 23 |
+|---|---|---|---|---|
+| run16 | restored (anchor-row instrument) | `seeded-paging-00072` | `seeded-paging-00072` | **PASS** |
+| run15d | mutant (extent formula) | `seeded-paging-00071` | `seeded-paging-00072` | **FAIL** |
+
+The corrected oracle accepts the corrected product and rejects the restored
+defect, at the exact row the arithmetic predicts. That is the controlling-
+mutation acceptance evidence §13 requires for the criterion-23 oracle
+change, and it closes the chain run15 / run15b / run15c could not close (each
+of those failed before the comparison for its own recorded reason).
+
+**The layout-cycle fix held under mutation.** The app again survived the whole
+run: sampler **11236 samples, 11234 answered, p50 0.15 ms, p95 1.33 ms,
+p99 5.81 ms, max 26.68 ms, 0 over 250 ms**, and `%LocalAppData%\Mayasaba\
+unhandled-exception.log` gained **no** entry (the only 2026-10-27 entry
+remains run15b's `04:46:39`). The `TryGetElement` probe is compatible with the
+mutant's positioning, confirming the fail-fast was the probe and nothing else.
+
+**What is not claimed.** The FAIL is for a defect that was *deliberately
+re-introduced*; it is not a new product finding, and the committed source
+carries neither mutation half. `MainWindow.xaml.cpp` was restored from
+`.mutation-backup` (SHA-256 `0c6db922…` verified), the `TryGetElement` fix
+re-applied alone, and the result verified byte-identical to `.fixed-base`
+(SHA-256 `e6094fb2…`). A rebuild of that identical source produced exe
+`b9cd1e45…` — a different hash from run16's `36d7dd1b…`, i.e. MSVC build
+non-determinism (PE timestamp/PDB GUID), not a source difference. Because a
+native observation is evidence only for the artifact that produced it, the
+restored state is re-confirmed by **run17** against `b9cd1e45…` rather than
+carrying run16's verdict forward; run17 is recorded next.
+
+### Run 17: restored artifact re-confirmed - criterion 23 PASS on the committed state
+
+`f4r5-run17`, restored product rebuilt from the byte-identical restored
+source (exe `b9cd1e452aa80e9c70672697b40372ba8a23b4cc0dc8536241dccc762b03b321`,
+XBF `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a`
+unchanged — C++-only; `source_commit 8079e60d` per `artifact-identity.json`).
+Totals **14 PASS / 0 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 9 NOT_RUN**.
+Criterion 23 **PASS**; criteria 7 (DPI) and 22 **PASS**. The only FAIL line is
+the pre-existing Phase 9 `ActionCenterPanel not found in UIA tree` abort,
+which leaves criteria 8–15 and 21 `NOT_RUN` on every run in this section.
+
+Criterion-23 detail, identical in shape to run16:
+
+```
+top-visible published: 'top-visible=seeded-paging-00072' (expected anchored
+  submission_id 'seeded-paging-00072'; realized topmost 69 is buffer evidence
+  only)
+hold read: realized indices [69..75] (topmost 69), scroll 50.17 %,
+  top-visible 'top-visible=seeded-paging-00072'
+prepend chain: older-trigger (1), older-capture, older-page, older-prepend,
+  older-compensate
+older-compensate instrument=anchor-row y1=4150.399902 r=-27.804199
+  off=47.888855 target=4198.288757
+older-recomp-done pass=2 off=4197.800781 y1=4150.399902 r=-27.400879
+wheel journey: 285 batches to the at-top trigger (identical to every
+  post-fix run)
+```
+
+Sampler **11227 samples, 11225 answered, p50 0.15 ms, p95 1.43 ms, p99 5.85
+ms, max 23.12 ms, 0 over 250 ms**; `%LocalAppData%\Mayasaba\
+unhandled-exception.log` still carries only run15b's `04:46:39` entry.
+
+This run exists because the rebuilt exe's hash differs from run16's despite
+byte-identical source, and §13 forbids carrying an observation across an
+artifact boundary. It re-confirms PASS on the exact artifact backing the
+committed source, so the F4-R5 close-out does not rest on a hash that no
+longer exists in `bin\x64\Release`.
+
+**F4-R5 final state.** Legs 22 and 23 both PASS on the committed artifact.
+The controlling mutation (run15d) fails exactly at the identity the extent
+formula gets wrong; the restored product (runs 16 and 17) passes with the
+same read path. The layout-cycle defect found in run15b is fixed
+(`TryGetElement`) and confirmed across three whole-run survivals (run15c,
+run16, run15d-mutant, run17). The oracle's comtypes accessor defect is
+corrected and documented. Remaining open obligations belong to other work:
+the Phase 9 `ActionCenterPanel` abort (criteria 8–15, 21), F4-R2's refusal
+branch (source-reviewed, no non-empty `errorMessage` page arrived in any
+run), and F4-R4's Jump-to-latest control (no harness leg clicks it).
+
+
+### Criterion 23 (reading anchor) - first measurable run
+
+Criterion 23 was never measurable while 22 failed (its precondition is 22's
+pass). Per the standing rule, a criterion's verdict comes entirely from its
+own first measurable run; no prior BLOCKED/INCONCLUSIVE reading carries
+forward. Four harness-side stimulus defects surfaced in sequence, each
+named before it was corrected:
+
+1. **Missing pattern argument (run5).** `iface_scroll.SetScrollPercent`
+   requires both the horizontal and the vertical pattern argument; the leg
+   passed only the vertical one, raising `TypeError: required argument
+   'verticalPercent' missing`.
+2. **Provider rejection (run6).** With both arguments supplied the call
+   reached the provider and was rejected: `COMError -2146233079
+   (0x80131509)`. The standalone probe `f4r5-run6/scroll-pattern-probe.py`
+   (launched against a live app on a fresh fixture copy) established the
+   mechanism: every `SetScrollPercent(0.0, v)` form is rejected by the
+   provider with the same HRESULT, the `UIA_ScrollPatternNoScroll` (-1)
+   horizontal forms die inside pywinauto's wrapper before reaching COM
+   (`'float' object is not callable`), and the pattern's *reads*
+   (`CurrentVerticalScrollPercent`, `CurrentVerticalViewSize`) work fine.
+   Conclusion: the UIA Scroll-pattern set is not a valid stimulus against
+   this control; only the scroll gesture is.
+3. **Off-screen aiming (run7).** The first wheel replacement took its point
+   from the scroller's own UIA rect, whose midpoint is an off-screen
+   location because the rect is not the viewport (L-13326 / T-12265 with
+   the window at 64,64 in that run). 120 delivered-and-foregrounded wheel
+   batches produced zero `view` events; no prepend ever triggered, and the
+   rect-based delta comparison certified nothing (recorded as FAIL with
+   the cause named, in the Run 7 subsection).
+4. **Card-rect aiming (run8, INCONCLUSIVE by discipline).** Per batch the
+   stimulus aimed at the bottom-most realized "Paging message N" card
+   inside the header/composer band, verified the window foreground, and
+   verified each batch's contact from new `view` events in the trace -
+   six such batches produced zero `view` events, the loop stopped with
+   that precise reason, and the verdict was INCONCLUSIVE rather than a
+   FAIL that would have blamed the product (Run 8 subsection).
+5. **The card-rect lie measured (probe, `f4r5-run9-probe`).** The probe
+   measured the assumption the run8 stimulus had been built on:
+   at a realized card's own UIA rect center, `ElementFromPoint` names
+   `SearchMessagesButton` - the realized scrolled-subtree rects do not
+   correspond to their physical screen locations (the same artifact class
+   as the scroller's rect). At the band center between the truthful
+   header/composer rects, the ancestry reaches `HistoryScroller`, one
+   wheel notch produced 31 `view` events and moved the ScrollPattern
+   percent 99.854 -> 99.507 (Contact-loss subsection above).
+6. **Overlay-covered aim (run9; candidate scan (run10)).** run9's
+   preflight - ancestry from a fixed band-middle point - named the notice
+   banner text, then 'Claude Code CLI needs a decision: CHECKING', then
+   `ChatProblemCardsScroller`: the notice and CLI-problem-cards block
+   overlay the top portion of the chat band, so a fixed band middle can
+   be covered (and, in this first version, the ancestry walk past the
+   desktop root also raised `COMError -2147467261`, a probe bug recorded
+   here). run10's leg replaces the fixed aim with a per-batch candidate
+   scan from just above the composer upward, returning the first point
+   whose `ElementFromPoint` ancestry reaches `HistoryScroller`; an aim
+   that cannot be verified stops the stimulus with its reason recorded
+   instead of wheeling blind. The identity oracle from item 4 is
+   unchanged.
+7. **The diagnostic cap collided with the streaming journey (run10).**
+   run10 verified the aim (first scan batch reached `HistoryScroller`)
+   and delivered all 80 batches with confirmed foreground and streamed
+   trace events, yet the leg stopped at batch 80 with "no view-change
+   events for 6 consecutive batches" while the window was still
+   scrolling: the product-side `UiTraceEvent` cap (then 3000 lines) had
+   been exhausted by the inertia streaming itself, so the leg's contact
+   signal - trace line counts - was reading a file the diagnostic had
+   finished writing. The run also measured the budget unit: each
+   3-notch burst at `pause=0.02` settles exactly 14.0 px apart
+   (~330 batches for the ~4,530 px journey against a 120-batch budget).
+   Corrections: product trace cap raised to 30000 lines (still bounded),
+   the leg's contact and progress now read the truthful ScrollPattern
+   percent rather than trace counts, notches are spaced so each notch's
+   inertia completes, and the batch budget is an 800-batch backstop
+   sized from the measured unit with a per-batch estimate logged.
+   The identity oracle remains unchanged.
+
+The oracle, standing (from item 4, unchanged since run8): after the
+prepend, message 72 must be realized with at most one boundary row above
+it (topmost realized >= 71) and the first inserted row - message 22 - must
+never be realized, the uncompensated symptom; the load is confirmed by the
+product's own trace chain (`older-page`/`older-prepend`), a second prepend
+chain during the settle window fails, and a 1.2 s hold read repeats the
+topmost identity. The ScrollPattern percent and viewsize frames are logged
+as evidence only: run7 measured 0.58 % viewsize where extent arithmetic
+says ~10 %, so neither can serve as the pass/fail comparison.
+
+F4-R remediation status (per item; each claim names what actually exercised
+it — `--store` per run from the fixture backup, per-run fresh evidence
+directories):
+
+- F4-R1 (reference counts under the store mutex): implemented; covered by the
+  storage test groups added with this remediation (114/114 pass in
+  `storage_tests.exe`, recorded with the implementation).
+- F4-R2 (a page with a non-empty `errorMessage` is refused): implemented in
+  both callers (`loadchat-refuse` on the initial load path, `older-refuse` on
+  the prepend path). **No page with a non-empty errorMessage arrived in any
+  run in this section**, so the refusal branch is source-reviewed and covered
+  at its unit level only; the acceptance runs exercised it with zero
+  occurrences and this section does not certify it from that silence.
+- F4-R3 (legacy full-history `Contributions()` throws on read): implemented;
+  storage tests 114/114 PASS with the controlling mutation for the throw.
+- F4-R4 (`historyIsNewestWindow_` + Jump-to-latest `ShowChat()`):
+  implemented. The `gen=18` reload in the run5-7 traces is the return-to-alpha
+  rebind path, **not** the Jump-to-latest control; no harness leg clicks that
+  control yet, so the flag-driven jump behavior remains an open proof
+  obligation, not exercised by this section.
+- F4-R5 (anchor compensation + Phase 3B legs 22/23): **closed**. Compensation
+  implemented, then root-caused in depth across runs 11-12. Leg 22 `PASS` on
+  every post-fix run (runs 5 through 17). Leg 23's stimulus was rebuilt five
+  times (runs 5-8 and run9's verified aim, subsections above) with the
+  contact-loss root cause measured by the probe and the diagnostic-cap
+  collision measured by run10 (items 5-7); run11 first made full contact and
+  produced the first product-attributable FAIL, whose root cause (extent
+  counts inserted rows at the unrealized estimate while the positioning model
+  refines them) is recorded in the Run 11 subsection; run12 measured the
+  extent staying stale through the v1 reconcile and its guard read fail-closed
+  on a wrong baseline. The content-based fix (anchor-row slot instrument +
+  baseline identity capture) reached criterion 23 **PASS** in run14
+  (`instrument=anchor-row`, published top edge read the anchored row), and
+  run16 re-confirmed it through the corrected ItemStatus read. The oracle
+  itself was then corrected (comtypes accessor defect, oracle-adequacy finding
+  + run15c above) and proven discriminating by the controlling mutation:
+  run15d's extent-formula mutant published `seeded-paging-00071` against the
+  expected `seeded-paging-00072` and failed exactly there, while run16's
+  restored product passed with a matching read. The committed source carries
+  neither mutation half (restored from `.mutation-backup`, verified
+  byte-identical to `.fixed-base`), and run17 re-confirmed **PASS** against
+  the exact rebuilt artifact `b9cd1e45…` (14 PASS / 0 FAIL / 9 NOT_RUN;
+  criterion 23 PASS with the published top edge reading the anchored row).
+
+### Residual limitations (named, not certified)
+
+- The two-agreeing-samples gate means an at-top reader whose gesture produces
+  exactly one at-top view event and no further events does not trigger the
+  older page until their next scroll event. Every real gesture observed in the
+  harness produces an event stream; this corner remains a declared behavior
+  tradeoff, priced in exchange for refusing transient reload reports.
+- The Phase 9 `ActionCenterPanel not found` abort remains pre-existing and
+  untouched (runs 1-12 all abort there); criteria 8-15 and 21 stay NOT_RUN. The
+  per-run summary verdict counts (e.g. run5: 13 PASS / 1 INCONCLUSIVE / 9
+  NOT_RUN) are counts of *executed* criteria only.
+- `MAYASABA_UI_TRACE` remains a dev-opt-in diagnostic. Its event set and line
+  cap make no promises about ordering relative to sensor events beyond the
+  sequence it itself records (it is event-truth, not latency-truth).

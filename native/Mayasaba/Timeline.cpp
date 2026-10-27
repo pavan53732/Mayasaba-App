@@ -220,9 +220,12 @@ namespace mayasaba::ui
         }
     }
 
-    // Prepends older messages (for infinite scroll up). The new entries are
-    // inserted at the beginning so the reading anchor is preserved by the
-    // ItemsRepeater's virtualization. Returns the number of entries prepended.
+    // Prepends older messages (for infinite scroll up). Existing tokens are left
+    // untouched so every realized element stays the same item; only the entries
+    // being prepended receive fresh tokens. Preserving the reading position is
+    // NOT a property of this prepend by itself: without an offset adjustment the
+    // ScrollViewer would show the freshly inserted rows. The caller advances the
+    // scroller offset by the extent the insert adds, after the layout pass.
     std::size_t TimelineRenderer::PrependOlder(std::vector<TimelineEntry> olderEntries)
     {
         if (olderEntries.empty()) return 0;

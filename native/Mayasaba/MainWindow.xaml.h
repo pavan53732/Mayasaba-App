@@ -255,6 +255,20 @@ namespace winrt::Mayasaba::implementation
         std::ofstream layoutTraceFile_;
         LARGE_INTEGER layoutTraceFrequency_{}, layoutTraceStart_{};
         size_t layoutTraceSamples_{};
+        // Dev-diagnostic event trace, MAYASABA_UI_TRACE opt-in (value = output
+        // file path). The layout trace above samples geometry on a timer; this
+        // records the chat-history control-flow decisions (page adoption,
+        // prepend triggers and their anchor compensation, scroll-to-end passes)
+        // as they happen, so a redominated reproducible observation of the
+        // asynchronous sequence needs no UIA inference. Metadata only: counts,
+        // offsets and row ids, never message text. Line-capped so an
+        // accidentally shipped run cannot grow without bound.
+        void InitUiTrace();
+        void UiTraceEvent(char const* label, std::string const& fields = {});
+        std::ofstream uiTraceFile_;
+        LARGE_INTEGER uiTraceFrequency_{}, uiTraceStart_{};
+        uint64_t uiTraceLines_{};
+
         void InitPerfMeasurement();
         void RecordInputEvent();
         void OnRendering(IInspectable const& sender, IInspectable const& args);
@@ -447,6 +461,14 @@ namespace winrt::Mayasaba::implementation
         bool historyHasMore_{false};
         bool historyLoading_{false};
         uint64_t historyLoadSeq_{0};
+        // The at-top reading of the previous OnHistoryViewChanged event. The
+        // prepend trigger requires the current and the previous read to both
+        // sit at the top: during a post-save reload the ScrollViewer reports
+        // one transient at-top sample mid-transition before the pending
+        // scroll-to-end lands (measured in f4r5-run4 at t+53200.4ms), and a
+        // trigger fired on that single sample prepends pages the reader never
+        // asked for and its compensation then drags the reader off the bottom.
+        bool lastViewAtTop_{false};
 
         std::atomic_uint64_t selectorGeneration_{0};
 
@@ -477,6 +499,33 @@ namespace winrt::Mayasaba::implementation
         void RenderHistory(bool dockTransition = false);
         // Loads older messages when the user scrolls near the top of the history.
         winrt::fire_and_forget LoadOlderHistoryAsync(uint64_t gen);
+        // Re-measures the anchor row's slot after an older-page prepend and
+        // re-applies the reading-anchor target while the virtualizing panel
+        // refines the inserted rows' heights. The scroll extent is the wrong
+        // instrument for this: it counts the inserted rows at the panel's
+        // unrealized estimate (f4r5-run11/12 measured 81.12 px/row in the
+        // extent against ~89 px/row in the positioning model), so an
+        // extent-based target cannot see the gap it creates. Bounded to four
+        // passes; aborts on supersession, a scroll-to-end pass, or the reader
+        // scrolling away from the applied position.
+        winrt::fire_and_forget ReconcileHistoryAnchorAsync(uint64_t gen, uint64_t loadSeq,
+            double anchorOffset, int32_t anchorIndex, double target);
+        // Publishes the physically visible top row on HistoryScroller's ItemStatus as
+        // `top-visible=<submissionId>`, read from the realized rows' scroller-frame
+        // transforms (the same instrument as the reconcile `r`). This is a read-only
+        // projection, not authority; it exists so criterion 23's oracle can measure
+        // the physical top edge rather than the realization buffer's top edge.
+        // `pending` (set by the prepend path) invalidates a stale pre-prepend value;
+        // `unknown` is published when no realized row intersects the viewport top.
+        // Bounded to a probe window around the estimated visible index; never throws.
+        void PublishTopVisibleRow(std::wstring const& status);
+        // False means the loaded history is a bounded window from a search jump
+        // whose bottom is NOT necessarily the project's newest saved message.
+        // LoadChatAsync's newest-page load sets it true; only RevealMessageFromHistory
+        // sets it false. Jump to Latest must restore the newest page when it is false,
+        // because scrolling to the end of a jumped-to window would present the window's
+        // bottom as "latest" when newer saved messages exist outside it.
+        bool historyIsNewestWindow_{false};
         void ApplyChatLayout(bool dockTransition);
         void ApplyResponsiveLayout();
         // Keeps every full CLI name visible: the readiness entries are compact on a

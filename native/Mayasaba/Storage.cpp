@@ -5870,7 +5870,12 @@ namespace mayasaba
                 ContributionsPage page = ContributionsPaged(query);
                 if (!page.errorMessage.empty())
                 {
-                    break;
+                    // A page whose attachment batch could not be read leaves the
+                    // composite result incomplete. A caller of this legacy method
+                    // expects the whole history; returning what was collected so
+                    // far would silently turn a complete-history read into a
+                    // partial one. Throw instead — partial success is refused.
+                    throw std::runtime_error("History could not be read completely: " + page.errorMessage);
                 }
                 result.insert(result.begin(), std::make_move_iterator(page.items.begin()), std::make_move_iterator(page.items.end()));
                 hasMore = page.hasMore;
@@ -5883,13 +5888,14 @@ namespace mayasaba
             return result;
         }
 
-    // Resolves the storage row identity of one saved contribution. Reads only;
-    // no transaction: the value is a cursor for a subsequent bounded read, so a
-    // racing save merely means the resolved window is built from the ordering
-    // that existed at that query's own time.
+    // Resolves the storage row identity of one saved contribution. Serialized
+    // under the store mutex like every other SQL user of db_: the value is a
+    // cursor for a subsequent bounded read, so a racing save merely means the
+    // resolved window is built from the ordering that existed at that read.
         std::optional<std::int64_t> Storage::RowIdForSubmission(std::string const& projectId, std::string const& submissionId)
         {
             if (projectId.empty() || submissionId.empty()) return std::nullopt;
+            std::lock_guard lock(mutex_);
             Statement q(db_, "SELECT row_id FROM contributions WHERE project_id=?1 AND submission_id=?2 LIMIT 1;");
             Bind(q.value, 1, projectId);
             Bind(q.value, 2, submissionId);
@@ -5917,6 +5923,10 @@ namespace mayasaba
                 page.errorMessage = "The history window request is not valid.";
                 return page;
             }
+
+            // Same serialization discipline as ContributionsPaged: every SQL user
+            // of db_ holds the store mutex. Nothing below re-acquires it.
+            std::lock_guard lock(mutex_);
 
             std::int64_t oldestRowId = query.centerRowId;
             std::vector<Contribution> older; // fetched newest-first; rows <= center

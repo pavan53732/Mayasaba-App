@@ -8502,6 +8502,146 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // 55. Concurrent saves and window reads interfere with no result: the window
+        // and the resolver hold the store mutex like every other SQL user of db_.
+        {
+            CASES_BEGIN("55. Window queries and saves are serialized with no lost rows or torn windows");
+            auto const dbFile = folder / "window_concurrent.db";
+            mayasaba::Storage store(dbFile);
+            auto proj = store.BindProject(mayasaba::NewUuid(), "Conc Project", "C:/Projects/Conc", "id_conc");
+            auto saveHelper = [&](std::string const& id, std::string const& body) {
+                store.StageSubmission(proj, id, body);
+                auto disp = store.SaveContribution(proj, id, body);
+                EXPECT(disp == mayasaba::SaveDisposition::Saved);
+            };
+
+            // Seed one message so the window reader always has a valid center.
+            auto seedId = mayasaba::NewUuid();
+            saveHelper(seedId, "Conc seed message");
+            auto seedRow = store.RowIdForSubmission(proj, seedId);
+            EXPECT(seedRow.has_value());
+
+            // Reader: repeatedly resolve and window the seed while the writer saves.
+            std::atomic<bool> readerFailed{false};
+            std::atomic<int> windowReads{0};
+            auto reader = std::async(std::launch::async, [&]
+            {
+                for (int i = 0; i < 40; ++i)
+                {
+                    auto resolved = store.RowIdForSubmission(proj, seedId);
+                    if (!resolved.has_value() || *resolved != *seedRow) { readerFailed = true; return; }
+                    mayasaba::ContributionsWindowQuery w;
+                    w.projectId = proj;
+                    w.centerRowId = *resolved;
+                    w.beforeCount = 10;
+                    w.afterCount = 10;
+                    auto win = store.ContributionsWindow(w);
+                    // The seed row is never older than everything saved by a racing
+                    // writer: the center must be present exactly once, and the
+                    // window must be contiguous by construction.
+                    if (!win.errorMessage.empty()) { readerFailed = true; return; }
+                    // The center must be present in every window exactly once; the
+                    // seed row never belongs to whatever newer pages the racing
+                    // writer added above it.
+                    int centerCount = 0;
+                    for (auto const& c : win.items)
+                    {
+                        if (c.submissionId == seedId) ++centerCount;
+                    }
+                    if (centerCount != 1) { readerFailed = true; return; }
+                    ++windowReads;
+                }
+            });
+
+            // Writer: save 40 messages while the reader runs.
+            for (int i = 1; i <= 40; ++i)
+            {
+                saveHelper(mayasaba::NewUuid(), "Conc runtime message " + std::to_string(i));
+            }
+            reader.wait();
+            EXPECT(!readerFailed.load());
+            EXPECT(windowReads.load() == 40);
+
+            // No save was lost: 41 rows total, each resolvable exactly.
+            int resolvedCount = 0;
+            for (int i = 1; i <= 40; ++i)
+            {
+                // Resolve by body text through the paged API.
+                mayasaba::ContributionsQuery q;
+                q.projectId = proj;
+                q.limit = 200;
+                auto page = store.ContributionsPaged(q);
+                EXPECT(page.errorMessage.empty());
+                EXPECT(page.items.size() == 41);
+                std::set<std::string> bodies;
+                bool foundSeed = false;
+                for (auto const& c : page.items)
+                {
+                    bodies.insert(c.body);
+                    if (c.submissionId == seedId) foundSeed = true;
+                }
+                EXPECT(foundSeed);
+                EXPECT(bodies.size() == 41);
+                EXPECT(bodies.count("Conc runtime message " + std::to_string(i)) == 1);
+                resolvedCount = i;
+            }
+            EXPECT(resolvedCount == 40);
+            CASES_END();
+        }
+
+        // 56. The legacy complete-history read refuses a partially readable store
+        // instead of returning the rows collected so far.
+        {
+            CASES_BEGIN("56. Legacy Contributions() throws on an incomplete page instead of partial success");
+            auto const dbFile = folder / "legacy_incomplete.db";
+            mayasaba::Storage store(dbFile);
+            auto proj = store.BindProject(mayasaba::NewUuid(), "Incomplete Project", "C:/Projects/Incomplete", "id_incomplete");
+
+            for (int i = 1; i <= 250; ++i)
+            {
+                auto id = mayasaba::NewUuid();
+                store.StageSubmission(proj, id, "Incomplete message " + std::to_string(i));
+                auto disp = store.SaveContribution(proj, id, "Incomplete message " + std::to_string(i));
+                EXPECT(disp == mayasaba::SaveDisposition::Saved);
+            }
+
+            // Inject a prepare failure for the attachment batch through a second raw
+            // connection, the same DDL-fault mechanism the UI harness uses.
+            sqlite3* injector{};
+            EXPECT(sqlite3_open16(dbFile.c_str(), &injector) == SQLITE_OK);
+            {
+                char* errMsg{};
+                EXPECT(sqlite3_exec(injector, "ALTER TABLE attachments RENAME TO attachments_gone;", nullptr, nullptr, &errMsg) == SQLITE_OK);
+                if (errMsg) sqlite3_free(errMsg);
+            }
+
+            bool threw = false;
+            std::string message;
+            try
+            {
+                (void)store.Contributions(proj);
+            }
+            catch (std::exception const& e)
+            {
+                threw = true;
+                message = e.what();
+            }
+            EXPECT(threw);
+            EXPECT(message.find("History could not be read completely") != std::string::npos);
+
+            // Restore the table; the full history is complete and oldest-first again.
+            {
+                char* errMsg{};
+                EXPECT(sqlite3_exec(injector, "ALTER TABLE attachments_gone RENAME TO attachments;", nullptr, nullptr, &errMsg) == SQLITE_OK);
+                if (errMsg) sqlite3_free(errMsg);
+            }
+            sqlite3_close(injector);
+
+            auto restored = store.Contributions(proj);
+            EXPECT(restored.size() == 250);
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.
