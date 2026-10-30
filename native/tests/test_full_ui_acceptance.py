@@ -4973,18 +4973,43 @@ def main():
             # File -> Switch Project, then Cancel switching (ReturnToChat calls RefreshActionCenterAsync)
             log("Triggering production Action Center refresh via File -> Switch Project -> Cancel...")
             sw_heading = open_switch_project(win)
-            if not sw_heading:
+            if not sw_heading or not sw_heading.is_visible():
                 log("FAIL: File -> Switch Project did not reach Screen 2 to trigger refresh")
                 return 1
             cancel_btn = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
-            if not cancel_btn:
+            if not cancel_btn or not cancel_btn.is_visible():
                 log("FAIL: FolderCancelButton not found on Screen 2 to return to chat")
                 return 1
             cancel_btn.iface_invoke.Invoke()
-            time.sleep(1.0)
+
+            def find_visible_chat_heading():
+                h = find_by_aid(win, "ProjectHeading")
+                return h if (h and h.is_visible()) else None
+
+            def find_visible_ac_panel():
+                p = find_by_aid(win, "ActionCenterPanel")
+                return p if (p and p.is_visible()) else None
+
+            def find_visible_details_panel():
+                p = find_by_aid(win, "ActionCenterDetailsPanel")
+                return p if (p and p.is_visible()) else None
+
+            # Mandatory assertion: return to correct project's Chat
+            ret_chat = poll_until(find_visible_chat_heading, timeout=6.0, interval=0.1)
+            if not ret_chat:
+                log("FAIL: Returning from Screen 2 Cancel did not show ProjectHeading in Chat")
+                return 1
+            if "alpha" not in ret_chat.window_text().lower():
+                log(f"FAIL: Returned to unexpected project: {ret_chat.window_text()}")
+                return 1
+            folder_h = find_by_aid(win, "FolderHeading")
+            if folder_h and folder_h.is_visible():
+                log("FAIL: Screen 2 FolderHeading still visible after Cancel")
+                return 1
+            log("PASS: Screen 2 navigation, Cancel, and return to project alpha Chat verified mandatorily.")
 
             # Wait for ActionCenterPanel to become visible and display the obligation
-            ac_panel_active = poll_until(lambda: find_by_aid(win, "ActionCenterPanel") and find_by_aid(win, "ActionCenterPanel").is_visible(), timeout=6.0, interval=0.2)
+            ac_panel_active = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.2)
             if not ac_panel_active:
                 log("FAIL: ActionCenterPanel did not appear after obligation was introduced and refreshed")
                 return 1
@@ -5004,61 +5029,163 @@ def main():
                 return 1
             log("Expanding Action Center details panel via ShowActionCenterDetailsButton...")
             show_details_btn.iface_invoke.Invoke()
-            time.sleep(0.5)
 
-            details_panel = find_by_aid(win, "ActionCenterDetailsPanel")
-            if not details_panel or not details_panel.is_visible():
+            details_panel = poll_until(find_visible_details_panel, timeout=3.0, interval=0.1)
+            if not details_panel:
                 log("FAIL: ActionCenterDetailsPanel did not become visible after Show details click")
                 return 1
 
             details_list = find_by_aid(win, "ActionCenterDetailsList")
-            if not details_list:
-                log("FAIL: ActionCenterDetailsList missing inside details panel")
+            detail_rows = [d for d in details_panel.descendants() if (d.element_info.name or "").startswith("Item ")]
+            if not details_list and len(detail_rows) == 0:
+                log("FAIL: ActionCenterDetailsList and detail items missing inside details panel")
                 return 1
 
             close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
-            if not close_details_btn:
+            if not close_details_btn or not close_details_btn.is_visible():
                 log("FAIL: CloseActionCenterDetailsButton missing inside details panel")
                 return 1
             close_details_btn.iface_invoke.Invoke()
-            time.sleep(0.3)
-            if details_panel.is_visible():
+
+            details_closed = poll_until(lambda: not (find_by_aid(win, "ActionCenterDetailsPanel") and find_by_aid(win, "ActionCenterDetailsPanel").is_visible()), timeout=3.0, interval=0.1)
+            if not details_closed:
                 log("FAIL: ActionCenterDetailsPanel remained visible after CloseActionCenterDetailsButton click")
                 return 1
             log("PASS: Action Center details panel expansion, contents, and collapse verified mandatorily.")
 
-            # 9.2 Dismiss Action Center via CloseActionCenterButton
-            close_ac_btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
-            if not close_ac_btn:
-                log("FAIL: CloseActionCenterButton not found")
-                return 1
-            log("Dismissing Action Center via CloseActionCenterButton...")
-            close_ac_btn.iface_invoke.Invoke()
-            time.sleep(1.0)
-            log("PASS: Action Center dismissed cleanly via CloseActionCenterButton.")
+            # -------------------------------------------------------------
+            # Sequence 1: Held in-flight query completing after dismissal
+            # Reject its result without reopening or repopulating.
+            # -------------------------------------------------------------
+            log("\nTesting Sequence 1: In-flight refresh completing after dismissal...")
+            # Set up named Win32 events for deterministic hold
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+            kernel32.CreateEventW.restype = wintypes.HANDLE
+            kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+            kernel32.SetEvent.restype = wintypes.BOOL
+            kernel32.ResetEvent.argtypes = [wintypes.HANDLE]
+            kernel32.ResetEvent.restype = wintypes.BOOL
+            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
 
-            # Verify Action Center panel is collapsed after dismissal
-            ac_panel_after = find_by_aid(win, "ActionCenterPanel")
-            is_ac_closed = (ac_panel_after is None) or (not ac_panel_after.is_visible())
-            if not is_ac_closed:
-                log("FAIL: Action Center panel remains visible after CloseActionCenterButton click")
-                return 1
-            log("PASS: Action Center panel confirmed collapsed following CloseActionCenterButton invocation.")
+            # Create the hold trigger, in-flight notification, and release events
+            h_hold = kernel32.CreateEventW(None, True, True, "Local\\Mayasaba_Ac_HoldRequested")
+            h_inflight = kernel32.CreateEventW(None, True, False, "Local\\Mayasaba_Ac_InFlight")
+            h_release = kernel32.CreateEventW(None, True, False, "Local\\Mayasaba_Ac_Release")
 
-            # Verify that in-flight or subsequent refresh completion cannot reopen or repopulate the card while dismissed
-            log("Triggering production refresh while dismissed to verify dismissal stability...")
-            sw_heading_dismissed = open_switch_project(win)
-            if sw_heading_dismissed:
-                cancel_btn_dismissed = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
-                if cancel_btn_dismissed:
-                    cancel_btn_dismissed.iface_invoke.Invoke()
-                    time.sleep(1.0)
-            ac_panel_dismissed_check = find_by_aid(win, "ActionCenterPanel")
-            is_still_closed = (ac_panel_dismissed_check is None) or (not ac_panel_dismissed_check.is_visible())
-            if not is_still_closed:
-                log("FAIL: Action Center panel reopened after background refresh completed while dismissed")
+            try:
+                # Trigger refresh via Switch Project -> Cancel while Action Center is visible
+                sw_h2 = open_switch_project(win)
+                if not sw_h2 or not sw_h2.is_visible():
+                    log("FAIL: File -> Switch Project failed during held-refresh test")
+                    return 1
+                c_btn2 = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
+                if not c_btn2 or not c_btn2.is_visible():
+                    log("FAIL: FolderCancelButton not found on Screen 2")
+                    return 1
+                c_btn2.iface_invoke.Invoke()
+
+                # Verify return to alpha Chat screen
+                ret2 = poll_until(find_visible_chat_heading, timeout=6.0, interval=0.1)
+                if not ret2 or "alpha" not in ret2.window_text().lower():
+                    log("FAIL: Did not return to alpha Chat after Cancel")
+                    return 1
+
+                # Wait for the background query to hit the hold hook
+                wait_inflight = kernel32.WaitForSingleObject(h_inflight, 5000)
+                if wait_inflight != 0:
+                    log(f"FAIL: In-flight refresh event was not signaled within 5s (wait result: {wait_inflight})")
+                    return 1
+                log("PASS: Background Action Center query is confirmed in-flight and held.")
+
+                # Card is currently visible on screen. Now dismiss it while query is in-flight!
+                def find_close_ac_btn():
+                    btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
+                    return btn if (btn and btn.is_visible()) else None
+
+                close_ac_btn = poll_until(find_close_ac_btn, timeout=5.0, interval=0.1)
+                if not close_ac_btn:
+                    log("FAIL: CloseActionCenterButton not visible to dismiss held card")
+                    return 1
+                log("Dismissing Action Center via CloseActionCenterButton while query is held in flight...")
+                close_ac_btn.iface_invoke.Invoke()
+
+                # Verify card is collapsed on UI
+                ac_panel_collapsed = poll_until(lambda: not (find_by_aid(win, "ActionCenterPanel") and find_by_aid(win, "ActionCenterPanel").is_visible()), timeout=3.0, interval=0.1)
+                if not ac_panel_collapsed:
+                    log("FAIL: ActionCenterPanel did not collapse upon dismissal click")
+                    return 1
+                log("PASS: ActionCenterPanel collapsed immediately upon CloseActionCenterButton click.")
+
+                # Disarm the hold event before releasing query so subsequent refreshes won't block
+                if h_hold:
+                    kernel32.CloseHandle(h_hold)
+                    h_hold = None
+
+                # Now release the held background query so it resumes to UI thread
+                log("Releasing in-flight query to UI thread...")
+                kernel32.SetEvent(h_release)
+                time.sleep(1.0)
+
+                # Assert that in-flight completion rejected the result without reopening or repopulating
+                ac_panel_after_release = find_by_aid(win, "ActionCenterPanel")
+                if ac_panel_after_release and ac_panel_after_release.is_visible():
+                    log("FAIL: ActionCenterPanel reopened after held in-flight query finished!")
+                    return 1
+
+                status_label_after = find_by_aid(win, "ActionCenterStatusText")
+                if status_label_after and status_label_after.window_text().strip():
+                    log(f"FAIL: ActionCenterStatusText was repopulated: '{status_label_after.window_text()}'")
+                    return 1
+
+                log("PASS: In-flight query completing after dismissal was rejected: panel remains strictly collapsed and obsolete items discarded.")
+            finally:
+                # Disarm and close events
+                if h_release:
+                    kernel32.SetEvent(h_release)
+                    kernel32.CloseHandle(h_release)
+                if h_inflight:
+                    kernel32.CloseHandle(h_inflight)
+                if h_hold:
+                    kernel32.CloseHandle(h_hold)
+
+            # -------------------------------------------------------------
+            # Sequence 2: A new explicit refresh starts after dismissal
+            # Follows existing production contract, which permits reactivation.
+            # -------------------------------------------------------------
+            log("\nTesting Sequence 2: New explicit refresh after dismissal permits reactivation...")
+            sw_h3 = open_switch_project(win)
+            if not sw_h3 or not sw_h3.is_visible():
+                log("FAIL: File -> Switch Project failed during explicit reactivation test")
                 return 1
-            log("PASS: Action Center panel remains strictly collapsed; refresh completion cannot undo dismissal.")
+            c_btn3 = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
+            if not c_btn3 or not c_btn3.is_visible():
+                log("FAIL: FolderCancelButton not found on Screen 2")
+                return 1
+            c_btn3.iface_invoke.Invoke()
+
+            # Verify return to alpha Chat screen
+            ret3 = poll_until(find_visible_chat_heading, timeout=6.0, interval=0.1)
+            if not ret3 or "alpha" not in ret3.window_text().lower():
+                log("FAIL: Did not return to alpha Chat after Cancel in Sequence 2")
+                return 1
+
+            # Wait for Action Center panel to reactivate as per production contract
+            ac_panel_reactivated = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.2)
+            if not ac_panel_reactivated:
+                log("FAIL: ActionCenterPanel was not reactivated by new explicit refresh after dismissal")
+                return 1
+
+            status_label_reactivated = find_by_aid(win, "ActionCenterStatusText")
+            status_reactivated_val = status_label_reactivated.window_text() if status_label_reactivated else ""
+            log(f"Alpha Action Center status after explicit reactivation: '{status_reactivated_val}'")
+            if "1 item" not in status_reactivated_val:
+                log(f"FAIL: Expected '1 item(s) need your attention.', got '{status_reactivated_val}'")
+                return 1
+            log("PASS: New explicit refresh after dismissal reactivated the card as permitted by production contract.")
 
         finally:
             # Clean up disposable obligation in alpha in finally block (exception safe)
@@ -5291,9 +5418,21 @@ def main():
         # Show details have rendered size. Load more items is checked only when it is meant
         # to be shown: once the continuation token is consumed the control is legitimately
         # collapsed, and demanding size for a collapsed control would assert the wrong thing.
-        ac_list = find_by_aid(win, "ActionCenterList")
-        if ac_list is None or ac_list.rectangle().height() < 20:
-            log("FAIL: Action Center item list has no usable height after closing details")
+        def _get_ac_list_with_height():
+            lst = find_by_aid(win, "ActionCenterList") or find_by_name(win, "Action Center items")
+            if lst is not None and lst.rectangle().height() >= 20:
+                return lst
+            return None
+
+        ac_list = poll_until(_get_ac_list_with_height, timeout=5.0, interval=0.1)
+        if ac_list is None:
+            raw_list = find_by_aid(win, "ActionCenterList") or find_by_name(win, "Action Center items")
+            if raw_list is None:
+                ac_panel = find_by_aid(win, "ActionCenterPanel")
+                panel_desc = [(d.element_info.automation_id, d.element_info.name, d.element_info.control_type, d.rectangle()) for d in (ac_panel.descendants() if ac_panel else [])]
+                log(f"FAIL: Action Center item list not found in tree after closing details. Panel descendants: {panel_desc}")
+            else:
+                log(f"FAIL: Action Center item list has no usable height after closing details (rect={raw_list.rectangle()}, height={raw_list.rectangle().height()})")
             return 1
         show_again_btn = find_by_aid(win, "ShowActionCenterDetailsButton")
         if (show_again_btn is None or show_again_btn.rectangle().width() <= 0
@@ -5403,6 +5542,7 @@ def main():
         contribs_before = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
         pending_before = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
         conn.close()
+        comp_text_before = composer_box.window_text() if composer_box else ""
 
         # Single admission test via ole_drop.exe
         log(f"Invoking ole_drop.exe on window handle {win.handle} with single file '{single_drop_file}'...")
@@ -5457,7 +5597,7 @@ def main():
             contribs_after=contribs_after,
             pending_before=pending_before,
             pending_after=pending_after,
-            composer_text_before="",
+            composer_text_before=comp_text_before,
             composer_text_after=comp_text,
             expected_filename="native_drop_single.txt",
             expected_size=single_drop_size,

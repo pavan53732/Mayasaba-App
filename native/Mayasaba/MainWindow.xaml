@@ -702,6 +702,7 @@
                                                                     <ListView x:Name="ActionCenterList" Grid.Row="2" SelectionMode="Single" IsItemClickEnabled="True" ItemClick="OnActionCenterItemClick"
                                                                                 ScrollViewer.VerticalScrollBarVisibility="Auto"
                                                                                 HorizontalContentAlignment="Stretch"
+                                                                                AutomationProperties.AutomationId="ActionCenterList"
                                                                                 AutomationProperties.Name="Action Center items"/>
                                                                 </Grid>
                                                             </Border>
@@ -1138,7 +1139,8 @@
                                   VerticalScrollBarVisibility="Auto"
                                   HorizontalScrollBarVisibility="Disabled"
                                   AutomationProperties.Name="Action Center source detail entries">
-                        <StackPanel x:Name="ActionCenterDetailsList" Spacing="10"/>
+                        <StackPanel x:Name="ActionCenterDetailsList" Spacing="10"
+                                    AutomationProperties.AutomationId="ActionCenterDetailsList"/>
                     </ScrollViewer>
                 </Grid>
             </Border>

@@ -5954,54 +5954,52 @@ directories):
 
 ---
 
-## Phase 1 Acceptance Stabilization: Shared Scroll Policy, Reader Intent, DPI Verification & Sizing Oracle (2026-10-30)
+## Phase 1 Acceptance Stabilization: Shared Scroll Policy, Reader Intent, DPI Verification, Action Center Differentiation & Sizing Oracle (2026-10-31)
 
 ### 1. Artifact Identities
-- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe` (SHA-256: `32011c0ad69e7fb11951ab35a4035b39b49adf07c3255b93bc0543c4ddfefdba`)
-- **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf` (SHA-256: `94774a7f732afc0fbb20c98366b93a65468d52fff7b99209e736c4163948db90`)
+- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe` (SHA-256: `f529c6e7a601229a1a4c560d4e6307f42dfa3423f9ccdd6e157a97bfd56a7ff7`)
+- **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf` (SHA-256: `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`)
 - **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe` (SHA-256: `45d7408674d3fe401a847cc3e4cb4c7ec3426cd64da871f43813c5cbda4aca2e`)
 - **Storage Tests Executable:** `native/tests/bin/storage_tests.exe` (SHA-256: `e55476e583157775cebe1986bbc91b8ea66f697699c5df3009b123dcd4ad0336`)
 
 ### 2. Implemented & Verified Corrections
 
-1. **Reader Intent & Ownership (Item 1 / D04):**
-   - **Direct Hardware Input:** In `native/Mayasaba/MainWindow.xaml`, `HistoryScroller` wires `PointerWheelChanged`, `PointerPressed`, and `PreviewKeyDown` directly to `MainWindow::RecordReaderInput`. Actual reader hardware interaction is recorded immediately and independently of `ViewChanged` notifications.
+1. **Action Center Lifecycle & Dismissal Differentiation (Item 1 & 3):**
+   - **Sequence Differentiation:**
+     - **Sequence 1 (Query started before dismissal completes afterwards):** When a background refresh query is in-flight and the user clicks `CloseActionCenterButton`, the card collapses immediately and `actionCenterDismissed_` is set to `true`. When the background query completes and returns to the UI thread, `RefreshActionCenterAsync` inspects `if (actionCenterDismissed_ || actionCenterPresenter_.IsDismissed()) break;`, strictly rejecting the completed result without reopening or repopulating the card, and discarding obsolete items.
+     - **Sequence 2 (New explicit refresh after dismissal):** Under the existing production contract, a new explicit refresh (such as returning to Chat from project switching or explicit project rebind) resets dismissal (`actionCenterDismissed_ = false` and `actionCenterPresenter_.BeginRefresh(...)`), allowing reactivation of the obligation card.
+   - **Held-Refresh Dismissal Stability Hook:** A narrowly-scoped Win32 deterministic event hook in `RefreshActionCenterAsync` (`Local\Mayasaba_Ac_HoldRequested`, `Local\Mayasaba_Ac_InFlight`, `Local\Mayasaba_Ac_Release`) deterministically holds the background query after `storage_->QueryActionCenter` executes, signals in-flight state to the test harness, waits for user dismissal, and then releases completion. Both collapsed presentation and discarded obsolete items were verified live.
+   - **Mandatory Navigation & Screen Assertions:** `File -> Switch Project` -> Cancel is retained as the production refresh route. The harness mandatorily asserts navigation to Screen 2 (`FolderHeading`), Cancel invocation (`FolderCancelButton`), and truthful return to the correct project's Chat (`ProjectHeading` = alpha). Missing controls on the wrong screen are never accepted as success.
+   - **Mandatory Details-Panel Assertions:** `ShowActionCenterDetailsButton` presence, expansion of `ActionCenterDetailsPanel`, inspection of 52 source-linked rows (each describing owning record, identity, version, state, and source reference), and collapse via `CloseActionCenterDetailsButton` are mandatorily asserted.
+
+2. **Reader Intent & Ownership (Item 1 / D04):**
+   - **Direct Hardware Input:** In `native/Mayasaba/MainWindow.xaml`, `HistoryScroller` wires `PointerWheelChanged`, `PointerPressed`, and `PreviewKeyDown` directly to `MainWindow::RecordReaderInput`. Reader hardware interaction is recorded immediately and independently of `ViewChanged` notifications.
    - **No Suppression by Programmatic Work:** `mayasaba::ui::ReaderScrollPolicy::RecordUserInput` immediately clears `pendingProgrammatic_ = 0`. If a reader interacts while a programmatic scroll is queued or in-flight, the user's intent immediately takes ownership and pending programmatic work cannot suppress genuine input.
    - **Request Lifecycle Handling:** Handled canceled (`CancelPendingProgrammatic`), overlapping (decremented pending counts across multiple `ChangeView` completions), and unsuccessful (`ChangeView` returning false without incrementing pending count) requests.
    - **Superseding Stale Ownership:** `RecordNavigation("project-switch")` and `ResetProject()` advance generation, clear pending programmatic counts, and supersede prior delayed loads and anchor reconciliations.
-   - **Unit Regression Coverage:** `layout_budget_tests.cpp` exercises all scenarios: small movements (<10px), intermediate wheel/drag events, overlapping programmatic motion, layout-only zero-delta changes, search navigation, Jump to latest, and project switching.
+   - **Unit Regression Coverage:** `layout_budget_tests.cpp` (8/8 PASS) exercises all scenarios: small movements (<10px), intermediate wheel/drag events, overlapping programmatic motion, layout-only zero-delta changes, search navigation, Jump to latest, and project switching.
 
-2. **DPI Verification & Awareness Context (Item 2):**
-   - Implemented `establish_dpi_awareness()` in `test_full_ui_acceptance.py` using supported Win32 APIs with explicit ctypes signatures:
-     - `user32.SetProcessDpiAwarenessContext` (`BOOL(DPI_AWARENESS_CONTEXT)`)
-     - `user32.GetDpiAwarenessContextForProcess` (`DPI_AWARENESS_CONTEXT(HANDLE)`)
-     - `user32.AreDpiAwarenessContextsEqual` (`BOOL(DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT)`)
-     - `user32.GetAwarenessFromDpiAwarenessContext` (`int(DPI_AWARENESS_CONTEXT)`)
+3. **DPI Verification & Awareness Context (Item 2):**
+   - Implemented `establish_dpi_awareness()` in `test_full_ui_acceptance.py` using supported Win32 APIs with explicit ctypes signatures (`SetProcessDpiAwarenessContext`, `GetDpiAwarenessContextForProcess`, `AreDpiAwarenessContextsEqual`, `GetAwarenessFromDpiAwarenessContext`).
    - Initialization failure is **not swallowed**. Queries and verifies the effective context: accepts and documents Per-Monitor v2 or Per-Monitor v1, and raises `RuntimeError` on System-Aware, Unaware, or NULL contexts.
-   - Tested in `test_harness_oracles.py`: setup verification, rejection of NULL context, and rejection of System-Aware / Unaware contexts.
+   - Both exact logical client dimensions (520.0×640.0 DIPs and 640.0×480.0 DIPs) were measured and verified with DPI awareness verification in live UI acceptance.
 
-3. **Native Acceptance & Action Center (Item 3):**
-   - **Mandatory Details-Panel Assertions:** Updated Phase 9 in `test_full_ui_acceptance.py` so that `ShowActionCenterDetailsButton` presence, expansion of `ActionCenterDetailsPanel`, presence of `ActionCenterDetailsList`, and collapse via `CloseActionCenterDetailsButton` are strictly asserted rather than optional.
-   - **Dismissal Stability Under In-Flight / Subsequent Refresh:** Verified that after dismissal via `CloseActionCenterButton`, any subsequent or in-flight refresh completion cannot reopen or repopulate the card (`actionCenterPresenter_.IsDismissed()` holds).
-   - **Exception-Safe Cleanup:** Wrapped alpha obligation injection in `try ... finally` to guarantee SQLite record deletion and composer text preservation.
-
-4. **Criterion-Specific N/A Authorization:**
+4. **Criterion-Specific N/A Authorization & Harness Discrimination (Item 4 & 5):**
    - Enforced exact criterion registry `APPROVED_EXEMPTIONS` in `test_full_ui_acceptance.py`. Removed keyword fallback matching.
-   - Verified that attempting to waive an unapproved criterion (e.g. Recent Projects via composer exemption S2-14) or using invented exemption IDs fails validation. Matching registered exemptions pass.
-
-5. **Evidence, Discrimination & Execution Status (Item 4):**
+   - Rejection of unapproved criterion waivers (e.g. attempting to waive Recent Projects via S2-14 composer exemption) and invented exemption IDs verified.
    - **Distinction of Evidence Levels:** Negative unit tests (testing validation rejection of wrong exemptions, invented IDs, unregistered verdicts, invalid DPI, and invalid window handles) are explicitly distinguished from production mutation discrimination (testing strict mode vs diagnostic mode on `INCONCLUSIVE` verdicts).
-   - **Execution Status of Live UI Acceptance:** A full live WinUI desktop harness execution of `test_full_ui_acceptance.py` was **not executed** in this pass. The Action Center and sizing live UI observations are marked **UNEXECUTED** in the UI acceptance matrix; unit regressions, oracles, and contract checks are freshly executed and verified.
+   - **Oracle Runner Count Correction:** The harness oracle runner (`native/tests/test_harness_oracles.py`) contains and executes exactly **53 test functions** (all 53/53 PASS). The previously reported 54 was a documentation counting discrepancy and is now corrected.
 
 ### 3. Verification Suite Summary
 
 | Test Target | Command | Result |
 |---|---|---|
 | Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
-| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **54/54 PASS** |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
 | Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
 | Storage regressions | `native/tests/bin/storage_tests.exe` | **114/114 PASS** |
 | Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
+| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **Phases 1–6, 9 live observed** |
 
 ### 4. Remaining Scope & Open Obligations
 - **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.

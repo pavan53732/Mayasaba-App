@@ -6180,6 +6180,24 @@ namespace winrt::Mayasaba::implementation
             query.pageSize = 50;
             auto result = storage_->QueryActionCenter(query);
 
+            HANDLE hHold = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\Mayasaba_Ac_HoldRequested");
+            if (hHold)
+            {
+                CloseHandle(hHold);
+                HANDLE hInFlight = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\Mayasaba_Ac_InFlight");
+                if (hInFlight)
+                {
+                    SetEvent(hInFlight);
+                    CloseHandle(hInFlight);
+                }
+                HANDLE hRelease = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\Mayasaba_Ac_Release");
+                if (hRelease)
+                {
+                    WaitForSingleObject(hRelease, 5000);
+                    CloseHandle(hRelease);
+                }
+            }
+
             if (!co_await resume_foreground(ui)) co_return;
 
             bool rerunNeeded = false;
