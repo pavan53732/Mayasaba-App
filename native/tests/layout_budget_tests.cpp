@@ -1,5 +1,6 @@
 #include "../Mayasaba/HeaderLayoutBudget.h"
 #include "../Mayasaba/ActionCenterPresenter.h"
+#include "../Mayasaba/TimelineScrollPolicy.h"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -9,68 +10,12 @@
 
 #define REQUIRE(x) do { if (!(x)) throw std::runtime_error(#x); } while (0)
 
-namespace
-{
-    // Regression D05: Simulates the diagnostic top-visible row loop bounding
-    int RunDiagnosticAttemptBudgetProbe(int32_t lo, int32_t hi, int32_t realizedIndex)
-    {
-        int32_t attempts = 0;
-        int32_t examined = 0;
-        for (int32_t i = lo; i <= hi && attempts < 400 && examined < 50; ++i, ++attempts)
-        {
-            bool isRealized = (i == realizedIndex);
-            if (!isRealized) continue;
-            ++examined;
-        }
-        return attempts;
-    }
-
-    // Regression D04: Simulates reader ownership state transitions
-    struct ReaderOwnershipTracker
-    {
-        uint64_t readerInteractionGen_{0};
-        bool programmaticScroll_{false};
-        std::string lastReason_;
-
-        void RecordReaderInteraction(char const* reason)
-        {
-            ++readerInteractionGen_;
-            lastReason_ = reason ? reason : "unknown";
-        }
-
-        void OnViewChanged(bool isProgrammatic, bool isIntermediate)
-        {
-            if (programmaticScroll_ || isProgrammatic)
-            {
-                if (!isIntermediate)
-                {
-                    programmaticScroll_ = false;
-                }
-            }
-            else
-            {
-                RecordReaderInteraction("user-scroll");
-            }
-        }
-
-        bool ShouldAbortOlderLoad(uint64_t genAtStart) const
-        {
-            return readerInteractionGen_ != genAtStart;
-        }
-
-        bool ShouldAbortReconcilePass(uint64_t genAtStart) const
-        {
-            return readerInteractionGen_ != genAtStart;
-        }
-    };
-}
-
 int main()
 {
     int passed = 0;
     try
     {
-        // Run the production allocation through repeated native auto-header
+        // 1. Run the production allocation through repeated native auto-header
         // measurements. The old per-card residual calculation alternated here.
         for (double pool : {1.0, 71.0, 87.0, 159.0, 160.0, 178.0, 202.0, 650.0})
         {
@@ -90,6 +35,8 @@ int main()
             }
         }
         ++passed;
+
+        // 2. Search density calculation
         {
             auto const density = mayasaba::ui::SearchDensity(180.0, true);
             // Measured native fixed rows, plus borders and top/bottom margins.
@@ -100,6 +47,8 @@ int main()
             REQUIRE(mayasaba::ui::SearchDensity(500.0, true).listFloor == 48.0);
         }
         ++passed;
+
+        // 3. Header attention & problems partitioning
         for (bool attention : {false, true}) for (bool problems : {false, true})
         {
             auto const b = mayasaba::ui::AllocateHeaderLayout(600, 100, 0, 0, 200, attention, problems);
@@ -108,6 +57,8 @@ int main()
             if (attention != problems) REQUIRE(std::abs(b.attention + b.problems - 276) < 0.001);
         }
         ++passed;
+
+        // 4. ActionCenter presenter visibility logic
         auto visible = [](mayasaba::ActionCenterResult const& result)
         {
             mayasaba::ActionCenterPresenter presenter;
@@ -126,66 +77,130 @@ int main()
         ++passed;
         empty.errorMessage.clear(); empty.items.push_back({}); REQUIRE(visible(empty)); ++passed;
 
-        // D05 Regression: Diagnostic probe attempts must strictly cap at 400 even with 10,000 unrealized items
+        // 5. D05 Shared Production Regression: Diagnostic probe bounding via TimelineScrollPolicy.h
         {
-            int attemptsAllUnrealized = RunDiagnosticAttemptBudgetProbe(0, 10000, -1);
-            REQUIRE(attemptsAllUnrealized == 400);
+            // All unrealized: strictly caps attempts at 400
+            auto const [attemptsUnrealized, examinedUnrealized] =
+                mayasaba::ui::ProbeTimelineTopVisible(0, 10000, 400, 50, [](int32_t) {
+                    return mayasaba::ui::ProbeStatus::NotRealized;
+                });
+            REQUIRE(attemptsUnrealized == 400);
+            REQUIRE(examinedUnrealized == 0);
 
-            int attemptsFarRealized = RunDiagnosticAttemptBudgetProbe(0, 5000, 4500);
-            REQUIRE(attemptsFarRealized == 400);
+            // Realized far beyond attempt cap: caps at 400
+            auto const [attemptsFar, examinedFar] =
+                mayasaba::ui::ProbeTimelineTopVisible(0, 5000, 400, 50, [](int32_t i) {
+                    return (i == 4500) ? mayasaba::ui::ProbeStatus::ExaminedFoundStop : mayasaba::ui::ProbeStatus::NotRealized;
+                });
+            REQUIRE(attemptsFar == 400);
+            REQUIRE(examinedFar == 0);
 
-            int attemptsNearRealized = RunDiagnosticAttemptBudgetProbe(0, 100, 10);
-            REQUIRE(attemptsNearRealized == 101); // bounded by hi (101 items)
+            // Realized near and found: stops immediately
+            auto const [attemptsFound, examinedFound] =
+                mayasaba::ui::ProbeTimelineTopVisible(0, 100, 400, 50, [](int32_t i) {
+                    return (i == 10) ? mayasaba::ui::ProbeStatus::ExaminedFoundStop : mayasaba::ui::ProbeStatus::NotRealized;
+                });
+            REQUIRE(attemptsFound == 11);
+            REQUIRE(examinedFound == 1);
+
+            // Realized near but continue: runs to end of range
+            auto const [attemptsContinue, examinedContinue] =
+                mayasaba::ui::ProbeTimelineTopVisible(0, 100, 400, 50, [](int32_t i) {
+                    return (i == 10) ? mayasaba::ui::ProbeStatus::ExaminedContinue : mayasaba::ui::ProbeStatus::NotRealized;
+                });
+            REQUIRE(attemptsContinue == 101);
+            REQUIRE(examinedContinue == 1);
+
+            // Maximum examined limit (50) caps attempts
+            auto const [attemptsCapExamined, examinedCap] =
+                mayasaba::ui::ProbeTimelineTopVisible(0, 1000, 400, 50, [](int32_t) {
+                    return mayasaba::ui::ProbeStatus::ExaminedContinue;
+                });
+            REQUIRE(examinedCap == 50);
+            REQUIRE(attemptsCapExamined == 50);
         }
         ++passed;
 
-        // D04 Regression: Reader ownership transitions and cancellation
+        // 6. D04 Shared Production Regression: Reader ownership and intent handling via TimelineScrollPolicy.h
         {
-            ReaderOwnershipTracker tracker;
-            REQUIRE(tracker.readerInteractionGen_ == 0);
+            mayasaba::ui::ReaderScrollPolicy policy;
+            REQUIRE(policy.Generation() == 0);
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
 
-            // 1. Programmatic scroll does not advance readerInteractionGen_
-            tracker.programmaticScroll_ = true;
-            tracker.OnViewChanged(true, false);
-            REQUIRE(tracker.readerInteractionGen_ == 0);
-            REQUIRE(!tracker.programmaticScroll_);
+            // A. ChangeView failure / no-op handling:
+            // When ChangeView returns false, RecordProgrammaticQueued is NOT called.
+            // Pending count remains 0, so subsequent user scroll is NOT swallowed.
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
 
-            // 2. Capture gen before delayed load
-            uint64_t const loadStartGen = tracker.readerInteractionGen_;
-            REQUIRE(!tracker.ShouldAbortOlderLoad(loadStartGen));
+            // B. Single programmatic scroll accepted:
+            policy.RecordProgrammaticQueued();
+            REQUIRE(policy.PendingProgrammaticCount() == 1);
+            // Intermediate programmatic scroll
+            REQUIRE(!policy.OnViewChanged(true, 0.0, 50.0));
+            REQUIRE(policy.PendingProgrammaticCount() == 1);
+            REQUIRE(policy.Generation() == 0);
+            // Final programmatic scroll completion
+            REQUIRE(!policy.OnViewChanged(false, 50.0, 100.0));
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
+            REQUIRE(policy.Generation() == 0);
 
-            // 3. User scroll during delayed load advances gen and aborts load
-            tracker.OnViewChanged(false, false);
-            REQUIRE(tracker.readerInteractionGen_ == 1);
-            REQUIRE(tracker.lastReason_ == "user-scroll");
-            REQUIRE(tracker.ShouldAbortOlderLoad(loadStartGen));
+            // C. Overlapping programmatic scrolls:
+            policy.RecordProgrammaticQueued();
+            policy.RecordProgrammaticQueued();
+            REQUIRE(policy.PendingProgrammaticCount() == 2);
+            // First scroll finishes
+            REQUIRE(!policy.OnViewChanged(false, 100.0, 200.0));
+            REQUIRE(policy.PendingProgrammaticCount() == 1);
+            REQUIRE(policy.Generation() == 0);
+            // Second scroll finishes
+            REQUIRE(!policy.OnViewChanged(false, 200.0, 300.0));
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
+            REQUIRE(policy.Generation() == 0);
 
-            // 4. Capture gen for reconciliation
-            uint64_t const recompStartGen = tracker.readerInteractionGen_;
-            REQUIRE(!tracker.ShouldAbortReconcilePass(recompStartGen));
+            // D. Layout-only changes: offset unchanged (viewport/window resize, font load)
+            // Must return false and NOT advance generation, preserving stationary anchor!
+            REQUIRE(!policy.OnViewChanged(false, 300.0, 300.0));
+            REQUIRE(policy.Generation() == 0);
+            // Sub-pixel jitter (< 0.001) is treated as layout-only
+            REQUIRE(!policy.OnViewChanged(false, 300.0, 300.0004));
+            REQUIRE(policy.Generation() == 0);
 
-            // 5. Jump to latest during reconciliation aborts
-            tracker.RecordReaderInteraction("jump-to-latest");
-            REQUIRE(tracker.readerInteractionGen_ == 2);
-            REQUIRE(tracker.ShouldAbortReconcilePass(recompStartGen));
+            // E. Real user scroll during delayed history load:
+            uint64_t const loadStartGen = policy.Generation();
+            REQUIRE(!policy.IsSuperseded(loadStartGen));
+            // User scrolls
+            REQUIRE(policy.OnViewChanged(false, 300.0, 350.0));
+            REQUIRE(policy.Generation() == 1);
+            REQUIRE(std::string(policy.LastReason()) == "user-scroll");
+            // Delayed load must abort because reader moved!
+            REQUIRE(policy.IsSuperseded(loadStartGen));
 
-            // 6. Search navigation during load aborts
-            uint64_t const searchLoadGen = tracker.readerInteractionGen_;
-            tracker.RecordReaderInteraction("search-nav");
-            REQUIRE(tracker.readerInteractionGen_ == 3);
-            REQUIRE(tracker.ShouldAbortOlderLoad(searchLoadGen));
+            // F. Small movements (e.g. small wheel delta < 10px or intermediate drag)
+            uint64_t const smallMoveGen = policy.Generation();
+            REQUIRE(policy.OnViewChanged(true, 350.0, 355.0));
+            REQUIRE(policy.Generation() == 2);
+            REQUIRE(policy.IsSuperseded(smallMoveGen));
 
-            // 7. Project switch during load aborts
-            uint64_t const projLoadGen = tracker.readerInteractionGen_;
-            tracker.RecordReaderInteraction("project-switch");
-            REQUIRE(tracker.readerInteractionGen_ == 4);
-            REQUIRE(tracker.ShouldAbortOlderLoad(projLoadGen));
+            // G. Reconciliation abort on explicit navigation actions:
+            uint64_t const recompStartGen = policy.Generation();
+            REQUIRE(!policy.ShouldAbortReconcile(recompStartGen));
 
-            // 8. Small reader movement (< 128px) still triggers user-scroll and aborts reconciliation
-            uint64_t const smallScrollGen = tracker.readerInteractionGen_;
-            tracker.OnViewChanged(false, true); // intermediate wheel/drag
-            REQUIRE(tracker.readerInteractionGen_ == 5);
-            REQUIRE(tracker.ShouldAbortReconcilePass(smallScrollGen));
+            // Jump to latest
+            policy.RecordUserAction("jump-to-latest");
+            REQUIRE(policy.Generation() == 3);
+            REQUIRE(policy.ShouldAbortReconcile(recompStartGen));
+
+            // Search navigation
+            uint64_t const searchGen = policy.Generation();
+            policy.RecordUserAction("search-nav");
+            REQUIRE(policy.Generation() == 4);
+            REQUIRE(policy.IsSuperseded(searchGen));
+
+            // Project switch
+            uint64_t const projGen = policy.Generation();
+            policy.RecordUserAction("project-switch");
+            REQUIRE(policy.Generation() == 5);
+            REQUIRE(policy.IsSuperseded(projGen));
         }
         ++passed;
 

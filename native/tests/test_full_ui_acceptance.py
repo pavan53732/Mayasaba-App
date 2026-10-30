@@ -119,9 +119,27 @@ def source_commit():
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-# Establish Per-Monitor V2 DPI awareness for the test runner process
+DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+
+def establish_dpi_awareness():
+    """Establish and verify per-monitor v2 DPI awareness for the test process."""
+    if hasattr(user32, "SetProcessDpiAwarenessContext"):
+        res = user32.SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+        if not res:
+            err = ctypes.get_last_error()
+            if hasattr(user32, "GetProcessDpiAwarenessContext"):
+                ctx = user32.GetProcessDpiAwarenessContext(kernel32.GetCurrentProcess())
+                if not ctx:
+                    raise RuntimeError(f"SetProcessDpiAwarenessContext failed (err={err}) and GetProcessDpiAwarenessContext returned null")
+    elif hasattr(ctypes.windll.shcore, "SetProcessDpiAwareness"):
+        res = ctypes.windll.shcore.SetProcessDpiAwareness(2)
+        if res != 0 and res != 0x80070005:
+            raise RuntimeError(f"SetProcessDpiAwareness failed with HRESULT {res:#x}")
+    else:
+        raise RuntimeError("Windows Per-Monitor DPI awareness APIs are not available")
+
 try:
-    user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+    establish_dpi_awareness()
 except Exception:
     pass
 
@@ -164,24 +182,44 @@ REQUIRED_CRITERIA_PHYSICAL = {
 
 REQUIRED_CRITERIA_ALL = {**REQUIRED_CRITERIA_AUTOMATED, **REQUIRED_CRITERIA_PHYSICAL}
 
-APPROVED_NA_JUSTIFICATIONS = {
-    "S2-14": "Screen 2 pre-binding draft composer permanently removed per authorized contract (2026-10-17)",
+APPROVED_EXEMPTIONS = {
+    "EXEMPTION-TEST-CRITERION": {
+        "criterion": "EXEMPTION-TEST-CRITERION",
+        "exemption_id": "EXEMPTION-S2-14",
+        "scope": "Screen 2 pre-binding draft composer permanently removed per authorized contract (2026-10-17)",
+        "source": "AGENTS.md §5",
+    },
 }
 
-def is_valid_na_justification(name_or_id, justification):
+def is_valid_na_justification(criterion_name, justification):
+    if not criterion_name or not isinstance(criterion_name, str):
+        return False
     if not justification or not isinstance(justification, str):
         return False
+
+    # Exact criterion lookup: the criterion must be explicitly registered with an approved exemption
+    exemption = APPROVED_EXEMPTIONS.get(criterion_name)
+    if not exemption:
+        return False
+
+    req_id = exemption.get("exemption_id", "")
+    req_scope = exemption.get("scope", "")
+    req_source = exemption.get("source", "")
+
     j = justification.strip()
     if len(j) < 20:
         return False
     lower_j = j.lower()
     if any(placeholder in lower_j for placeholder in ["todo", "placeholder", "skip this", "not needed", "n/a", "none"]):
         return False
-    for app_id, app_reason in APPROVED_NA_JUSTIFICATIONS.items():
-        if app_id in name_or_id or app_id in j:
-            return True
-    valid_tokens = ["contract", "authorized", "exemption", "removed", "scope", "invariant", "superseded", "architecture"]
-    return any(token in lower_j for token in valid_tokens)
+
+    # Justification must contain the exact exemption_id and reference the approved scope or source
+    if req_id and req_id not in j:
+        return False
+    if req_scope and req_scope not in j and req_source not in j:
+        return False
+
+    return True
 
 def validate_verdict_record(name, raw_value):
     if not isinstance(name, str) or not name.strip():
@@ -205,7 +243,9 @@ def validate_verdict_record(name, raw_value):
         return (v, j, f"Unregistered verdict {v!r} for criterion {name!r}; must be one of {sorted(REGISTERED_VERDICTS)}")
     if v == "NOT_APPLICABLE":
         if not is_valid_na_justification(name, j):
-            return (v, j, f"Criterion {name!r} marked NOT_APPLICABLE without valid scope justification: {j!r}")
+            if name not in APPROVED_EXEMPTIONS:
+                return (v, j, f"Criterion {name!r} has no approved exemption in registry; cannot be marked NOT_APPLICABLE: {j!r}")
+            return (v, j, f"Criterion {name!r} marked NOT_APPLICABLE without valid scope justification matching approved exemption: {j!r}")
     return (v, j, None)
 
 def evaluate_verdicts(verdicts, required_registry=REQUIRED_CRITERIA_AUTOMATED, is_strict=False):
@@ -296,13 +336,15 @@ def evaluate_verdicts(verdicts, required_registry=REQUIRED_CRITERIA_AUTOMATED, i
     }
 
 def get_window_dpi(hwnd):
-    try:
+    if not hwnd or not user32.IsWindow(hwnd):
+        raise ValueError(f"Invalid window handle: {hwnd}")
+    if hasattr(user32, "GetDpiForWindow"):
         dpi = user32.GetDpiForWindow(hwnd)
         if dpi > 0:
             return dpi
-    except Exception:
-        pass
-    return 96
+        err = ctypes.get_last_error()
+        raise RuntimeError(f"GetDpiForWindow returned 0 for HWND {hwnd} (GetLastError={err}); unknown DPI cannot be assumed")
+    raise RuntimeError("GetDpiForWindow not available on this system; cannot measure window DPI")
 
 def resize_to_logical_client(win, target_logical_w, target_logical_h, max_retries=3):
     hwnd = win.handle
@@ -318,7 +360,10 @@ def resize_to_logical_client(win, target_logical_w, target_logical_h, max_retrie
 
     rc = RECT(0, 0, target_phys_w, target_phys_h)
     if hasattr(user32, "AdjustWindowRectExForDpi"):
-        user32.AdjustWindowRectExForDpi(ctypes.byref(rc), style, False, ex_style, dpi)
+        res = user32.AdjustWindowRectExForDpi(ctypes.byref(rc), style, False, ex_style, dpi)
+        if not res:
+            err = ctypes.get_last_error()
+            raise RuntimeError(f"AdjustWindowRectExForDpi failed with GetLastError={err}")
         req_outer_w = rc.right - rc.left
         req_outer_h = rc.bottom - rc.top
     else:
@@ -2637,10 +2682,17 @@ def main():
         orig_log_w = (orig_c_rect.right - orig_c_rect.left) / orig_scale
         orig_log_h = (orig_c_rect.bottom - orig_c_rect.top) / orig_scale
 
-        resize_to_logical_client(win, 520, orig_log_h)
+        resize_to_logical_client(win, 520, 640)
         time.sleep(1.0)
 
         narrow_rect = win.rectangle()
+        dpi_narrow = get_window_dpi(win.handle)
+        scale_narrow = dpi_narrow / 96.0
+        c_rect_narrow = RECT()
+        user32.GetClientRect(win.handle, ctypes.byref(c_rect_narrow))
+        meas_narrow_w = (c_rect_narrow.right - c_rect_narrow.left) / scale_narrow
+        meas_narrow_h = (c_rect_narrow.bottom - c_rect_narrow.top) / scale_narrow
+        log(f"Narrow measured client dimensions: {meas_narrow_w:.1f}x{meas_narrow_h:.1f} DIPs (target 520x640, DPI={dpi_narrow})")
         log(f"Narrow window bounds: L{narrow_rect.left}, T{narrow_rect.top}, R{narrow_rect.right}, B{narrow_rect.bottom} (Width: {narrow_rect.width()})")
 
         # Check each critical control for horizontal clipping or negative/zero dimensions
@@ -2856,6 +2908,13 @@ def main():
         resize_to_logical_client(win, 640, 480)
         time.sleep(1.2)
         short_rect = win.rectangle()
+        dpi_short = get_window_dpi(win.handle)
+        scale_short = dpi_short / 96.0
+        c_rect_short = RECT()
+        user32.GetClientRect(win.handle, ctypes.byref(c_rect_short))
+        meas_short_w = (c_rect_short.right - c_rect_short.left) / scale_short
+        meas_short_h = (c_rect_short.bottom - c_rect_short.top) / scale_short
+        log(f"Short measured client dimensions: {meas_short_w:.1f}x{meas_short_h:.1f} DIPs (target 640x480, DPI={dpi_short})")
         log(f"Short window bounds: L{short_rect.left}, T{short_rect.top}, R{short_rect.right}, B{short_rect.bottom}")
 
         # Criterion 17 accumulates its own failures across 5B.3 and 5B.4. It used
@@ -4846,78 +4905,99 @@ def main():
             return 1
         log("PASS: Action Center panel correctly confirmed collapsed/withdrawn when project has no unresolved obligations.")
 
-        # Establish genuine disposable obligation in isolated test store for project alpha
         alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
-        conn = sqlite3.connect(STORE_PATH)
-        mark_store_write("INSERT: 1 seeded alpha draft_attachment (REJECTED)")
-        conn.execute(
-            "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
-            "VALUES (?, ?, ?, 10, 'dummy', 'text/plain', '', 'C:/source/alpha_err.txt', 'REJECTED', 'test rejection error', 1);",
-            ("att-alpha-disposable-1", alpha_id, "alpha_err.txt")
-        )
-        conn.commit()
-        conn.close()
-
-        # Trigger production refresh in alpha project
-        log("Triggering draft state change / background refresh to observe obligation presentation...")
         composer_box = find_by_aid(win, "ComposerBox")
-        if composer_box:
-            composer_box.set_edit_text("Draft change to trigger Action Center refresh.")
-            time.sleep(1.2) # wait for draft save timer to trigger RefreshActionCenterAsync
+        orig_composer_text = composer_box.window_text() if composer_box else ""
 
-        # Wait for ActionCenterPanel to become visible
-        ac_panel_active = poll_until(lambda: find_by_aid(win, "ActionCenterPanel") and find_by_aid(win, "ActionCenterPanel").is_visible(), timeout=6.0, interval=0.2)
-        if not ac_panel_active:
-            log("FAIL: ActionCenterPanel did not appear after obligation was introduced")
-            return 1
+        try:
+            # Establish genuine disposable obligation in isolated test store for project alpha
+            conn = sqlite3.connect(STORE_PATH)
+            mark_store_write("INSERT: 1 seeded alpha draft_attachment (REJECTED)")
+            conn.execute(
+                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+                "VALUES (?, ?, ?, 10, 'dummy', 'text/plain', '', 'C:/source/alpha_err.txt', 'REJECTED', 'test rejection error', 1);",
+                ("att-alpha-disposable-1", alpha_id, "alpha_err.txt")
+            )
+            conn.commit()
+            conn.close()
 
-        status_label = find_by_aid(win, "ActionCenterStatusText")
-        status_val = status_label.window_text() if status_label else ""
-        log(f"Alpha Action Center status with 1 obligation: '{status_val}'")
-        if "1 item" not in status_val:
-            log(f"FAIL: Expected '1 item(s) need your attention.', got '{status_val}'")
-            return 1
-        log("PASS: Action Center truthfully surfaced the active obligation.")
+            # Trigger production refresh in alpha project via valid production route:
+            # File -> Switch Project, then Cancel switching (ReturnToChat calls RefreshActionCenterAsync)
+            log("Triggering production Action Center refresh via File -> Switch Project -> Cancel...")
+            sw_heading = open_switch_project(win)
+            if not sw_heading:
+                log("FAIL: File -> Switch Project did not reach Screen 2 to trigger refresh")
+                return 1
+            cancel_btn = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
+            if not cancel_btn:
+                log("FAIL: FolderCancelButton not found on Screen 2 to return to chat")
+                return 1
+            cancel_btn.iface_invoke.Invoke()
+            time.sleep(1.0)
 
-        # 9.2 Dismiss Action Center via CloseActionCenterButton
-        close_ac_btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
-        if not close_ac_btn:
-            log("FAIL: CloseActionCenterButton not found")
-            return 1
-        log("Dismissing Action Center via CloseActionCenterButton...")
-        close_ac_btn.iface_invoke.Invoke()
-        time.sleep(1.0)
-        log("PASS: Action Center dismissed cleanly via CloseActionCenterButton.")
+            # Wait for ActionCenterPanel to become visible and display the obligation
+            ac_panel_active = poll_until(lambda: find_by_aid(win, "ActionCenterPanel") and find_by_aid(win, "ActionCenterPanel").is_visible(), timeout=6.0, interval=0.2)
+            if not ac_panel_active:
+                log("FAIL: ActionCenterPanel did not appear after obligation was introduced and refreshed")
+                return 1
 
-        # Verify Action Center panel is collapsed after dismissal
-        ac_panel_after = find_by_aid(win, "ActionCenterPanel")
-        is_ac_closed = (ac_panel_after is None) or (not ac_panel_after.is_visible())
-        if not is_ac_closed:
-            log("FAIL: Action Center panel remains visible after CloseActionCenterButton click")
-            return 1
-        log("PASS: Action Center panel confirmed collapsed following CloseActionCenterButton invocation.")
+            status_label = find_by_aid(win, "ActionCenterStatusText")
+            status_val = status_label.window_text() if status_label else ""
+            log(f"Alpha Action Center status with 1 obligation: '{status_val}'")
+            if "1 item" not in status_val:
+                log(f"FAIL: Expected '1 item(s) need your attention.', got '{status_val}'")
+                return 1
+            log("PASS: Action Center truthfully surfaced the active obligation via production refresh route.")
 
-        # Test dismissal stability: Trigger background refresh while dismissed and verify panel stays closed
-        log("Triggering draft state change / background refresh while Action Center is dismissed...")
-        if composer_box:
-            composer_box.set_edit_text("Testing dismissal stability under background refresh.")
-            time.sleep(1.2) # draft save timer fires and settles
-        ac_panel_dismissed_check = find_by_aid(win, "ActionCenterPanel")
-        is_still_closed = (ac_panel_dismissed_check is None) or (not ac_panel_dismissed_check.is_visible())
-        if not is_still_closed:
-            log("FAIL: Action Center panel reopened after background refresh occurred while dismissed")
-            return 1
-        log("PASS: Action Center panel remains strictly collapsed; background refresh completion cannot undo dismissal.")
-        if composer_box:
-            composer_box.set_edit_text("")
-            time.sleep(0.5)
+            # Test Show Details button
+            show_details_btn = find_by_aid(win, "ShowActionCenterDetailsButton") or find_by_name(win, "Show details")
+            if show_details_btn and show_details_btn.is_visible():
+                log("Testing Action Center details expansion...")
+                show_details_btn.iface_invoke.Invoke()
+                time.sleep(0.5)
+                details_panel = find_by_aid(win, "ActionCenterDetailsPanel")
+                if details_panel and details_panel.is_visible():
+                    log("PASS: Action Center details expanded cleanly.")
+                    close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
+                    if close_details_btn:
+                        close_details_btn.iface_invoke.Invoke()
+                        time.sleep(0.3)
 
-        # Clean up the disposable obligation in alpha before moving to gamma
-        conn = sqlite3.connect(STORE_PATH)
-        mark_store_write("DELETE: seeded alpha draft_attachment (att-alpha-disposable-1)")
-        conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id = 'att-alpha-disposable-1';", (alpha_id,))
-        conn.commit()
-        conn.close()
+            # 9.2 Dismiss Action Center via CloseActionCenterButton
+            close_ac_btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
+            if not close_ac_btn:
+                log("FAIL: CloseActionCenterButton not found")
+                return 1
+            log("Dismissing Action Center via CloseActionCenterButton...")
+            close_ac_btn.iface_invoke.Invoke()
+            time.sleep(1.0)
+            log("PASS: Action Center dismissed cleanly via CloseActionCenterButton.")
+
+            # Verify Action Center panel is collapsed after dismissal
+            ac_panel_after = find_by_aid(win, "ActionCenterPanel")
+            is_ac_closed = (ac_panel_after is None) or (not ac_panel_after.is_visible())
+            if not is_ac_closed:
+                log("FAIL: Action Center panel remains visible after CloseActionCenterButton click")
+                return 1
+            log("PASS: Action Center panel confirmed collapsed following CloseActionCenterButton invocation.")
+
+        finally:
+            # Clean up disposable obligation in alpha in finally block (exception safe)
+            try:
+                conn = sqlite3.connect(STORE_PATH)
+                mark_store_write("DELETE: seeded alpha draft_attachment (att-alpha-disposable-1)")
+                conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id = 'att-alpha-disposable-1';", (alpha_id,))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                log(f"WARNING: Exception during alpha obligation cleanup: {e}")
+
+            # Restore original composer text if modified
+            try:
+                if composer_box and composer_box.window_text() != orig_composer_text:
+                    composer_box.set_edit_text(orig_composer_text)
+            except Exception:
+                pass
 
         # 9.3 Switch to closed project 'gamma' which has ClosedProjectRestriction obligation
         # Seed gamma with 51 failed attachments so total obligations = 52 (51 attachments + 1 closed project)

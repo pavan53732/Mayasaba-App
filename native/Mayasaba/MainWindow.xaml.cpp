@@ -428,8 +428,10 @@ namespace winrt::Mayasaba::implementation
         {
             double const offset = HistoryScroller().VerticalOffset();
             RenderHistory(false);
-            programmaticScroll_ = true;
-            HistoryScroller().ChangeView(nullptr, offset, nullptr, true);
+            if (HistoryScroller().ChangeView(nullptr, offset, nullptr, true))
+            {
+                readerScrollPolicy_.RecordProgrammaticQueued();
+            }
         }
     }
 
@@ -712,10 +714,10 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::RecordReaderInteraction(char const* reason)
     {
-        ++readerInteractionGen_;
+        readerScrollPolicy_.RecordUserAction(reason);
         UiTraceEvent("reader-interact",
             std::string("reason=") + (reason ? reason : "unknown") +
-            " gen=" + std::to_string(readerInteractionGen_));
+            " gen=" + std::to_string(readerScrollPolicy_.Generation()));
     }
 
     void MainWindow::ShowFolder(SelectorContext context)
@@ -942,7 +944,7 @@ namespace winrt::Mayasaba::implementation
         std::string const projectId = activeProject_;
         std::int64_t const beforeRowId = historyOldestRowId_;
         uint64_t const genAtStart = selectorGeneration_.load();
-        uint64_t const readerGenAtStart = readerInteractionGen_;
+        uint64_t const readerGenAtStart = readerScrollPolicy_.Generation();
         // Reading-anchor inputs, captured on the UI thread before the load: the
         // scroller's offset and extent as the reader left them. Inserting content
         // above the viewport does not move content by itself — the offset stays at
@@ -993,11 +995,11 @@ namespace winrt::Mayasaba::implementation
             historyLoading_ = false;
             co_return;
         }
-        if (readerInteractionGen_ != readerGenAtStart)
+        if (readerScrollPolicy_.IsSuperseded(readerGenAtStart))
         {
             UiTraceEvent("older-abort-reader",
                 "why=userInteractedBeforePrepend startGen=" + std::to_string(readerGenAtStart) +
-                " nowGen=" + std::to_string(readerInteractionGen_));
+                " nowGen=" + std::to_string(readerScrollPolicy_.Generation()));
             historyLoading_ = false;
             co_return;
         }
@@ -1138,8 +1140,10 @@ namespace winrt::Mayasaba::implementation
                             " r=" + std::to_string(r0) +
                             " off=" + std::to_string(anchorOffset) +
                             " target=" + std::to_string(target));
-                        programmaticScroll_ = true;
-                        scroller.ChangeView(nullptr, target, nullptr, true);
+                        if (scroller.ChangeView(nullptr, target, nullptr, true))
+                        {
+                            readerScrollPolicy_.RecordProgrammaticQueued();
+                        }
                         // The immediate ChangeView is the first positioning
                         // act, not the final one: the panel refines the
                         // inserted rows' slot heights as layout settles, so
@@ -1207,7 +1211,7 @@ namespace winrt::Mayasaba::implementation
                     "pass=" + std::to_string(pass) + " reason=superseded");
                 co_return;
             }
-            if (readerInteractionGen_ != readerGenAtStart)
+            if (readerScrollPolicy_.ShouldAbortReconcile(readerGenAtStart))
             {
                 UiTraceEvent("older-recomp-abort",
                     "pass=" + std::to_string(pass) + " reason=reader-interacted");
@@ -1286,8 +1290,10 @@ namespace winrt::Mayasaba::implementation
                 }
                 if (!onTarget)
                 {
-                    programmaticScroll_ = true;
-                    scroller.ChangeView(nullptr, settled, nullptr, true);
+                    if (scroller.ChangeView(nullptr, settled, nullptr, true))
+                    {
+                        readerScrollPolicy_.RecordProgrammaticQueued();
+                    }
                     target = settled;
                 }
                 previousY1 = y1;
@@ -1339,42 +1345,33 @@ namespace winrt::Mayasaba::implementation
             if (lo < 0) lo = 0;
             if (hi > count - 1) hi = count - 1;
             std::wstring result = L"unknown";
-            int32_t attempts = 0;
-            int32_t examined = 0;
-            for (int32_t i = lo; i <= hi && attempts < 400 && examined < 50; ++i, ++attempts)
-            {
-                UIElement element{ nullptr };
-                // TryGetElement, NOT GetOrCreateElement: this publication runs on
-                // every scroll-idle tick and a diagnostic must never mutate the
-                // layout it observes. GetOrCreateElement forces realization of
-                // unrealized rows, so each tick inflated the extent, the
-                // virtualizer released it again, and the feedback loop tripped
-                // WinUI's cycle detection (E_LAYOUTCYCLE 0x802B0014 -> fail-fast
-                // 0xC000027B; recorded 2026-10-27T04:46:39 in
-                // %LocalAppData%\Mayasaba\unhandled-exception.log, f4r5-run15b).
-                // The visible row is always realized inside the +-3-row buffer,
-                // so the read-only probe always finds it.
-                try { element = HistoryRepeater().TryGetElement(i); } catch (...) {}
-                if (!element) continue;
-                ++examined;
-                double y = 0.0;
-                double h = 0.0;
-                try
+            mayasaba::ui::ProbeTimelineTopVisible(
+                lo, hi, 400, 50, [&](int32_t i) -> mayasaba::ui::ProbeStatus
                 {
-                    auto const fe = element.try_as<FrameworkElement>();
-                    if (fe) h = fe.ActualHeight();
-                    y = element.TransformToVisual(scroller)
-                        .TransformBounds(winrt::Windows::Foundation::Rect{0, 0, 0, 0}).Y;
-                }
-                catch (...) { continue; }
-                if (y <= 0.0 && 0.0 < y + h)
-                {
-                    auto const* entry = timeline->At(static_cast<std::size_t>(i));
-                    if (entry && !entry->identity.empty())
-                        result = winrt::to_hstring(entry->identity);
-                    break;
-                }
-            }
+                    UIElement element{ nullptr };
+                    try { element = HistoryRepeater().TryGetElement(i); } catch (...) {}
+                    if (!element) return mayasaba::ui::ProbeStatus::NotRealized;
+
+                    double y = 0.0;
+                    double h = 0.0;
+                    try
+                    {
+                        auto const fe = element.try_as<FrameworkElement>();
+                        if (fe) h = fe.ActualHeight();
+                        y = element.TransformToVisual(scroller)
+                            .TransformBounds(winrt::Windows::Foundation::Rect{0, 0, 0, 0}).Y;
+                    }
+                    catch (...) { return mayasaba::ui::ProbeStatus::ExaminedContinue; }
+
+                    if (y <= 0.0 && 0.0 < y + h)
+                    {
+                        auto const* entry = timeline->At(static_cast<std::size_t>(i));
+                        if (entry && !entry->identity.empty())
+                            result = winrt::to_hstring(entry->identity);
+                        return mayasaba::ui::ProbeStatus::ExaminedFoundStop;
+                    }
+                    return mayasaba::ui::ProbeStatus::ExaminedContinue;
+                });
             Automation::AutomationProperties::SetItemStatus(scroller, L"top-visible=" + result);
         }
         catch (...)
@@ -1810,8 +1807,10 @@ namespace winrt::Mayasaba::implementation
             UiTraceEvent("stl-changeview",
                 "target=" + std::to_string(extent) +
                 " offNow=" + std::to_string(scroller.VerticalOffset()));
-            programmaticScroll_ = true;
-            scroller.ChangeView(nullptr, extent, nullptr, true);
+            if (scroller.ChangeView(nullptr, extent, nullptr, true))
+            {
+                readerScrollPolicy_.RecordProgrammaticQueued();
+            }
         }
 
         if (extent > 0.0 && (extent - scroller.VerticalOffset()) <= 24.0)
@@ -1850,16 +1849,14 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnHistoryViewChanged(IInspectable const&,
         Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const& e)
     {
-        if (programmaticScroll_)
+        auto const hScroller = HistoryScroller();
+        double const currentOffset = hScroller ? hScroller.VerticalOffset() : 0.0;
+        bool const isUserScroll = readerScrollPolicy_.OnViewChanged(e.IsIntermediate(), lastObservedScrollOffset_, currentOffset);
+        lastObservedScrollOffset_ = currentOffset;
+        if (isUserScroll)
         {
-            if (!e.IsIntermediate())
-            {
-                programmaticScroll_ = false;
-            }
-        }
-        else
-        {
-            RecordReaderInteraction("user-scroll");
+            UiTraceEvent("reader-interact",
+                std::string("reason=user-scroll gen=") + std::to_string(readerScrollPolicy_.Generation()));
         }
         if (perfEnabled_ && perfFreq_.QuadPart > 0)
         {

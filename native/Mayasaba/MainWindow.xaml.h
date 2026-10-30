@@ -12,6 +12,7 @@
 #include "SearchController.h"
 #include "ActionCenterPresenter.h"
 #include "AgentGateway.h"
+#include "TimelineScrollPolicy.h"
 #include <array>
 #include <fstream>
 #include <memory>
@@ -411,8 +412,8 @@ namespace winrt::Mayasaba::implementation
         bool scrollingToEnd_{false};
         double lastScrollTarget_{-1.0};
         // Reader scroll and navigation ownership tracking (D04)
-        uint64_t readerInteractionGen_{0};
-        bool programmaticScroll_{false};
+        mayasaba::ui::ReaderScrollPolicy readerScrollPolicy_;
+        double lastObservedScrollOffset_{0.0};
         void RecordReaderInteraction(char const* reason);
         // Set only by the opt-in fixture harness; production startup leaves it false.
         bool fixturesActive_{false};

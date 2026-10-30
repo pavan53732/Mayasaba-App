@@ -852,22 +852,6 @@ def test_evaluator_rejects_unknown_verdict():
     assert any("Unregistered verdict 'MYSTERY'" in err for err in res["errors"]), res["errors"]
 
 
-def test_mutation_evaluator_accepting_unknown_verdict_would_fail():
-    """Mutation: an evaluator that ignores unregistered verdicts would pass."""
-    verdicts = _valid_all_pass_verdicts()
-    verdicts["1. Recent Projects & Startup Filtering"] = "MYSTERY"
-
-    # Flawed evaluator (the pre-D07 behavior from the audit)
-    def flawed_eval(v_dict):
-        fails = sum(1 for v in v_dict.values() if v == "FAIL")
-        return 1 if fails > 0 else 0
-
-    mutant_code = flawed_eval(verdicts)
-    prod_res = H.evaluate_verdicts(verdicts, is_strict=False)
-    assert mutant_code == 0, "Flawed evaluator failed to reproduce the defect"
-    assert prod_res["exit_code"] == 1, "Production evaluator failed to catch unknown verdict"
-
-
 def test_evaluator_rejects_unjustified_not_applicable():
     """NOT_APPLICABLE without an authorized scope justification must fail."""
     verdicts = _valid_all_pass_verdicts()
@@ -875,7 +859,7 @@ def test_evaluator_rejects_unjustified_not_applicable():
     res = H.evaluate_verdicts(verdicts)
     assert not res["valid"], res
     assert res["exit_code"] == 1, res
-    assert any("without valid scope justification" in err for err in res["errors"]), res["errors"]
+    assert any("has no approved exemption" in err or "without valid scope" in err for err in res["errors"]), res["errors"]
 
     # Also test trivial justification (e.g. "todo" or "skip")
     verdicts["1. Recent Projects & Startup Filtering"] = "NOT_APPLICABLE: todo"
@@ -884,13 +868,38 @@ def test_evaluator_rejects_unjustified_not_applicable():
     assert res2["exit_code"] == 1, res2
 
 
-def test_evaluator_accepts_justified_not_applicable():
-    """NOT_APPLICABLE with an approved scope justification must pass."""
+def test_evaluator_rejects_wrong_criterion_exemption():
+    """Applying an approved exemption to a criterion it does not belong to must fail."""
     verdicts = _valid_all_pass_verdicts()
+    # EXEMPTION-S2-14 belongs to EXEMPTION-TEST-CRITERION, NOT "1. Recent Projects & Startup Filtering"
     verdicts["1. Recent Projects & Startup Filtering"] = (
-        "NOT_APPLICABLE: S2-14: Screen 2 pre-binding draft composer permanently removed per authorized contract (2026-10-17)"
+        "NOT_APPLICABLE: EXEMPTION-S2-14: Screen 2 pre-binding draft composer permanently removed per authorized contract (2026-10-17)"
     )
     res = H.evaluate_verdicts(verdicts, is_strict=True)
+    assert not res["valid"], res
+    assert res["exit_code"] == 1, res
+    assert any("has no approved exemption" in err for err in res["errors"]), res["errors"]
+
+
+def test_evaluator_rejects_invented_exemption():
+    """Invented exemption IDs or unregistered scopes must fail even if format looks plausible."""
+    verdicts = _valid_all_pass_verdicts()
+    verdicts["1. Recent Projects & Startup Filtering"] = (
+        "NOT_APPLICABLE: EXEMPTION-INVENTED-99: Completely made up scope mentioning contract and architecture"
+    )
+    res = H.evaluate_verdicts(verdicts, is_strict=True)
+    assert not res["valid"], res
+    assert res["exit_code"] == 1, res
+
+
+def test_evaluator_accepts_valid_matching_exemption():
+    """NOT_APPLICABLE with exact matching approved exemption and scope must pass."""
+    verdicts = _valid_all_pass_verdicts()
+    verdicts["EXEMPTION-TEST-CRITERION"] = (
+        "NOT_APPLICABLE: EXEMPTION-S2-14: Screen 2 pre-binding draft composer permanently removed per authorized contract (2026-10-17)"
+    )
+    req = {**H.REQUIRED_CRITERIA_AUTOMATED, "EXEMPTION-TEST-CRITERION": "Test criterion with approved waiver"}
+    res = H.evaluate_verdicts(verdicts, required_registry=req, is_strict=True)
     assert res["valid"], res
     assert res["exit_code"] == 0, res
     assert res["counts"]["NOT_APPLICABLE"] == 1, res["counts"]
@@ -926,19 +935,38 @@ def test_evaluator_allows_inconclusive_in_diagnostic_mode():
     assert res["status"] == "ACCEPTANCE_CHECKS_COMPLETE_INCONCLUSIVE_RETAINED", res["status"]
 
 
-def test_mutation_strict_evaluator_ignoring_inconclusive_would_fail():
-    """Mutation: an evaluator that ignores INCONCLUSIVE in strict mode would falsely certify."""
+def test_evaluator_strict_vs_diagnostic_discrimination():
+    """The production evaluator must strictly discriminate between strict release and diagnostic runs."""
     verdicts = _valid_all_pass_verdicts()
     verdicts["11. Native OLE Desktop Drag-and-Drop Execution"] = "INCONCLUSIVE"
+    strict_res = H.evaluate_verdicts(verdicts, is_strict=True)
+    diag_res = H.evaluate_verdicts(verdicts, is_strict=False)
+    assert strict_res["exit_code"] == 1, "Strict mode must fail on INCONCLUSIVE"
+    assert diag_res["exit_code"] == 0, "Diagnostic mode must retain INCONCLUSIVE with exit 0"
 
-    def flawed_strict_eval(v_dict):
-        fails = sum(1 for v in v_dict.values() if v == "FAIL")
-        return 1 if fails > 0 else 0
 
-    mutant_code = flawed_strict_eval(verdicts)
-    prod_res = H.evaluate_verdicts(verdicts, is_strict=True)
-    assert mutant_code == 0, "Flawed evaluator failed to reproduce defect"
-    assert prod_res["exit_code"] == 1, "Production strict evaluator failed to catch INCONCLUSIVE"
+def test_sizing_oracle_rejects_unknown_or_invalid_dpi():
+    """get_window_dpi must reject invalid window handles and zero/unknown DPI returns."""
+    try:
+        H.get_window_dpi(0)
+        assert False, "get_window_dpi(0) should have raised ValueError"
+    except ValueError:
+        pass
+
+    class _ZeroDpiUser32:
+        def IsWindow(self, hwnd): return True
+        def GetDpiForWindow(self, hwnd): return 0
+
+    real_user32 = H.user32
+    H.user32 = _ZeroDpiUser32()
+    try:
+        try:
+            H.get_window_dpi(99999)
+            assert False, "get_window_dpi returning 0 should have raised RuntimeError instead of defaulting to 96"
+        except RuntimeError:
+            pass
+    finally:
+        H.user32 = real_user32
 
 
 def test_full_certification_matrix_requires_physical_criteria():
