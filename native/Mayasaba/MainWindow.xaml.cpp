@@ -196,6 +196,22 @@ namespace winrt::Mayasaba::implementation
             }
         });
 
+        // D06: Ongoing background maintenance timer (15 minutes).
+        maintenanceTimer_ = DispatcherTimer{};
+        maintenanceTimer_.Interval(std::chrono::minutes(15));
+        auto const maintWeak = get_weak();
+        maintenanceTimer_.Tick([maintWeak](IInspectable const&, IInspectable const&)
+        {
+            if (auto const self = maintWeak.get())
+            {
+                if (!self->windowClosed_)
+                {
+                    self->RunMaintenanceWorkflowAsync();
+                }
+            }
+        });
+        maintenanceTimer_.Start();
+
         auto closeWeak = get_weak();
         AppWindow().Closing([closeWeak](auto const&, Microsoft::UI::Windowing::AppWindowClosingEventArgs const& e)
         {
@@ -213,6 +229,11 @@ namespace winrt::Mayasaba::implementation
                 self->windowClosed_ = true;
                 ++self->selectorGeneration_;
                 self->draftTimer_.Stop();
+                if (self->maintenanceTimer_)
+                {
+                    self->maintenanceTimer_.Stop();
+                    self->maintenanceTimer_ = nullptr;
+                }
                 if (self->highlightResetTimer_)
                 {
                     self->highlightResetTimer_.Stop();
@@ -2526,6 +2547,36 @@ namespace winrt::Mayasaba::implementation
         if (!windowClosed_ && !error.empty()) ShowNotice(L"Draft not confirmed saved: " + Utf16(error), true);
     }
 
+    winrt::Windows::Foundation::IAsyncAction MainWindow::RunMaintenanceWorkflowAsync()
+    {
+        auto keepAlive = get_strong();
+        if (windowClosed_ || !storage_) co_return;
+        if (maintenanceInFlight_.exchange(true)) co_return;
+
+        try
+        {
+            co_await selectorQueue_.Background();
+            if (storage_ && !windowClosed_)
+            {
+                auto const result = storage_->RunScheduledMaintenance();
+                UiTraceEvent("scheduled-maintenance",
+                    std::string("changedDay=") + (result.changedDayEvaluated ? "true" : "false") +
+                    " eightyPercent=" + (result.eightyPercentEvaluated ? "true" : "false") +
+                    " pruned=" + std::to_string(result.evaluationsPruned) +
+                    (result.reclaim ? (" reclaimed=" + std::to_string(result.reclaim->removed)) : ""));
+            }
+        }
+        catch (std::exception const& ex)
+        {
+            UiTraceEvent("maintenance-error", ex.what());
+        }
+        catch (...)
+        {
+            UiTraceEvent("maintenance-error", "unknown exception");
+        }
+        maintenanceInFlight_.store(false);
+    }
+
     void MainWindow::OnWelcomeNext(IInspectable const&, RoutedEventArgs const&)
     {
         ShowFolder(SelectorContext::FirstRun);
@@ -4649,7 +4700,9 @@ namespace winrt::Mayasaba::implementation
         catch(std::exception const& e){error=e.what();}
         if(!co_await resume_foreground(ui))co_return;
         if(windowClosed_)co_return;navigationBusy_=false;
-        if(!error.empty()){ShowNotice(Utf16(error),true);co_return;}ShowChat();
+        if(!error.empty()){ShowNotice(Utf16(error),true);co_return;}
+        if(closed) RunMaintenanceWorkflowAsync();
+        ShowChat();
     }
 
     void MainWindow::OnChatKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& e)

@@ -5957,10 +5957,10 @@ directories):
 ## Phase 1 Acceptance Stabilization: Shared Scroll Policy, Reader Intent, DPI Verification, Action Center Differentiation & Sizing Oracle (2026-10-31)
 
 ### 1. Artifact Identities
-- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe` (SHA-256: `f529c6e7a601229a1a4c560d4e6307f42dfa3423f9ccdd6e157a97bfd56a7ff7`)
+- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe` (SHA-256: `5c9ff6bb7d4b628a0b2ac7f0cf368e8de4db1081d8abcba46fa788eacf13f7f6`)
 - **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf` (SHA-256: `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`)
-- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe` (SHA-256: `45d7408674d3fe401a847cc3e4cb4c7ec3426cd64da871f43813c5cbda4aca2e`)
-- **Storage Tests Executable:** `native/tests/bin/storage_tests.exe` (SHA-256: `e55476e583157775cebe1986bbc91b8ea66f697699c5df3009b123dcd4ad0336`)
+- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe` (SHA-256: `4d7376d4d3703679bfd1e3a9b75f6ded8251699114d8629198d1b8216a984ca4`)
+- **Storage Tests Executable:** `native/tests/bin/storage_tests.exe` (SHA-256: `88764d67f5563c476b3e35c68fc8d4bd35e1aaa130faaba7f3275e6790ab8e3e`)
 
 ### 2. Implemented & Verified Corrections
 
@@ -5990,6 +5990,12 @@ directories):
    - **Distinction of Evidence Levels:** Negative unit tests (testing validation rejection of wrong exemptions, invented IDs, unregistered verdicts, invalid DPI, and invalid window handles) are explicitly distinguished from production mutation discrimination (testing strict mode vs diagnostic mode on `INCONCLUSIVE` verdicts).
    - **Oracle Runner Count Correction:** The harness oracle runner (`native/tests/test_harness_oracles.py`) contains and executes exactly **53 test functions** (all 53/53 PASS). The previously reported 54 was a documentation counting discrepancy and is now corrected.
 
+5. **Ongoing Application Maintenance Workflow (D06 Closed):**
+   - **Background Periodic Invocation:** Added `maintenanceTimer_` (15-minute interval) in `MainWindow` running `RunMaintenanceWorkflowAsync` on `selectorQueue_` (outside UI thread) with single-flight check (`maintenanceInFlight_`) and window teardown cancellation on `Closed`. Also triggered on explicit project closure.
+   - **Reclamation Integration:** In `Storage.cpp::RunScheduledMaintenance()`, when either trigger evaluates (`changed.evaluated || eighty.evaluated`), `result.reclaim = ReclaimEligibleCleanup();` is executed, binding the evaluation directly to authorized physical reclamation.
+   - **Separation of Concerns Preserved:** Reference verification, grace period checks, and commit-before-delete durability remain intact. Protected data and unexpired grace files are strictly preserved.
+   - **Regression Verification:** Added Group 115 to `storage_tests.cpp` (all 115 groups PASS) verifying that normal maintenance below 80% ceiling does not delete files, whereas maintenance under capacity pressure (>=80% ceiling) reclaims expired orphans while strictly preserving unexpired files and database integrity.
+
 ### 3. Verification Suite Summary
 
 | Test Target | Command | Result |
@@ -5997,13 +6003,13 @@ directories):
 | Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
 | Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
 | Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
-| Storage regressions | `native/tests/bin/storage_tests.exe` | **114/114 PASS** |
+| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
 | Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
 | Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **Phases 1–6, 9 live observed** |
 
 ### 4. Remaining Scope & Open Obligations
 - **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
-- **D06 Maintenance Application Wiring:** Periodic background invocation of `EvaluateCleanup` (Storage.cpp:2972), `ReclaimEligibleCleanup` (Storage.cpp:3096), and `RunScheduledMaintenance` (Storage.cpp:3349) remains open.
+- **D06 Maintenance Application Wiring (Closed):** Periodic background invocation and capacity-pressure reclamation integrated in `MainWindow` (`RunMaintenanceWorkflowAsync` on `selectorQueue_`) and `Storage::RunScheduledMaintenance` (verified by Group 115 in `storage_tests.exe`).
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.

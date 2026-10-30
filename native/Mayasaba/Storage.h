@@ -820,6 +820,7 @@ namespace mayasaba
             std::string changedDayDispositionEn;
             std::string eightyPercentDispositionEn;
             std::uint64_t evaluationsPruned{0};
+            std::optional<CleanupReclaimResult> reclaim;
         };
         MaintenanceResult RunScheduledMaintenance();
         // Rows currently held in the evaluation log. Test-only, for the pruning bound.

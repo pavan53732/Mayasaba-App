@@ -8733,6 +8733,66 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // 115. Scheduled maintenance integrates ongoing reclamation on capacity pressure or day change (D06).
+        {
+            CASES_BEGIN("115. Scheduled maintenance integrates ongoing reclamation on capacity pressure or day change (D06)");
+            auto const dbFile = folder / "maintenance_d06.db";
+            mayasaba::Storage store(dbFile);
+            std::string const proj = "maint-proj-d06";
+            store.BindProject(proj, proj, "C:/Projects/" + proj);
+
+            // Staged unreferenced file with expired grace
+            auto const staging = store.ManagedAttachmentRoot() / "staging" / proj;
+            fs::create_directories(staging);
+            auto const orphan = staging / "d06-orphan.bin";
+            {
+                std::ofstream of(orphan, std::ios::binary);
+                of.write("d06-aged-payload", 16);
+            }
+            fs::last_write_time(orphan, fs::file_time_type::clock::now() - std::chrono::hours(24 * 9));
+            (void)store.EvaluateCleanup("EXPLICIT");
+            store.BackdateStagingGraceForTesting(WideToUtf8(orphan.wstring()), 8);
+
+            // Staged unreferenced file inside grace period
+            auto const fresh = staging / "d06-fresh.bin";
+            {
+                std::ofstream of(fresh, std::ios::binary);
+                of.write("d06-fresh-payload", 17);
+            }
+
+            // Normal scheduled maintenance: below 80% ceiling and same day -> declined triggers
+            auto const declined = store.RunScheduledMaintenance();
+            EXPECT(declined.changedDayInvoked);
+            EXPECT(declined.eightyPercentInvoked);
+            EXPECT(!declined.changedDayEvaluated);
+            EXPECT(!declined.eightyPercentEvaluated);
+            EXPECT(!declined.reclaim.has_value());
+            EXPECT(fs::exists(orphan)); // orphan remains when triggers decline
+            EXPECT(fs::exists(fresh));
+
+            // Under capacity pressure (>=80% ceiling): eightyPercentEvaluated fires and triggers reclamation
+            store.SetStorageCeilingGiB(2);
+            constexpr auto gib = 1024ull * 1024 * 1024;
+            store.SetManagedLedgerForTesting(3 * gib, 0);
+            auto const pressured = store.RunScheduledMaintenance();
+            EXPECT(pressured.eightyPercentInvoked);
+            EXPECT(pressured.eightyPercentEvaluated);
+            EXPECT(pressured.reclaim.has_value());
+            EXPECT(pressured.reclaim->removed >= 1);
+            EXPECT(!fs::exists(orphan)); // expired orphan safely reclaimed
+            EXPECT(fs::exists(fresh));  // fresh file inside grace strictly preserved
+
+            // Idempotent second pass: no candidates left to reclaim
+            auto const repeat = store.RunScheduledMaintenance();
+            EXPECT(repeat.eightyPercentEvaluated);
+            EXPECT(repeat.reclaim.has_value());
+            EXPECT(repeat.reclaim->removed == 0);
+            EXPECT(fs::exists(fresh));
+
+            store.SetManagedLedgerForTesting(0, 0);
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.

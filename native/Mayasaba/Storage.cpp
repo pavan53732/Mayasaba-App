@@ -3361,6 +3361,13 @@ namespace mayasaba
         result.eightyPercentEvaluated = eighty.evaluated;
         result.eightyPercentDispositionEn = eighty.dispositionEn;
 
+        // D06: When either trigger evaluates (day change or >=80% capacity), perform
+        // authorized bounded reclamation of eligible unreferenced cleanup candidates.
+        if (changed.evaluated || eighty.evaluated)
+        {
+            result.reclaim = ReclaimEligibleCleanup();
+        }
+
         std::lock_guard lock(mutex_);
         AdmitWrite_locked();
         Exec("BEGIN IMMEDIATE;");

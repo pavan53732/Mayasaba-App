@@ -14,6 +14,7 @@
 #include "AgentGateway.h"
 #include "TimelineScrollPolicy.h"
 #include <array>
+#include <atomic>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -230,6 +231,10 @@ namespace winrt::Mayasaba::implementation
         std::string pendingAttemptProject_;
         std::string pendingAttemptBody_;
         Microsoft::UI::Xaml::DispatcherTimer draftTimer_{nullptr};
+        // Ongoing application maintenance workflow (D06).
+        Microsoft::UI::Xaml::DispatcherTimer maintenanceTimer_{nullptr};
+        std::atomic<bool> maintenanceInFlight_{false};
+        winrt::Windows::Foundation::IAsyncAction RunMaintenanceWorkflowAsync();
         Microsoft::UI::Xaml::DispatcherTimer highlightResetTimer_{nullptr};
         winrt::weak_ref<Microsoft::UI::Xaml::FrameworkElement> highlightedElement_{nullptr};
         double highlightedRestingElevation_{0.0};
