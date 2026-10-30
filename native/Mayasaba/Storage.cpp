@@ -5916,108 +5916,122 @@ namespace mayasaba
     // gap. The center row itself is always included, so the caller navigates by
     // the exact submission id and finds it in the rebuilt timeline.
         ContributionsPage Storage::ContributionsWindow(ContributionsWindowQuery const& query)
+    {
+        ContributionsPage page;
+        // Zero-count behavior: beforeCount must be >= 1 because it counts messages at or older
+        // than centerRowId inclusive of centerRowId; a count of 0 would exclude the center row.
+        // centerRowId must be > 0 and projectId non-empty.
+        if (query.projectId.empty() || query.centerRowId <= 0 || query.beforeCount == 0)
         {
-            ContributionsPage page;
-            if (query.projectId.empty() || query.centerRowId <= 0 || query.beforeCount == 0)
-            {
-                page.errorMessage = "The history window request is not valid.";
-                return page;
-            }
-
-            // Same serialization discipline as ContributionsPaged: every SQL user
-            // of db_ holds the store mutex. Nothing below re-acquires it.
-            std::lock_guard lock(mutex_);
-
-            std::int64_t oldestRowId = query.centerRowId;
-            std::vector<Contribution> older; // fetched newest-first; rows <= center
-            bool centerRowSeen = false;
-            {
-                Statement p(db_, "SELECT row_id,submission_id,body,created_at FROM contributions WHERE project_id=?1 AND row_id<=?2 ORDER BY row_id DESC LIMIT ?3;");
-                Bind(p.value, 1, query.projectId);
-                sqlite3_bind_int64(p.value, 2, query.centerRowId);
-                sqlite3_bind_int64(p.value, 3, static_cast<sqlite3_int64>(query.beforeCount));
-                int rc = SQLITE_OK;
-                while ((rc = sqlite3_step(p.value)) == SQLITE_ROW)
-                {
-                    std::int64_t rowId = sqlite3_column_int64(p.value, 0);
-                    if (rowId == query.centerRowId) centerRowSeen = true;
-                    older.push_back(Contribution{Text(p.value, 1), Text(p.value, 2), Text(p.value, 3)});
-                    oldestRowId = rowId; // rows walk down to the oldest included
-                }
-                Check(rc, db_);
-            }
-
-            // The center row must belong to this project; a foreign or vanished
-            // row identity is an explicit refusal, never an arbitrary window.
-            if (!centerRowSeen)
-            {
-                page.errorMessage = "That saved message is no longer part of this project's recorded history.";
-                return page;
-            }
-
-            std::vector<std::string> olderIds;
-            olderIds.reserve(older.size());
-            for (auto const& c : older) olderIds.push_back(c.submissionId);
-            std::unordered_map<std::string, std::vector<AttachmentRecord>> olderAtts;
-            bool attachmentsOk = FetchAttachmentsForSubmissions(db_, olderIds, olderAtts);
-            // Merge attachments while still newest-first, then reverse to ascending.
-            for (auto& c : older)
-            {
-                auto it = olderAtts.find(c.submissionId);
-                if (it != olderAtts.end()) c.attachments = std::move(it->second);
-            }
-            std::reverse(older.begin(), older.end());
-
-            std::vector<Contribution> newer; // ascending; rows > center
-            {
-                Statement p(db_, "SELECT row_id,submission_id,body,created_at FROM contributions WHERE project_id=?1 AND row_id>?2 ORDER BY row_id ASC LIMIT ?3;");
-                Bind(p.value, 1, query.projectId);
-                sqlite3_bind_int64(p.value, 2, query.centerRowId);
-                sqlite3_bind_int64(p.value, 3, static_cast<sqlite3_int64>(query.afterCount));
-                int rc = SQLITE_OK;
-                while ((rc = sqlite3_step(p.value)) == SQLITE_ROW)
-                {
-                    newer.push_back(Contribution{Text(p.value, 1), Text(p.value, 2), Text(p.value, 3)});
-                }
-                Check(rc, db_);
-            }
-
-            std::vector<std::string> newerIds;
-            newerIds.reserve(newer.size());
-            for (auto const& c : newer) newerIds.push_back(c.submissionId);
-            std::unordered_map<std::string, std::vector<AttachmentRecord>> newerAtts;
-            if (!FetchAttachmentsForSubmissions(db_, newerIds, newerAtts)) attachmentsOk = false;
-            for (auto& c : newer)
-            {
-                auto it = newerAtts.find(c.submissionId);
-                if (it != newerAtts.end()) c.attachments = std::move(it->second);
-            }
-
-            page.items = std::move(older);
-            for (auto& c : newer) page.items.push_back(std::move(c));
-
-            // hasMore reports whether even older rows exist, so a jumped-to window
-            // continues the ordinary older-history keyset cursor without a special case.
-            {
-                Statement p(db_, "SELECT 1 FROM contributions WHERE project_id=?1 AND row_id<?2 LIMIT 1;");
-                Bind(p.value, 1, query.projectId);
-                sqlite3_bind_int64(p.value, 2, oldestRowId);
-                int rc = sqlite3_step(p.value);
-                if (rc == SQLITE_ROW)
-                {
-                    page.hasMore = true;
-                    page.oldestRowId = oldestRowId;
-                }
-                Check(rc, db_);
-            }
-
-            if (!attachmentsOk)
-            {
-                page.errorMessage = "Attachment records could not be read for this history window.";
-            }
-
+            page.errorMessage = "The history window request is not valid.";
             return page;
         }
+
+        // Bounded window limits: clamp each half to kMaxWindowHalfCount (50).
+        // Total items cannot exceed kMaxWindowTotalCount (100).
+        // SIZE_MAX and any count > 50 safely clamp to 50, avoiding negative SQLite LIMIT values.
+        size_t const beforeLimit = (query.beforeCount > kMaxWindowHalfCount)
+            ? kMaxWindowHalfCount
+            : query.beforeCount;
+        size_t const afterLimit = (query.afterCount > kMaxWindowHalfCount)
+            ? kMaxWindowHalfCount
+            : query.afterCount;
+
+        // Same serialization discipline as ContributionsPaged: every SQL user
+        // of db_ holds the store mutex. Nothing below re-acquires it.
+        std::lock_guard lock(mutex_);
+
+        std::int64_t oldestRowId = query.centerRowId;
+        std::vector<Contribution> older; // fetched newest-first; rows <= center
+        bool centerRowSeen = false;
+        {
+            Statement p(db_, "SELECT row_id,submission_id,body,created_at FROM contributions WHERE project_id=?1 AND row_id<=?2 ORDER BY row_id DESC LIMIT ?3;");
+            Bind(p.value, 1, query.projectId);
+            sqlite3_bind_int64(p.value, 2, query.centerRowId);
+            sqlite3_bind_int64(p.value, 3, static_cast<sqlite3_int64>(beforeLimit));
+            int rc = SQLITE_OK;
+            while ((rc = sqlite3_step(p.value)) == SQLITE_ROW)
+            {
+                std::int64_t rowId = sqlite3_column_int64(p.value, 0);
+                if (rowId == query.centerRowId) centerRowSeen = true;
+                older.push_back(Contribution{Text(p.value, 1), Text(p.value, 2), Text(p.value, 3)});
+                oldestRowId = rowId; // rows walk down to the oldest included
+            }
+            Check(rc, db_);
+        }
+
+        // The center row must belong to this project; a foreign or vanished
+        // row identity is an explicit refusal, never an arbitrary window.
+        if (!centerRowSeen)
+        {
+            page.errorMessage = "That saved message is no longer part of this project's recorded history.";
+            return page;
+        }
+
+        std::vector<std::string> olderIds;
+        olderIds.reserve(older.size());
+        for (auto const& c : older) olderIds.push_back(c.submissionId);
+        std::unordered_map<std::string, std::vector<AttachmentRecord>> olderAtts;
+        bool attachmentsOk = FetchAttachmentsForSubmissions(db_, olderIds, olderAtts);
+        // Merge attachments while still newest-first, then reverse to ascending.
+        for (auto& c : older)
+        {
+            auto it = olderAtts.find(c.submissionId);
+            if (it != olderAtts.end()) c.attachments = std::move(it->second);
+        }
+        std::reverse(older.begin(), older.end());
+
+        std::vector<Contribution> newer; // ascending; rows > center
+        if (afterLimit > 0)
+        {
+            Statement p(db_, "SELECT row_id,submission_id,body,created_at FROM contributions WHERE project_id=?1 AND row_id>?2 ORDER BY row_id ASC LIMIT ?3;");
+            Bind(p.value, 1, query.projectId);
+            sqlite3_bind_int64(p.value, 2, query.centerRowId);
+            sqlite3_bind_int64(p.value, 3, static_cast<sqlite3_int64>(afterLimit));
+            int rc = SQLITE_OK;
+            while ((rc = sqlite3_step(p.value)) == SQLITE_ROW)
+            {
+                newer.push_back(Contribution{Text(p.value, 1), Text(p.value, 2), Text(p.value, 3)});
+            }
+            Check(rc, db_);
+        }
+
+        std::vector<std::string> newerIds;
+        newerIds.reserve(newer.size());
+        for (auto const& c : newer) newerIds.push_back(c.submissionId);
+        std::unordered_map<std::string, std::vector<AttachmentRecord>> newerAtts;
+        if (!newerIds.empty() && !FetchAttachmentsForSubmissions(db_, newerIds, newerAtts)) attachmentsOk = false;
+        for (auto& c : newer)
+        {
+            auto it = newerAtts.find(c.submissionId);
+            if (it != newerAtts.end()) c.attachments = std::move(it->second);
+        }
+
+        page.items = std::move(older);
+        for (auto& c : newer) page.items.push_back(std::move(c));
+
+        // hasMore reports whether even older rows exist, so a jumped-to window
+        // continues the ordinary older-history keyset cursor without a special case.
+        {
+            Statement p(db_, "SELECT 1 FROM contributions WHERE project_id=?1 AND row_id<?2 LIMIT 1;");
+            Bind(p.value, 1, query.projectId);
+            sqlite3_bind_int64(p.value, 2, oldestRowId);
+            int rc = sqlite3_step(p.value);
+            if (rc == SQLITE_ROW)
+            {
+                page.hasMore = true;
+                page.oldestRowId = oldestRowId;
+            }
+            Check(rc, db_);
+        }
+
+        if (!attachmentsOk)
+        {
+            page.errorMessage = "Attachment records could not be read for this history window.";
+        }
+
+        return page;
+    }
 
     MessageSearchResult Storage::SearchUserMessages(MessageSearchQuery const& query)
     {

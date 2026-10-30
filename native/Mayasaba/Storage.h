@@ -159,6 +159,16 @@ namespace mayasaba
         std::string errorMessage;
     };
 
+    // History window limits for ContributionsWindow.
+    // Default: 25 before (inclusive of center) + 25 after = 50 items total.
+    // Justified Maximum: kMaxWindowHalfCount (50) per half, yielding an absolute
+    // upper bound of kMaxWindowTotalCount (100) items total (half of ContributionsPaged's
+    // 200 hard cap), preventing unbounded memory allocation or SQL execution on extreme counts.
+    constexpr size_t kDefaultWindowBeforeCount = 25;
+    constexpr size_t kDefaultWindowAfterCount = 25;
+    constexpr size_t kMaxWindowHalfCount = 50;
+    constexpr size_t kMaxWindowTotalCount = 100;
+
     // A bounded window of history centered on a row identity, fetched when a
     // saved-message search result points at a message the current page does not
     // hold. The window is small (tens of items), so jumping to an old message
@@ -167,8 +177,8 @@ namespace mayasaba
     {
         std::string projectId;
         std::int64_t centerRowId{0};
-        size_t beforeCount{25}; // messages at or older than centerRowId, inclusive
-        size_t afterCount{25};  // messages newer than centerRowId, in ascending order
+        size_t beforeCount{kDefaultWindowBeforeCount}; // messages at or older than centerRowId, inclusive (must be >= 1, max 50)
+        size_t afterCount{kDefaultWindowAfterCount};   // messages newer than centerRowId, in ascending order (0 is valid, max 50)
     };
 
     // ------------------------------------------------------------------

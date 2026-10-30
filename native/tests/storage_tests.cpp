@@ -6855,7 +6855,8 @@ fs::remove(bigManaged);
             store.ReleaseManagedReservation(1024);
             store.ReserveManagedBytes(1);
             store.ReleaseManagedReservation(1);
-            EXPECT(reserve == 5ull << 30);
+            volatile auto verifiedReserve = reserve;
+            EXPECT(verifiedReserve == (5ull << 30));
             store.SetCapacityProbeForTesting(nullptr);
             CASES_END();
         }
@@ -8499,6 +8500,96 @@ fs::remove(bigManaged);
             bad.beforeCount = 25;
             auto badWin = store.ContributionsWindow(bad);
             EXPECT(!badWin.errorMessage.empty());
+
+            // D03 regression: Zero-count behavior
+            // beforeCount == 0 is invalid because beforeCount counts items at or older than centerRowId
+            // inclusive of centerRowId; a count of 0 would exclude centerRowId itself.
+            mayasaba::ContributionsWindowQuery zeroBefore;
+            zeroBefore.projectId = proj;
+            zeroBefore.centerRowId = *midRow;
+            zeroBefore.beforeCount = 0;
+            zeroBefore.afterCount = 25;
+            auto zeroBeforeWin = store.ContributionsWindow(zeroBefore);
+            EXPECT(!zeroBeforeWin.errorMessage.empty());
+
+            // afterCount == 0 is valid: it requests only older items up to and including center.
+            mayasaba::ContributionsWindowQuery zeroAfter;
+            zeroAfter.projectId = proj;
+            zeroAfter.centerRowId = *midRow;
+            zeroAfter.beforeCount = 25;
+            zeroAfter.afterCount = 0;
+            auto zeroAfterWin = store.ContributionsWindow(zeroAfter);
+            EXPECT(zeroAfterWin.errorMessage.empty());
+            EXPECT(zeroAfterWin.items.size() == 25);
+            EXPECT(zeroAfterWin.items.back().submissionId == ids[499]); // center is the newest included
+            EXPECT(zeroAfterWin.hasMore);
+
+            // beforeCount == 1, afterCount == 0 returns exactly the center row itself
+            mayasaba::ContributionsWindowQuery singleCenter;
+            singleCenter.projectId = proj;
+            singleCenter.centerRowId = *midRow;
+            singleCenter.beforeCount = 1;
+            singleCenter.afterCount = 0;
+            auto singleCenterWin = store.ContributionsWindow(singleCenter);
+            EXPECT(singleCenterWin.errorMessage.empty());
+            EXPECT(singleCenterWin.items.size() == 1);
+            EXPECT(singleCenterWin.items.front().submissionId == ids[499]);
+
+            // D03 regression: SIZE_MAX and extreme counts must be bounded to kMaxWindowHalfCount (50 each),
+            // yielding an absolute maximum of kMaxWindowTotalCount (100) items total.
+            // Under an unbounded implementation, SIZE_MAX converts to -1 in SQLite LIMIT, returning all 1000 items.
+            mayasaba::ContributionsWindowQuery winSizeMax;
+            winSizeMax.projectId = proj;
+            winSizeMax.centerRowId = *midRow;
+            winSizeMax.beforeCount = SIZE_MAX;
+            winSizeMax.afterCount = SIZE_MAX;
+            auto winMax = store.ContributionsWindow(winSizeMax);
+            EXPECT(winMax.errorMessage.empty());
+            EXPECT(winMax.items.size() == mayasaba::kMaxWindowTotalCount);
+            EXPECT(winMax.items.size() == 100);
+            EXPECT(winMax.items[49].submissionId == ids[499]); // center at index 49 (50th item)
+            EXPECT(winMax.items[0].submissionId == ids[450]);  // 50 older items (indices 450..499)
+            EXPECT(winMax.items[99].submissionId == ids[549]); // 50 newer items (indices 500..549)
+            EXPECT(winMax.hasMore);
+
+            // Large counts below SIZE_MAX clamp to 50 each
+            mayasaba::ContributionsWindowQuery winLarge;
+            winLarge.projectId = proj;
+            winLarge.centerRowId = *midRow;
+            winLarge.beforeCount = 1000;
+            winLarge.afterCount = 1000;
+            auto winLargeRes = store.ContributionsWindow(winLarge);
+            EXPECT(winLargeRes.errorMessage.empty());
+            EXPECT(winLargeRes.items.size() == 100);
+
+            // Combined-limit boundary checks
+            mayasaba::ContributionsWindowQuery winBound1;
+            winBound1.projectId = proj;
+            winBound1.centerRowId = *midRow;
+            winBound1.beforeCount = 50;
+            winBound1.afterCount = 50;
+            auto winBound1Res = store.ContributionsWindow(winBound1);
+            EXPECT(winBound1Res.errorMessage.empty());
+            EXPECT(winBound1Res.items.size() == 100);
+
+            mayasaba::ContributionsWindowQuery winBound2;
+            winBound2.projectId = proj;
+            winBound2.centerRowId = *midRow;
+            winBound2.beforeCount = 51; // clamps to 50
+            winBound2.afterCount = 50;
+            auto winBound2Res = store.ContributionsWindow(winBound2);
+            EXPECT(winBound2Res.errorMessage.empty());
+            EXPECT(winBound2Res.items.size() == 100);
+
+            mayasaba::ContributionsWindowQuery winBound3;
+            winBound3.projectId = proj;
+            winBound3.centerRowId = *midRow;
+            winBound3.beforeCount = 50;
+            winBound3.afterCount = 51; // clamps to 50
+            auto winBound3Res = store.ContributionsWindow(winBound3);
+            EXPECT(winBound3Res.errorMessage.empty());
+            EXPECT(winBound3Res.items.size() == 100);
+
             CASES_END();
         }
 
