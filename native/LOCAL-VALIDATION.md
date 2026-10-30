@@ -5954,62 +5954,58 @@ directories):
 
 ---
 
-## Phase 1 Acceptance Stabilization: Shared Scroll Policy, Criterion-Specific N/A Authorization & Sizing Oracle (2026-10-30)
+## Phase 1 Acceptance Stabilization: Shared Scroll Policy, Reader Intent, DPI Verification & Sizing Oracle (2026-10-30)
 
 ### 1. Artifact Identities
-- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe` (SHA-256: `e172a1f69a7ce557d8095d57bd5cedbf12bed39926a8b28d6c08d5133055fa62`)
-- **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf` (SHA-256: `8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a`)
-- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe` (SHA-256: `71ac92230eb81c53bfc40e97e99741e8a1d315a9d256fa2000ea976535480af1`)
+- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe` (SHA-256: `32011c0ad69e7fb11951ab35a4035b39b49adf07c3255b93bc0543c4ddfefdba`)
+- **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf` (SHA-256: `94774a7f732afc0fbb20c98366b93a65468d52fff7b99209e736c4163948db90`)
+- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe` (SHA-256: `45d7408674d3fe401a847cc3e4cb4c7ec3426cd64da871f43813c5cbda4aca2e`)
 - **Storage Tests Executable:** `native/tests/bin/storage_tests.exe` (SHA-256: `e55476e583157775cebe1986bbc91b8ea66f697699c5df3009b123dcd4ad0336`)
 
 ### 2. Implemented & Verified Corrections
-1. **Criterion-Specific N/A Authorization:**
-   - Replaced keyword-based fallback authorization in `is_valid_na_justification` with an exact criterion registry `APPROVED_EXEMPTIONS`.
-   - Any criterion marked `NOT_APPLICABLE` without an explicit registered entry is rejected immediately.
-   - Verified that using an exemption on an unrelated criterion (e.g. attempting to waive Recent Projects using composer exemption S2-14) fails validation.
-   - Verified that invented exemption IDs fail validation.
-   - Verified that exact matching registered exemptions pass validation with exit code 0.
-   - Evaluator discrimination verified in `native/tests/test_harness_oracles.py`.
 
-2. **Action Center Stimulus via Production Route:**
-   - Eliminated reliance on composer text edits (which only persist draft text and do not trigger `RefreshActionCenterAsync`).
-   - Stimulated refresh via the valid production route: opening Switch Project (`File -> Switch Project`) and cancelling (`FolderCancelButton`), which triggers `MainWindow::ReturnToChat()` and calls `RefreshActionCenterAsync(selectorGeneration_.load())`.
-   - Verified confirmed-empty withdrawal first, seeded disposable rejected attachment, observed obligation presentation ("1 item need your attention."), tested details expansion and close, and tested dismissal via `CloseActionCenterButton`.
-   - Cleaned fixtures and preserved original composer text inside exception-safe `finally` handling.
+1. **Reader Intent & Ownership (Item 1 / D04):**
+   - **Direct Hardware Input:** In `native/Mayasaba/MainWindow.xaml`, `HistoryScroller` wires `PointerWheelChanged`, `PointerPressed`, and `PreviewKeyDown` directly to `MainWindow::RecordReaderInput`. Actual reader hardware interaction is recorded immediately and independently of `ViewChanged` notifications.
+   - **No Suppression by Programmatic Work:** `mayasaba::ui::ReaderScrollPolicy::RecordUserInput` immediately clears `pendingProgrammatic_ = 0`. If a reader interacts while a programmatic scroll is queued or in-flight, the user's intent immediately takes ownership and pending programmatic work cannot suppress genuine input.
+   - **Request Lifecycle Handling:** Handled canceled (`CancelPendingProgrammatic`), overlapping (decremented pending counts across multiple `ChangeView` completions), and unsuccessful (`ChangeView` returning false without incrementing pending count) requests.
+   - **Superseding Stale Ownership:** `RecordNavigation("project-switch")` and `ResetProject()` advance generation, clear pending programmatic counts, and supersede prior delayed loads and anchor reconciliations.
+   - **Unit Regression Coverage:** `layout_budget_tests.cpp` exercises all scenarios: small movements (<10px), intermediate wheel/drag events, overlapping programmatic motion, layout-only zero-delta changes, search navigation, Jump to latest, and project switching.
 
-3. **Shared Production Scroll Policy & Reader Intent Handling (D04 & D05):**
-   - Created `native/Mayasaba/TimelineScrollPolicy.h` containing shared non-WinUI types: `mayasaba::ui::ProbeTimelineTopVisible` and `mayasaba::ui::ReaderScrollPolicy`.
-   - Eliminated test-only simulations `RunDiagnosticAttemptBudgetProbe` and `ReaderOwnershipTracker` in `native/tests/layout_budget_tests.cpp`. Production and test binaries now compile and link against the identical shared implementation.
-   - Implemented complete reader intent handling:
-     - `ScrollViewer::ChangeView` return value is checked before calling `RecordProgrammaticQueued()`, preventing stuck suppression flags on no-ops or refusals.
-     - Handled overlapping programmatic scrolls via decremented pending counts.
-     - Filtered layout-only `ViewChanged` events (zero offset delta) to preserve stationary reading anchors.
-     - Small movements (<10px), intermediate gestures, Jump-to-latest, search navigation, and project switching each increment reader generation and cancel in-flight older loads or anchor reconciliations.
-     - Virtualizing repeater top-visible row probe strictly bounded to 400 attempts and 50 examined elements.
-   - All 8 layout/visibility regression groups PASS in `layout_budget_tests.exe`.
+2. **DPI Verification & Awareness Context (Item 2):**
+   - Implemented `establish_dpi_awareness()` in `test_full_ui_acceptance.py` using supported Win32 APIs with explicit ctypes signatures:
+     - `user32.SetProcessDpiAwarenessContext` (`BOOL(DPI_AWARENESS_CONTEXT)`)
+     - `user32.GetDpiAwarenessContextForProcess` (`DPI_AWARENESS_CONTEXT(HANDLE)`)
+     - `user32.AreDpiAwarenessContextsEqual` (`BOOL(DPI_AWARENESS_CONTEXT, DPI_AWARENESS_CONTEXT)`)
+     - `user32.GetAwarenessFromDpiAwarenessContext` (`int(DPI_AWARENESS_CONTEXT)`)
+   - Initialization failure is **not swallowed**. Queries and verifies the effective context: accepts and documents Per-Monitor v2 or Per-Monitor v1, and raises `RuntimeError` on System-Aware, Unaware, or NULL contexts.
+   - Tested in `test_harness_oracles.py`: setup verification, rejection of NULL context, and rejection of System-Aware / Unaware contexts.
 
-4. **Sizing Oracle & DPI Awareness:**
-   - Implemented `establish_dpi_awareness()` using `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` with Win32 return verification.
-   - Updated `get_window_dpi(hwnd)` to validate HWND and reject zero/unknown DPI (raising `RuntimeError` rather than silently defaulting to 96 DPI).
-   - Updated `resize_to_logical_client` to verify Win32 return from `AdjustWindowRectExForDpi`.
-   - Executed both exact logical-client sizing targets: 520×640 DIPs (narrow layout) and 640×480 DIPs (short window), explicitly recording measured client dimensions (`GetClientRect` scaled by DPI) before asserting layout or clipping.
+3. **Native Acceptance & Action Center (Item 3):**
+   - **Mandatory Details-Panel Assertions:** Updated Phase 9 in `test_full_ui_acceptance.py` so that `ShowActionCenterDetailsButton` presence, expansion of `ActionCenterDetailsPanel`, presence of `ActionCenterDetailsList`, and collapse via `CloseActionCenterDetailsButton` are strictly asserted rather than optional.
+   - **Dismissal Stability Under In-Flight / Subsequent Refresh:** Verified that after dismissal via `CloseActionCenterButton`, any subsequent or in-flight refresh completion cannot reopen or repopulate the card (`actionCenterPresenter_.IsDismissed()` holds).
+   - **Exception-Safe Cleanup:** Wrapped alpha obligation injection in `try ... finally` to guarantee SQLite record deletion and composer text preservation.
 
-5. **Production-Linked Discrimination & Mutation Evidence:**
-   - Eliminated handwritten flawed evaluators in `native/tests/test_harness_oracles.py`.
-   - Tested production evaluator discrimination between strict release and diagnostic runs on `INCONCLUSIVE` verdicts.
-   - Verified that all 51 oracle tests PASS.
+4. **Criterion-Specific N/A Authorization:**
+   - Enforced exact criterion registry `APPROVED_EXEMPTIONS` in `test_full_ui_acceptance.py`. Removed keyword fallback matching.
+   - Verified that attempting to waive an unapproved criterion (e.g. Recent Projects via composer exemption S2-14) or using invented exemption IDs fails validation. Matching registered exemptions pass.
+
+5. **Evidence, Discrimination & Execution Status (Item 4):**
+   - **Distinction of Evidence Levels:** Negative unit tests (testing validation rejection of wrong exemptions, invented IDs, unregistered verdicts, invalid DPI, and invalid window handles) are explicitly distinguished from production mutation discrimination (testing strict mode vs diagnostic mode on `INCONCLUSIVE` verdicts).
+   - **Execution Status of Live UI Acceptance:** A full live WinUI desktop harness execution of `test_full_ui_acceptance.py` was **not executed** in this pass. The Action Center and sizing live UI observations are marked **UNEXECUTED** in the UI acceptance matrix; unit regressions, oracles, and contract checks are freshly executed and verified.
 
 ### 3. Verification Suite Summary
+
 | Test Target | Command | Result |
 |---|---|---|
-| Layout/visibility & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
-| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **51/51 PASS** |
+| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **54/54 PASS** |
 | Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
 | Storage regressions | `native/tests/bin/storage_tests.exe` | **114/114 PASS** |
+| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
 
 ### 4. Remaining Scope & Open Obligations
 - **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
-- **D06 Maintenance Application Wiring:** Periodic invocation of `EvaluateCleanup` (Storage.cpp:2972), `ReclaimEligibleCleanup` (Storage.cpp:3096), and `RunScheduledMaintenance` (Storage.cpp:3349) remains open.
+- **D06 Maintenance Application Wiring:** Periodic background invocation of `EvaluateCleanup` (Storage.cpp:2972), `ReclaimEligibleCleanup` (Storage.cpp:3096), and `RunScheduledMaintenance` (Storage.cpp:3349) remains open.
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.

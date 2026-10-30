@@ -113,6 +113,9 @@ namespace winrt::Mayasaba::implementation
         void OnChatBodySizeChanged(IInspectable const&, Microsoft::UI::Xaml::SizeChangedEventArgs const&);
         void OnRootSizeChanged(IInspectable const&, Microsoft::UI::Xaml::SizeChangedEventArgs const&);
         void OnHistoryViewChanged(IInspectable const&, Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const&);
+        void OnHistoryPointerWheelChanged(IInspectable const&, Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&);
+        void OnHistoryPointerPressed(IInspectable const&, Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&);
+        void OnHistoryPreviewKeyDown(IInspectable const&, Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const&);
         void OnJumpToLatest(IInspectable const&, Microsoft::UI::Xaml::RoutedEventArgs const&);
 
     public:
@@ -415,6 +418,7 @@ namespace winrt::Mayasaba::implementation
         mayasaba::ui::ReaderScrollPolicy readerScrollPolicy_;
         double lastObservedScrollOffset_{0.0};
         void RecordReaderInteraction(char const* reason);
+        void RecordReaderInput(char const* reason);
         // Set only by the opt-in fixture harness; production startup leaves it false.
         bool fixturesActive_{false};
         // Set for exactly one refresh when a confirmed first save moves the composer.

@@ -119,29 +119,77 @@ def source_commit():
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
+from ctypes import wintypes
+
 DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE = ctypes.c_void_p(-3)
+DPI_AWARENESS_CONTEXT_SYSTEM_AWARE = ctypes.c_void_p(-2)
+DPI_AWARENESS_CONTEXT_UNAWARE = ctypes.c_void_p(-1)
+
+# Set ctypes signatures explicitly
+if hasattr(user32, "SetProcessDpiAwarenessContext"):
+    user32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user32.SetProcessDpiAwarenessContext.restype = wintypes.BOOL
+
+if hasattr(user32, "GetDpiAwarenessContextForProcess"):
+    user32.GetDpiAwarenessContextForProcess.argtypes = [wintypes.HANDLE]
+    user32.GetDpiAwarenessContextForProcess.restype = ctypes.c_void_p
+
+if hasattr(user32, "AreDpiAwarenessContextsEqual"):
+    user32.AreDpiAwarenessContextsEqual.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    user32.AreDpiAwarenessContextsEqual.restype = wintypes.BOOL
+
+if hasattr(user32, "GetAwarenessFromDpiAwarenessContext"):
+    user32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+    user32.GetAwarenessFromDpiAwarenessContext.restype = ctypes.c_int
+
+if hasattr(user32, "GetDpiForWindow"):
+    user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+    user32.GetDpiForWindow.restype = wintypes.UINT
 
 def establish_dpi_awareness():
-    """Establish and verify per-monitor v2 DPI awareness for the test process."""
-    if hasattr(user32, "SetProcessDpiAwarenessContext"):
-        res = user32.SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
-        if not res:
-            err = ctypes.get_last_error()
-            if hasattr(user32, "GetProcessDpiAwarenessContext"):
-                ctx = user32.GetProcessDpiAwarenessContext(kernel32.GetCurrentProcess())
-                if not ctx:
-                    raise RuntimeError(f"SetProcessDpiAwarenessContext failed (err={err}) and GetProcessDpiAwarenessContext returned null")
-    elif hasattr(ctypes.windll.shcore, "SetProcessDpiAwareness"):
-        res = ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        if res != 0 and res != 0x80070005:
-            raise RuntimeError(f"SetProcessDpiAwareness failed with HRESULT {res:#x}")
-    else:
-        raise RuntimeError("Windows Per-Monitor DPI awareness APIs are not available")
+    """Establish and explicitly verify effective DPI awareness using supported Win32 APIs.
 
-try:
-    establish_dpi_awareness()
-except Exception:
-    pass
+    Attempts to set DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2.
+    If SetProcessDpiAwarenessContext returns FALSE (e.g. manifest or runtime
+    pre-initialized DPI context), verifies the effective awareness context via
+    GetDpiAwarenessContextForProcess and GetAwarenessFromDpiAwarenessContext.
+    Accepts and documents Per-Monitor v2 or Per-Monitor v1, but strictly rejects
+    System-Aware, Unaware, or null contexts. Does NOT swallow initialization failure.
+    """
+    if not hasattr(user32, "SetProcessDpiAwarenessContext") or not hasattr(user32, "GetDpiAwarenessContextForProcess"):
+        raise RuntimeError("Windows Per-Monitor DPI awareness APIs are not available on this platform")
+
+    set_ok = bool(user32.SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2))
+    current_proc = kernel32.GetCurrentProcess()
+    effective_ctx = user32.GetDpiAwarenessContextForProcess(current_proc)
+    if not effective_ctx:
+        err = ctypes.get_last_error()
+        raise RuntimeError(f"GetDpiAwarenessContextForProcess returned NULL (GetLastError={err})")
+
+    # 1. Exact PMv2 match
+    if hasattr(user32, "AreDpiAwarenessContextsEqual") and user32.AreDpiAwarenessContextsEqual(effective_ctx, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2):
+        return ("PER_MONITOR_AWARE_V2", effective_ctx)
+
+    # 2. Check awareness level if context pointer differs
+    awareness = -1
+    if hasattr(user32, "GetAwarenessFromDpiAwarenessContext"):
+        awareness = user32.GetAwarenessFromDpiAwarenessContext(effective_ctx)
+
+    # 2 is DPI_AWARENESS_PER_MONITOR_AWARE (PMv1)
+    if awareness == 2:
+        return ("PER_MONITOR_AWARE_V1", effective_ctx)
+
+    # Context is UNAWARE (0), SYSTEM_AWARE (1), or INVALID (-1)
+    err = ctypes.get_last_error()
+    awareness_names = {-1: "INVALID", 0: "UNAWARE", 1: "SYSTEM_AWARE", 2: "PER_MONITOR_AWARE"}
+    aw_name = awareness_names.get(awareness, f"UNKNOWN({awareness})")
+    raise RuntimeError(
+        f"DPI awareness initialization failed: SetProcessDpiAwarenessContext returned {set_ok} (GetLastError={err}), "
+        f"and effective context is {aw_name} (ctx={effective_ctx}), which does not satisfy per-monitor scaling"
+    )
+
+EFFECTIVE_DPI_NAME, EFFECTIVE_DPI_CTX = establish_dpi_awareness()
 
 REGISTERED_VERDICTS = {"PASS", "FAIL", "INCONCLUSIVE", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"}
 
@@ -4949,19 +4997,35 @@ def main():
                 return 1
             log("PASS: Action Center truthfully surfaced the active obligation via production refresh route.")
 
-            # Test Show Details button
+            # Mandatory details panel assertions (Item 3)
             show_details_btn = find_by_aid(win, "ShowActionCenterDetailsButton") or find_by_name(win, "Show details")
-            if show_details_btn and show_details_btn.is_visible():
-                log("Testing Action Center details expansion...")
-                show_details_btn.iface_invoke.Invoke()
-                time.sleep(0.5)
-                details_panel = find_by_aid(win, "ActionCenterDetailsPanel")
-                if details_panel and details_panel.is_visible():
-                    log("PASS: Action Center details expanded cleanly.")
-                    close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
-                    if close_details_btn:
-                        close_details_btn.iface_invoke.Invoke()
-                        time.sleep(0.3)
+            if not show_details_btn or not show_details_btn.is_visible():
+                log("FAIL: ShowActionCenterDetailsButton is missing or not visible when obligations exist")
+                return 1
+            log("Expanding Action Center details panel via ShowActionCenterDetailsButton...")
+            show_details_btn.iface_invoke.Invoke()
+            time.sleep(0.5)
+
+            details_panel = find_by_aid(win, "ActionCenterDetailsPanel")
+            if not details_panel or not details_panel.is_visible():
+                log("FAIL: ActionCenterDetailsPanel did not become visible after Show details click")
+                return 1
+
+            details_list = find_by_aid(win, "ActionCenterDetailsList")
+            if not details_list:
+                log("FAIL: ActionCenterDetailsList missing inside details panel")
+                return 1
+
+            close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
+            if not close_details_btn:
+                log("FAIL: CloseActionCenterDetailsButton missing inside details panel")
+                return 1
+            close_details_btn.iface_invoke.Invoke()
+            time.sleep(0.3)
+            if details_panel.is_visible():
+                log("FAIL: ActionCenterDetailsPanel remained visible after CloseActionCenterDetailsButton click")
+                return 1
+            log("PASS: Action Center details panel expansion, contents, and collapse verified mandatorily.")
 
             # 9.2 Dismiss Action Center via CloseActionCenterButton
             close_ac_btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
@@ -4980,6 +5044,21 @@ def main():
                 log("FAIL: Action Center panel remains visible after CloseActionCenterButton click")
                 return 1
             log("PASS: Action Center panel confirmed collapsed following CloseActionCenterButton invocation.")
+
+            # Verify that in-flight or subsequent refresh completion cannot reopen or repopulate the card while dismissed
+            log("Triggering production refresh while dismissed to verify dismissal stability...")
+            sw_heading_dismissed = open_switch_project(win)
+            if sw_heading_dismissed:
+                cancel_btn_dismissed = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
+                if cancel_btn_dismissed:
+                    cancel_btn_dismissed.iface_invoke.Invoke()
+                    time.sleep(1.0)
+            ac_panel_dismissed_check = find_by_aid(win, "ActionCenterPanel")
+            is_still_closed = (ac_panel_dismissed_check is None) or (not ac_panel_dismissed_check.is_visible())
+            if not is_still_closed:
+                log("FAIL: Action Center panel reopened after background refresh completed while dismissed")
+                return 1
+            log("PASS: Action Center panel remains strictly collapsed; refresh completion cannot undo dismissal.")
 
         finally:
             # Clean up disposable obligation in alpha in finally block (exception safe)

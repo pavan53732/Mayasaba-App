@@ -946,7 +946,7 @@ def test_evaluator_strict_vs_diagnostic_discrimination():
 
 
 def test_sizing_oracle_rejects_unknown_or_invalid_dpi():
-    """get_window_dpi must reject invalid window handles and zero/unknown DPI returns."""
+    """[Negative Unit Test] get_window_dpi must reject invalid window handles and zero/unknown DPI returns."""
     try:
         H.get_window_dpi(0)
         assert False, "get_window_dpi(0) should have raised ValueError"
@@ -965,6 +965,51 @@ def test_sizing_oracle_rejects_unknown_or_invalid_dpi():
             assert False, "get_window_dpi returning 0 should have raised RuntimeError instead of defaulting to 96"
         except RuntimeError:
             pass
+    finally:
+        H.user32 = real_user32
+
+
+def test_dpi_awareness_established_and_verified():
+    """[Unit Test] establish_dpi_awareness explicitly verifies effective awareness context."""
+    name, ctx = H.establish_dpi_awareness()
+    assert name in ("PER_MONITOR_AWARE_V2", "PER_MONITOR_AWARE_V1"), name
+    assert ctx is not None, ctx
+
+
+def test_dpi_awareness_rejects_unaware_or_system_aware_context():
+    """[Negative Unit Test] establish_dpi_awareness rejects System-Aware or Unaware effective contexts."""
+    class _SystemAwareUser32:
+        def SetProcessDpiAwarenessContext(self, ctx): return False
+        def GetDpiAwarenessContextForProcess(self, proc): return 1234
+        def AreDpiAwarenessContextsEqual(self, a, b): return False
+        def GetAwarenessFromDpiAwarenessContext(self, ctx): return 1 # DPI_AWARENESS_SYSTEM_AWARE
+
+    real_user32 = H.user32
+    H.user32 = _SystemAwareUser32()
+    try:
+        try:
+            H.establish_dpi_awareness()
+            assert False, "establish_dpi_awareness should have raised RuntimeError for SYSTEM_AWARE context"
+        except RuntimeError as exc:
+            assert "SYSTEM_AWARE" in str(exc) and "does not satisfy per-monitor scaling" in str(exc), str(exc)
+    finally:
+        H.user32 = real_user32
+
+
+def test_dpi_awareness_rejects_null_context():
+    """[Negative Unit Test] establish_dpi_awareness fails fast if context query returns NULL."""
+    class _NullContextUser32:
+        def SetProcessDpiAwarenessContext(self, ctx): return False
+        def GetDpiAwarenessContextForProcess(self, proc): return None
+
+    real_user32 = H.user32
+    H.user32 = _NullContextUser32()
+    try:
+        try:
+            H.establish_dpi_awareness()
+            assert False, "establish_dpi_awareness should have raised RuntimeError for NULL context"
+        except RuntimeError as exc:
+            assert "returned NULL" in str(exc), str(exc)
     finally:
         H.user32 = real_user32
 

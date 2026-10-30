@@ -121,86 +121,119 @@ int main()
         }
         ++passed;
 
-        // 6. D04 Shared Production Regression: Reader ownership and intent handling via TimelineScrollPolicy.h
+        // 6. D04 Shared Production Regression: Comprehensive Reader Intent & Ownership via TimelineScrollPolicy.h
         {
             mayasaba::ui::ReaderScrollPolicy policy;
             REQUIRE(policy.Generation() == 0);
             REQUIRE(policy.PendingProgrammaticCount() == 0);
 
-            // A. ChangeView failure / no-op handling:
-            // When ChangeView returns false, RecordProgrammaticQueued is NOT called.
-            // Pending count remains 0, so subsequent user scroll is NOT swallowed.
+            // A. Independent reader hardware input:
+            // Input is recorded directly (e.g. from PointerWheelChanged, PointerPressed, KeyDown)
+            // without waiting for or depending on ViewChanged notifications.
+            policy.RecordUserInput("user-wheel");
+            REQUIRE(policy.Generation() == 1);
+            REQUIRE(std::string(policy.LastReason()) == "user-wheel");
             REQUIRE(policy.PendingProgrammaticCount() == 0);
 
-            // B. Single programmatic scroll accepted:
-            policy.RecordProgrammaticQueued();
-            REQUIRE(policy.PendingProgrammaticCount() == 1);
-            // Intermediate programmatic scroll
-            REQUIRE(!policy.OnViewChanged(true, 0.0, 50.0));
-            REQUIRE(policy.PendingProgrammaticCount() == 1);
-            REQUIRE(policy.Generation() == 0);
-            // Final programmatic scroll completion
-            REQUIRE(!policy.OnViewChanged(false, 50.0, 100.0));
-            REQUIRE(policy.PendingProgrammaticCount() == 0);
-            REQUIRE(policy.Generation() == 0);
+            policy.RecordUserInput("user-pointer");
+            REQUIRE(policy.Generation() == 2);
+            REQUIRE(std::string(policy.LastReason()) == "user-pointer");
 
-            // C. Overlapping programmatic scrolls:
-            policy.RecordProgrammaticQueued();
-            policy.RecordProgrammaticQueued();
+            policy.RecordUserInput("user-key");
+            REQUIRE(policy.Generation() == 3);
+            REQUIRE(std::string(policy.LastReason()) == "user-key");
+
+            // B. Pending programmatic work MUST NOT suppress genuine user input:
+            // Queue a programmatic scroll request
+            policy.RecordProgrammaticQueued(500.0);
+            REQUIRE(policy.PendingProgrammaticCount() == 1);
+            REQUIRE(policy.LastProgrammaticTarget() == 500.0);
+
+            // While programmatic motion is queued/pending, genuine user input arrives (e.g. user touches/wheels)
+            policy.RecordUserInput("user-wheel");
+            // User input immediately takes ownership and clears pending programmatic count
+            REQUIRE(policy.Generation() == 4);
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
+            REQUIRE(std::string(policy.LastReason()) == "user-wheel");
+
+            // C. Overlapping programmatic motion:
+            // Two rapid layout passes queue programmatic ChangeView calls
+            policy.RecordProgrammaticQueued(100.0);
+            policy.RecordProgrammaticQueued(200.0);
             REQUIRE(policy.PendingProgrammaticCount() == 2);
-            // First scroll finishes
-            REQUIRE(!policy.OnViewChanged(false, 100.0, 200.0));
+            REQUIRE(policy.LastProgrammaticTarget() == 200.0);
+
+            // First programmatic scroll completes (ViewChanged with intermediate=false)
+            REQUIRE(!policy.OnViewChanged(false, 50.0, 100.0));
             REQUIRE(policy.PendingProgrammaticCount() == 1);
-            REQUIRE(policy.Generation() == 0);
-            // Second scroll finishes
-            REQUIRE(!policy.OnViewChanged(false, 200.0, 300.0));
+            REQUIRE(policy.Generation() == 4); // generation NOT incremented by programmatic motion
+
+            // Second programmatic scroll completes
+            REQUIRE(!policy.OnViewChanged(false, 100.0, 200.0));
             REQUIRE(policy.PendingProgrammaticCount() == 0);
-            REQUIRE(policy.Generation() == 0);
+            REQUIRE(policy.Generation() == 4);
 
-            // D. Layout-only changes: offset unchanged (viewport/window resize, font load)
-            // Must return false and NOT advance generation, preserving stationary anchor!
-            REQUIRE(!policy.OnViewChanged(false, 300.0, 300.0));
-            REQUIRE(policy.Generation() == 0);
-            // Sub-pixel jitter (< 0.001) is treated as layout-only
-            REQUIRE(!policy.OnViewChanged(false, 300.0, 300.0004));
-            REQUIRE(policy.Generation() == 0);
+            // D. Unsuccessful requests (ChangeView returning false) and cancellation:
+            // If ChangeView returns false, caller does not call RecordProgrammaticQueued
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
 
-            // E. Real user scroll during delayed history load:
+            // Canceled programmatic motion:
+            policy.RecordProgrammaticQueued(350.0);
+            REQUIRE(policy.PendingProgrammaticCount() == 1);
+            policy.CancelPendingProgrammatic("animation-canceled");
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
+            REQUIRE(std::string(policy.LastReason()) == "animation-canceled");
+
+            // E. Layout-only changes:
+            // ViewChanged fired by viewport resize / font load with zero offset change
+            REQUIRE(!policy.OnViewChanged(false, 200.0, 200.0));
+            REQUIRE(policy.Generation() == 4); // stationary anchor preserved
+            // Sub-pixel jitter (< 0.001)
+            REQUIRE(!policy.OnViewChanged(false, 200.0, 200.0003));
+            REQUIRE(policy.Generation() == 4);
+
+            // F. Delayed loading cancellation on small reader movement:
             uint64_t const loadStartGen = policy.Generation();
             REQUIRE(!policy.IsSuperseded(loadStartGen));
-            // User scrolls
-            REQUIRE(policy.OnViewChanged(false, 300.0, 350.0));
-            REQUIRE(policy.Generation() == 1);
-            REQUIRE(std::string(policy.LastReason()) == "user-scroll");
-            // Delayed load must abort because reader moved!
-            REQUIRE(policy.IsSuperseded(loadStartGen));
 
-            // F. Small movements (e.g. small wheel delta < 10px or intermediate drag)
-            uint64_t const smallMoveGen = policy.Generation();
-            REQUIRE(policy.OnViewChanged(true, 350.0, 355.0));
-            REQUIRE(policy.Generation() == 2);
-            REQUIRE(policy.IsSuperseded(smallMoveGen));
+            // Small movement (< 10px) during delayed load
+            REQUIRE(policy.OnViewChanged(false, 200.0, 206.0));
+            REQUIRE(policy.Generation() == 5);
+            REQUIRE(policy.IsSuperseded(loadStartGen)); // load must abort
 
-            // G. Reconciliation abort on explicit navigation actions:
+            // Intermediate wheel/drag event also advances generation
+            uint64_t const intermediateGen = policy.Generation();
+            REQUIRE(policy.OnViewChanged(true, 206.0, 212.0));
+            REQUIRE(policy.Generation() == 6);
+            REQUIRE(policy.IsSuperseded(intermediateGen));
+
+            // G. Reconciliation abort on explicit navigation and project changes:
             uint64_t const recompStartGen = policy.Generation();
             REQUIRE(!policy.ShouldAbortReconcile(recompStartGen));
 
             // Jump to latest
-            policy.RecordUserAction("jump-to-latest");
-            REQUIRE(policy.Generation() == 3);
+            policy.RecordNavigation("jump-to-latest");
+            REQUIRE(policy.Generation() == 7);
             REQUIRE(policy.ShouldAbortReconcile(recompStartGen));
 
             // Search navigation
-            uint64_t const searchGen = policy.Generation();
-            policy.RecordUserAction("search-nav");
-            REQUIRE(policy.Generation() == 4);
-            REQUIRE(policy.IsSuperseded(searchGen));
+            uint64_t const searchLoadGen = policy.Generation();
+            policy.RecordNavigation("search-nav");
+            REQUIRE(policy.Generation() == 8);
+            REQUIRE(policy.IsSuperseded(searchLoadGen));
 
             // Project switch
-            uint64_t const projGen = policy.Generation();
-            policy.RecordUserAction("project-switch");
-            REQUIRE(policy.Generation() == 5);
-            REQUIRE(policy.IsSuperseded(projGen));
+            uint64_t const projLoadGen = policy.Generation();
+            policy.RecordNavigation("project-switch");
+            REQUIRE(policy.Generation() == 9);
+            REQUIRE(policy.IsSuperseded(projLoadGen));
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
+
+            // ResetProject
+            policy.ResetProject();
+            REQUIRE(policy.Generation() == 10);
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
+            REQUIRE(std::string(policy.LastReason()) == "project-reset");
         }
         ++passed;
 

@@ -430,7 +430,7 @@ namespace winrt::Mayasaba::implementation
             RenderHistory(false);
             if (HistoryScroller().ChangeView(nullptr, offset, nullptr, true))
             {
-                readerScrollPolicy_.RecordProgrammaticQueued();
+                readerScrollPolicy_.RecordProgrammaticQueued(offset);
             }
         }
     }
@@ -714,10 +714,45 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::RecordReaderInteraction(char const* reason)
     {
-        readerScrollPolicy_.RecordUserAction(reason);
+        readerScrollPolicy_.RecordNavigation(reason);
         UiTraceEvent("reader-interact",
             std::string("reason=") + (reason ? reason : "unknown") +
             " gen=" + std::to_string(readerScrollPolicy_.Generation()));
+    }
+
+    void MainWindow::RecordReaderInput(char const* reason)
+    {
+        readerScrollPolicy_.RecordUserInput(reason);
+        UiTraceEvent("reader-input",
+            std::string("reason=") + (reason ? reason : "unknown") +
+            " gen=" + std::to_string(readerScrollPolicy_.Generation()));
+    }
+
+    void MainWindow::OnHistoryPointerWheelChanged(IInspectable const&,
+        Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&)
+    {
+        RecordReaderInput("user-wheel");
+    }
+
+    void MainWindow::OnHistoryPointerPressed(IInspectable const&,
+        Microsoft::UI::Xaml::Input::PointerRoutedEventArgs const&)
+    {
+        RecordReaderInput("user-pointer");
+    }
+
+    void MainWindow::OnHistoryPreviewKeyDown(IInspectable const&,
+        Microsoft::UI::Xaml::Input::KeyRoutedEventArgs const& e)
+    {
+        auto const key = e.Key();
+        if (key == winrt::Windows::System::VirtualKey::Up ||
+            key == winrt::Windows::System::VirtualKey::Down ||
+            key == winrt::Windows::System::VirtualKey::PageUp ||
+            key == winrt::Windows::System::VirtualKey::PageDown ||
+            key == winrt::Windows::System::VirtualKey::Home ||
+            key == winrt::Windows::System::VirtualKey::End)
+        {
+            RecordReaderInput("user-key");
+        }
     }
 
     void MainWindow::ShowFolder(SelectorContext context)
@@ -1142,7 +1177,7 @@ namespace winrt::Mayasaba::implementation
                             " target=" + std::to_string(target));
                         if (scroller.ChangeView(nullptr, target, nullptr, true))
                         {
-                            readerScrollPolicy_.RecordProgrammaticQueued();
+                            readerScrollPolicy_.RecordProgrammaticQueued(target);
                         }
                         // The immediate ChangeView is the first positioning
                         // act, not the final one: the panel refines the
@@ -1292,7 +1327,7 @@ namespace winrt::Mayasaba::implementation
                 {
                     if (scroller.ChangeView(nullptr, settled, nullptr, true))
                     {
-                        readerScrollPolicy_.RecordProgrammaticQueued();
+                        readerScrollPolicy_.RecordProgrammaticQueued(settled);
                     }
                     target = settled;
                 }
@@ -1809,7 +1844,7 @@ namespace winrt::Mayasaba::implementation
                 " offNow=" + std::to_string(scroller.VerticalOffset()));
             if (scroller.ChangeView(nullptr, extent, nullptr, true))
             {
-                readerScrollPolicy_.RecordProgrammaticQueued();
+                readerScrollPolicy_.RecordProgrammaticQueued(extent);
             }
         }
 

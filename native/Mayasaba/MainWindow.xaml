@@ -877,7 +877,10 @@
                                   HorizontalScrollBarVisibility="Disabled"
                                   VerticalScrollBarVisibility="Auto"
                                   VerticalAnchorRatio="1.0"
-                                  ViewChanged="OnHistoryViewChanged">
+                                  ViewChanged="OnHistoryViewChanged"
+                                  PointerWheelChanged="OnHistoryPointerWheelChanged"
+                                  PointerPressed="OnHistoryPointerPressed"
+                                  PreviewKeyDown="OnHistoryPreviewKeyDown">
                         <ItemsRepeater x:Name="HistoryRepeater" Margin="0,20,0,10"
                                        HorizontalAlignment="Center"
                                        AutomationProperties.Name="Conversation timeline">
