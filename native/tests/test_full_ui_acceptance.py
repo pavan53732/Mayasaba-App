@@ -119,6 +119,252 @@ def source_commit():
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
+# Establish Per-Monitor V2 DPI awareness for the test runner process
+try:
+    user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
+except Exception:
+    pass
+
+REGISTERED_VERDICTS = {"PASS", "FAIL", "INCONCLUSIVE", "BLOCKED", "NOT_RUN", "NOT_APPLICABLE"}
+
+REQUIRED_CRITERIA_AUTOMATED = {
+    "1. Recent Projects & Startup Filtering": "Recent project filtering and selection on Screen 2",
+    "2. Message Search Pagination & Continuation": "Message search pagination and forward continuation",
+    "3. Older Message Navigation & Selection": "Navigation to older search results and row selection",
+    "4. Search Mode Project Switch Safety": "Project switching while in search mode resets state cleanly",
+    "5. Narrow 520px Responsive Layout": "Narrow 520px client width layout and reachability",
+    "6. Rapid Hover Sweeps & Animation Stability": "Rapid hover sweeps over interactive elements without crash or feedback loop",
+    "7. Display DPI Scaling Simulation": "Simulated DPI change handling across components",
+    "8. Action Center Pagination & Resumption": "Action Center obligation pagination and resumption",
+    "9. Action Center Stale Invalidation & Refresh": "Action Center refresh and stale cache invalidation",
+    "10. Action Center Panel Dismissal Stability": "Action Center panel dismissal and non-reopening when empty",
+    "11. Native OLE Desktop Drag-and-Drop Execution": "Native OLE desktop drag-and-drop file admission",
+    "12. Mixed-Batch Folder Rejection on Drop": "Rejection of folders in mixed-batch drag-drop operations",
+    "13. Seeded Attachment Chip Realization & Diagnostics": "Attachment chip rendering, realization and diagnostic bounds",
+    "14. Strict Non-English Prose Preview Withholding": "Strict withholding of non-English prose previews per English-only invariant",
+    "15. WinUI 3 CompositionTarget Performance Profiling": "WinUI 3 CompositionTarget frame rendering performance profiling",
+    "16. Search Overlay Flat Resting Orientation": "Search overlay rests completely flat without residual 3D tilt",
+    "17. Search Overlay Bounded Height, Scrolling & Paging Reachability": "Search overlay height bounded and paging controls reachable",
+    "18. Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat": "Repeated reveal and cancellation leaves search overlay flat",
+    "19. Empty-Chat Hero Perspective Preserved": "Empty-chat hero perspective preserved without leaking into stable reading planes",
+    "20. Reduced-Motion Change Leaves The Overlay Flat": "Live reduced-motion preference toggle leaves overlay flat",
+    "21. CLI Readiness Projection & Non-Gating": "CLI readiness indicator truthfully projected and non-gating",
+    "22. Bounded History Paging Save & Newest Rendering": "Bounded history paging and newest contribution rendering",
+    "23. Reading Anchor Preserved Across Older Prepend": "Reading anchor preserved during older message prepending",
+}
+
+REQUIRED_CRITERIA_PHYSICAL = {
+    "P01. Physical Windows Client Sizing": "Physical window sizing at 520x640 and 640x480 logical client units with actual OS borders",
+    "P02. Physical High-DPI Display Scaling": "Physical multi-monitor / actual OS display scaling (125%, 150%, 200%)",
+    "P03. Physical OS Theme & High-Contrast Switching": "Physical live OS light/dark and high-contrast theme changes",
+    "P04. Physical Keyboard Navigation & Narrator": "Physical keyboard-only navigation and Narrator speech/announcement verification",
+    "P05. Physical OLE Desktop Drag-and-Drop": "Physical OLE drag-and-drop from real Windows Explorer process",
+    "P06. Physical Long-Session Performance & Resource Leak": "Physical long-session duration benchmarking for memory/handle leaks",
+}
+
+REQUIRED_CRITERIA_ALL = {**REQUIRED_CRITERIA_AUTOMATED, **REQUIRED_CRITERIA_PHYSICAL}
+
+APPROVED_NA_JUSTIFICATIONS = {
+    "S2-14": "Screen 2 pre-binding draft composer permanently removed per authorized contract (2026-10-17)",
+}
+
+def is_valid_na_justification(name_or_id, justification):
+    if not justification or not isinstance(justification, str):
+        return False
+    j = justification.strip()
+    if len(j) < 20:
+        return False
+    lower_j = j.lower()
+    if any(placeholder in lower_j for placeholder in ["todo", "placeholder", "skip this", "not needed", "n/a", "none"]):
+        return False
+    for app_id, app_reason in APPROVED_NA_JUSTIFICATIONS.items():
+        if app_id in name_or_id or app_id in j:
+            return True
+    valid_tokens = ["contract", "authorized", "exemption", "removed", "scope", "invariant", "superseded", "architecture"]
+    return any(token in lower_j for token in valid_tokens)
+
+def validate_verdict_record(name, raw_value):
+    if not isinstance(name, str) or not name.strip():
+        return (None, None, f"Malformed criterion identifier: {name!r}")
+    if isinstance(raw_value, dict):
+        v = raw_value.get("verdict")
+        j = raw_value.get("justification", "")
+    elif isinstance(raw_value, (list, tuple)):
+        v = raw_value[0] if len(raw_value) > 0 else None
+        j = raw_value[1] if len(raw_value) > 1 else ""
+    elif isinstance(raw_value, str):
+        if raw_value.startswith("NOT_APPLICABLE:"):
+            v = "NOT_APPLICABLE"
+            j = raw_value[len("NOT_APPLICABLE:"):].strip()
+        else:
+            v = raw_value.strip()
+            j = ""
+    else:
+        return (None, None, f"Malformed verdict value type for criterion {name!r}: {type(raw_value).__name__}")
+    if v not in REGISTERED_VERDICTS:
+        return (v, j, f"Unregistered verdict {v!r} for criterion {name!r}; must be one of {sorted(REGISTERED_VERDICTS)}")
+    if v == "NOT_APPLICABLE":
+        if not is_valid_na_justification(name, j):
+            return (v, j, f"Criterion {name!r} marked NOT_APPLICABLE without valid scope justification: {j!r}")
+    return (v, j, None)
+
+def evaluate_verdicts(verdicts, required_registry=REQUIRED_CRITERIA_AUTOMATED, is_strict=False):
+    if not isinstance(verdicts, dict):
+        return {
+            "valid": False,
+            "exit_code": 1,
+            "status": "MALFORMED_VERDICTS_OBJECT",
+            "errors": [f"Verdicts object must be a dictionary, got {type(verdicts).__name__}"],
+            "counts": {},
+            "records": {}
+        }
+    errors = []
+    records = {}
+    counts = {v: 0 for v in REGISTERED_VERDICTS}
+    for req_id in required_registry:
+        if req_id not in verdicts:
+            errors.append(f"Missing required criterion: {req_id!r}")
+    for name, raw_value in verdicts.items():
+        v, j, err = validate_verdict_record(name, raw_value)
+        if err:
+            errors.append(err)
+        else:
+            records[name] = (v, j)
+            counts[v] += 1
+    if errors:
+        return {
+            "valid": False,
+            "exit_code": 1,
+            "status": "VALIDATION_FAILED",
+            "errors": errors,
+            "counts": counts,
+            "records": records
+        }
+    if counts["FAIL"] > 0:
+        return {
+            "valid": True,
+            "exit_code": 1,
+            "status": "TEST_SUITE_FAILED",
+            "errors": [f"{counts['FAIL']} assertion(s) failed"],
+            "counts": counts,
+            "records": records
+        }
+    if counts["BLOCKED"] > 0:
+        return {
+            "valid": True,
+            "exit_code": 1,
+            "status": "TEST_SUITE_INCOMPLETE_BLOCKED",
+            "errors": [f"{counts['BLOCKED']} criterion(s) blocked by failed preconditions"],
+            "counts": counts,
+            "records": records
+        }
+    if counts["NOT_RUN"] > 0:
+        return {
+            "valid": True,
+            "exit_code": 1,
+            "status": "TEST_SUITE_INCOMPLETE_NOT_RUN",
+            "errors": [f"{counts['NOT_RUN']} criterion(s) were never executed"],
+            "counts": counts,
+            "records": records
+        }
+    if counts["INCONCLUSIVE"] > 0:
+        if is_strict:
+            return {
+                "valid": True,
+                "exit_code": 1,
+                "status": "STRICT_CERTIFICATION_FAILED",
+                "errors": [f"{counts['INCONCLUSIVE']} inconclusive criteria disallowed in strict mode"],
+                "counts": counts,
+                "records": records
+            }
+        else:
+            return {
+                "valid": True,
+                "exit_code": 0,
+                "status": "ACCEPTANCE_CHECKS_COMPLETE_INCONCLUSIVE_RETAINED",
+                "errors": [],
+                "counts": counts,
+                "records": records
+            }
+    return {
+        "valid": True,
+        "exit_code": 0,
+        "status": "ALL_CRITERIA_PASSED",
+        "errors": [],
+        "counts": counts,
+        "records": records
+    }
+
+def get_window_dpi(hwnd):
+    try:
+        dpi = user32.GetDpiForWindow(hwnd)
+        if dpi > 0:
+            return dpi
+    except Exception:
+        pass
+    return 96
+
+def resize_to_logical_client(win, target_logical_w, target_logical_h, max_retries=3):
+    hwnd = win.handle
+    dpi = get_window_dpi(hwnd)
+    scale = dpi / 96.0
+    target_phys_w = int(round(target_logical_w * scale))
+    target_phys_h = int(round(target_logical_h * scale))
+
+    GWL_STYLE = -16
+    GWL_EXSTYLE = -20
+    style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+    ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+
+    rc = RECT(0, 0, target_phys_w, target_phys_h)
+    if hasattr(user32, "AdjustWindowRectExForDpi"):
+        user32.AdjustWindowRectExForDpi(ctypes.byref(rc), style, False, ex_style, dpi)
+        req_outer_w = rc.right - rc.left
+        req_outer_h = rc.bottom - rc.top
+    else:
+        w_rect = RECT()
+        c_rect = RECT()
+        user32.GetWindowRect(hwnd, ctypes.byref(w_rect))
+        user32.GetClientRect(hwnd, ctypes.byref(c_rect))
+        chrome_w = (w_rect.right - w_rect.left) - (c_rect.right - c_rect.left)
+        chrome_h = (w_rect.bottom - w_rect.top) - (c_rect.bottom - c_rect.top)
+        req_outer_w = target_phys_w + chrome_w
+        req_outer_h = target_phys_h + chrome_h
+
+    cur_w_rect = RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(cur_w_rect))
+    left = cur_w_rect.left
+    top = cur_w_rect.top
+
+    for attempt in range(max_retries):
+        user32.MoveWindow(hwnd, left, top, req_outer_w, req_outer_h, True)
+        time.sleep(0.4)
+        dpi = get_window_dpi(hwnd)
+        scale = dpi / 96.0
+        c_rect = RECT()
+        user32.GetClientRect(hwnd, ctypes.byref(c_rect))
+        act_phys_w = c_rect.right - c_rect.left
+        act_phys_h = c_rect.bottom - c_rect.top
+        act_log_w = act_phys_w / scale
+        act_log_h = act_phys_h / scale
+        diff_w = target_logical_w - act_log_w
+        diff_h = target_logical_h - act_log_h
+        if abs(diff_w) <= 2.0 and abs(diff_h) <= 2.0:
+            log(f"resize_to_logical_client: target {target_logical_w}x{target_logical_h} DIPs -> "
+                f"measured logical {act_log_w:.1f}x{act_log_h:.1f} (phys client {act_phys_w}x{act_phys_h}, "
+                f"outer {req_outer_w}x{req_outer_h} at {dpi} DPI)")
+            return (act_log_w, act_log_h)
+        req_outer_w += int(round(diff_w * scale))
+        req_outer_h += int(round(diff_h * scale))
+
+    log(f"WARNING: resize_to_logical_client target {target_logical_w}x{target_logical_h} DIPs, "
+        f"measured logical {act_log_w:.1f}x{act_log_h:.1f} (diff {diff_w:.1f}, {diff_h:.1f})")
+    assert abs(target_logical_w - act_log_w) <= 2.0 and abs(target_logical_h - act_log_h) <= 2.0, (
+        f"Failed to achieve target logical client dimensions: target={target_logical_w}x{target_logical_h}, "
+        f"actual={act_log_w:.1f}x{act_log_h:.1f} at {dpi} DPI"
+    )
+    return (act_log_w, act_log_h)
+
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_CLOSE = 0x0010
@@ -1693,28 +1939,25 @@ def main():
             "23. Reading Anchor Preserved Across Older Prepend": criterion_reading_anchor,
         }
 
-    def emit_report():
+    def emit_report(custom_verdicts=None, is_strict=None, required_registry=None):
         """Print the per-criterion table once, and return the run's exit code.
 
-        NOT_RUN is reported as its own state and is never counted as a pass: an
-        unexecuted criterion is an unverified criterion, and this harness does not
-        turn one into the other.
-
-        BLOCKED is likewise its own state. It means the observation was never
-        made because a precondition the harness needed -- a menu that did not
-        open, a project that did not load -- failed first. Calling that FAIL
-        would assert a defect the evidence does not show; calling it PASS would
-        assert a verification that never happened. Both are wrong, so it is
-        reported as what it is and the run is still non-zero.
+        Validates all criteria against the registered vocabulary and strict/diagnostic rules.
         """
         nonlocal report_done
-        verdicts = build_verdicts()
+        verdicts = custom_verdicts if custom_verdicts is not None else build_verdicts()
+        if is_strict is None:
+            is_strict = ("--strict" in sys.argv) or (os.environ.get("MAYASABA_STRICT_CERTIFICATION", "0") == "1")
+        if required_registry is None:
+            if ("--universe=all" in sys.argv) or (os.environ.get("MAYASABA_CERTIFICATION_UNIVERSE", "") == "all"):
+                required_registry = REQUIRED_CRITERIA_ALL
+            else:
+                required_registry = REQUIRED_CRITERIA_AUTOMATED
+
+        eval_result = evaluate_verdicts(verdicts, required_registry=required_registry, is_strict=is_strict)
         log("\n" + "=" * 70)
         log("NATIVE UI ACCEPTANCE VERIFICATION SUMMARY REPORT")
         log("=" * 70)
-        # The W1 question, answered by this run's own measurements: how long the
-        # application's pump ever took to answer, and whether the slowest
-        # answers coincide with a harness write to the live store.
         try:
             log(f"UI-thread sampler summary: {ui_sample_summary()}")
         except Exception as exc:
@@ -1727,37 +1970,42 @@ def main():
         except Exception as exc:
             log(f"UI-thread raw samples could not be written: "
                 f"{type(exc).__name__}: {exc}")
-        pass_count = sum(1 for v in verdicts.values() if v == "PASS")
-        inconclusive_count = sum(1 for v in verdicts.values() if v == "INCONCLUSIVE")
-        fail_count = sum(1 for v in verdicts.values() if v == "FAIL")
-        blocked_count = sum(1 for v in verdicts.values() if v == "BLOCKED")
-        not_run_count = sum(1 for v in verdicts.values() if v == "NOT_RUN")
 
-        for name, v in verdicts.items():
-            log(f"  {name:<54} [{v}]")
+        for name, (v, j) in eval_result["records"].items():
+            just_str = f" ({j})" if j else ""
+            log(f"  {name:<54} [{v}]{just_str}")
         log("-" * 70)
-        log(f"  Total: {len(verdicts)} criteria | Passed: {pass_count} | "
-            f"Inconclusive: {inconclusive_count} | Failed: {fail_count} | "
-            f"Blocked: {blocked_count} | Not run: {not_run_count}")
+        counts = eval_result["counts"]
+        log(f"  Total: {len(eval_result['records'])} criteria | Passed: {counts.get('PASS', 0)} | "
+            f"Inconclusive: {counts.get('INCONCLUSIVE', 0)} | Failed: {counts.get('FAIL', 0)} | "
+            f"Blocked: {counts.get('BLOCKED', 0)} | Not run: {counts.get('NOT_RUN', 0)} | "
+            f"N/A: {counts.get('NOT_APPLICABLE', 0)}")
         report_done = True
-        if fail_count > 0:
+
+        if not eval_result["valid"]:
+            log("\nSTATUS: CERTIFICATION EVALUATION FAILED (VALIDATION ERRORS)")
+            for err in eval_result["errors"]:
+                log(f"  ERROR: {err}")
+            log("=" * 70 + "\n")
+            return 1
+
+        if counts.get("FAIL", 0) > 0:
             log("\nSTATUS: TEST SUITE FAILED (one or more assertions failed)")
             log("=" * 70 + "\n")
             return 1
-        if blocked_count > 0:
+        if counts.get("BLOCKED", 0) > 0:
             log("\nSTATUS: TEST SUITE INCOMPLETE (a precondition blocked an observation)")
             log("NOTE: A BLOCKED criterion is unverified. The harness could not reach")
             log("      the observation, so nothing is claimed either way.")
             log("=" * 70 + "\n")
             return 1
-        if not_run_count > 0:
+        if counts.get("NOT_RUN", 0) > 0:
             log("\nSTATUS: TEST SUITE INCOMPLETE (criteria were never executed)")
             log("NOTE: A NOT_RUN criterion is unverified, not passed. The run stopped")
             log("      before the observation that would have earned it.")
             log("=" * 70 + "\n")
             return 1
-        is_strict = ("--strict" in sys.argv) or (os.environ.get("MAYASABA_STRICT_CERTIFICATION", "0") == "1")
-        if inconclusive_count > 0:
+        if counts.get("INCONCLUSIVE", 0) > 0:
             if is_strict:
                 log("\nSTATUS: STRICT CERTIFICATION FAILED (INCONCLUSIVE CRITERIA DISALLOWED IN STRICT MODE)")
                 log("NOTE: Strict certification requires every criterion to be PASS or justified NOT_APPLICABLE.")
@@ -2382,10 +2630,14 @@ def main():
         # Narrow Window Adaptation & Clipping Verification (520px Width)
         log("\nTesting responsive narrow-window adaptation (width 520px) and measuring clipping...")
         win_rect_orig = win.rectangle()
-        orig_width = win_rect_orig.width()
-        orig_height = win_rect_orig.height()
+        orig_dpi = get_window_dpi(win.handle)
+        orig_scale = orig_dpi / 96.0
+        orig_c_rect = RECT()
+        user32.GetClientRect(win.handle, ctypes.byref(orig_c_rect))
+        orig_log_w = (orig_c_rect.right - orig_c_rect.left) / orig_scale
+        orig_log_h = (orig_c_rect.bottom - orig_c_rect.top) / orig_scale
 
-        user32.MoveWindow(win.handle, win_rect_orig.left, win_rect_orig.top, 520, orig_height, True)
+        resize_to_logical_client(win, 520, orig_log_h)
         time.sleep(1.0)
 
         narrow_rect = win.rectangle()
@@ -2423,8 +2675,8 @@ def main():
         log("PASS: 520px narrow layout measured: zero controls clipped or collapsed.")
 
         # Restore window size
-        log(f"Restoring window size to {orig_width}x{orig_height}...")
-        user32.MoveWindow(win.handle, win_rect_orig.left, win_rect_orig.top, orig_width, orig_height, True)
+        log(f"Restoring window size to logical {orig_log_w:.1f}x{orig_log_h:.1f}...")
+        resize_to_logical_client(win, orig_log_w, orig_log_h)
         time.sleep(1.0)
 
         # Rapid Hover Sweeps (asserting cards actually exercised)
@@ -2593,9 +2845,15 @@ def main():
         # the results list shrinks and scrolls, and the paging action stays reachable.
         # UX-28 declares the short-window matrix as 520x640 and 640x480 logical
         # sizes, so the short case is the declared 640x480 and not a size below it.
-        log("\nResizing to the declared short window (640x480) and re-checking the overlay...")
-        base_rect = win.rectangle()
-        user32.MoveWindow(win.handle, base_rect.left, base_rect.top, 640, 480, True)
+        log("\nResizing to the declared short window (640x480 logical) and re-checking the overlay...")
+        short_base_dpi = get_window_dpi(win.handle)
+        short_base_scale = short_base_dpi / 96.0
+        short_c_rect = RECT()
+        user32.GetClientRect(win.handle, ctypes.byref(short_c_rect))
+        base_log_w = (short_c_rect.right - short_c_rect.left) / short_base_scale
+        base_log_h = (short_c_rect.bottom - short_c_rect.top) / short_base_scale
+
+        resize_to_logical_client(win, 640, 480)
         time.sleep(1.2)
         short_rect = win.rectangle()
         log(f"Short window bounds: L{short_rect.left}, T{short_rect.top}, R{short_rect.right}, B{short_rect.bottom}")
@@ -2755,8 +3013,8 @@ def main():
                     bounds_fail("The results list did not scroll in the short window")
 
         # 5B.4 Narrow window: the overlay and its controls stay inside the window.
-        log("\nResizing to a narrow window (480x800) and re-checking the overlay...")
-        user32.MoveWindow(win.handle, base_rect.left, base_rect.top, 480, 800, True)
+        log("\nResizing to a narrow window (480x800 logical) and re-checking the overlay...")
+        resize_to_logical_client(win, 480, 800)
         time.sleep(1.2)
         narrow_rect = win.rectangle()
         panel = overlay_panel()
@@ -2793,8 +3051,8 @@ def main():
                 "action inside the window.")
 
         # Restore the window before the interaction checks.
-        user32.MoveWindow(win.handle, base_rect.left, base_rect.top,
-                          base_rect.width(), base_rect.height(), True)
+        log(f"Restoring window size to logical {base_log_w:.1f}x{base_log_h:.1f}...")
+        resize_to_logical_client(win, base_log_w, base_log_h)
         time.sleep(1.0)
 
         # 5B.5 Repeated open/close: every open must settle flat and every close must
@@ -4579,18 +4837,47 @@ def main():
         log("\n--- PHASE 9: Action Center Real Action Routing & Stale Item Revalidation ---")
 
         # 9.1 Initial Action Center status in clean alpha project
-        action_center_panel = find_by_aid(win, "ActionCenterPanel") or find_by_name(win, "Action Center")
-        if not action_center_panel:
-            log("FAIL: ActionCenterPanel not found in UIA tree")
+        # Contract & Presenter rule: when there are no unresolved obligations (clean project),
+        # Action Center panel is correctly collapsed/withdrawn (confirmedEmpty).
+        action_center_panel = find_by_aid(win, "ActionCenterPanel")
+        is_ac_initially_withdrawn = (action_center_panel is None) or (not action_center_panel.is_visible())
+        if not is_ac_initially_withdrawn:
+            log("FAIL: ActionCenterPanel should be collapsed/withdrawn when clean alpha has no obligations")
+            return 1
+        log("PASS: Action Center panel correctly confirmed collapsed/withdrawn when project has no unresolved obligations.")
+
+        # Establish genuine disposable obligation in isolated test store for project alpha
+        alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
+        conn = sqlite3.connect(STORE_PATH)
+        mark_store_write("INSERT: 1 seeded alpha draft_attachment (REJECTED)")
+        conn.execute(
+            "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+            "VALUES (?, ?, ?, 10, 'dummy', 'text/plain', '', 'C:/source/alpha_err.txt', 'REJECTED', 'test rejection error', 1);",
+            ("att-alpha-disposable-1", alpha_id, "alpha_err.txt")
+        )
+        conn.commit()
+        conn.close()
+
+        # Trigger production refresh in alpha project
+        log("Triggering draft state change / background refresh to observe obligation presentation...")
+        composer_box = find_by_aid(win, "ComposerBox")
+        if composer_box:
+            composer_box.set_edit_text("Draft change to trigger Action Center refresh.")
+            time.sleep(1.2) # wait for draft save timer to trigger RefreshActionCenterAsync
+
+        # Wait for ActionCenterPanel to become visible
+        ac_panel_active = poll_until(lambda: find_by_aid(win, "ActionCenterPanel") and find_by_aid(win, "ActionCenterPanel").is_visible(), timeout=6.0, interval=0.2)
+        if not ac_panel_active:
+            log("FAIL: ActionCenterPanel did not appear after obligation was introduced")
             return 1
 
         status_label = find_by_aid(win, "ActionCenterStatusText")
         status_val = status_label.window_text() if status_label else ""
-        log(f"Alpha Action Center initial status: '{status_val}'")
-        if "No unresolved owner obligations" not in status_val:
-            log(f"FAIL: Expected 'No unresolved owner obligations...', got '{status_val}'")
+        log(f"Alpha Action Center status with 1 obligation: '{status_val}'")
+        if "1 item" not in status_val:
+            log(f"FAIL: Expected '1 item(s) need your attention.', got '{status_val}'")
             return 1
-        log("PASS: Action Center truthfully reports no unresolved obligations in clean alpha project.")
+        log("PASS: Action Center truthfully surfaced the active obligation.")
 
         # 9.2 Dismiss Action Center via CloseActionCenterButton
         close_ac_btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
@@ -4610,9 +4897,8 @@ def main():
             return 1
         log("PASS: Action Center panel confirmed collapsed following CloseActionCenterButton invocation.")
 
-        # Test Finding 2 in live UI: Trigger background refresh while dismissed and verify panel stays closed
+        # Test dismissal stability: Trigger background refresh while dismissed and verify panel stays closed
         log("Triggering draft state change / background refresh while Action Center is dismissed...")
-        composer_box = find_by_aid(win, "ComposerBox")
         if composer_box:
             composer_box.set_edit_text("Testing dismissal stability under background refresh.")
             time.sleep(1.2) # draft save timer fires and settles
@@ -4625,6 +4911,13 @@ def main():
         if composer_box:
             composer_box.set_edit_text("")
             time.sleep(0.5)
+
+        # Clean up the disposable obligation in alpha before moving to gamma
+        conn = sqlite3.connect(STORE_PATH)
+        mark_store_write("DELETE: seeded alpha draft_attachment (att-alpha-disposable-1)")
+        conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id = 'att-alpha-disposable-1';", (alpha_id,))
+        conn.commit()
+        conn.close()
 
         # 9.3 Switch to closed project 'gamma' which has ClosedProjectRestriction obligation
         # Seed gamma with 51 failed attachments so total obligations = 52 (51 attachments + 1 closed project)

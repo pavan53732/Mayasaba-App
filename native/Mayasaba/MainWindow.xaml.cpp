@@ -428,6 +428,7 @@ namespace winrt::Mayasaba::implementation
         {
             double const offset = HistoryScroller().VerticalOffset();
             RenderHistory(false);
+            programmaticScroll_ = true;
             HistoryScroller().ChangeView(nullptr, offset, nullptr, true);
         }
     }
@@ -709,8 +710,17 @@ namespace winrt::Mayasaba::implementation
         NextButton().Focus(FocusState::Programmatic);
     }
 
+    void MainWindow::RecordReaderInteraction(char const* reason)
+    {
+        ++readerInteractionGen_;
+        UiTraceEvent("reader-interact",
+            std::string("reason=") + (reason ? reason : "unknown") +
+            " gen=" + std::to_string(readerInteractionGen_));
+    }
+
     void MainWindow::ShowFolder(SelectorContext context)
     {
+        RecordReaderInteraction("project-switch");
         if (highlightResetTimer_)
         {
             highlightResetTimer_.Stop();
@@ -932,6 +942,7 @@ namespace winrt::Mayasaba::implementation
         std::string const projectId = activeProject_;
         std::int64_t const beforeRowId = historyOldestRowId_;
         uint64_t const genAtStart = selectorGeneration_.load();
+        uint64_t const readerGenAtStart = readerInteractionGen_;
         // Reading-anchor inputs, captured on the UI thread before the load: the
         // scroller's offset and extent as the reader left them. Inserting content
         // above the viewport does not move content by itself — the offset stays at
@@ -979,6 +990,14 @@ namespace winrt::Mayasaba::implementation
         {
             // A newer load or project switch superseded this result. Leave the
             // loading flag clear so a subsequent load can proceed.
+            historyLoading_ = false;
+            co_return;
+        }
+        if (readerInteractionGen_ != readerGenAtStart)
+        {
+            UiTraceEvent("older-abort-reader",
+                "why=userInteractedBeforePrepend startGen=" + std::to_string(readerGenAtStart) +
+                " nowGen=" + std::to_string(readerInteractionGen_));
             historyLoading_ = false;
             co_return;
         }
@@ -1119,13 +1138,14 @@ namespace winrt::Mayasaba::implementation
                             " r=" + std::to_string(r0) +
                             " off=" + std::to_string(anchorOffset) +
                             " target=" + std::to_string(target));
+                        programmaticScroll_ = true;
                         scroller.ChangeView(nullptr, target, nullptr, true);
                         // The immediate ChangeView is the first positioning
                         // act, not the final one: the panel refines the
                         // inserted rows' slot heights as layout settles, so
                         // the bounded reconcile re-measures the anchor row
                         // and re-applies the target while the view is ours.
-                        ReconcileHistoryAnchorAsync(gen, loadSeq, anchorOffset, anchorIndex, target);
+                        ReconcileHistoryAnchorAsync(gen, loadSeq, anchorOffset, anchorIndex, target, readerGenAtStart);
                     }
                 }
                 else
@@ -1163,7 +1183,7 @@ namespace winrt::Mayasaba::implementation
     // position wins), a scroll-to-end or jump-to-latest pass owns the view,
     // the load was superseded, or the pass budget ran out.
     winrt::fire_and_forget MainWindow::ReconcileHistoryAnchorAsync(uint64_t gen, uint64_t loadSeq,
-        double anchorOffset, int32_t anchorIndex, double target)
+        double anchorOffset, int32_t anchorIndex, double target, uint64_t readerGenAtStart)
     {
         if (windowClosed_) co_return;
         auto keepAlive = get_strong();
@@ -1185,6 +1205,13 @@ namespace winrt::Mayasaba::implementation
                 // A newer load or project switch owns the view now.
                 UiTraceEvent("older-recomp-abort",
                     "pass=" + std::to_string(pass) + " reason=superseded");
+                co_return;
+            }
+            if (readerInteractionGen_ != readerGenAtStart)
+            {
+                UiTraceEvent("older-recomp-abort",
+                    "pass=" + std::to_string(pass) + " reason=reader-interacted");
+                PublishTopVisibleRow(L"");
                 co_return;
             }
             if (pendingScrollToEnd_ || scrollingToEnd_ || following_)
@@ -1259,6 +1286,7 @@ namespace winrt::Mayasaba::implementation
                 }
                 if (!onTarget)
                 {
+                    programmaticScroll_ = true;
                     scroller.ChangeView(nullptr, settled, nullptr, true);
                     target = settled;
                 }
@@ -1311,8 +1339,9 @@ namespace winrt::Mayasaba::implementation
             if (lo < 0) lo = 0;
             if (hi > count - 1) hi = count - 1;
             std::wstring result = L"unknown";
+            int32_t attempts = 0;
             int32_t examined = 0;
-            for (int32_t i = lo; i <= hi && examined < 400; ++i)
+            for (int32_t i = lo; i <= hi && attempts < 400 && examined < 50; ++i, ++attempts)
             {
                 UIElement element{ nullptr };
                 // TryGetElement, NOT GetOrCreateElement: this publication runs on
@@ -1781,6 +1810,7 @@ namespace winrt::Mayasaba::implementation
             UiTraceEvent("stl-changeview",
                 "target=" + std::to_string(extent) +
                 " offNow=" + std::to_string(scroller.VerticalOffset()));
+            programmaticScroll_ = true;
             scroller.ChangeView(nullptr, extent, nullptr, true);
         }
 
@@ -1800,6 +1830,7 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::OnJumpToLatest(IInspectable const&, RoutedEventArgs const&)
     {
+        RecordReaderInteraction("jump-to-latest");
         if (windowClosed_) return;
         // The loaded history may be a bounded search window whose bottom is not
         // the project's newest saved contribution. Scrolling to its end would
@@ -1819,6 +1850,17 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::OnHistoryViewChanged(IInspectable const&,
         Microsoft::UI::Xaml::Controls::ScrollViewerViewChangedEventArgs const& e)
     {
+        if (programmaticScroll_)
+        {
+            if (!e.IsIntermediate())
+            {
+                programmaticScroll_ = false;
+            }
+        }
+        else
+        {
+            RecordReaderInteraction("user-scroll");
+        }
         if (perfEnabled_ && perfFreq_.QuadPart > 0)
         {
             LARGE_INTEGER now;
@@ -2532,6 +2574,7 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::ReturnToChat()
     {
+        RecordReaderInteraction("project-switch");
         ++selectorGeneration_;
         motion_.CancelAll();
         SetVisible(FolderScreen(),false); SetVisible(ChatScreen(),true); SetVisible(NativeFileMenu(),true);
@@ -2544,6 +2587,7 @@ namespace winrt::Mayasaba::implementation
     }
     void MainWindow::OnCancelSwitch(IInspectable const&, RoutedEventArgs const&)
     {
+        RecordReaderInteraction("project-switch");
         if(selectorContext_==SelectorContext::Switching && !activeProject_.empty()) ReturnToChat();
     }
 
@@ -5234,6 +5278,7 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::NavigateToMessage(std::string const& submissionId)
     {
+        RecordReaderInteraction("search-nav");
         CloseSearch();
 
         if (!timeline_) return;

@@ -835,6 +835,124 @@ def test_mutation_a_uia_walk_that_records_nothing_cannot_separate_them():
     assert "inside a harness UIA walk: 0" in summary, summary
 
 
+
+# --- D07 Criteria Registry & Strict Certification Evaluator Oracles ---
+
+def _valid_all_pass_verdicts():
+    return {k: "PASS" for k in H.REQUIRED_CRITERIA_AUTOMATED}
+
+
+def test_evaluator_rejects_unknown_verdict():
+    """An unregistered verdict such as MYSTERY must fail validation and exit 1."""
+    verdicts = _valid_all_pass_verdicts()
+    verdicts["1. Recent Projects & Startup Filtering"] = "MYSTERY"
+    res = H.evaluate_verdicts(verdicts, is_strict=False)
+    assert not res["valid"], res
+    assert res["exit_code"] == 1, res
+    assert any("Unregistered verdict 'MYSTERY'" in err for err in res["errors"]), res["errors"]
+
+
+def test_mutation_evaluator_accepting_unknown_verdict_would_fail():
+    """Mutation: an evaluator that ignores unregistered verdicts would pass."""
+    verdicts = _valid_all_pass_verdicts()
+    verdicts["1. Recent Projects & Startup Filtering"] = "MYSTERY"
+
+    # Flawed evaluator (the pre-D07 behavior from the audit)
+    def flawed_eval(v_dict):
+        fails = sum(1 for v in v_dict.values() if v == "FAIL")
+        return 1 if fails > 0 else 0
+
+    mutant_code = flawed_eval(verdicts)
+    prod_res = H.evaluate_verdicts(verdicts, is_strict=False)
+    assert mutant_code == 0, "Flawed evaluator failed to reproduce the defect"
+    assert prod_res["exit_code"] == 1, "Production evaluator failed to catch unknown verdict"
+
+
+def test_evaluator_rejects_unjustified_not_applicable():
+    """NOT_APPLICABLE without an authorized scope justification must fail."""
+    verdicts = _valid_all_pass_verdicts()
+    verdicts["1. Recent Projects & Startup Filtering"] = "NOT_APPLICABLE"
+    res = H.evaluate_verdicts(verdicts)
+    assert not res["valid"], res
+    assert res["exit_code"] == 1, res
+    assert any("without valid scope justification" in err for err in res["errors"]), res["errors"]
+
+    # Also test trivial justification (e.g. "todo" or "skip")
+    verdicts["1. Recent Projects & Startup Filtering"] = "NOT_APPLICABLE: todo"
+    res2 = H.evaluate_verdicts(verdicts)
+    assert not res2["valid"], res2
+    assert res2["exit_code"] == 1, res2
+
+
+def test_evaluator_accepts_justified_not_applicable():
+    """NOT_APPLICABLE with an approved scope justification must pass."""
+    verdicts = _valid_all_pass_verdicts()
+    verdicts["1. Recent Projects & Startup Filtering"] = (
+        "NOT_APPLICABLE: S2-14: Screen 2 pre-binding draft composer permanently removed per authorized contract (2026-10-17)"
+    )
+    res = H.evaluate_verdicts(verdicts, is_strict=True)
+    assert res["valid"], res
+    assert res["exit_code"] == 0, res
+    assert res["counts"]["NOT_APPLICABLE"] == 1, res["counts"]
+
+
+def test_evaluator_rejects_missing_required_criterion():
+    """Omitting any criterion in the required registry must fail validation."""
+    verdicts = _valid_all_pass_verdicts()
+    del verdicts["1. Recent Projects & Startup Filtering"]
+    res = H.evaluate_verdicts(verdicts)
+    assert not res["valid"], res
+    assert res["exit_code"] == 1, res
+    assert any("Missing required criterion" in err for err in res["errors"]), res["errors"]
+
+
+def test_evaluator_rejects_inconclusive_in_strict_mode():
+    """In strict mode, an INCONCLUSIVE verdict must fail the release gate (exit 1)."""
+    verdicts = _valid_all_pass_verdicts()
+    verdicts["11. Native OLE Desktop Drag-and-Drop Execution"] = "INCONCLUSIVE"
+    res = H.evaluate_verdicts(verdicts, is_strict=True)
+    assert res["valid"], res
+    assert res["exit_code"] == 1, res
+    assert res["status"] == "STRICT_CERTIFICATION_FAILED", res["status"]
+
+
+def test_evaluator_allows_inconclusive_in_diagnostic_mode():
+    """In diagnostic mode, an INCONCLUSIVE verdict is retained with exit 0."""
+    verdicts = _valid_all_pass_verdicts()
+    verdicts["11. Native OLE Desktop Drag-and-Drop Execution"] = "INCONCLUSIVE"
+    res = H.evaluate_verdicts(verdicts, is_strict=False)
+    assert res["valid"], res
+    assert res["exit_code"] == 0, res
+    assert res["status"] == "ACCEPTANCE_CHECKS_COMPLETE_INCONCLUSIVE_RETAINED", res["status"]
+
+
+def test_mutation_strict_evaluator_ignoring_inconclusive_would_fail():
+    """Mutation: an evaluator that ignores INCONCLUSIVE in strict mode would falsely certify."""
+    verdicts = _valid_all_pass_verdicts()
+    verdicts["11. Native OLE Desktop Drag-and-Drop Execution"] = "INCONCLUSIVE"
+
+    def flawed_strict_eval(v_dict):
+        fails = sum(1 for v in v_dict.values() if v == "FAIL")
+        return 1 if fails > 0 else 0
+
+    mutant_code = flawed_strict_eval(verdicts)
+    prod_res = H.evaluate_verdicts(verdicts, is_strict=True)
+    assert mutant_code == 0, "Flawed evaluator failed to reproduce defect"
+    assert prod_res["exit_code"] == 1, "Production strict evaluator failed to catch INCONCLUSIVE"
+
+
+def test_full_certification_matrix_requires_physical_criteria():
+    """Full release certification (REQUIRED_CRITERIA_ALL) fails when physical criteria are NOT_RUN."""
+    verdicts = {k: "PASS" for k in H.REQUIRED_CRITERIA_AUTOMATED}
+    for p in H.REQUIRED_CRITERIA_PHYSICAL:
+        verdicts[p] = "NOT_RUN"
+    res = H.evaluate_verdicts(verdicts, required_registry=H.REQUIRED_CRITERIA_ALL, is_strict=True)
+    assert res["valid"], res
+    assert res["exit_code"] == 1, res
+    assert res["status"] == "TEST_SUITE_INCOMPLETE_NOT_RUN", res["status"]
+    assert res["counts"]["NOT_RUN"] == len(H.REQUIRED_CRITERIA_PHYSICAL), res["counts"]
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

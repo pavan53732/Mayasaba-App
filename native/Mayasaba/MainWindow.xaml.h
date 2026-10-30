@@ -410,6 +410,10 @@ namespace winrt::Mayasaba::implementation
         bool pendingScrollToEnd_{false};
         bool scrollingToEnd_{false};
         double lastScrollTarget_{-1.0};
+        // Reader scroll and navigation ownership tracking (D04)
+        uint64_t readerInteractionGen_{0};
+        bool programmaticScroll_{false};
+        void RecordReaderInteraction(char const* reason);
         // Set only by the opt-in fixture harness; production startup leaves it false.
         bool fixturesActive_{false};
         // Set for exactly one refresh when a confirmed first save moves the composer.
@@ -509,7 +513,7 @@ namespace winrt::Mayasaba::implementation
         // passes; aborts on supersession, a scroll-to-end pass, or the reader
         // scrolling away from the applied position.
         winrt::fire_and_forget ReconcileHistoryAnchorAsync(uint64_t gen, uint64_t loadSeq,
-            double anchorOffset, int32_t anchorIndex, double target);
+            double anchorOffset, int32_t anchorIndex, double target, uint64_t readerGenAtStart);
         // Publishes the physically visible top row on HistoryScroller's ItemStatus as
         // `top-visible=<submissionId>`, read from the realized rows' scroller-frame
         // transforms (the same instrument as the reconcile `r`). This is a read-only
