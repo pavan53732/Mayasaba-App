@@ -8910,8 +8910,142 @@ fs::remove(bigManaged);
             auto const resumedReclaim = store.ReclaimEligibleCleanup();
             EXPECT(resumedReclaim.removed >= 1);
             EXPECT(!fs::exists(orphan3));
-
             store.SetCapacityProbeForTesting(nullptr);
+            
+            // Reproduction of ordinary-write-inside-recovery callback case and concurrent admission
+            auto const storeParent = dbFile.parent_path();
+            auto const dbNameW = dbFile.filename().wstring();
+            for (int i = 1; i <= 3; ++i)
+            {
+                auto bp = storeParent / (dbNameW + L".pre_migration.bak." + std::to_wstring(i));
+                std::ofstream of(bp, std::ios::binary);
+                std::string d(4096 * i, 'B');
+                of.write(d.data(), d.size());
+                store.RecordVerifiedBackup(WideToUtf8(bp.wstring()));
+            }
+            auto bpCandidate = storeParent / (dbNameW + L".pre_migration.bak.4");
+            {
+                std::ofstream of(bpCandidate, std::ios::binary);
+                std::string d(1024, 'C');
+                of.write(d.data(), d.size());
+                store.RecordVerifiedBackup(WideToUtf8(bpCandidate.wstring()));
+            }
+            
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3ull * 1024 * 1024 * 1024, 20ull * 1024 * 1024 * 1024 };
+            });
+
+            bool ordinaryInsideCallbackRefused = false;
+            bool concurrentWriteRefused = false;
+            store.SetBackupCandidateHashingHookForTesting([&]() {
+                // 1. Same recovery thread: ordinary write inside recovery callback MUST be refused at ceiling
+                try
+                {
+                    store.SaveDraft(proj, "ordinary-write-inside-recovery-thread");
+                }
+                catch (std::runtime_error const& ex)
+                {
+                    ordinaryInsideCallbackRefused = (std::string(ex.what()).find("ceiling") != std::string::npos);
+                }
+
+                // 2. Concurrent thread: ordinary write during active recovery MUST be refused at ceiling
+                std::thread t([&]() {
+                    try
+                    {
+                        store.SaveDraft(proj, "concurrent-ordinary-write");
+                    }
+                    catch (std::runtime_error const& ex)
+                    {
+                        concurrentWriteRefused = (std::string(ex.what()).find("ceiling") != std::string::npos);
+                    }
+                });
+                t.join();
+            });
+
+            auto const evalMaint = store.EvaluateCleanup("EXPLICIT");
+                        EXPECT(evalMaint.evaluated);
+            EXPECT(ordinaryInsideCallbackRefused);
+            EXPECT(concurrentWriteRefused);
+            store.SetBackupCandidateHashingHookForTesting(nullptr);
+
+            // Restoration coverage: success restoration below ceiling
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 1ull * 1024 * 1024 * 1024, 20ull * 1024 * 1024 * 1024 };
+            });
+            bool restoredWriteSucceeded = false;
+            try
+            {
+                store.SaveDraft(proj, "draft-succeeds-after-capacity-restoration");
+                restoredWriteSucceeded = true;
+            }
+            catch (...) {}
+                        EXPECT(restoredWriteSucceeded);
+
+            // Restoration coverage: failure restoration back at ceiling
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3ull * 1024 * 1024 * 1024, 20ull * 1024 * 1024 * 1024 };
+            });
+            bool failureRestored = false;
+            try
+            {
+                store.SaveDraft(proj, "draft-fails-again-at-ceiling");
+            }
+            catch (std::runtime_error const& ex)
+            {
+                failureRestored = (std::string(ex.what()).find("ceiling") != std::string::npos);
+            }
+                        EXPECT(failureRestored);
+
+            // Active-pass cancellation: test cancellation requested during an active pass
+            // (via hook during removal of candidate 1 to stop candidate 2)
+            store.SetCapacityProbeForTesting(nullptr);
+            auto const orphanActive1 = staging / "d06-active1.bin";
+            {
+                std::ofstream of(orphanActive1, std::ios::binary);
+                of.write("d06-active1-bytes", 17);
+            }
+            fs::last_write_time(orphanActive1, fs::file_time_type::clock::now() - std::chrono::hours(24 * 10));
+            auto const orphanActive2 = staging / "d06-active2.bin";
+            {
+                std::ofstream of(orphanActive2, std::ios::binary);
+                of.write("d06-active2-bytes", 17);
+            }
+            fs::last_write_time(orphanActive2, fs::file_time_type::clock::now() - std::chrono::hours(24 * 10));
+                        (void)store.EvaluateCleanup("EXPLICIT");
+                        store.BackdateStagingGraceForTesting(WideToUtf8(orphanActive1.wstring()), 9);
+            store.BackdateStagingGraceForTesting(WideToUtf8(orphanActive2.wstring()), 9);
+            
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3ull * 1024 * 1024 * 1024, 20ull * 1024 * 1024 * 1024 };
+            });
+
+            std::atomic_bool cancelActivePass{false};
+            std::atomic_int removalHookCalls{0};
+            store.SetReclaimRemovalPhaseHookForTesting([&]() {
+                ++removalHookCalls;
+                cancelActivePass.store(true);
+            });
+            store.SetMaintenanceCancellation([&]() {
+                return cancelActivePass.load();
+            });
+
+            auto const activeCancelledReclaim = store.ReclaimEligibleCleanup();
+                        EXPECT(activeCancelledReclaim.bounded);
+            EXPECT(activeCancelledReclaim.removed == 1);
+            EXPECT(removalHookCalls.load() == 1);
+            EXPECT(!fs::exists(orphanActive1));
+            EXPECT(fs::exists(orphanActive2));
+
+            store.SetReclaimRemovalPhaseHookForTesting(nullptr);
+            store.SetMaintenanceCancellation(nullptr);
+            store.SetCapacityProbeForTesting(nullptr);
+
+            auto const resumedActiveReclaim = store.ReclaimEligibleCleanup();
+                        EXPECT(resumedActiveReclaim.removed >= 1);
+            EXPECT(!fs::exists(orphanActive2));
+            EXPECT(resumedActiveReclaim.removed >= 1);
+            EXPECT(!fs::exists(orphanActive2));
+
             CASES_END();
         }
 

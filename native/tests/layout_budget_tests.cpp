@@ -58,7 +58,7 @@ int main()
         }
 
         // Bounded & constrained pools: ensure neither region is starved to 0 height when both are present
-        for (double constrainedPool : {10.0, 40.0, 64.0, 70.0, 100.0, 140.0, 205.0, 220.0})
+        for (double constrainedPool : {10.0, 40.0, 64.0, 70.0, 100.0, 140.0, 180.0, 200.0})
         {
             // Allocate with fixed pool
             auto const b = mayasaba::ui::AllocateHeaderLayout(
@@ -66,10 +66,10 @@ int main()
             REQUIRE(b.attention > 0.0);
             REQUIRE(b.problems > 0.0);
             REQUIRE(b.attention + b.problems <= constrainedPool + 0.001);
-            if (constrainedPool >= 205.0)
+            if (constrainedPool >= 180.0)
             {
-                REQUIRE(b.attention >= 190.0 - 0.001);
-                REQUIRE(b.problems >= 15.0 - 0.001);
+                REQUIRE(b.attention >= 140.0 - 0.001);
+                REQUIRE(b.problems >= 40.0 - 0.001);
             }
         }
 

@@ -324,6 +324,12 @@ namespace mayasaba
         std::string physicalOutcome{ "NOT_STARTED" };
     };
 
+    enum class WriteAdmissionScope
+    {
+        Ordinary,
+        MaintenanceRecovery
+    };
+
     // One owning connection and an OS-visible writer mutex, not a domain authority service.
     // ALL public calls are serialized on the owning connection.
     class Storage final
@@ -952,7 +958,7 @@ namespace mayasaba
         // the recovery calls, before the constructor returns.
         bool openSchemaPhase_{false};
         bool inSettingsAdmission_{false};
-        std::thread::id recoveryThreadId_{};
+        WriteAdmissionScope writeAdmissionScope_{WriteAdmissionScope::Ordinary};
         CancellationProbe maintenanceCancellation_;
         bool forceHashFailureForTesting_{false};
         bool forceRollbackFailureForTesting_{false};
@@ -970,10 +976,10 @@ namespace mayasaba
 #endif
         void Exec(char const* sql);
         CapacityObservation ObserveCapacity_locked();
-        void CheckWriteCapacity(bool isRecovery = false);
+        void CheckWriteCapacity(WriteAdmissionScope scope = WriteAdmissionScope::Ordinary);
 
         // Mandatory admission for every mutation: a quarantined connection records nothing.
-        void AdmitWrite_locked();
+        void AdmitWrite_locked(WriteAdmissionScope scope = WriteAdmissionScope::Ordinary);
         // Refuses an attachment identity that another project already owns, checked inside
         // the same transaction as the write it guards.
         void RefuseForeignAttachmentIdentity_locked(std::string const& projectId, std::string const& attachmentId);

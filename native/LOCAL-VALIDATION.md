@@ -6017,3 +6017,100 @@ directories):
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
+
+
+---
+
+## Phase 1 Acceptance Stabilization: Explicit Write Admission Scope, Correlated Held-Query Invalidation, Header Layout Floors & Full UI Acceptance (2026-11-01)
+
+### 1. Artifact Identities & Test Suite Manifest
+- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`  
+  SHA-256: `8C65C42359865B4A47609B31F6ABAF62EDD2BD3DE46E18A070DC5149AB9E97E5`
+- **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf`  
+  SHA-256: `12235E06178F658FD39ED843B6CEDC80A9542D3AD0734527BE3F14C33D92DD31`
+- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe`  
+  SHA-256: `6B7214822FF533F9C4FF40BDC515CA9C768E558D9F436AF482B954E39CCFD7B3`
+- **Storage Tests Executable:** `native/tests/bin/storage_tests.exe`  
+  SHA-256: `B91119F1A6FE0407FA5D95242D0F58912669CA71D59DAF45EF0358A030286F9A`
+- **Source Revision:** `8f842b2` + Phase 1 corrections (`Storage.h`, `Storage.cpp`, `MainWindow.xaml.cpp`, `HeaderLayoutBudget.h`, `storage_tests.cpp`, `layout_budget_tests.cpp`, `test_full_ui_acceptance.py`).
+- **Managed Python Environment:** `C:\Users\pavan\.workbuddy-ai\binaries\python\envs\default\Scripts\python.exe`
+
+### 2. Verified Corrections
+
+1. **Explicit Private Write Admission Scope (Item 1):**
+   - Replaced ambient thread-based recovery permission (`recoveryThreadId_` and `ScopedRecoveryAdmission`) with an explicit parameter enum: `enum class WriteAdmissionScope { Ordinary, MaintenanceRecovery };`.
+   - `AdmitWrite_locked(WriteAdmissionScope scope = WriteAdmissionScope::Ordinary)` and `CheckWriteCapacity(WriteAdmissionScope scope = WriteAdmissionScope::Ordinary)`: Ordinary writes always remain ordinary, even when invoked from a recovery callback or worker thread.
+   - Exceptional admission above the storage ceiling (`managedBytes >= effectiveCeiling`) is strictly restricted to private maintenance recovery and cleanup journal operations (`RecoverInterruptedCleanups`, `RecordVerifiedBackup`, `BackdateStagingGraceForTesting`, `EvaluateCleanup`, `ReclaimEligibleCleanup`, `RunScheduledMaintenance`, `ResolveCleanup`, `RetireInterruptedPreparationGuarded`, `RemoveUntrackedStagedFileGuarded`).
+   - Transaction commit/rollback strictly restores scope to `WriteAdmissionScope::Ordinary`.
+   - Preserves quarantine (`poisoned_`), reference fences (`CountOtherProtectedReferences_locked`), physical object identity, durable journals, and volume free-space safety (< 5 GiB reserve).
+   - In `storage_tests.cpp` Group 115:
+     - Reproduced ordinary-write-inside-recovery callback case: attempting `SaveDraft` inside `backupCandidateHashingHook_` during `EvaluateCleanup` at ceiling throws `"Local project store reached its 2 GiB ceiling..."`.
+     - Concurrent admission: concurrent thread attempting `SaveDraft` during active recovery at ceiling strictly throws ceiling error.
+     - Restoration coverage: verified success restoration below ceiling and failure restoration when back at ceiling.
+     - Active-pass cancellation: verified cancellation requested *during an active pass* (via removal hook between candidate 1 and candidate 2) cleanly stops, deleting candidate 1 while retaining candidate 2, with `reclaim.bounded == true`.
+
+2. **Correlated Held-Query Verification (Item 2):**
+   - In `MainWindow.xaml.cpp` (`RefreshActionCenterAsync`):
+     - Uses token-correlated Win32 event names: `Local\Mayasaba_Ac_{token}_{EventName}` passed via environment variable `MAYASABA_TEST_HOLD_AC_QUERY`.
+     - Checks and evaluates `waitRes = WaitForSingleObject(hRelease, 15000)`. Distinguishes `WAIT_OBJECT_0` (release), `WAIT_TIMEOUT` (timeout), and wait failures.
+     - On timeout, emits a correlated `TimedOut` event and aborts, ensuring wait timeouts invalidate the observation rather than silently passing.
+     - When dismissed (`actionCenterDismissed_`), discards items, clears UI, and emits a correlated `Rejected` event.
+   - In `test_full_ui_acceptance.py`:
+     - Generates unique run token: `f"run_{os.getpid()}_{int(time.time())}"`.
+     - Validates that dismissal happened before completion, that the held query completed, and that the rejected outcome cleanly kept the card collapsed with 0 items populated.
+
+3. **Qualified Header Recovery Regions & HeaderLayoutBudget Allocation (Item 4):**
+   - In `HeaderLayoutBudget.h`, updated allocation floors:
+     `attentionFloor = 140.0, problemsFloor = 40.0, combinedFloor = 180.0`.
+   - Proportional allocation: when constrained (`pool < combinedFloor`), the available pool is allocated proportionally:
+     `attention = pool * (140.0 / 180.0)`, `problems = pool - attention`.
+   - Avoids overstrong claims: acknowledges that proportional positive allocation cannot guarantee a fixed 20-DIP list at arbitrary minimal sizes, but guarantees both regions receive positive height and prevents either region from collapsing to zero within supported window configurations.
+   - Retains actual Gamma observations, with `ActionCenterList` and `ChatProblemCardsScroller` verified simultaneously in unit tests (`layout_budget_tests.exe` 8/8 PASS) and native UI acceptance.
+
+4. **Preserved Raw Native Acceptance Table (23 Criteria):**
+   - Complete 23-criterion acceptance results from `test_full_ui_acceptance.py`:
+
+| # | Criterion | Result | Measured Context / Reason |
+|---|---|---|---|
+| C01 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only' |
+| C02 | Message Search Pagination & Continuation | **PASS** | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen |
+| C03 | Older Message Navigation & Selection | **PASS** | Seeded message selection, scroll observation, timeline integrity |
+| C04 | Search Mode Project Switch Safety | **PASS** | Switching project during active search preserves target project isolation and cleanly resets search overlay |
+| C05 | Narrow 520px Responsive Layout | **PASS** | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable |
+| C06 | Rapid Hover Sweeps & Animation Stability | **PASS** | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles |
+| C07 | Display DPI Scaling Simulation | **PASS** | Per-monitor DPI awareness verified (API-level check + scaling reflow) |
+| C08 | Action Center Pagination & Resumption | **PASS** | Obligations list pagination, continuation tokens, item count updates |
+| C09 | Action Center Stale Invalidation & Refresh | **PASS** | Obligation dismissal, project switch -> cancel refresh reactivation under production contract |
+| C10 | Action Center Panel Dismissal Stability | **PASS** | Held background query released after dismissal; result discarded, panel remains collapsed, zero items |
+| C11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
+| C12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
+| C13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chips realized, metadata inspectable, diagnostic details displayed |
+| C14 | Strict Non-English Prose Preview Withholding | **PASS** | Non-English preview withheld with English reason label; metadata and digest preserved |
+| C15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 47,417 frames, avg interval 7.13 ms; typing p50 = 6.15 ms, p95 = 36.59 ms; UI thread sampler: 6,548 samples, p50 = 0.10 ms, p95 = 0.39 ms |
+| C16 | Search Overlay Flat Resting Orientation | **PASS** | Overlay resting orientation verified flat (0 deg rotation) |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 4392184), synthetic mouse wheel does not reach control |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated reveal/dismiss cycles preserve flat geometry and reading position |
+| C19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection preserved on empty-chat hero container |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | System reduced-motion preference toggle disables transition animations, overlay remains flat |
+| C21 | CLI Readiness Projection & Non-Gating | **PASS** | CLI status indicators accurately project probe results; Send/Chat remain non-gated |
+| C22 | Bounded History Paging Save & Newest Rendering | **PASS** | Message paging, chronological timeline rendering, docked composer transition |
+| C23 | Reading Anchor Preserved Across Older Prepend | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 4392184), synthetic mouse wheel does not reach control |
+
+**Acceptance Totals:** 23 criteria | 19 PASS | 4 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
+
+### 3. Full Verification Summary
+
+| Test Target | Command | Result |
+|---|---|---|
+| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
+| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
+| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
+| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
+| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
+
+### 4. Remaining Scope & Open Obligations
+- **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
+- **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
+- **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
+- **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.

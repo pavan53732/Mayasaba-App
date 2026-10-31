@@ -102,6 +102,17 @@ namespace winrt::Mayasaba::implementation
         }
     }
 
+    static std::wstring GetAcTestEventName(wchar_t const* baseName)
+    {
+        wchar_t buf[64]{};
+        if (GetEnvironmentVariableW(L"MAYASABA_TEST_HOLD_AC_QUERY", buf, 64) > 0)
+        {
+            if (wcscmp(buf, L"1") == 0) return std::wstring(L"Local\\Mayasaba_Ac_") + baseName;
+            return std::wstring(L"Local\\Mayasaba_Ac_") + buf + L"_" + baseName;
+        }
+        return {};
+    }
+
     MainWindow::MainWindow()
     {
         InitializeComponent();
@@ -266,11 +277,11 @@ namespace winrt::Mayasaba::implementation
         CreateNewProjectButton().IsEnabled(false);
         ApplyMotionPreference();
 
-        wchar_t testHoldBuf[8]{};
-        if (GetEnvironmentVariableW(L"MAYASABA_TEST_HOLD_AC_QUERY", testHoldBuf, 8) > 0)
+        std::wstring const triggerName = GetAcTestEventName(L"TriggerRefresh");
+        if (!triggerName.empty())
         {
-            std::thread([weak = get_weak(), uiQueue = DispatcherQueue()]() {
-                HANDLE hTrigger = CreateEventW(nullptr, FALSE, FALSE, L"Local\\Mayasaba_Ac_TriggerRefresh");
+            std::thread([weak = get_weak(), uiQueue = DispatcherQueue(), triggerName]() {
+                HANDLE hTrigger = CreateEventW(nullptr, FALSE, FALSE, triggerName.c_str());
                 if (!hTrigger) return;
                 while (true)
                 {
@@ -6290,25 +6301,38 @@ namespace winrt::Mayasaba::implementation
             query.pageSize = 50;
             auto result = storage_->QueryActionCenter(query);
 
-            wchar_t testHoldBuf[8]{};
-            if (GetEnvironmentVariableW(L"MAYASABA_TEST_HOLD_AC_QUERY", testHoldBuf, 8) > 0)
+            std::wstring const holdName = GetAcTestEventName(L"HoldRequested");
+            if (!holdName.empty())
             {
-                HANDLE hHold = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\Mayasaba_Ac_HoldRequested");
+                HANDLE hHold = OpenEventW(SYNCHRONIZE, FALSE, holdName.c_str());
                 if (hHold)
                 {
                     CloseHandle(hHold);
-                    HANDLE hInFlight = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\Mayasaba_Ac_InFlight");
+                    std::wstring const inFlightName = GetAcTestEventName(L"InFlight");
+                    HANDLE hInFlight = OpenEventW(EVENT_MODIFY_STATE, FALSE, inFlightName.c_str());
                     if (hInFlight)
                     {
                         SetEvent(hInFlight);
                         CloseHandle(hInFlight);
                     }
-                    HANDLE hRelease = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\Mayasaba_Ac_Release");
+                    std::wstring const releaseName = GetAcTestEventName(L"Release");
+                    HANDLE hRelease = OpenEventW(SYNCHRONIZE, FALSE, releaseName.c_str());
                     if (hRelease)
                     {
                         DWORD waitRes = WaitForSingleObject(hRelease, 15000);
                         CloseHandle(hRelease);
-                        (void)waitRes;
+                        if (waitRes != WAIT_OBJECT_0)
+                        {
+                            // Invalidate observation on timeout or wait failure
+                            std::wstring const timedOutName = GetAcTestEventName(L"TimedOut");
+                            HANDLE hTimeout = OpenEventW(EVENT_MODIFY_STATE, FALSE, timedOutName.c_str());
+                            if (hTimeout)
+                            {
+                                SetEvent(hTimeout);
+                                CloseHandle(hTimeout);
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -6321,11 +6345,15 @@ namespace winrt::Mayasaba::implementation
             // Reject obsolete completions: dismissal occurred, project changed, generation changed, or window closed
             if (actionCenterDismissed_ || actionCenterPresenter_.IsDismissed())
             {
-                HANDLE hRejected = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\Mayasaba_Ac_Rejected");
-                if (hRejected)
+                std::wstring const rejectedName = GetAcTestEventName(L"Rejected");
+                if (!rejectedName.empty())
                 {
-                    SetEvent(hRejected);
-                    CloseHandle(hRejected);
+                    HANDLE hRejected = OpenEventW(EVENT_MODIFY_STATE, FALSE, rejectedName.c_str());
+                    if (hRejected)
+                    {
+                        SetEvent(hRejected);
+                        CloseHandle(hRejected);
+                    }
                 }
                 break;
             }

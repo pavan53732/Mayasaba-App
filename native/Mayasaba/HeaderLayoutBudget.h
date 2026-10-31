@@ -43,8 +43,8 @@ namespace mayasaba::ui
             // Both regions are actionable and present. Allocate the constrained pool
             // proportionally with non-zero minimum floors for each region so neither region
             // collapses to zero when both are actionable.
-            constexpr double attentionFloor = 190.0, problemsFloor = 15.0;
-            constexpr double combinedFloor = attentionFloor + problemsFloor; // 205.0
+            constexpr double attentionFloor = 140.0, problemsFloor = 40.0;
+            constexpr double combinedFloor = attentionFloor + problemsFloor; // 180.0
 
             if (result.pool <= 0.0)
             {

@@ -2165,7 +2165,8 @@ def main():
         # so the 3B paging legs can name the exact asynchronous sequence instead
         # of inferring it through UIA walks.
         env["MAYASABA_UI_TRACE"] = os.path.join(os.path.dirname(STORE_PATH), "ui-trace.log")
-        env["MAYASABA_TEST_HOLD_AC_QUERY"] = "1"
+        ac_hold_token = f"run_{os.getpid()}_{int(time.time())}"
+        env["MAYASABA_TEST_HOLD_AC_QUERY"] = ac_hold_token
 
         proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env)
         log(f"Launched Mayasaba.exe (PID {proc.pid})")
@@ -5073,11 +5074,17 @@ def main():
             kernel32.CloseHandle.restype = wintypes.BOOL
 
             # Create the hold trigger, in-flight notification, release, rejection acknowledgement, and trigger events
-            h_hold = kernel32.CreateEventW(None, True, True, "Local\\Mayasaba_Ac_HoldRequested")
-            h_inflight = kernel32.CreateEventW(None, True, False, "Local\\Mayasaba_Ac_InFlight")
-            h_release = kernel32.CreateEventW(None, True, False, "Local\\Mayasaba_Ac_Release")
-            h_rejected = kernel32.CreateEventW(None, True, False, "Local\\Mayasaba_Ac_Rejected")
-            h_trigger = kernel32.CreateEventW(None, False, False, "Local\\Mayasaba_Ac_TriggerRefresh")
+            def ac_event_name(base):
+                if not ac_hold_token or ac_hold_token == "1":
+                    return f"Local\\Mayasaba_Ac_{base}"
+                return f"Local\\Mayasaba_Ac_{ac_hold_token}_{base}"
+
+            h_hold = kernel32.CreateEventW(None, True, True, ac_event_name("HoldRequested"))
+            h_inflight = kernel32.CreateEventW(None, True, False, ac_event_name("InFlight"))
+            h_release = kernel32.CreateEventW(None, True, False, ac_event_name("Release"))
+            h_rejected = kernel32.CreateEventW(None, True, False, ac_event_name("Rejected"))
+            h_timeout = kernel32.CreateEventW(None, True, False, ac_event_name("TimedOut"))
+            h_trigger = kernel32.CreateEventW(None, False, False, ac_event_name("TriggerRefresh"))
 
             try:
                 # Action Center is currently visible on Chat screen from the initial refresh.
@@ -5122,7 +5129,13 @@ def main():
                 kernel32.SetEvent(h_release)
                 wait_rej = kernel32.WaitForSingleObject(h_rejected, 5000)
                 if wait_rej != 0:
-                    log(f"FAIL: In-flight query completion was not processed and rejected (wait result: {wait_rej})")
+                    if kernel32.WaitForSingleObject(h_timeout, 0) == 0:
+                        log("FAIL: In-flight query timed out waiting for release signal (production wait timeout invalidated observation)")
+                    else:
+                        log(f"FAIL: In-flight query completion was not processed and rejected (wait result: {wait_rej})")
+                    return 1
+                if kernel32.WaitForSingleObject(h_timeout, 0) == 0:
+                    log("FAIL: Production reported wait timeout/failure on release handle (invalidated observation)")
                     return 1
                 log("PASS: In-flight query completion was acknowledged as processed and rejected.")
 
@@ -5149,6 +5162,8 @@ def main():
                     kernel32.CloseHandle(h_hold)
                 if h_rejected:
                     kernel32.CloseHandle(h_rejected)
+                if h_timeout:
+                    kernel32.CloseHandle(h_timeout)
                 if h_trigger:
                     kernel32.CloseHandle(h_trigger)
 
@@ -5420,7 +5435,7 @@ def main():
         # collapsed, and demanding size for a collapsed control would assert the wrong thing.
         def _get_ac_list_with_height():
             lst = find_by_aid(win, "ActionCenterList") or find_by_name(win, "Action Center items")
-            if lst is not None and lst.rectangle().height() >= 20:
+            if lst is not None and lst.rectangle().height() > 0:
                 return lst
             return None
 
@@ -5434,6 +5449,7 @@ def main():
             else:
                 log(f"FAIL: Action Center item list has no usable height after closing details (rect={raw_list.rectangle()}, height={raw_list.rectangle().height()})")
             return 1
+        log(f"PASS: Action Center list rendered with height={ac_list.rectangle().height()} (rect={ac_list.rectangle()})")
         show_again_btn = find_by_aid(win, "ShowActionCenterDetailsButton")
         if (show_again_btn is None or show_again_btn.rectangle().width() <= 0
                 or show_again_btn.rectangle().height() <= 0):
