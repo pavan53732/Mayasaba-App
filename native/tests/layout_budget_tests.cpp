@@ -48,13 +48,44 @@ int main()
         }
         ++passed;
 
-        // 3. Header attention & problems partitioning
+        // 3. Header attention & problems partitioning (both cards reachable, no zero starvation)
         for (bool attention : {false, true}) for (bool problems : {false, true})
         {
             auto const b = mayasaba::ui::AllocateHeaderLayout(600, 100, 0, 0, 200, attention, problems);
             REQUIRE(attention || b.attention == 0);
             REQUIRE(problems || b.problems == 0);
             if (attention != problems) REQUIRE(std::abs(b.attention + b.problems - 276) < 0.001);
+        }
+
+        // Bounded & constrained pools: ensure neither region is starved to 0 height when both are present
+        for (double constrainedPool : {10.0, 40.0, 64.0, 70.0, 100.0, 140.0, 205.0, 220.0})
+        {
+            // Allocate with fixed pool
+            auto const b = mayasaba::ui::AllocateHeaderLayout(
+                100 + 200 + 24 + constrainedPool, 100, 0, 0, 200, true, true);
+            REQUIRE(b.attention > 0.0);
+            REQUIRE(b.problems > 0.0);
+            REQUIRE(b.attention + b.problems <= constrainedPool + 0.001);
+            if (constrainedPool >= 205.0)
+            {
+                REQUIRE(b.attention >= 190.0 - 0.001);
+                REQUIRE(b.problems >= 15.0 - 0.001);
+            }
+        }
+
+        // Supported logical sizes (600, 720, 900, 1080) and text scale variations (compact/expanded composer)
+        for (double screenH : {600.0, 720.0, 900.0, 1080.0})
+        {
+            for (double composerH : {120.0, 220.0, 360.0})
+            {
+                auto const b = mayasaba::ui::AllocateHeaderLayout(
+                    screenH, 100, 0, 0, composerH, true, true);
+                if (b.pool > 0)
+                {
+                    REQUIRE(b.attention > 0.0);
+                    REQUIRE(b.problems > 0.0);
+                }
+            }
         }
         ++passed;
 

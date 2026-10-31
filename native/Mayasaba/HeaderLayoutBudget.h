@@ -40,13 +40,21 @@ namespace mayasaba::ui
         }
         else
         {
-            // Both regions are actionable. Attention card requires at least 140px to ensure
-            // its title, status, buttons and item list remain reachable with rendered height >= 20px.
-            constexpr double attentionFloor = 140.0, problemsFloor = 40.0;
-            if (result.pool <= attentionFloor + problemsFloor)
+            // Both regions are actionable and present. Allocate the constrained pool
+            // proportionally with non-zero minimum floors for each region so neither region
+            // collapses to zero when both are actionable.
+            constexpr double attentionFloor = 190.0, problemsFloor = 15.0;
+            constexpr double combinedFloor = attentionFloor + problemsFloor; // 205.0
+
+            if (result.pool <= 0.0)
             {
-                result.attention = std::min(result.pool, attentionFloor);
-                result.problems = std::max(0.0, result.pool - result.attention);
+                result.attention = 0.0;
+                result.problems = 0.0;
+            }
+            else if (result.pool < combinedFloor)
+            {
+                result.attention = result.pool * (attentionFloor / combinedFloor);
+                result.problems = result.pool - result.attention;
             }
             else
             {

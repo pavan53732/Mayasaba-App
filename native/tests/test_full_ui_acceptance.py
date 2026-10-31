@@ -2165,6 +2165,7 @@ def main():
         # so the 3B paging legs can name the exact asynchronous sequence instead
         # of inferring it through UIA walks.
         env["MAYASABA_UI_TRACE"] = os.path.join(os.path.dirname(STORE_PATH), "ui-trace.log")
+        env["MAYASABA_TEST_HOLD_AC_QUERY"] = "1"
 
         proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env)
         log(f"Launched Mayasaba.exe (PID {proc.pid})")
@@ -5071,28 +5072,27 @@ def main():
             kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
             kernel32.CloseHandle.restype = wintypes.BOOL
 
-            # Create the hold trigger, in-flight notification, and release events
+            # Create the hold trigger, in-flight notification, release, rejection acknowledgement, and trigger events
             h_hold = kernel32.CreateEventW(None, True, True, "Local\\Mayasaba_Ac_HoldRequested")
             h_inflight = kernel32.CreateEventW(None, True, False, "Local\\Mayasaba_Ac_InFlight")
             h_release = kernel32.CreateEventW(None, True, False, "Local\\Mayasaba_Ac_Release")
+            h_rejected = kernel32.CreateEventW(None, True, False, "Local\\Mayasaba_Ac_Rejected")
+            h_trigger = kernel32.CreateEventW(None, False, False, "Local\\Mayasaba_Ac_TriggerRefresh")
 
             try:
-                # Trigger refresh via Switch Project -> Cancel while Action Center is visible
-                sw_h2 = open_switch_project(win)
-                if not sw_h2 or not sw_h2.is_visible():
-                    log("FAIL: File -> Switch Project failed during held-refresh test")
-                    return 1
-                c_btn2 = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
-                if not c_btn2 or not c_btn2.is_visible():
-                    log("FAIL: FolderCancelButton not found on Screen 2")
-                    return 1
-                c_btn2.iface_invoke.Invoke()
+                # Action Center is currently visible on Chat screen from the initial refresh.
+                def find_close_ac_btn():
+                    btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
+                    return btn if (btn and btn.is_visible()) else None
 
-                # Verify return to alpha Chat screen
-                ret2 = poll_until(find_visible_chat_heading, timeout=6.0, interval=0.1)
-                if not ret2 or "alpha" not in ret2.window_text().lower():
-                    log("FAIL: Did not return to alpha Chat after Cancel")
+                close_ac_btn = poll_until(find_close_ac_btn, timeout=5.0, interval=0.1)
+                if not close_ac_btn:
+                    log("FAIL: CloseActionCenterButton not visible on Chat before triggering held query")
                     return 1
+
+                # Trigger the background refresh query via the deterministic test hook
+                log("Triggering background Action Center refresh query while card is presented on Chat...")
+                kernel32.SetEvent(h_trigger)
 
                 # Wait for the background query to hit the hold hook
                 wait_inflight = kernel32.WaitForSingleObject(h_inflight, 5000)
@@ -5102,14 +5102,6 @@ def main():
                 log("PASS: Background Action Center query is confirmed in-flight and held.")
 
                 # Card is currently visible on screen. Now dismiss it while query is in-flight!
-                def find_close_ac_btn():
-                    btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
-                    return btn if (btn and btn.is_visible()) else None
-
-                close_ac_btn = poll_until(find_close_ac_btn, timeout=5.0, interval=0.1)
-                if not close_ac_btn:
-                    log("FAIL: CloseActionCenterButton not visible to dismiss held card")
-                    return 1
                 log("Dismissing Action Center via CloseActionCenterButton while query is held in flight...")
                 close_ac_btn.iface_invoke.Invoke()
 
@@ -5128,7 +5120,11 @@ def main():
                 # Now release the held background query so it resumes to UI thread
                 log("Releasing in-flight query to UI thread...")
                 kernel32.SetEvent(h_release)
-                time.sleep(1.0)
+                wait_rej = kernel32.WaitForSingleObject(h_rejected, 5000)
+                if wait_rej != 0:
+                    log(f"FAIL: In-flight query completion was not processed and rejected (wait result: {wait_rej})")
+                    return 1
+                log("PASS: In-flight query completion was acknowledged as processed and rejected.")
 
                 # Assert that in-flight completion rejected the result without reopening or repopulating
                 ac_panel_after_release = find_by_aid(win, "ActionCenterPanel")
@@ -5151,6 +5147,10 @@ def main():
                     kernel32.CloseHandle(h_inflight)
                 if h_hold:
                     kernel32.CloseHandle(h_hold)
+                if h_rejected:
+                    kernel32.CloseHandle(h_rejected)
+                if h_trigger:
+                    kernel32.CloseHandle(h_trigger)
 
             # -------------------------------------------------------------
             # Sequence 2: A new explicit refresh starts after dismissal

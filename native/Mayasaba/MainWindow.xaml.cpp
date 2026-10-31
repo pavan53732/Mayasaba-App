@@ -227,6 +227,7 @@ namespace winrt::Mayasaba::implementation
             if (auto const self = closedWeak.get())
             {
                 self->windowClosed_ = true;
+                self->maintenanceCancelled_.store(true);
                 ++self->selectorGeneration_;
                 self->draftTimer_.Stop();
                 if (self->maintenanceTimer_)
@@ -264,6 +265,34 @@ namespace winrt::Mayasaba::implementation
         ChooseFolderButton().IsEnabled(false);
         CreateNewProjectButton().IsEnabled(false);
         ApplyMotionPreference();
+
+        wchar_t testHoldBuf[8]{};
+        if (GetEnvironmentVariableW(L"MAYASABA_TEST_HOLD_AC_QUERY", testHoldBuf, 8) > 0)
+        {
+            std::thread([weak = get_weak(), uiQueue = DispatcherQueue()]() {
+                HANDLE hTrigger = CreateEventW(nullptr, FALSE, FALSE, L"Local\\Mayasaba_Ac_TriggerRefresh");
+                if (!hTrigger) return;
+                while (true)
+                {
+                    DWORD waitRes = WaitForSingleObject(hTrigger, 200);
+                    auto self = weak.get();
+                    if (!self || self->windowClosed_.load()) break;
+                    if (waitRes == WAIT_OBJECT_0)
+                    {
+                        uiQueue.TryEnqueue([weak]() {
+                            if (auto s = weak.get())
+                            {
+                                if (!s->windowClosed_.load() && !s->activeProject_.empty())
+                                {
+                                    s->RefreshActionCenterAsync(s->selectorGeneration_.load());
+                                }
+                            }
+                        });
+                    }
+                }
+                CloseHandle(hTrigger);
+            }).detach();
+        }
 
         // A live light/dark switch recolours the code-built surfaces in place. This is
         // driven by the observed effective theme of the surface rather than by re-reading
@@ -327,6 +356,13 @@ namespace winrt::Mayasaba::implementation
         if (windowClosed_) co_return;
         if (!error.empty()) { ShowFolder(SelectorContext::Startup); RetryStoreButton().Visibility(Visibility::Visible); ShowNotice(L"Store initialization blocked: " + Utf16(error) + L". Retry opening the store or Exit; no empty-list result is claimed.", true); co_return; }
         storage_ = std::move(store);
+        storage_->SetMaintenanceCancellation([weak = get_weak()]() {
+            if (auto self = weak.get())
+            {
+                return self->windowClosed_.load() || self->maintenanceCancelled_.load();
+            }
+            return true;
+        });
         attachmentService_ = std::make_unique<mayasaba::AttachmentService>(*storage_);
         ChooseFolderButton().IsEnabled(true);
         CreateNewProjectButton().IsEnabled(true);
@@ -2553,26 +2589,44 @@ namespace winrt::Mayasaba::implementation
         if (windowClosed_ || !storage_) co_return;
         if (maintenanceInFlight_.exchange(true)) co_return;
 
+        auto uiQueue = DispatcherQueue();
+        std::optional<mayasaba::Storage::MaintenanceResult> result;
+        std::string error;
+
         try
         {
             co_await selectorQueue_.Background();
-            if (storage_ && !windowClosed_)
+            if (storage_ && !windowClosed_ && !maintenanceCancelled_.load())
             {
-                auto const result = storage_->RunScheduledMaintenance();
-                UiTraceEvent("scheduled-maintenance",
-                    std::string("changedDay=") + (result.changedDayEvaluated ? "true" : "false") +
-                    " eightyPercent=" + (result.eightyPercentEvaluated ? "true" : "false") +
-                    " pruned=" + std::to_string(result.evaluationsPruned) +
-                    (result.reclaim ? (" reclaimed=" + std::to_string(result.reclaim->removed)) : ""));
+                result = storage_->RunScheduledMaintenance();
             }
         }
         catch (std::exception const& ex)
         {
-            UiTraceEvent("maintenance-error", ex.what());
+            error = ex.what();
         }
         catch (...)
         {
-            UiTraceEvent("maintenance-error", "unknown exception");
+            error = "unknown exception";
+        }
+
+        if (co_await resume_foreground(uiQueue))
+        {
+            if (!windowClosed_)
+            {
+                if (!error.empty())
+                {
+                    UiTraceEvent("maintenance-error", error);
+                }
+                else if (result.has_value())
+                {
+                    UiTraceEvent("scheduled-maintenance",
+                        std::string("changedDay=") + (result->changedDayEvaluated ? "true" : "false") +
+                        " eightyPercent=" + (result->eightyPercentEvaluated ? "true" : "false") +
+                        " pruned=" + std::to_string(result->evaluationsPruned) +
+                        (result->reclaim ? (" reclaimed=" + std::to_string(result->reclaim->removed)) : ""));
+                }
+            }
         }
         maintenanceInFlight_.store(false);
     }
@@ -5637,6 +5691,7 @@ namespace winrt::Mayasaba::implementation
 
     void MainWindow::UiTraceEvent(char const* label, std::string const& fields)
     {
+        std::lock_guard lock(uiTraceMutex_);
         // The cap exists so the opt-in diagnostic cannot grow without bound
         // (AGENTS.md storage-boundedness) while still remaining intact across
         // an entire acceptance run: f4r5-run10 measured a 3-notch wheel batch
@@ -5823,6 +5878,7 @@ namespace winrt::Mayasaba::implementation
     {
         actionCenterDetailsOpen_ = false;
         ActionCenterDetailsPanel().Visibility(Visibility::Collapsed);
+        ApplyResponsiveLayout();
         // Focus returns to the control that owns the expansion so keyboard position is not
         // lost when the panel collapses.
         ShowActionCenterDetailsButton().Focus(FocusState::Programmatic);
@@ -6024,6 +6080,7 @@ namespace winrt::Mayasaba::implementation
             ActionCenterStatusText().Text(std::to_wstring(actionCenterItems_.size()) + L" item(s) need your attention.");
             MoreActionCenterItemsButton().Visibility(Visibility::Collapsed);
         }
+        ApplyResponsiveLayout();
     }
 
     void MainWindow::OnActionCenterItemClick(IInspectable const&, Controls::ItemClickEventArgs const& e)
@@ -6233,21 +6290,26 @@ namespace winrt::Mayasaba::implementation
             query.pageSize = 50;
             auto result = storage_->QueryActionCenter(query);
 
-            HANDLE hHold = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\Mayasaba_Ac_HoldRequested");
-            if (hHold)
+            wchar_t testHoldBuf[8]{};
+            if (GetEnvironmentVariableW(L"MAYASABA_TEST_HOLD_AC_QUERY", testHoldBuf, 8) > 0)
             {
-                CloseHandle(hHold);
-                HANDLE hInFlight = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\Mayasaba_Ac_InFlight");
-                if (hInFlight)
+                HANDLE hHold = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\Mayasaba_Ac_HoldRequested");
+                if (hHold)
                 {
-                    SetEvent(hInFlight);
-                    CloseHandle(hInFlight);
-                }
-                HANDLE hRelease = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\Mayasaba_Ac_Release");
-                if (hRelease)
-                {
-                    WaitForSingleObject(hRelease, 5000);
-                    CloseHandle(hRelease);
+                    CloseHandle(hHold);
+                    HANDLE hInFlight = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\Mayasaba_Ac_InFlight");
+                    if (hInFlight)
+                    {
+                        SetEvent(hInFlight);
+                        CloseHandle(hInFlight);
+                    }
+                    HANDLE hRelease = OpenEventW(SYNCHRONIZE, FALSE, L"Local\\Mayasaba_Ac_Release");
+                    if (hRelease)
+                    {
+                        DWORD waitRes = WaitForSingleObject(hRelease, 15000);
+                        CloseHandle(hRelease);
+                        (void)waitRes;
+                    }
                 }
             }
 
@@ -6259,6 +6321,12 @@ namespace winrt::Mayasaba::implementation
             // Reject obsolete completions: dismissal occurred, project changed, generation changed, or window closed
             if (actionCenterDismissed_ || actionCenterPresenter_.IsDismissed())
             {
+                HANDLE hRejected = OpenEventW(EVENT_MODIFY_STATE, FALSE, L"Local\\Mayasaba_Ac_Rejected");
+                if (hRejected)
+                {
+                    SetEvent(hRejected);
+                    CloseHandle(hRejected);
+                }
                 break;
             }
             if (windowClosed_ || activeProject_ != projectId || selectorGeneration_.load() != currentGen)

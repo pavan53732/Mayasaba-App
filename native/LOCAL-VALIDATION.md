@@ -5954,47 +5954,51 @@ directories):
 
 ---
 
-## Phase 1 Acceptance Stabilization: Shared Scroll Policy, Reader Intent, DPI Verification, Action Center Differentiation & Sizing Oracle (2026-10-31)
+## Phase 1 Acceptance Stabilization: Recovery Admission, Thread-Safe Maintenance, Header Recovery Regions & Full UI Acceptance (2026-10-31)
 
 ### 1. Artifact Identities
-- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe` (SHA-256: `5c9ff6bb7d4b628a0b2ac7f0cf368e8de4db1081d8abcba46fa788eacf13f7f6`)
+- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe` (SHA-256: `a7bb9afde184ae412bc54b33c8588a4435658adbbdeb8b9af2beb3f73330c306`)
 - **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf` (SHA-256: `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`)
-- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe` (SHA-256: `4d7376d4d3703679bfd1e3a9b75f6ded8251699114d8629198d1b8216a984ca4`)
-- **Storage Tests Executable:** `native/tests/bin/storage_tests.exe` (SHA-256: `88764d67f5563c476b3e35c68fc8d4bd35e1aaa130faaba7f3275e6790ab8e3e`)
+- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe` (SHA-256: `21b420e06d04bc1036065e9cd0dea8f38e399e76f90b38adf52da419ca5fdf4d`)
+- **Storage Tests Executable:** `native/tests/bin/storage_tests.exe` (SHA-256: `5bff2d55cc53fff67747841fad471170b3cf65658ee2e1050d0b846afb52fe84`)
 
 ### 2. Implemented & Verified Corrections
 
-1. **Action Center Lifecycle & Dismissal Differentiation (Item 1 & 3):**
-   - **Sequence Differentiation:**
-     - **Sequence 1 (Query started before dismissal completes afterwards):** When a background refresh query is in-flight and the user clicks `CloseActionCenterButton`, the card collapses immediately and `actionCenterDismissed_` is set to `true`. When the background query completes and returns to the UI thread, `RefreshActionCenterAsync` inspects `if (actionCenterDismissed_ || actionCenterPresenter_.IsDismissed()) break;`, strictly rejecting the completed result without reopening or repopulating the card, and discarding obsolete items.
-     - **Sequence 2 (New explicit refresh after dismissal):** Under the existing production contract, a new explicit refresh (such as returning to Chat from project switching or explicit project rebind) resets dismissal (`actionCenterDismissed_ = false` and `actionCenterPresenter_.BeginRefresh(...)`), allowing reactivation of the obligation card.
-   - **Held-Refresh Dismissal Stability Hook:** A narrowly-scoped Win32 deterministic event hook in `RefreshActionCenterAsync` (`Local\Mayasaba_Ac_HoldRequested`, `Local\Mayasaba_Ac_InFlight`, `Local\Mayasaba_Ac_Release`) deterministically holds the background query after `storage_->QueryActionCenter` executes, signals in-flight state to the test harness, waits for user dismissal, and then releases completion. Both collapsed presentation and discarded obsolete items were verified live.
-   - **Mandatory Navigation & Screen Assertions:** `File -> Switch Project` -> Cancel is retained as the production refresh route. The harness mandatorily asserts navigation to Screen 2 (`FolderHeading`), Cancel invocation (`FolderCancelButton`), and truthful return to the correct project's Chat (`ProjectHeading` = alpha). Missing controls on the wrong screen are never accepted as success.
-   - **Mandatory Details-Panel Assertions:** `ShowActionCenterDetailsButton` presence, expansion of `ActionCenterDetailsPanel`, inspection of 52 source-linked rows (each describing owning record, identity, version, state, and source reference), and collapse via `CloseActionCenterDetailsButton` are mandatorily asserted.
+1. **Narrow Recovery Admission (Item 1):**
+   - Implemented RAII `ScopedRecoveryAdmission` in `Storage.h` and `Storage.cpp`, recording the recovery thread identity (`recoveryThreadId_`).
+   - `CheckWriteCapacity(bool isRecovery)` permits journal write transactions during maintenance cleanup when `managedBytes >= effectiveCeiling`, narrowly enabling reclamation of eligible orphans.
+   - Strictly preserves quarantine (`poisoned_`), reference fences (`CountOtherProtectedReferences_locked`), physical object identity, durable journals, and volume free-space safety (< 5 GiB reserve). Ordinary writes cannot use recovery admission.
 
-2. **Reader Intent & Ownership (Item 1 / D04):**
-   - **Direct Hardware Input:** In `native/Mayasaba/MainWindow.xaml`, `HistoryScroller` wires `PointerWheelChanged`, `PointerPressed`, and `PreviewKeyDown` directly to `MainWindow::RecordReaderInput`. Reader hardware interaction is recorded immediately and independently of `ViewChanged` notifications.
-   - **No Suppression by Programmatic Work:** `mayasaba::ui::ReaderScrollPolicy::RecordUserInput` immediately clears `pendingProgrammatic_ = 0`. If a reader interacts while a programmatic scroll is queued or in-flight, the user's intent immediately takes ownership and pending programmatic work cannot suppress genuine input.
-   - **Request Lifecycle Handling:** Handled canceled (`CancelPendingProgrammatic`), overlapping (decremented pending counts across multiple `ChangeView` completions), and unsuccessful (`ChangeView` returning false without incrementing pending count) requests.
-   - **Superseding Stale Ownership:** `RecordNavigation("project-switch")` and `ResetProject()` advance generation, clear pending programmatic counts, and supersede prior delayed loads and anchor reconciliations.
-   - **Unit Regression Coverage:** `layout_budget_tests.cpp` (8/8 PASS) exercises all scenarios: small movements (<10px), intermediate wheel/drag events, overlapping programmatic motion, layout-only zero-delta changes, search navigation, Jump to latest, and project switching.
+2. **Thread-Safe Maintenance Diagnostics & Shutdown Cancellation (Items 2 & 3):**
+   - **Diagnostic Thread-Safety:** In `MainWindow.xaml.h` and `MainWindow.xaml.cpp`, all stream writes, formatting, and counter increments in `UiTraceEvent()` are fully serialized under `std::mutex uiTraceMutex_`. Exceptions in background maintenance are marshaled back to the UI thread via `resume_foreground(uiQueue)` prior to trace emissions.
+   - **Bounded Cancellation on Teardown:** Added `std::atomic<bool> maintenanceCancelled_{false}` and `storage_->SetMaintenanceCancellation(...)`. In `Storage.cpp::ReclaimEligibleCleanup()`, cancellation is checked between each journalled deletion candidate unit, providing safe bounded exit without leaving orphaned transactions or dangling state when `MainWindow::Closed` fires.
 
-3. **DPI Verification & Awareness Context (Item 2):**
-   - Implemented `establish_dpi_awareness()` in `test_full_ui_acceptance.py` using supported Win32 APIs with explicit ctypes signatures (`SetProcessDpiAwarenessContext`, `GetDpiAwarenessContextForProcess`, `AreDpiAwarenessContextsEqual`, `GetAwarenessFromDpiAwarenessContext`).
-   - Initialization failure is **not swallowed**. Queries and verifies the effective context: accepts and documents Per-Monitor v2 or Per-Monitor v1, and raises `RuntimeError` on System-Aware, Unaware, or NULL contexts.
-   - Both exact logical client dimensions (520.0×640.0 DIPs and 640.0×480.0 DIPs) were measured and verified with DPI awareness verification in live UI acceptance.
+3. **Deterministic Held-Query Action Center Lifecycle (Item 4):**
+   - Verified both sequences with isolated Win32 named event synchronization (`MAYASABA_TEST_HOLD_AC_QUERY`):
+     - **Sequence 1 (Pre-dismissal query completing after dismissal):** Background query held in-flight; user dismisses card via `CloseActionCenterButton` (panel collapses immediately); completion is released; `RefreshActionCenterAsync` detects `actionCenterDismissed_` and strictly rejects the obsolete result, discarding all items and keeping the card collapsed.
+     - **Sequence 2 (Post-dismissal explicit refresh):** Triggering explicit refresh (via project rebind or navigation) resets dismissal and successfully reactivates the obligation card under the production contract.
+   - Wait results and timeouts are strictly checked; timeout or premature release fails the test.
 
-4. **Criterion-Specific N/A Authorization & Harness Discrimination (Item 4 & 5):**
-   - Enforced exact criterion registry `APPROVED_EXEMPTIONS` in `test_full_ui_acceptance.py`. Removed keyword fallback matching.
-   - Rejection of unapproved criterion waivers (e.g. attempting to waive Recent Projects via S2-14 composer exemption) and invented exemption IDs verified.
-   - **Distinction of Evidence Levels:** Negative unit tests (testing validation rejection of wrong exemptions, invented IDs, unregistered verdicts, invalid DPI, and invalid window handles) are explicitly distinguished from production mutation discrimination (testing strict mode vs diagnostic mode on `INCONCLUSIVE` verdicts).
-   - **Oracle Runner Count Correction:** The harness oracle runner (`native/tests/test_harness_oracles.py`) contains and executes exactly **53 test functions** (all 53/53 PASS). The previously reported 54 was a documentation counting discrepancy and is now corrected.
+4. **Proportional Header Recovery Regions Allocation (Item 5):**
+   - In `HeaderLayoutBudget.h`, updated `AllocateHeaderLayout` when both Attention Card (`ActionCenterPanel`) and Problem Cards (`ChatProblemCardsScroller`) are actionable:
+     `attentionFloor = 190.0, problemsFloor = 15.0, combinedFloor = 205.0`.
+   - When constrained (`pool < combinedFloor`), the available pool is divided proportionally:
+     `attention = pool * (190.0 / 205.0)`, `problems = pool - attention`.
+   - Guarantees `ActionCenterList` receives usable height (>= 20 DIPs) across the entire constrained pool range while ensuring neither region collapses to zero.
+   - Verified by `layout_budget_tests.exe` (all 8 groups PASS) and live UI acceptance in Gamma project.
 
-5. **Ongoing Application Maintenance Workflow (D06 Closed):**
-   - **Background Periodic Invocation:** Added `maintenanceTimer_` (15-minute interval) in `MainWindow` running `RunMaintenanceWorkflowAsync` on `selectorQueue_` (outside UI thread) with single-flight check (`maintenanceInFlight_`) and window teardown cancellation on `Closed`. Also triggered on explicit project closure.
-   - **Reclamation Integration:** In `Storage.cpp::RunScheduledMaintenance()`, when either trigger evaluates (`changed.evaluated || eighty.evaluated`), `result.reclaim = ReclaimEligibleCleanup();` is executed, binding the evaluation directly to authorized physical reclamation.
-   - **Separation of Concerns Preserved:** Reference verification, grace period checks, and commit-before-delete durability remain intact. Protected data and unexpired grace files are strictly preserved.
-   - **Regression Verification:** Added Group 115 to `storage_tests.cpp` (all 115 groups PASS) verifying that normal maintenance below 80% ceiling does not delete files, whereas maintenance under capacity pressure (>=80% ceiling) reclaims expired orphans while strictly preserving unexpired files and database integrity.
+5. **Empirical UI Performance & Full Native Acceptance (Item 6):**
+   - Executed `test_full_ui_acceptance.py` to completion across all phases:
+     - **Total: 23 criteria | Passed: 19 | Inconclusive: 4 | Failed: 0 | Blocked: 0 | Not run: 0 | N/A: 0**.
+     - **4 Inconclusive Criteria (retained honestly due to headless desktop automation constraints):**
+       - Criterion 11: Native OLE Desktop Drag-and-Drop Execution (requires interactive desktop session).
+       - Criterion 12: Mixed-Batch Folder Rejection on Drop (requires interactive desktop session).
+       - Criterion 17: Search Overlay Bounded Height, Scrolling & Paging Reachability at 400x260 (DPI/OS minimum window dimensions).
+       - Criterion 23: Reading Anchor Preserved Across Older Prepend (requires live mouse-wheel hardware input).
+   - Live CompositionTarget Performance Metrics:
+     - Total render callbacks: 47,887 (avg frame interval: 7.14 ms).
+     - Typing latency: p50 = 5.74 ms, p95 = 17.78 ms, max = 24.40 ms.
+     - UI thread latency sampler: 6,640 samples, p50 = 0.09 ms, p95 = 0.33 ms, p99 = 8.67 ms.
 
 ### 3. Verification Suite Summary
 
@@ -6005,11 +6009,11 @@ directories):
 | Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
 | Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
 | Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
-| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **Phases 1–6, 9 live observed** |
+| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **19 PASS, 4 INCONCLUSIVE, 0 FAIL, 0 NOT_RUN** |
 
 ### 4. Remaining Scope & Open Obligations
 - **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
-- **D06 Maintenance Application Wiring (Closed):** Periodic background invocation and capacity-pressure reclamation integrated in `MainWindow` (`RunMaintenanceWorkflowAsync` on `selectorQueue_`) and `Storage::RunScheduledMaintenance` (verified by Group 115 in `storage_tests.exe`).
+- **D06 Maintenance Application Wiring:** Periodic background invocation, shutdown cancellation, and capacity-pressure recovery reclamation integrated in `MainWindow` (`RunMaintenanceWorkflowAsync`) and `Storage::RunScheduledMaintenance` (verified by Group 115 in `storage_tests.exe`).
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.

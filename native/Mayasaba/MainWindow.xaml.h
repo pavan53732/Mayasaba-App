@@ -234,6 +234,7 @@ namespace winrt::Mayasaba::implementation
         // Ongoing application maintenance workflow (D06).
         Microsoft::UI::Xaml::DispatcherTimer maintenanceTimer_{nullptr};
         std::atomic<bool> maintenanceInFlight_{false};
+        std::atomic<bool> maintenanceCancelled_{false};
         winrt::Windows::Foundation::IAsyncAction RunMaintenanceWorkflowAsync();
         Microsoft::UI::Xaml::DispatcherTimer highlightResetTimer_{nullptr};
         winrt::weak_ref<Microsoft::UI::Xaml::FrameworkElement> highlightedElement_{nullptr};
@@ -277,6 +278,7 @@ namespace winrt::Mayasaba::implementation
         std::ofstream uiTraceFile_;
         LARGE_INTEGER uiTraceFrequency_{}, uiTraceStart_{};
         uint64_t uiTraceLines_{};
+        std::mutex uiTraceMutex_;
 
         void InitPerfMeasurement();
         void RecordInputEvent();

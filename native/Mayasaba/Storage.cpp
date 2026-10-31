@@ -949,6 +949,24 @@ namespace mayasaba
     // prepared. The authorizer installed at open is the backstop for any future entry point
     // that forgets to call this: it denies writes on a quarantined connection at the SQLite
     // layer, where no call path can bypass it.
+    class ScopedRecoveryAdmission
+    {
+        std::thread::id& target_;
+        std::thread::id prev_;
+    public:
+        explicit ScopedRecoveryAdmission(std::thread::id& target) noexcept
+            : target_(target), prev_(target)
+        {
+            target_ = std::this_thread::get_id();
+        }
+        ~ScopedRecoveryAdmission() noexcept
+        {
+            target_ = prev_;
+        }
+        ScopedRecoveryAdmission(ScopedRecoveryAdmission const&) = delete;
+        ScopedRecoveryAdmission& operator=(ScopedRecoveryAdmission const&) = delete;
+    };
+
     void Storage::AdmitWrite_locked()
     {
         if (poisoned_)
@@ -959,7 +977,8 @@ namespace mayasaba
         }
         // Capacity is suppressed only during the constructor's scoped schema/recovery
         // phase (R05) and during explicit ceiling settings changes; quarantine is never suppressed.
-        if (!openSchemaPhase_ && !inSettingsAdmission_) CheckWriteCapacity();
+        bool const isRecovery = (recoveryThreadId_ == std::this_thread::get_id());
+        if (!openSchemaPhase_ && !inSettingsAdmission_) CheckWriteCapacity(isRecovery);
     }
 
     int Storage::WriteAdmissionAuthorizer(void* userData, int action, char const*, char const*,
@@ -1713,6 +1732,7 @@ namespace mayasaba
 
     std::vector<Storage::CleanupRecoveryOutcome> Storage::RecoverInterruptedCleanups()
     {
+        ScopedRecoveryAdmission recovery(recoveryThreadId_);
         std::lock_guard lock(mutex_);
         std::vector<CleanupRecoveryOutcome> outcomes;
 
@@ -2971,6 +2991,7 @@ namespace mayasaba
 
     Storage::CleanupEvaluation Storage::EvaluateCleanup(std::string const& trigger)
     {
+        ScopedRecoveryAdmission recovery(recoveryThreadId_);
         std::unique_lock<std::mutex> lock(mutex_);
         CleanupEvaluation evaluation;
         evaluation.trigger = trigger;
@@ -2993,9 +3014,17 @@ namespace mayasaba
         }
         else if (trigger == "EIGHTY_PERCENT")
         {
-            std::uint64_t managed = managedLedgerOverrideForTesting_
-                ? managedLedgerAttachmentForTesting_ + managedLedgerOtherForTesting_
-                : attachmentBytes_ + otherManagedBytes_;
+            std::uint64_t managed = 0;
+            if (capacityProbeForTesting_)
+            {
+                managed = capacityProbeForTesting_().managedBytes;
+            }
+            else
+            {
+                managed = managedLedgerOverrideForTesting_
+                    ? managedLedgerAttachmentForTesting_ + managedLedgerOtherForTesting_
+                    : attachmentBytes_ + otherManagedBytes_;
+            }
             for (auto const& suffix : { L"", L"-wal", L"-shm" })
             {
                 std::error_code ec;
@@ -3095,6 +3124,7 @@ namespace mayasaba
 
     Storage::CleanupReclaimResult Storage::ReclaimEligibleCleanup()
     {
+        ScopedRecoveryAdmission recovery(recoveryThreadId_);
         std::unique_lock<std::mutex> lock(mutex_);
         CleanupReclaimResult result;
         auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -3140,6 +3170,12 @@ namespace mayasaba
 
         for (auto const& candidate : collection.candidates)
         {
+            if (maintenanceCancellation_ && maintenanceCancellation_())
+            {
+                result.bounded = true;
+                result.reasonEn = "Reclamation stopped: cancellation was requested.";
+                break;
+            }
             if (std::chrono::steady_clock::now() >= deadline)
             {
                 result.bounded = true;
@@ -3348,6 +3384,7 @@ namespace mayasaba
 
     Storage::MaintenanceResult Storage::RunScheduledMaintenance()
     {
+        ScopedRecoveryAdmission recovery(recoveryThreadId_);
         MaintenanceResult result;
         // Each trigger self-gates, so calling this repeatedly is safe and idempotent within
         // the same 24-hour period and below the capacity threshold. A declined trigger is a
@@ -3443,7 +3480,7 @@ namespace mayasaba
         return observed;
     }
 
-    void Storage::CheckWriteCapacity()
+    void Storage::CheckWriteCapacity(bool isRecovery)
     {
         // Ordinary write admission (R05). Two properties are load-bearing here.
         //
@@ -3471,7 +3508,7 @@ namespace mayasaba
 
         std::uintmax_t const ceiling = static_cast<std::uintmax_t>(EffectiveCeilingBytes_locked());
         constexpr uintmax_t reserve = 5ull * 1024 * 1024 * 1024;
-        if (observed.managedBytes >= ceiling)
+        if (!isRecovery && observed.managedBytes >= ceiling)
         {
             // Same rule as the reservation path: name the ceiling in force. Before SQLite is
             // open there is no persisted setting, so this is the default by definition.

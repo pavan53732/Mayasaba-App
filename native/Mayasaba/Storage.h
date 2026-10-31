@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
@@ -846,6 +847,10 @@ namespace mayasaba
         // exists to cover. Test-only.
         void SetReclaimRemovalPhaseHookForTesting(std::function<void()> hook) { reclaimRemovalPhaseHook_ = std::move(hook); }
 
+        // Safe bounded cancellation for maintenance / reclamation passes.
+        using CancellationProbe = std::function<bool()>;
+        void SetMaintenanceCancellation(CancellationProbe probe) { maintenanceCancellation_ = std::move(probe); }
+
     private:
         sqlite3* db_{nullptr};
         std::filesystem::path file_;
@@ -947,6 +952,8 @@ namespace mayasaba
         // the recovery calls, before the constructor returns.
         bool openSchemaPhase_{false};
         bool inSettingsAdmission_{false};
+        std::thread::id recoveryThreadId_{};
+        CancellationProbe maintenanceCancellation_;
         bool forceHashFailureForTesting_{false};
         bool forceRollbackFailureForTesting_{false};
         bool forceCommitFailureForTesting_{false};
@@ -963,7 +970,7 @@ namespace mayasaba
 #endif
         void Exec(char const* sql);
         CapacityObservation ObserveCapacity_locked();
-        void CheckWriteCapacity();
+        void CheckWriteCapacity(bool isRecovery = false);
 
         // Mandatory admission for every mutation: a quarantined connection records nothing.
         void AdmitWrite_locked();

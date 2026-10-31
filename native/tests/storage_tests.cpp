@@ -8736,7 +8736,9 @@ fs::remove(bigManaged);
         // 115. Scheduled maintenance integrates ongoing reclamation on capacity pressure or day change (D06).
         {
             CASES_BEGIN("115. Scheduled maintenance integrates ongoing reclamation on capacity pressure or day change (D06)");
-            auto const dbFile = folder / "maintenance_d06.db";
+            auto const groupFolder = folder / "d06_maint";
+            fs::create_directories(groupFolder);
+            auto const dbFile = groupFolder / "maintenance_d06.db";
             mayasaba::Storage store(dbFile);
             std::string const proj = "maint-proj-d06";
             store.BindProject(proj, proj, "C:/Projects/" + proj);
@@ -8790,6 +8792,126 @@ fs::remove(bigManaged);
             EXPECT(fs::exists(fresh));
 
             store.SetManagedLedgerForTesting(0, 0);
+
+            // Extended R05 / D06 verification: real capacity admission probe, ordinary write refusal,
+            // recovery admission reclamation, reference fences, free-space safety, and bounded cancellation.
+            store.SetStorageCeilingGiB(2);
+
+            // Setup expired orphan candidate before installing capacity probe
+            auto const orphan2 = staging / "d06-orphan2.bin";
+            {
+                std::ofstream of(orphan2, std::ios::binary);
+                of.write("d06-orphan2-bytes", 17);
+            }
+            fs::last_write_time(orphan2, fs::file_time_type::clock::now() - std::chrono::hours(24 * 10));
+            (void)store.EvaluateCleanup("EXPLICIT");
+            store.BackdateStagingGraceForTesting(WideToUtf8(orphan2.wstring()), 9);
+
+            // Setup protected staged file referenced in draft_attachments (reference fence test)
+            auto const protectedStaged = staging / "d06-protected.bin";
+            {
+                std::ofstream of(protectedStaged, std::ios::binary);
+                of.write("d06-protected-content", 21);
+            }
+            {
+                mayasaba::AttachmentRecord rec{};
+                rec.id = "att-d06-prot";
+                rec.projectId = proj;
+                rec.fileName = "d06-protected.bin";
+                rec.fileSize = 21;
+                rec.storagePath = WideToUtf8(protectedStaged.wstring());
+                rec.sha256 = "dummy-sha-protected";
+                rec.status = "PREPARING";
+                store.SaveDraftAttachments(proj, {rec});
+            }
+
+            // NOW install capacity probe: 3 GiB on 2 GiB ceiling, free space 20 GiB
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3ull * 1024 * 1024 * 1024, 20ull * 1024 * 1024 * 1024 };
+            });
+
+            // Ordinary write MUST throw ceiling error
+            bool writeRefused = false;
+            try
+            {
+                store.SaveDraft(proj, "attempting-ordinary-write-at-ceiling");
+            }
+            catch (std::runtime_error const& ex)
+            {
+                writeRefused = (std::string(ex.what()).find("ceiling") != std::string::npos);
+            }
+            EXPECT(writeRefused);
+
+            // Run scheduled maintenance while at ceiling:
+            // Under recovery admission, eightyPercentEvaluated fires, ReclaimEligibleCleanup reclaims orphan2,
+            // while preserving fresh.bin and protectedStaged.
+            auto const maintAtCeiling = store.RunScheduledMaintenance();
+            EXPECT(maintAtCeiling.eightyPercentEvaluated);
+            EXPECT(maintAtCeiling.reclaim.has_value());
+
+            EXPECT(maintAtCeiling.reclaim->removed >= 1);
+            EXPECT(!fs::exists(orphan2));
+            EXPECT(fs::exists(fresh));
+            EXPECT(fs::exists(protectedStaged));
+
+            // Record consistency in cleanup_journal:
+            auto const journal = store.CleanupJournal();
+            bool orphan2Resolved = false;
+            for (auto const& entry : journal)
+            {
+                if (entry.stagedPath.find("d06-orphan2.bin") != std::string::npos)
+                {
+                    if (entry.state == "DELETED") orphan2Resolved = true;
+                }
+            }
+            EXPECT(orphan2Resolved);
+
+            // Free-space safety check during recovery (< 5 GiB volume free space MUST throw)
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3ull * 1024 * 1024 * 1024, 1ull * 1024 * 1024 * 1024 };
+            });
+            bool freeSpaceRefused = false;
+            try
+            {
+                (void)store.RunScheduledMaintenance();
+            }
+            catch (std::runtime_error const& ex)
+            {
+                freeSpaceRefused = (std::string(ex.what()).find("free-space reserve") != std::string::npos);
+            }
+            EXPECT(freeSpaceRefused);
+
+            // Safe bounded cancellation between journalled units:
+            // Temporarily clear probe to register orphan3 fixture
+            store.SetCapacityProbeForTesting(nullptr);
+            auto const orphan3 = staging / "d06-orphan3.bin";
+            {
+                std::ofstream of(orphan3, std::ios::binary);
+                of.write("d06-orphan3-bytes", 17);
+            }
+            fs::last_write_time(orphan3, fs::file_time_type::clock::now() - std::chrono::hours(24 * 10));
+            (void)store.EvaluateCleanup("EXPLICIT");
+            store.BackdateStagingGraceForTesting(WideToUtf8(orphan3.wstring()), 9);
+
+            // Re-install probe at ceiling
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3ull * 1024 * 1024 * 1024, 20ull * 1024 * 1024 * 1024 };
+            });
+
+            // Set cancellation probe returning true
+            store.SetMaintenanceCancellation([]() { return true; });
+            auto const cancelledReclaim = store.ReclaimEligibleCleanup();
+            EXPECT(cancelledReclaim.bounded);
+            EXPECT(cancelledReclaim.removed == 0);
+            EXPECT(fs::exists(orphan3)); // Stopped cleanly between journalled candidates!
+
+            // Disarm cancellation probe: subsequent reclamation reclaims orphan3
+            store.SetMaintenanceCancellation(nullptr);
+            auto const resumedReclaim = store.ReclaimEligibleCleanup();
+            EXPECT(resumedReclaim.removed >= 1);
+            EXPECT(!fs::exists(orphan3));
+
+            store.SetCapacityProbeForTesting(nullptr);
             CASES_END();
         }
 
