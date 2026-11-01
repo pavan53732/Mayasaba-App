@@ -56,6 +56,16 @@ namespace mayasaba
             viewState_.errorMessage.clear();
         }
 
+        // Called when an in-flight refresh query times out or fails its wait,
+        // settling the refreshing state so a subsequent refresh does not falsely perceive
+        // a stale in-flight query or pending rerun.
+        void AbortRefresh() noexcept
+        {
+            isRefreshing_ = false;
+            pendingRerun_ = false;
+            viewState_.isRefreshing = false;
+        }
+
         // Begins a refresh cycle. Returns refresh sequence ID.
         uint64_t BeginRefresh(uint64_t generation)
         {

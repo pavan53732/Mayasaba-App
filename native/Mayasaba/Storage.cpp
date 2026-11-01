@@ -1644,11 +1644,10 @@ namespace mayasaba
         UntrackedStagedDeletion outcome;
         if (stagedPath.empty()) return outcome;
 
-        AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
         // PHASE 1 - reference fence and durable tombstone, no physical effect inside it.
         // The tombstone must survive a refused COMMIT, otherwise a rollback erases the
         // only thing that stops a later READY admission from claiming these bytes.
-        Exec("BEGIN IMMEDIATE;");
+        BeginRecoveryTransaction_locked();
         StagedObjectIdentity expectedIdentity;
         try
         {

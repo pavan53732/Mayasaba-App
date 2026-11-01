@@ -6271,6 +6271,7 @@ namespace winrt::Mayasaba::implementation
             co_return;
         }
         actionCenterRefreshing_ = true;
+        uint64_t const currentFlightId = ++actionCenterFlightId_;
 
         auto alive = get_strong();
         auto ui = DispatcherQueue();
@@ -6304,15 +6305,21 @@ namespace winrt::Mayasaba::implementation
 
         struct RefreshCleanup
         {
-            MainWindow* self;
+            MainWindow* self{nullptr};
+            uint64_t flightId{0};
             ~RefreshCleanup()
             {
-                if (self && !self->windowClosed_)
+                release();
+            }
+            void release() noexcept
+            {
+                if (self && !self->windowClosed_ && self->actionCenterFlightId_ == flightId)
                 {
                     self->actionCenterRefreshing_ = false;
                 }
+                self = nullptr;
             }
-        } cleanup{this};
+        } cleanup{this, currentFlightId};
 
         while (true)
         {
@@ -6336,7 +6343,7 @@ namespace winrt::Mayasaba::implementation
             if (!holdName.empty())
             {
                 ScopedHandle hHold(OpenEventW(SYNCHRONIZE, FALSE, holdName.c_str()));
-                if (hHold)
+                if (hHold && WaitForSingleObject(hHold.get(), 0) == WAIT_OBJECT_0)
                 {
                     hHold.reset();
                     std::wstring const inFlightName = GetAcTestEventName(L"InFlight");
@@ -6369,6 +6376,16 @@ namespace winrt::Mayasaba::implementation
                             }
                         }
                     }
+                    else
+                    {
+                        waitFailedOrTimedOut = true;
+                        std::wstring const timedOutName = GetAcTestEventName(L"TimedOut");
+                        ScopedHandle hTimeout(OpenEventW(EVENT_MODIFY_STATE, FALSE, timedOutName.c_str()));
+                        if (hTimeout)
+                        {
+                            SetEvent(hTimeout.get());
+                        }
+                    }
                 }
             }
 
@@ -6382,6 +6399,18 @@ namespace winrt::Mayasaba::implementation
             // Safely back on UI thread:
             if (waitFailedOrTimedOut)
             {
+                // Assert dispatcher access on UI thread
+                WINRT_ASSERT(ui.HasThreadAccess());
+                std::wstring const confirmedName = GetAcTestEventName(L"TimedOutConfirmed");
+                if (!confirmedName.empty())
+                {
+                    ScopedHandle hConfirmed(OpenEventW(EVENT_MODIFY_STATE, FALSE, confirmedName.c_str()));
+                    if (hConfirmed && ui.HasThreadAccess())
+                    {
+                        SetEvent(hConfirmed.get());
+                    }
+                }
+                actionCenterPresenter_.AbortRefresh();
                 // Invalidate observation: held query timed out or failed to wait for release.
                 // Exiting the loop now runs post-loop logic and cleanup safely on the UI dispatcher.
                 break;
@@ -6486,7 +6515,13 @@ namespace winrt::Mayasaba::implementation
             break;
         }
 
-        if (actionCenterPendingRerun_ && !actionCenterDismissed_ && !windowClosed_ && !activeProject_.empty())
+        bool const needsRerun = actionCenterPendingRerun_ && !actionCenterDismissed_ && !windowClosed_ && !activeProject_.empty();
+        actionCenterPendingRerun_ = false;
+
+        // Release single-flight ownership BEFORE invoking or servicing the replacement!
+        cleanup.release();
+
+        if (needsRerun)
         {
             RefreshActionCenterAsync(selectorGeneration_.load());
         }

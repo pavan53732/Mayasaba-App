@@ -5085,6 +5085,7 @@ def main():
             h_release = kernel32.CreateEventW(None, True, False, ac_event_name("Release"))
             h_rejected = kernel32.CreateEventW(None, True, False, ac_event_name("Rejected"))
             h_timeout = kernel32.CreateEventW(None, True, False, ac_event_name("TimedOut"))
+            h_timeout_confirmed = kernel32.CreateEventW(None, True, False, ac_event_name("TimedOutConfirmed"))
             h_trigger = kernel32.CreateEventW(None, False, False, ac_event_name("TriggerRefresh"))
 
             try:
@@ -5098,8 +5099,8 @@ def main():
                     log("FAIL: CloseActionCenterButton not visible on Chat before triggering held query")
                     return 1
 
-                # Sequence 0: Deliberately unreleased wait scenario (proves wait timeout handled safely under dispatcher)
-                log("Testing Sequence 0: Deliberately unreleased query times out safely under dispatcher ownership...")
+                # Sequence 0: Deliberately unreleased wait scenario with pending-rerun ownership test
+                log("Testing Sequence 0: In-flight timeout, dispatcher confirmation, and pending-rerun ownership...")
                 kernel32.SetEvent(h_trigger)
                 wait_inflight_0 = kernel32.WaitForSingleObject(h_inflight, 5000)
                 if wait_inflight_0 != 0:
@@ -5107,17 +5108,45 @@ def main():
                     return 1
                 log("PASS: In-flight query confirmed held for deliberate timeout scenario.")
 
+                # While query 1 is held in flight, request a second refresh (exercises pending rerun)
+                log("Requesting second refresh while first query is held in flight (exercises pending rerun)...")
+                kernel32.SetEvent(h_trigger)
+
+                # Disarm the hold event so that the second query (the pending rerun) runs through without holding
+                kernel32.ResetEvent(h_hold)
+
                 # Do NOT signal h_release; wait for production to time out (configured at 4500ms)
                 wait_timed_out = kernel32.WaitForSingleObject(h_timeout, 8000)
                 if wait_timed_out != 0:
                     log(f"FAIL: Production query did not signal TimedOut within 8s (wait result: {wait_timed_out})")
                     return 1
-                log("PASS: Deliberately unreleased query correctly timed out and signaled TimedOut event under dispatcher ownership.")
-                time.sleep(0.5)
+                log("PASS: Worker wait-outcome signaled TimedOut event.")
 
-                # Reset events for Sequence 1
+                # Observe correlated confirmation on UI dispatcher
+                wait_confirmed = kernel32.WaitForSingleObject(h_timeout_confirmed, 5000)
+                if wait_confirmed != 0:
+                    log(f"FAIL: Correlated dispatcher confirmation TimedOutConfirmed not signaled within 5s (wait result: {wait_confirmed})")
+                    return 1
+                log("PASS: Dispatcher-owned completion confirmed with proven thread access (TimedOutConfirmed).")
+
+                # Verify that the second refresh actually executed and applied current results
+                log("Verifying second refresh executed and applied current results to UI...")
+                ac_panel_refreshed = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.1)
+                if not ac_panel_refreshed:
+                    log("FAIL: ActionCenterPanel was not visible after pending rerun completed")
+                    return 1
+                status_text_elem = find_by_aid(win, "ActionCenterStatusText")
+                status_text_val = status_text_elem.window_text() if status_text_elem else ""
+                if "1 item" not in status_text_val:
+                    log(f"FAIL: Expected '1 item(s) need your attention.' after pending rerun, got '{status_text_val}'")
+                    return 1
+                log(f"PASS: Second refresh executed and truthfully applied current results ('{status_text_val}').")
+
+                # Re-arm h_hold and reset events for Sequence 1
                 kernel32.ResetEvent(h_inflight)
                 kernel32.ResetEvent(h_timeout)
+                kernel32.ResetEvent(h_timeout_confirmed)
+                kernel32.SetEvent(h_hold)
 
                 # Trigger the background refresh query for Sequence 1
                 log("Triggering background Action Center refresh query for Sequence 1 (dismissal and rejection)...")
@@ -5186,6 +5215,8 @@ def main():
                     kernel32.CloseHandle(h_rejected)
                 if h_timeout:
                     kernel32.CloseHandle(h_timeout)
+                if h_timeout_confirmed:
+                    kernel32.CloseHandle(h_timeout_confirmed)
                 if h_trigger:
                     kernel32.CloseHandle(h_trigger)
 

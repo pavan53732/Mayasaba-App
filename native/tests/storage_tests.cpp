@@ -9136,6 +9136,90 @@ fs::remove(bigManaged);
             }
             EXPECT(backAtCeilingRefused);
 
+            // Dedicated regression for RemoveUntrackedStagedFileGuarded above storage ceiling (Review e59fa78 / Finding 1):
+            // 1. Staged untracked file placed on disk in scopeProj staging directory.
+            auto const untrackedStage = store.ManagedAttachmentRoot() / "staging" / scopeProj;
+            fs::create_directories(untrackedStage);
+            auto const untrackedFile = untrackedStage / "untracked-at-ceiling.bin";
+            {
+                std::ofstream of(untrackedFile, std::ios::binary);
+                of.write("untracked-recovery-bytes", 24);
+            }
+            EXPECT(fs::exists(untrackedFile));
+
+            // 2. Set capacity above ceiling (3 GiB managed, 20 GiB free space, 2 GiB ceiling)
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3 * g, 20 * g };
+            });
+
+            // 3. Confirm ordinary write remains strictly refused above ceiling
+            bool ordinarySubmissionStillRefused = false;
+            try
+            {
+                store.StageSubmission(scopeProj, mayasaba::NewUuid(), "ordinary-refusal-during-untracked-check");
+            }
+            catch (std::runtime_error const& ex)
+            {
+                ordinarySubmissionStillRefused = (std::string(ex.what()).find("ceiling") != std::string::npos);
+            }
+            EXPECT(ordinarySubmissionStillRefused);
+
+            // 4. Volume reserve check fails closed (< 5 GiB free space)
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3 * g, 1 * g };
+            });
+            bool reserveRefused = false;
+            try
+            {
+                (void)store.RemoveUntrackedStagedFileGuarded(
+                    scopeProj,
+                    untrackedFile.string(),
+                    [](std::string const&, mayasaba::Storage::StagedObjectIdentity const&, std::string*) {
+                        return false;
+                    });
+            }
+            catch (std::runtime_error const& ex)
+            {
+                reserveRefused = (std::string(ex.what()).find("free-space reserve") != std::string::npos);
+            }
+            EXPECT(reserveRefused);
+            EXPECT(fs::exists(untrackedFile)); // Bytes retained
+
+            // 5. Restore volume reserve (20 GiB free space, still 3 GiB managed above 2 GiB ceiling)
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3 * g, 20 * g };
+            });
+
+            // 6. Exercise production RemoveUntrackedStagedFileGuarded above ceiling:
+            //    Must be admitted under MaintenanceRecovery, execute deleter, remove physical bytes,
+            //    and commit durable journal record.
+            bool deleterCalledAboveCeiling = false;
+            auto const untrackedOutcome = store.RemoveUntrackedStagedFileGuarded(
+                scopeProj,
+                untrackedFile.string(),
+                [&](std::string const& p, mayasaba::Storage::StagedObjectIdentity const& exp, std::string*) {
+                    deleterCalledAboveCeiling = true;
+                    if (!exp.valid) return false;
+                    return fs::remove(p);
+                });
+            EXPECT(deleterCalledAboveCeiling);
+            EXPECT(untrackedOutcome.removed);
+            EXPECT(!untrackedOutcome.referenced);
+            EXPECT(!fs::exists(untrackedFile)); // Physical bytes removed
+
+            // 7. Verify journal outcome in database:
+            auto const untrackedJournal = store.CleanupJournal();
+            bool deletedJournalFound = false;
+            for (auto const& entry : untrackedJournal)
+            {
+                if (entry.stagedPath == untrackedFile.string() && entry.state == "DELETED")
+                {
+                    deletedJournalFound = true;
+                    break;
+                }
+            }
+            EXPECT(deletedJournalFound);
+
             // Reset capacity probe
             store.SetCapacityProbeForTesting(nullptr);
 

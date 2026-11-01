@@ -656,6 +656,96 @@ int main()
         EXPECT(rerunC3 == false);
         EXPECT(presenter.Items().size() == 1);
         EXPECT(presenter.Items()[0].titleEn == "Coalesced Final Item");
+
+        // --- Part D: Single-flight ownership transfer, timeout invalidation, and shutdown protection ---
+        mayasaba::ActionCenterPresenter presenterD;
+        presenterD.BindProject("proj-rl", 1);
+
+        struct MockWindowRefreshContext
+        {
+            bool refreshing{false};
+            bool pendingRerun{false};
+            uint64_t flightId{0};
+            std::atomic<bool> windowClosed{false};
+
+            struct FlightCleanup
+            {
+                MockWindowRefreshContext* self{nullptr};
+                uint64_t myFlightId{0};
+                ~FlightCleanup() { release(); }
+                void release() noexcept
+                {
+                    if (self && !self->windowClosed.load() && self->flightId == myFlightId)
+                    {
+                        self->refreshing = false;
+                    }
+                    self = nullptr;
+                }
+            };
+        } mockWin;
+
+        // 1. Initial refresh starts (Flight 1)
+        mockWin.refreshing = true;
+        uint64_t const flight1 = ++mockWin.flightId;
+        auto cleanup1 = std::make_unique<MockWindowRefreshContext::FlightCleanup>(&mockWin, flight1);
+        uint64_t const seqFlight1 = presenterD.BeginRefresh(1);
+
+        // 2. A second refresh is requested while Flight 1 is in-flight/held
+        EXPECT(mockWin.refreshing == true);
+        mockWin.pendingRerun = true; // Queues pending rerun without calling BeginRefresh yet
+
+        // 3. Flight 1 times out or wait fails: observation invalidated, breaks out of query loop
+        bool waitFailedOrTimedOutFlight1 = true;
+        EXPECT(waitFailedOrTimedOutFlight1);
+        presenterD.AbortRefresh();
+
+        // 4. Post-loop transfers single-flight ownership:
+        bool const rerunNeededFlight1 = mockWin.pendingRerun && !mockWin.windowClosed.load();
+        mockWin.pendingRerun = false;
+
+        // Release single-flight ownership BEFORE launching replacement:
+        cleanup1->release();
+        EXPECT(mockWin.refreshing == false);
+
+        // 5. Replacement refresh starts (Flight 2)
+        EXPECT(rerunNeededFlight1 == true);
+        mockWin.refreshing = true;
+        uint64_t const flight2 = ++mockWin.flightId;
+        EXPECT(flight2 == 2);
+        auto cleanup2 = std::make_unique<MockWindowRefreshContext::FlightCleanup>(&mockWin, flight2);
+        uint64_t const seqFlight2 = presenterD.BeginRefresh(1);
+        EXPECT(seqFlight2 > seqFlight1);
+
+        // 6. Older cleanup runs destructor late (e.g. stack unwind of Flight 1):
+        // Must NOT clear Flight 2's ownership!
+        cleanup1.reset();
+        EXPECT(mockWin.refreshing == true); // Older cleanup did NOT clear replacement's ownership!
+        EXPECT(mockWin.flightId == flight2);
+
+        // 7. Flight 2 completes normally:
+        mayasaba::ActionCenterResult resFlight2;
+        mayasaba::ActionCenterItem itemFlight2;
+        itemFlight2.titleEn = "Flight 2 Item";
+        resFlight2.items.push_back(itemFlight2);
+        bool rerunF2 = false;
+        bool const accF2 = presenterD.ApplyRefreshResult(seqFlight2, "proj-rl", 1, resFlight2, rerunF2);
+        EXPECT(accF2 == true);
+        EXPECT(presenterD.Items().size() == 1);
+        EXPECT(presenterD.Items()[0].titleEn == "Flight 2 Item");
+
+        cleanup2->release();
+        EXPECT(mockWin.refreshing == false); // Legitimate flight 2 cleanup releases ownership
+
+        // 8. Shutdown safety: if windowClosed is true, release never mutates refreshing
+        mockWin.windowClosed = true;
+        mockWin.refreshing = true;
+        uint64_t const flight3 = ++mockWin.flightId;
+        MockWindowRefreshContext::FlightCleanup cleanup3(&mockWin, flight3);
+        cleanup3.release();
+        EXPECT(mockWin.refreshing == true); // Blocked from writing destroyed state on shutdown
+        mockWin.windowClosed = false;
+        mockWin.refreshing = false;
+
         CASES_END();
     }
 
