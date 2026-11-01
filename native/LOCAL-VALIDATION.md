@@ -6298,3 +6298,108 @@ directories):
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
+
+
+---
+
+## Phase 1 Verification Adequacy: Genuine Fresh Results in Sequence 0, Production Flight Ownership Architecture & Native Discrimination (2026-11-01)
+
+### 1. Artifact Identities & Test Suite Manifest
+- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`  
+  SHA-256: `fe94fd72206591f75d6bd8b81514953536afb89d029e7f61054692a4220e9263`
+- **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf`  
+  SHA-256: `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`
+- **Storage Tests Executable:** `native/tests/bin/storage_tests.exe`  
+  SHA-256: `03842440c0c44ef82fa94943df90dc57d0ebf52be5aeb950fbbae50b61882f14`
+- **Verify AC/AI Executable:** `native/tests/bin/verify_ac_ai.exe`  
+  SHA-256: `49570f6a62f55f5a08cf95570ad54f2405a78dfd7e9a121d693bedda04267210`
+- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe`  
+  SHA-256: `6b7214822ff533f9c4ff40bdc515ca9c768e558d9f436af482b954e39ccfd7b3`
+- **Production Store Hash:** `%LOCALAPPDATA%\Mayasaba\mayasaba.db`  
+  SHA-256: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified baseline).
+- **Source Revision:** Review 6961e7c verification follow-up (`ActionCenterPresenter.h`, `MainWindow.xaml.h`, `MainWindow.xaml.cpp`, `verify_ac_ai.cpp`, `test_full_ui_acceptance.py`).
+- **Managed Python Environment:** `C:\Users\pavan\.workbuddy-ai\binaries\python\envs\default\Scripts\python.exe`
+
+### 2. Verified Corrections
+
+1. **Sequence 0 Genuine Fresh Result Verification (Review 6961e7c / Finding 1):**
+   - While Flight 1 is held in-flight (its snapshot contains only 1 obligation `att-alpha-disposable-1`), the harness introduces a distinguishable second obligation into project alpha (`att-alpha-disposable-2` with file name `alpha_err_replacement.txt`).
+   - A second refresh request is dispatched. `MainWindow::RefreshActionCenterAsync` detects an active flight, queues the rerun via `actionCenterFlightOwner_`, and signals correlated acknowledgement `RerunQueued`.
+   - The harness awaits and confirms `RerunQueued` during active Flight 1.
+   - The hold event `HoldRequested` is disarmed to allow replacement queries to run through unhindered.
+   - Query 1 times out: background worker signals `TimedOut`.
+   - UI thread resumes foreground with verified thread access: `TimedOutConfirmed` is signaled and presenter state is settled via `actionCenterPresenter_.AbortRefresh()`.
+   - Single-flight ownership is cleanly released: `cleanup.Release()` signals `OwnershipReleased`.
+   - Replacement flight executes query and applies fresh database records to UI: `ResultApplied` is signaled.
+   - Mandatory UI verification asserts:
+     - `ActionCenterStatusText` displays `"2 item(s) need your attention."`.
+     - The obsolete `"1 item"` substring is strictly rejected.
+     - `ActionCenterList` contains `"alpha_err_replacement.txt"`.
+   - All disposable fixtures are cleaned up in exception-safe `finally` blocks, restoring project alpha to 1 obligation for subsequent Sequence 1 and Sequence 2 tests.
+
+2. **Production Flight Ownership Presentation Architecture (Review 6961e7c / Finding 2):**
+   - Extracted shared presentation-layer flight management classes into `ActionCenterPresenter.h`:
+     - `ActionCenterFlightRequest`: captures flight admission state and assigned flight ID.
+     - `ActionCenterFlightOwner`: tracks active flight state (`isRefreshing_`, `activeFlightId_`, `pendingRerun_`) and enforces flight-matched releases with shutdown protection.
+     - `ActionCenterFlightGuard`: RAII guard managing single-flight lifecycle, explicit release, idempotent disarm, and safe shutdown suppression against destroyed UI threads.
+   - `MainWindow.xaml.h` and `MainWindow.xaml.cpp` now directly use `ActionCenterFlightOwner` and `ActionCenterFlightGuard`, eliminating ad-hoc window fields and local structs.
+   - Replaced copied `MockWindowRefreshContext` in `verify_ac_ai.cpp` with 5 distinct production tests directly exercising `ActionCenterFlightOwner` and `ActionCenterFlightGuard`:
+     - **Case 1:** Explicit release followed by an inert destructor.
+     - **Case 2:** A still-armed obsolete cleanup with a mismatched current flight ID (checks `activeFlightId_ == flightId` guard, refuses release, preserves newer flight ownership).
+     - **Case 3:** Legitimate current-owner release via RAII destructor.
+     - **Case 4:** Pending-request transfer after timeout/failure (exercises `AbortRefresh`, `ConsumePendingRerun`, and replacement flight acceptance).
+     - **Case 5:** Closing while a query is held (ensures `windowClosed` suppresses release, avoiding mutations on destroyed UI state).
+
+3. **Demonstrated Discrimination (Review 6961e7c / Finding 3):**
+   - **Replacement Launch Mutation:** Disabled `RefreshActionCenterAsync` inside `if (needsRerun)` in `MainWindow.xaml.cpp`. The strengthened native scenario in `test_full_ui_acceptance.py` failed immediately with exit code 1 (`FAIL: ResultApplied event was not signaled within 6s for replacement flight (wait result: 258)`), proving that the scenario cannot be satisfied by obsolete or cached results.
+   - **Stale-Flight Guard Mutation:** Omitted `&& activeFlightId_ == flightId` in `ActionCenterFlightOwner::ReleaseFlight`. `verify_ac_ai.exe` failed immediately at Case 2 with exit code 1 (`Assertion failed: staleReleased == false at verify_ac_ai.cpp:708`).
+   - Both production files were restored byte-identically, rebuilt, and confirmed passing cleanly.
+
+4. **Preserved Raw Native Acceptance Table (23 Criteria):**
+   - Executed against fresh `Mayasaba.exe` (SHA-256 `fe94fd72206591f75d6bd8b81514953536afb89d029e7f61054692a4220e9263`) and `MainWindow.xbf` (SHA-256 `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`):
+
+| # | Criterion | Result | Measured Context / Reason |
+|---|---|---|---|
+| C01 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only' |
+| C02 | Message Search Pagination & Continuation | **PASS** | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen |
+| C03 | Older Message Navigation & Selection | **PASS** | Seeded message selection, scroll observation, timeline integrity |
+| C04 | Search Mode Project Switch Safety | **PASS** | Switching project during active search preserves target project isolation and cleanly resets search overlay |
+| C05 | Narrow 520px Responsive Layout | **PASS** | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable |
+| C06 | Rapid Hover Sweeps & Animation Stability | **PASS** | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles |
+| C07 | Display DPI Scaling Simulation | **PASS** | Per-monitor DPI awareness verified (API-level check + scaling reflow) |
+| C08 | Action Center Pagination & Resumption | **PASS** | Obligations list pagination, continuation tokens, item count updates |
+| C09 | Action Center Stale Invalidation & Refresh | **PASS** | Obligation dismissal, project switch -> cancel refresh reactivation under production contract |
+| C10 | Action Center Panel Dismissal Stability | **PASS** | Sequence 0 (in-flight timeout, fresh result application, pending-rerun ownership), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
+| C11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
+| C12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
+| C13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chips realized, metadata inspectable, diagnostic details displayed |
+| C14 | Strict Non-English Prose Preview Withholding | **PASS** | Non-English preview withheld with English reason label; metadata and digest preserved |
+| C15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 48,779 frames, avg interval 7.19 ms; typing p50 = 7.16 ms, p95 = 25.24 ms; UI thread sampler: 6,781 samples, p50 = 0.10 ms, p95 = 0.33 ms |
+| C16 | Search Overlay Flat Resting Orientation | **PASS** | Overlay resting orientation verified flat (0 deg rotation) |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1115724), synthetic mouse wheel does not reach control |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated reveal/dismiss cycles preserve flat geometry and reading position |
+| C19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection preserved on empty-chat hero container |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | System reduced-motion preference toggle disables transition animations, overlay remains flat |
+| C21 | CLI Readiness Projection & Non-Gating | **PASS** | CLI status indicators accurately project probe results; Send/Chat remain non-gated |
+| C22 | Bounded History Paging Save & Newest Rendering | **PASS** | Message paging, chronological timeline rendering, docked composer transition |
+| C23 | Reading Anchor Preserved Across Older Prepend | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1115724), synthetic mouse wheel does not reach control |
+
+**Acceptance Totals:** 23 criteria | 19 PASS | 4 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
+
+### 3. Full Verification Summary
+
+| Test Target | Command | Result |
+|---|---|---|
+| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
+| Verify AC/AI presentation & ownership | `native/tests/bin/verify_ac_ai.exe` | **15/15 PASS** |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
+| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
+| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
+| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
+| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
+
+### 4. Remaining Scope & Open Obligations
+- **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
+- **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
+- **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
+- **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.

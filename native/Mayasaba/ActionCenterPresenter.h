@@ -23,6 +23,154 @@ namespace mayasaba
         std::string errorMessage;
     };
 
+    struct ActionCenterFlightRequest
+    {
+        uint64_t flightId{0};
+        bool admitted{false};
+    };
+
+    class ActionCenterFlightOwner
+    {
+    public:
+        ActionCenterFlightOwner() noexcept = default;
+
+        // Requests admission for a new refresh flight.
+        // If no flight is active, admits the flight, increments and returns new flightId with admitted=true.
+        // If a flight is already active, records pendingRerun = true and returns current active flightId with admitted=false.
+        ActionCenterFlightRequest RequestFlight() noexcept
+        {
+            if (isRefreshing_)
+            {
+                pendingRerun_ = true;
+                return {activeFlightId_, false};
+            }
+            isRefreshing_ = true;
+            return {++activeFlightId_, true};
+        }
+
+        // Releases flight ownership.
+        // Returns true only if flightId matches activeFlightId_, isRefreshing_ was true, and isClosed is false.
+        // If isClosed is true, ownership mutation is suppressed to protect against modifying destroyed UI state during shutdown.
+        bool ReleaseFlight(uint64_t flightId, bool isClosed = false) noexcept
+        {
+            if (isClosed)
+            {
+                return false;
+            }
+            if (isRefreshing_ && activeFlightId_ == flightId)
+            {
+                isRefreshing_ = false;
+                return true;
+            }
+            return false;
+        }
+
+        // Consumes and clears any pending rerun flag.
+        bool ConsumePendingRerun() noexcept
+        {
+            bool const needed = pendingRerun_;
+            pendingRerun_ = false;
+            return needed;
+        }
+
+        // Clears the pending rerun flag without consuming.
+        void ClearPendingRerun() noexcept
+        {
+            pendingRerun_ = false;
+        }
+
+        // Resets all flight state.
+        void Reset() noexcept
+        {
+            isRefreshing_ = false;
+            pendingRerun_ = false;
+            activeFlightId_ = 0;
+        }
+
+        bool IsRefreshing() const noexcept { return isRefreshing_; }
+        bool HasPendingRerun() const noexcept { return pendingRerun_; }
+        uint64_t ActiveFlightId() const noexcept { return activeFlightId_; }
+
+    private:
+        bool isRefreshing_{false};
+        bool pendingRerun_{false};
+        uint64_t activeFlightId_{0};
+    };
+
+    class ActionCenterFlightGuard
+    {
+    public:
+        ActionCenterFlightGuard() noexcept = default;
+
+        ActionCenterFlightGuard(
+            ActionCenterFlightOwner* owner,
+            uint64_t flightId,
+            std::atomic<bool> const* windowClosed = nullptr) noexcept
+            : owner_(owner), flightId_(flightId), windowClosed_(windowClosed)
+        {
+        }
+
+        ~ActionCenterFlightGuard() noexcept
+        {
+            Release();
+        }
+
+        ActionCenterFlightGuard(ActionCenterFlightGuard const&) = delete;
+        ActionCenterFlightGuard& operator=(ActionCenterFlightGuard const&) = delete;
+
+        ActionCenterFlightGuard(ActionCenterFlightGuard&& o) noexcept
+            : owner_(o.owner_), flightId_(o.flightId_), windowClosed_(o.windowClosed_)
+        {
+            o.owner_ = nullptr;
+            o.flightId_ = 0;
+            o.windowClosed_ = nullptr;
+        }
+
+        ActionCenterFlightGuard& operator=(ActionCenterFlightGuard&& o) noexcept
+        {
+            if (this != &o)
+            {
+                Release();
+                owner_ = o.owner_;
+                flightId_ = o.flightId_;
+                windowClosed_ = o.windowClosed_;
+                o.owner_ = nullptr;
+                o.flightId_ = 0;
+                o.windowClosed_ = nullptr;
+            }
+            return *this;
+        }
+
+        // Explicitly releases flight ownership.
+        // Returns true if this guard legitimately owned and released the flight.
+        // Subsequent calls or destruction are inert.
+        bool Release() noexcept
+        {
+            if (owner_)
+            {
+                bool const closed = windowClosed_ ? windowClosed_->load() : false;
+                bool const released = owner_->ReleaseFlight(flightId_, closed);
+                owner_ = nullptr;
+                return released;
+            }
+            return false;
+        }
+
+        // Disarms the guard without releasing ownership (e.g. on unrecoverable dispatcher failure).
+        void Disarm() noexcept
+        {
+            owner_ = nullptr;
+        }
+
+        bool IsArmed() const noexcept { return owner_ != nullptr; }
+        uint64_t FlightId() const noexcept { return flightId_; }
+
+    private:
+        ActionCenterFlightOwner* owner_{nullptr};
+        uint64_t flightId_{0};
+        std::atomic<bool> const* windowClosed_{nullptr};
+    };
+
     class ActionCenterPresenter
     {
     public:

@@ -5845,7 +5845,7 @@ namespace winrt::Mayasaba::implementation
         actionCenterPresenter_.Dismiss();
         actionCenterDismissed_ = true;
         ++actionCenterRefreshSeq_;
-        actionCenterPendingRerun_ = false;
+        actionCenterFlightOwner_.ClearPendingRerun();
         actionCenterActivePagingId_ = 0;
         actionCenterPaging_ = false;
         actionCenterContinuationToken_.clear();
@@ -6265,17 +6265,6 @@ namespace winrt::Mayasaba::implementation
         actionCenterContinuationToken_.clear();
         actionCenterActivePagingId_ = 0;
         actionCenterPaging_ = false;
-        if (actionCenterRefreshing_)
-        {
-            actionCenterPendingRerun_ = true;
-            co_return;
-        }
-        actionCenterRefreshing_ = true;
-        uint64_t const currentFlightId = ++actionCenterFlightId_;
-
-        auto alive = get_strong();
-        auto ui = DispatcherQueue();
-
         struct ScopedHandle
         {
             HANDLE h{nullptr};
@@ -6303,27 +6292,31 @@ namespace winrt::Mayasaba::implementation
             }
         };
 
-        struct RefreshCleanup
+        auto const flightReq = actionCenterFlightOwner_.RequestFlight();
+        if (!flightReq.admitted)
         {
-            MainWindow* self{nullptr};
-            uint64_t flightId{0};
-            ~RefreshCleanup()
+            std::wstring const rerunQueuedName = GetAcTestEventName(L"RerunQueued");
+            if (!rerunQueuedName.empty())
             {
-                release();
-            }
-            void release() noexcept
-            {
-                if (self && !self->windowClosed_ && self->actionCenterFlightId_ == flightId)
+                ScopedHandle hRerunQueued(OpenEventW(EVENT_MODIFY_STATE, FALSE, rerunQueuedName.c_str()));
+                if (hRerunQueued)
                 {
-                    self->actionCenterRefreshing_ = false;
+                    SetEvent(hRerunQueued.get());
                 }
-                self = nullptr;
             }
-        } cleanup{this, currentFlightId};
+            UiTraceEvent("ac-rerun-queued", "flight=" + std::to_string(flightReq.flightId) + " seq=" + std::to_string(actionCenterRefreshSeq_));
+            co_return;
+        }
+        uint64_t const currentFlightId = flightReq.flightId;
+
+        auto alive = get_strong();
+        auto ui = DispatcherQueue();
+
+        mayasaba::ActionCenterFlightGuard cleanup{&actionCenterFlightOwner_, currentFlightId, &windowClosed_};
 
         while (true)
         {
-            actionCenterPendingRerun_ = false;
+            actionCenterFlightOwner_.ClearPendingRerun();
             uint64_t const servicedSeq = actionCenterPresenter_.BeginRefresh(selectorGeneration_.load());
             actionCenterDismissed_ = false;
             actionCenterRefreshSeq_ = servicedSeq;
@@ -6392,7 +6385,7 @@ namespace winrt::Mayasaba::implementation
             // Dispatcher ownership: ALWAYS resume UI thread before touching UI-owned state or exiting!
             if (!co_await resume_foreground(ui))
             {
-                cleanup.self = nullptr;
+                cleanup.Disarm();
                 co_return;
             }
 
@@ -6449,7 +6442,7 @@ namespace winrt::Mayasaba::implementation
             }
 
             // If a newer refresh request arrived while in background, rerun loop only if not dismissed
-            if (rerunNeeded || actionCenterPendingRerun_ || servicedSeq != actionCenterRefreshSeq_)
+            if (rerunNeeded || actionCenterFlightOwner_.HasPendingRerun() || servicedSeq != actionCenterRefreshSeq_)
             {
                 if (actionCenterDismissed_ || actionCenterPresenter_.IsDismissed()) break;
                 continue;
@@ -6512,14 +6505,33 @@ namespace winrt::Mayasaba::implementation
                 RenderActionCenterDetails();
                 ActionCenterDetailsPanel().Visibility(Visibility::Visible);
             }
+
+            std::wstring const resultAppliedName = GetAcTestEventName(L"ResultApplied");
+            if (!resultAppliedName.empty())
+            {
+                ScopedHandle hApplied(OpenEventW(EVENT_MODIFY_STATE, FALSE, resultAppliedName.c_str()));
+                if (hApplied)
+                {
+                    SetEvent(hApplied.get());
+                }
+            }
             break;
         }
 
-        bool const needsRerun = actionCenterPendingRerun_ && !actionCenterDismissed_ && !windowClosed_ && !activeProject_.empty();
-        actionCenterPendingRerun_ = false;
+        bool const needsRerun = actionCenterFlightOwner_.ConsumePendingRerun() && !actionCenterDismissed_ && !windowClosed_ && !activeProject_.empty();
 
         // Release single-flight ownership BEFORE invoking or servicing the replacement!
-        cleanup.release();
+        cleanup.Release();
+
+        std::wstring const ownershipReleasedName = GetAcTestEventName(L"OwnershipReleased");
+        if (!ownershipReleasedName.empty())
+        {
+            ScopedHandle hOwnership(OpenEventW(EVENT_MODIFY_STATE, FALSE, ownershipReleasedName.c_str()));
+            if (hOwnership)
+            {
+                SetEvent(hOwnership.get());
+            }
+        }
 
         if (needsRerun)
         {

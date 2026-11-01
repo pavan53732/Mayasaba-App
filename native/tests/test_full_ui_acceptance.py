@@ -5086,6 +5086,9 @@ def main():
             h_rejected = kernel32.CreateEventW(None, True, False, ac_event_name("Rejected"))
             h_timeout = kernel32.CreateEventW(None, True, False, ac_event_name("TimedOut"))
             h_timeout_confirmed = kernel32.CreateEventW(None, True, False, ac_event_name("TimedOutConfirmed"))
+            h_rerun_queued = kernel32.CreateEventW(None, True, False, ac_event_name("RerunQueued"))
+            h_ownership_released = kernel32.CreateEventW(None, True, False, ac_event_name("OwnershipReleased"))
+            h_result_applied = kernel32.CreateEventW(None, True, False, ac_event_name("ResultApplied"))
             h_trigger = kernel32.CreateEventW(None, False, False, ac_event_name("TriggerRefresh"))
 
             try:
@@ -5108,44 +5111,105 @@ def main():
                     return 1
                 log("PASS: In-flight query confirmed held for deliberate timeout scenario.")
 
-                # While query 1 is held in flight, request a second refresh (exercises pending rerun)
-                log("Requesting second refresh while first query is held in flight (exercises pending rerun)...")
-                kernel32.SetEvent(h_trigger)
+                # While query 1 is held in flight (its snapshot contains only 1 obligation),
+                # introduce a distinguishable second obligation into the isolated store for project alpha
+                log("Seeding distinguishable replacement obligation (att-alpha-disposable-2) while query 1 is held...")
+                conn = sqlite3.connect(STORE_PATH)
+                mark_store_write("INSERT: 1 new alpha draft_attachment (att-alpha-disposable-2)")
+                conn.execute(
+                    "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+                    "VALUES (?, ?, ?, 20, 'dummy2', 'text/plain', '', 'C:/source/alpha_err_replacement.txt', 'REJECTED', 'replacement rejection error', 1);",
+                    ("att-alpha-disposable-2", alpha_id, "alpha_err_replacement.txt")
+                )
+                conn.commit()
+                conn.close()
 
-                # Disarm the hold event so that the second query (the pending rerun) runs through without holding
-                kernel32.ResetEvent(h_hold)
+                try:
+                    # Request second refresh while first query is held in flight (exercises pending rerun)
+                    log("Requesting second refresh while first query is held in flight (exercises pending rerun)...")
+                    kernel32.SetEvent(h_trigger)
 
-                # Do NOT signal h_release; wait for production to time out (configured at 4500ms)
-                wait_timed_out = kernel32.WaitForSingleObject(h_timeout, 8000)
-                if wait_timed_out != 0:
-                    log(f"FAIL: Production query did not signal TimedOut within 8s (wait result: {wait_timed_out})")
-                    return 1
-                log("PASS: Worker wait-outcome signaled TimedOut event.")
+                    # Correlated acknowledgement: must prove second request was received and queued during first flight
+                    wait_rerun_queued = kernel32.WaitForSingleObject(h_rerun_queued, 5000)
+                    if wait_rerun_queued != 0:
+                        log(f"FAIL: Correlated RerunQueued event was not signaled within 5s (wait result: {wait_rerun_queued})")
+                        return 1
+                    log("PASS: Correlated acknowledgement confirmed second refresh was received and queued as pending rerun during active flight.")
 
-                # Observe correlated confirmation on UI dispatcher
-                wait_confirmed = kernel32.WaitForSingleObject(h_timeout_confirmed, 5000)
-                if wait_confirmed != 0:
-                    log(f"FAIL: Correlated dispatcher confirmation TimedOutConfirmed not signaled within 5s (wait result: {wait_confirmed})")
-                    return 1
-                log("PASS: Dispatcher-owned completion confirmed with proven thread access (TimedOutConfirmed).")
+                    # Disarm the hold event so that the second query (the pending rerun) runs through without holding
+                    kernel32.ResetEvent(h_hold)
 
-                # Verify that the second refresh actually executed and applied current results
-                log("Verifying second refresh executed and applied current results to UI...")
-                ac_panel_refreshed = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.1)
-                if not ac_panel_refreshed:
-                    log("FAIL: ActionCenterPanel was not visible after pending rerun completed")
-                    return 1
-                status_text_elem = find_by_aid(win, "ActionCenterStatusText")
-                status_text_val = status_text_elem.window_text() if status_text_elem else ""
-                if "1 item" not in status_text_val:
-                    log(f"FAIL: Expected '1 item(s) need your attention.' after pending rerun, got '{status_text_val}'")
-                    return 1
-                log(f"PASS: Second refresh executed and truthfully applied current results ('{status_text_val}').")
+                    # Do NOT signal h_release; wait for production to time out (configured at 4500ms)
+                    wait_timed_out = kernel32.WaitForSingleObject(h_timeout, 8000)
+                    if wait_timed_out != 0:
+                        log(f"FAIL: Production query did not signal TimedOut within 8s (wait result: {wait_timed_out})")
+                        return 1
+                    log("PASS: Worker wait-outcome signaled TimedOut event.")
+
+                    # Observe correlated confirmation on UI dispatcher
+                    wait_confirmed = kernel32.WaitForSingleObject(h_timeout_confirmed, 5000)
+                    if wait_confirmed != 0:
+                        log(f"FAIL: Correlated dispatcher confirmation TimedOutConfirmed not signaled within 5s (wait result: {wait_confirmed})")
+                        return 1
+                    log("PASS: Dispatcher-owned completion confirmed with proven thread access (TimedOutConfirmed).")
+
+                    # Observe single-flight ownership release confirmation
+                    wait_ownership = kernel32.WaitForSingleObject(h_ownership_released, 5000)
+                    if wait_ownership != 0:
+                        log(f"FAIL: OwnershipReleased event was not signaled within 5s (wait result: {wait_ownership})")
+                        return 1
+                    log("PASS: Single-flight ownership release confirmed on UI thread (OwnershipReleased).")
+
+                    # Observe replacement query result application confirmation
+                    wait_applied = kernel32.WaitForSingleObject(h_result_applied, 6000)
+                    if wait_applied != 0:
+                        log(f"FAIL: ResultApplied event was not signaled within 6s for replacement flight (wait result: {wait_applied})")
+                        return 1
+                    log("PASS: Replacement flight query and result application confirmed (ResultApplied).")
+
+                    # Verify that the replacement refresh actually queried and applied the fresh results to UI
+                    log("Verifying replacement refresh executed and applied genuinely fresh results to UI...")
+                    ac_panel_refreshed = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.1)
+                    if not ac_panel_refreshed:
+                        log("FAIL: ActionCenterPanel was not visible after pending rerun completed")
+                        return 1
+                    status_text_elem = find_by_aid(win, "ActionCenterStatusText")
+                    status_text_val = status_text_elem.window_text() if status_text_elem else ""
+                    log(f"Observed Action Center status after replacement rerun: '{status_text_val}'")
+                    if "2 item" not in status_text_val:
+                        log(f"FAIL: Expected '2 item(s) need your attention.' after pending rerun with fresh obligation, got '{status_text_val}'")
+                        return 1
+                    if "1 item" in status_text_val:
+                        log(f"FAIL: Obsolete snapshot '1 item' was not replaced!")
+                        return 1
+
+                    # Verify new obligation identity is visible in the ActionCenterList
+                    ac_list = find_by_aid(win, "ActionCenterList")
+                    list_children = ac_list.children() if ac_list else []
+                    list_texts = [c.window_text() for c in list_children]
+                    log(f"Observed Action Center list items: {list_texts}")
+                    if not any("alpha_err_replacement.txt" in t for t in list_texts):
+                        log(f"FAIL: Newly introduced obligation 'alpha_err_replacement.txt' not found in ActionCenterList: {list_texts}")
+                        return 1
+                    log(f"PASS: Replacement refresh truthfully applied and displayed the fresh obligation identity ('{status_text_val}').")
+                finally:
+                    # Clean up the second obligation fixture so alpha returns to 1 obligation for Sequence 1 and 2
+                    try:
+                        conn = sqlite3.connect(STORE_PATH)
+                        mark_store_write("DELETE: temporary alpha draft_attachment (att-alpha-disposable-2)")
+                        conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id = 'att-alpha-disposable-2';", (alpha_id,))
+                        conn.commit()
+                        conn.close()
+                    except Exception as e:
+                        log(f"WARNING: Exception during att-alpha-disposable-2 cleanup: {e}")
 
                 # Re-arm h_hold and reset events for Sequence 1
                 kernel32.ResetEvent(h_inflight)
                 kernel32.ResetEvent(h_timeout)
                 kernel32.ResetEvent(h_timeout_confirmed)
+                kernel32.ResetEvent(h_rerun_queued)
+                kernel32.ResetEvent(h_ownership_released)
+                kernel32.ResetEvent(h_result_applied)
                 kernel32.SetEvent(h_hold)
 
                 # Trigger the background refresh query for Sequence 1
@@ -5217,6 +5281,12 @@ def main():
                     kernel32.CloseHandle(h_timeout)
                 if h_timeout_confirmed:
                     kernel32.CloseHandle(h_timeout_confirmed)
+                if h_rerun_queued:
+                    kernel32.CloseHandle(h_rerun_queued)
+                if h_ownership_released:
+                    kernel32.CloseHandle(h_ownership_released)
+                if h_result_applied:
+                    kernel32.CloseHandle(h_result_applied)
                 if h_trigger:
                     kernel32.CloseHandle(h_trigger)
 
@@ -5259,8 +5329,8 @@ def main():
             # Clean up disposable obligation in alpha in finally block (exception safe)
             try:
                 conn = sqlite3.connect(STORE_PATH)
-                mark_store_write("DELETE: seeded alpha draft_attachment (att-alpha-disposable-1)")
-                conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id = 'att-alpha-disposable-1';", (alpha_id,))
+                mark_store_write("DELETE: seeded alpha draft_attachments (att-alpha-disposable-1, att-alpha-disposable-2)")
+                conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id IN ('att-alpha-disposable-1', 'att-alpha-disposable-2');", (alpha_id,))
                 conn.commit()
                 conn.close()
             except Exception as e:

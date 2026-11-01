@@ -434,11 +434,9 @@ namespace winrt::Mayasaba::implementation
 
         // Action Center read-only projection state and presenter.
         mayasaba::ActionCenterPresenter actionCenterPresenter_;
+        mayasaba::ActionCenterFlightOwner actionCenterFlightOwner_;
         bool actionCenterDismissed_{true};
         uint64_t actionCenterRefreshSeq_{0};
-        bool actionCenterRefreshing_{false};
-        bool actionCenterPendingRerun_{false};
-        uint64_t actionCenterFlightId_{0};
 
         // Paging identity and guards
         bool actionCenterPaging_{false};

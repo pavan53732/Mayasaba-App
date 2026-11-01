@@ -657,94 +657,153 @@ int main()
         EXPECT(presenter.Items().size() == 1);
         EXPECT(presenter.Items()[0].titleEn == "Coalesced Final Item");
 
-        // --- Part D: Single-flight ownership transfer, timeout invalidation, and shutdown protection ---
-        mayasaba::ActionCenterPresenter presenterD;
-        presenterD.BindProject("proj-rl", 1);
-
-        struct MockWindowRefreshContext
+        // --- Part D: Production flight ownership, timeout invalidation, and shutdown protection ---
+        // Case 1: Explicit release followed by an inert destructor
         {
-            bool refreshing{false};
-            bool pendingRerun{false};
-            uint64_t flightId{0};
-            std::atomic<bool> windowClosed{false};
-
-            struct FlightCleanup
+            mayasaba::ActionCenterFlightOwner owner;
+            auto const req = owner.RequestFlight();
+            EXPECT(req.admitted == true);
+            EXPECT(req.flightId == 1);
+            EXPECT(owner.IsRefreshing() == true);
             {
-                MockWindowRefreshContext* self{nullptr};
-                uint64_t myFlightId{0};
-                ~FlightCleanup() { release(); }
-                void release() noexcept
-                {
-                    if (self && !self->windowClosed.load() && self->flightId == myFlightId)
-                    {
-                        self->refreshing = false;
-                    }
-                    self = nullptr;
-                }
-            };
-        } mockWin;
+                mayasaba::ActionCenterFlightGuard guard(&owner, req.flightId);
+                EXPECT(guard.IsArmed() == true);
+                bool const released = guard.Release();
+                EXPECT(released == true);
+                EXPECT(owner.IsRefreshing() == false);
+                EXPECT(guard.IsArmed() == false);
+                // Second call while disarmed must return false and be inert
+                EXPECT(guard.Release() == false);
+            } // Destructor runs on disarmed guard: must remain inert
+            EXPECT(owner.IsRefreshing() == false);
+        }
 
-        // 1. Initial refresh starts (Flight 1)
-        mockWin.refreshing = true;
-        uint64_t const flight1 = ++mockWin.flightId;
-        auto cleanup1 = std::make_unique<MockWindowRefreshContext::FlightCleanup>(&mockWin, flight1);
-        uint64_t const seqFlight1 = presenterD.BeginRefresh(1);
+        // Case 2: A still-armed obsolete cleanup with a mismatched current flight ID
+        {
+            mayasaba::ActionCenterFlightOwner owner;
+            auto const req1 = owner.RequestFlight();
+            EXPECT(req1.admitted == true);
+            EXPECT(req1.flightId == 1);
 
-        // 2. A second refresh is requested while Flight 1 is in-flight/held
-        EXPECT(mockWin.refreshing == true);
-        mockWin.pendingRerun = true; // Queues pending rerun without calling BeginRefresh yet
+            // Stale guard for flight 1 remains armed (NOT released)
+            mayasaba::ActionCenterFlightGuard staleGuard(&owner, req1.flightId);
+            EXPECT(staleGuard.IsArmed() == true);
 
-        // 3. Flight 1 times out or wait fails: observation invalidated, breaks out of query loop
-        bool waitFailedOrTimedOutFlight1 = true;
-        EXPECT(waitFailedOrTimedOutFlight1);
-        presenterD.AbortRefresh();
+            // Flight 1 finishes or is released, and flight 2 is admitted as active owner
+            owner.ReleaseFlight(req1.flightId, false);
+            auto const req2 = owner.RequestFlight();
+            EXPECT(req2.admitted == true);
+            EXPECT(req2.flightId == 2);
+            EXPECT(owner.ActiveFlightId() == 2);
+            EXPECT(owner.IsRefreshing() == true);
 
-        // 4. Post-loop transfers single-flight ownership:
-        bool const rerunNeededFlight1 = mockWin.pendingRerun && !mockWin.windowClosed.load();
-        mockWin.pendingRerun = false;
+            // Active guard for flight 2
+            mayasaba::ActionCenterFlightGuard activeGuard2(&owner, req2.flightId);
+            EXPECT(activeGuard2.IsArmed() == true);
 
-        // Release single-flight ownership BEFORE launching replacement:
-        cleanup1->release();
-        EXPECT(mockWin.refreshing == false);
+            // Now the still-armed obsolete guard (flightId = 1) attempts Release() while owner is at flightId = 2:
+            // Must check flightId == activeFlightId and refuse to release!
+            EXPECT(staleGuard.FlightId() == 1);
+            bool const staleReleased = staleGuard.Release();
+            EXPECT(staleReleased == false); // Refused!
+            EXPECT(owner.IsRefreshing() == true); // Flight 2 ownership preserved!
+            EXPECT(owner.ActiveFlightId() == 2);
 
-        // 5. Replacement refresh starts (Flight 2)
-        EXPECT(rerunNeededFlight1 == true);
-        mockWin.refreshing = true;
-        uint64_t const flight2 = ++mockWin.flightId;
-        EXPECT(flight2 == 2);
-        auto cleanup2 = std::make_unique<MockWindowRefreshContext::FlightCleanup>(&mockWin, flight2);
-        uint64_t const seqFlight2 = presenterD.BeginRefresh(1);
-        EXPECT(seqFlight2 > seqFlight1);
+            // Destructor of staleGuard also runs without affecting owner:
+            EXPECT(staleGuard.IsArmed() == false);
 
-        // 6. Older cleanup runs destructor late (e.g. stack unwind of Flight 1):
-        // Must NOT clear Flight 2's ownership!
-        cleanup1.reset();
-        EXPECT(mockWin.refreshing == true); // Older cleanup did NOT clear replacement's ownership!
-        EXPECT(mockWin.flightId == flight2);
+            // Legitimate active guard 2 releases successfully
+            bool const activeReleased = activeGuard2.Release();
+            EXPECT(activeReleased == true);
+            EXPECT(owner.IsRefreshing() == false);
+        }
 
-        // 7. Flight 2 completes normally:
-        mayasaba::ActionCenterResult resFlight2;
-        mayasaba::ActionCenterItem itemFlight2;
-        itemFlight2.titleEn = "Flight 2 Item";
-        resFlight2.items.push_back(itemFlight2);
-        bool rerunF2 = false;
-        bool const accF2 = presenterD.ApplyRefreshResult(seqFlight2, "proj-rl", 1, resFlight2, rerunF2);
-        EXPECT(accF2 == true);
-        EXPECT(presenterD.Items().size() == 1);
-        EXPECT(presenterD.Items()[0].titleEn == "Flight 2 Item");
+        // Case 3: Legitimate current-owner release via RAII destructor
+        {
+            mayasaba::ActionCenterFlightOwner owner;
+            auto const req = owner.RequestFlight();
+            EXPECT(req.admitted == true);
+            EXPECT(owner.IsRefreshing() == true);
+            {
+                mayasaba::ActionCenterFlightGuard guard(&owner, req.flightId);
+                EXPECT(guard.IsArmed() == true);
+            } // RAII destructor releases ownership
+            EXPECT(owner.IsRefreshing() == false);
+        }
 
-        cleanup2->release();
-        EXPECT(mockWin.refreshing == false); // Legitimate flight 2 cleanup releases ownership
+        // Case 4: Pending-request transfer after timeout/failure
+        {
+            mayasaba::ActionCenterFlightOwner owner;
+            mayasaba::ActionCenterPresenter presenterD;
+            presenterD.BindProject("proj-pending", 1);
 
-        // 8. Shutdown safety: if windowClosed is true, release never mutates refreshing
-        mockWin.windowClosed = true;
-        mockWin.refreshing = true;
-        uint64_t const flight3 = ++mockWin.flightId;
-        MockWindowRefreshContext::FlightCleanup cleanup3(&mockWin, flight3);
-        cleanup3.release();
-        EXPECT(mockWin.refreshing == true); // Blocked from writing destroyed state on shutdown
-        mockWin.windowClosed = false;
-        mockWin.refreshing = false;
+            // 1. Initial refresh starts (Flight 1)
+            auto const req1 = owner.RequestFlight();
+            EXPECT(req1.admitted == true);
+            EXPECT(req1.flightId == 1);
+            uint64_t const seqFlight1 = presenterD.BeginRefresh(1);
+            mayasaba::ActionCenterFlightGuard guard1(&owner, req1.flightId);
+
+            // 2. Second refresh requested while Flight 1 is in-flight/held:
+            auto const req2 = owner.RequestFlight();
+            EXPECT(req2.admitted == false); // Busy, not admitted
+            EXPECT(owner.HasPendingRerun() == true); // Queued as pending rerun
+
+            // 3. Flight 1 times out or wait fails: observation invalidated, presenter settled
+            presenterD.AbortRefresh();
+            EXPECT(presenterD.IsRefreshing() == false);
+
+            // 4. Pre-replacement: single-flight ownership released BEFORE replacement launch
+            bool const rerunNeededPending = owner.ConsumePendingRerun();
+            EXPECT(rerunNeededPending == true);
+            EXPECT(owner.HasPendingRerun() == false);
+            bool const guard1Released = guard1.Release();
+            EXPECT(guard1Released == true);
+            EXPECT(owner.IsRefreshing() == false);
+
+            // 5. Replacement refresh starts (Flight 2)
+            auto const reqRep = owner.RequestFlight();
+            EXPECT(reqRep.admitted == true);
+            EXPECT(reqRep.flightId == 2);
+            uint64_t const seqFlight2 = presenterD.BeginRefresh(1);
+            EXPECT(seqFlight2 > seqFlight1);
+            mayasaba::ActionCenterFlightGuard guardRep(&owner, reqRep.flightId);
+
+            // 6. Flight 2 completes normally with fresh result
+            mayasaba::ActionCenterResult resFlight2;
+            mayasaba::ActionCenterItem itemFlight2;
+            itemFlight2.titleEn = "Transferred Fresh Item";
+            resFlight2.items.push_back(itemFlight2);
+            bool rerunF2 = false;
+            bool const accF2 = presenterD.ApplyRefreshResult(seqFlight2, "proj-pending", 1, resFlight2, rerunF2);
+            EXPECT(accF2 == true);
+            EXPECT(rerunF2 == false);
+            EXPECT(presenterD.Items().size() == 1);
+            EXPECT(presenterD.Items()[0].titleEn == "Transferred Fresh Item");
+
+            guardRep.Release();
+            EXPECT(owner.IsRefreshing() == false);
+        }
+
+        // Case 5: Closing while a query is held, retaining existing shutdown/dispatcher rules
+        {
+            mayasaba::ActionCenterFlightOwner owner;
+            std::atomic<bool> windowClosed{false};
+            auto const req = owner.RequestFlight();
+            EXPECT(req.admitted == true);
+            EXPECT(owner.IsRefreshing() == true);
+            {
+                mayasaba::ActionCenterFlightGuard guard(&owner, req.flightId, &windowClosed);
+                // While query is held, window closes:
+                windowClosed.store(true);
+
+                // When windowClosed is true, Release() refuses mutation to protect destroyed UI state
+                bool const released = guard.Release();
+                EXPECT(released == false);
+            }
+            // refreshing state was protected from write on closed window
+            EXPECT(owner.IsRefreshing() == true);
+        }
 
         CASES_END();
     }
