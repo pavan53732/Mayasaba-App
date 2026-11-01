@@ -918,13 +918,12 @@ namespace mayasaba
     }
     void Storage::Exec(char const* sql)
     {
-        if(std::string_view(sql).starts_with("BEGIN IMMEDIATE"))
+        if (std::string_view(sql).starts_with("BEGIN IMMEDIATE"))
         {
-            AdmitWrite_locked(writeAdmissionScope_);
+            AdmitWrite_locked(WriteAdmissionScope::Ordinary);
         }
         if (forceCommitFailureForTesting_ && std::string_view(sql).starts_with("COMMIT"))
         {
-            writeAdmissionScope_ = WriteAdmissionScope::Ordinary;
             // One-shot injected COMMIT failure for deterministic fault-injection tests:
             // the statement is deliberately not executed, so the transaction provably
             // remains open and every owner's catch path must re-establish the physical
@@ -934,10 +933,6 @@ namespace mayasaba
         }
         char* error = nullptr;
         auto const rc = sqlite3_exec(db_, sql, nullptr, nullptr, &error);
-        if (std::string_view(sql).starts_with("COMMIT") || std::string_view(sql).starts_with("ROLLBACK"))
-        {
-            writeAdmissionScope_ = WriteAdmissionScope::Ordinary;
-        }
         if (rc != SQLITE_OK)
         {
             std::string message = StatementFailureMessage(db_, rc, error);
@@ -962,10 +957,22 @@ namespace mayasaba
                 "The store is quarantined after an unconfirmed transaction rollback, so no change can be "
                 "recorded. Reopen the project store and reconcile the unresolved submission before retrying.");
         }
-        writeAdmissionScope_ = scope;
         // Capacity is suppressed only during the constructor's scoped schema/recovery
         // phase (R05) and during explicit ceiling settings changes; quarantine is never suppressed.
         if (!openSchemaPhase_ && !inSettingsAdmission_) CheckWriteCapacity(scope);
+    }
+
+    void Storage::BeginRecoveryTransaction_locked()
+    {
+        AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
+        char* error = nullptr;
+        auto const rc = sqlite3_exec(db_, "BEGIN IMMEDIATE;", nullptr, nullptr, &error);
+        if (rc != SQLITE_OK)
+        {
+            std::string message = StatementFailureMessage(db_, rc, error);
+            if (error) sqlite3_free(error);
+            throw std::runtime_error(message);
+        }
     }
 
     int Storage::WriteAdmissionAuthorizer(void* userData, int action, char const*, char const*,
@@ -1012,7 +1019,6 @@ namespace mayasaba
     // transaction can exercise the refused-rollback branch.
     void Storage::RollbackAfterFailure_locked() noexcept
     {
-        writeAdmissionScope_ = WriteAdmissionScope::Ordinary;
         if (forceRollbackFailureForTesting_)
         {
             // Inject only the failure: the ROLLBACK is deliberately not executed, so the
@@ -1446,8 +1452,7 @@ namespace mayasaba
     {
         try
         {
-            AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
-            Exec("BEGIN IMMEDIATE;");
+            BeginRecoveryTransaction_locked();
             ResolveCleanupIntent_locked(projectId, stagedPath, state, reason);
             Exec("COMMIT;");
         }
@@ -1483,8 +1488,7 @@ namespace mayasaba
         // be committed BEFORE the irreversible step, in a transaction that cannot fail
         // after the bytes have been touched - that is what makes it a record of intent
         // rather than a note carried alongside the effect.
-        AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
-        Exec("BEGIN IMMEDIATE;");
+        BeginRecoveryTransaction_locked();
         try
         {
             {
@@ -1583,8 +1587,7 @@ namespace mayasaba
         // PHASE 3 - record what actually happened. The record is retired only when the
         // bytes are provably gone; an unknown physical outcome keeps both the record and
         // the intent so recovery can settle it later.
-        AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
-        Exec("BEGIN IMMEDIATE;");
+        BeginRecoveryTransaction_locked();
         try
         {
             bool const recordOnly = !mustRemove || !deleteBytes;
@@ -1751,8 +1754,7 @@ namespace mayasaba
         }
         if (unresolved.empty()) return outcomes;
 
-        AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
-        Exec("BEGIN IMMEDIATE;");
+        BeginRecoveryTransaction_locked();
         try
         {
             for (auto const& row : unresolved)
@@ -2937,8 +2939,7 @@ namespace mayasaba
         auto const key = CleanupPathKey(path);
         if (key.empty()) return;
 
-        AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
-        Exec("BEGIN IMMEDIATE;");
+        BeginRecoveryTransaction_locked();
         try
         {
             Statement q(db_, "INSERT INTO backup_manifest(path_key,verified,verified_at,sha256_hex,file_size) "
@@ -3080,8 +3081,7 @@ namespace mayasaba
 
         // The record is a normal admitted write, in its own transaction: an evaluation must
         // not be silently lost, and must not be reported as recorded if it was not.
-        AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
-        Exec("BEGIN IMMEDIATE;");
+        BeginRecoveryTransaction_locked();
         try
         {
             for (auto const& refKey : collection.referencedPathsToInvalidateGrace)
@@ -3127,8 +3127,7 @@ namespace mayasaba
 
         if (!collection.referencedPathsToInvalidateGrace.empty() || !collection.unregisteredGracePaths.empty())
         {
-            AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
-            Exec("BEGIN IMMEDIATE;");
+            BeginRecoveryTransaction_locked();
             try
             {
                 for (auto const& refKey : collection.referencedPathsToInvalidateGrace)
@@ -3174,8 +3173,7 @@ namespace mayasaba
             // record of what was about to be removed.
             bool proceed = false;
             StagedObjectIdentity expected;
-            AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
-            Exec("BEGIN IMMEDIATE;");
+            BeginRecoveryTransaction_locked();
             try
             {
                 int const refs = CountOtherProtectedReferences_locked(candidate.path, std::string{}, std::string{});
@@ -3391,8 +3389,7 @@ namespace mayasaba
         }
 
         std::lock_guard lock(mutex_);
-        AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery);
-        Exec("BEGIN IMMEDIATE;");
+        BeginRecoveryTransaction_locked();
         try
         {
             result.evaluationsPruned = PruneCleanupEvaluations_locked();

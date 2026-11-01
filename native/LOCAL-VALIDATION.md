@@ -6114,3 +6114,92 @@ directories):
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
+
+
+---
+
+## Phase 1 Stabilization: Elimination of Scope Leakage, Held-Query Dispatcher Safety & Verified Acceptance (2026-11-01)
+
+### 1. Artifact Identities & Test Suite Manifest
+- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`  
+  SHA-256: `15807817f373613daf3cb515c298535b7f7cebcfbb7139308744fd4c18057691`
+- **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf`  
+  SHA-256: `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`
+- **Storage Tests Executable:** `native/tests/bin/storage_tests.exe`  
+  SHA-256: `6cf9349c3ac8bd3935803bed937182a1e2089eedd9c1fec888ff0f30c5c2dc2d`
+- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe`  
+  SHA-256: `6b7214822ff533f9c4ff40bdc515ca9c768e558d9f436af482b954e39ccfd7b3`
+- **Source Revision:** `83128f1` + P1/P2 fixes (`Storage.h`, `Storage.cpp`, `MainWindow.xaml.cpp`, `storage_tests.cpp`, `test_full_ui_acceptance.py`).
+- **Managed Python Environment:** `C:\Users\pavan\.workbuddy-ai\binaries\python\envs\default\Scripts\python.exe`
+
+### 2. Verified Corrections
+
+1. **Elimination of Recovery Scope Leakage (REVIEW.md P1):**
+   - Removed ambient `writeAdmissionScope_` member variable from `Storage.h` and `Storage.cpp`.
+   - `Exec("BEGIN IMMEDIATE;")` independently and unconditionally calls `AdmitWrite_locked(WriteAdmissionScope::Ordinary)`. Ordinary transaction entry cannot inherit recovery admission from prior operations or connection state.
+   - Dedicated private helper `BeginRecoveryTransaction_locked()` calls `AdmitWrite_locked(WriteAdmissionScope::MaintenanceRecovery)` and `sqlite3_exec(db_, "BEGIN IMMEDIATE;", ...)`. Used exclusively by private recovery/cleanup operations (`ResolveCleanup`, `RetireInterruptedPreparationGuarded`, `RemoveUntrackedStagedFileGuarded`, `RecoverInterruptedCleanups`, `RecordVerifiedBackup`, `EvaluateCleanup`, `ReclaimEligibleCleanup`, `RunScheduledMaintenance`).
+   - Recovery permission cannot survive a failed admission check, failed BEGIN, or transaction rollback.
+   - Preserves volume reserve check (< 5 GiB), quarantine (`poisoned_`), ownership fences, and eligible above-ceiling reclamation.
+   - Regression coverage in `storage_tests.cpp` Group 115:
+     - Reproduced exact sequence from `REVIEW.md` probe: ordinary `StageSubmission` refuses above ceiling (3 GiB managed, 2 GiB ceiling); `EvaluateCleanup` fails volume reserve check (< 5 GiB free); free space restored; subsequent ordinary `StageSubmission` strictly refuses above ceiling and records zero pending rows (`store.Pending(scopeProj)` empty).
+     - Success restoration coverage: lowering managed bytes below ceiling (1 GiB) admits `StageSubmission` and records row; raising back above ceiling (3 GiB) strictly refuses again.
+
+2. **Held-Query Timeout Dispatcher Safety & Lifetime Ownership (REVIEW.md P2):**
+   - In `MainWindow.xaml.cpp`:
+     - Introduced RAII `ScopedHandle` for exception-safe Win32 event management.
+     - `RefreshCleanup` safely writes `actionCenterRefreshing_ = false` only if the window is not closed (`!self->windowClosed_`).
+     - In `RefreshActionCenterAsync`: background query wait failure or timeout (`waitRes != WAIT_OBJECT_0`) sets `waitFailedOrTimedOut = true` and signals `TimedOut` event. Unconditionally resumes UI dispatcher via `co_await resume_foreground(ui)` before evaluating loop exit or touching UI-owned members.
+     - If the window closed while in flight (`resume_foreground` returning false), safely aborts with `cleanup.self = nullptr; co_return;` without touching destroyed UI state.
+     - Post-loop rerun and cleanup execute strictly under UI dispatcher ownership.
+   - In `test_full_ui_acceptance.py`:
+     - Executed Sequence 0: deliberately unreleased query times out safely under dispatcher ownership, signaling `TimedOut`.
+     - Executed Sequence 1: held query dismissed via `CloseActionCenterButton`, released, completion processed and rejected, panel remains collapsed, obsolete items discarded.
+     - Executed Sequence 2: subsequent explicit refresh after dismissal reactivates panel under production contract.
+
+3. **Preserved Raw Native Acceptance Table (23 Criteria):**
+   - Executed against fresh `Mayasaba.exe` (SHA-256 `15807817f373613daf3cb515c298535b7f7cebcfbb7139308744fd4c18057691`) and `MainWindow.xbf` (SHA-256 `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`):
+
+| # | Criterion | Result | Measured Context / Reason |
+|---|---|---|---|
+| C01 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only' |
+| C02 | Message Search Pagination & Continuation | **PASS** | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen |
+| C03 | Older Message Navigation & Selection | **PASS** | Seeded message selection, scroll observation, timeline integrity |
+| C04 | Search Mode Project Switch Safety | **PASS** | Switching project during active search preserves target project isolation and cleanly resets search overlay |
+| C05 | Narrow 520px Responsive Layout | **PASS** | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable |
+| C06 | Rapid Hover Sweeps & Animation Stability | **PASS** | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles |
+| C07 | Display DPI Scaling Simulation | **PASS** | Per-monitor DPI awareness verified (API-level check + scaling reflow) |
+| C08 | Action Center Pagination & Resumption | **PASS** | Obligations list pagination, continuation tokens, item count updates |
+| C09 | Action Center Stale Invalidation & Refresh | **PASS** | Obligation dismissal, project switch -> cancel refresh reactivation under production contract |
+| C10 | Action Center Panel Dismissal Stability | **PASS** | Sequence 0 (deliberate timeout), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
+| C11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
+| C12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
+| C13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chips realized, metadata inspectable, diagnostic details displayed |
+| C14 | Strict Non-English Prose Preview Withholding | **PASS** | Non-English preview withheld with English reason label; metadata and digest preserved |
+| C15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 47,527 frames, avg interval 7.21 ms; typing p50 = 6.08 ms, p95 = 22.83 ms; UI thread sampler: 6,625 samples, p50 = 0.13 ms, p95 = 0.62 ms |
+| C16 | Search Overlay Flat Resting Orientation | **PASS** | Overlay resting orientation verified flat (0 deg rotation) |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 329342), synthetic mouse wheel does not reach control |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated reveal/dismiss cycles preserve flat geometry and reading position |
+| C19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection preserved on empty-chat hero container |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | System reduced-motion preference toggle disables transition animations, overlay remains flat |
+| C21 | CLI Readiness Projection & Non-Gating | **PASS** | CLI status indicators accurately project probe results; Send/Chat remain non-gated |
+| C22 | Bounded History Paging Save & Newest Rendering | **PASS** | Message paging, chronological timeline rendering, docked composer transition |
+| C23 | Reading Anchor Preserved Across Older Prepend | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 329342), synthetic mouse wheel does not reach control |
+
+**Acceptance Totals:** 23 criteria | 19 PASS | 4 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
+
+### 3. Full Verification Summary
+
+| Test Target | Command | Result |
+|---|---|---|
+| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
+| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
+| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
+| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
+| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
+
+### 4. Remaining Scope & Open Obligations
+- **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
+- **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
+- **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
+- **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.

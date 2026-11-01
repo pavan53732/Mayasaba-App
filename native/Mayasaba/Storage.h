@@ -958,7 +958,6 @@ namespace mayasaba
         // the recovery calls, before the constructor returns.
         bool openSchemaPhase_{false};
         bool inSettingsAdmission_{false};
-        WriteAdmissionScope writeAdmissionScope_{WriteAdmissionScope::Ordinary};
         CancellationProbe maintenanceCancellation_;
         bool forceHashFailureForTesting_{false};
         bool forceRollbackFailureForTesting_{false};
@@ -980,6 +979,7 @@ namespace mayasaba
 
         // Mandatory admission for every mutation: a quarantined connection records nothing.
         void AdmitWrite_locked(WriteAdmissionScope scope = WriteAdmissionScope::Ordinary);
+        void BeginRecoveryTransaction_locked();
         // Refuses an attachment identity that another project already owns, checked inside
         // the same transaction as the write it guards.
         void RefuseForeignAttachmentIdentity_locked(std::string const& projectId, std::string const& attachmentId);

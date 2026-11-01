@@ -6275,12 +6275,42 @@ namespace winrt::Mayasaba::implementation
         auto alive = get_strong();
         auto ui = DispatcherQueue();
 
+        struct ScopedHandle
+        {
+            HANDLE h{nullptr};
+            ScopedHandle(HANDLE handle = nullptr) noexcept : h(handle) {}
+            ~ScopedHandle() noexcept { if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h); }
+            ScopedHandle(ScopedHandle const&) = delete;
+            ScopedHandle& operator=(ScopedHandle const&) = delete;
+            ScopedHandle(ScopedHandle&& o) noexcept : h(o.h) { o.h = nullptr; }
+            ScopedHandle& operator=(ScopedHandle&& o) noexcept
+            {
+                if (this != &o)
+                {
+                    if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h);
+                    h = o.h;
+                    o.h = nullptr;
+                }
+                return *this;
+            }
+            explicit operator bool() const noexcept { return h != nullptr && h != INVALID_HANDLE_VALUE; }
+            HANDLE get() const noexcept { return h; }
+            void reset(HANDLE handle = nullptr) noexcept
+            {
+                if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h);
+                h = handle;
+            }
+        };
+
         struct RefreshCleanup
         {
             MainWindow* self;
             ~RefreshCleanup()
             {
-                if (self) self->actionCenterRefreshing_ = false;
+                if (self && !self->windowClosed_)
+                {
+                    self->actionCenterRefreshing_ = false;
+                }
             }
         } cleanup{this};
 
@@ -6301,43 +6331,61 @@ namespace winrt::Mayasaba::implementation
             query.pageSize = 50;
             auto result = storage_->QueryActionCenter(query);
 
+            bool waitFailedOrTimedOut = false;
             std::wstring const holdName = GetAcTestEventName(L"HoldRequested");
             if (!holdName.empty())
             {
-                HANDLE hHold = OpenEventW(SYNCHRONIZE, FALSE, holdName.c_str());
+                ScopedHandle hHold(OpenEventW(SYNCHRONIZE, FALSE, holdName.c_str()));
                 if (hHold)
                 {
-                    CloseHandle(hHold);
+                    hHold.reset();
                     std::wstring const inFlightName = GetAcTestEventName(L"InFlight");
-                    HANDLE hInFlight = OpenEventW(EVENT_MODIFY_STATE, FALSE, inFlightName.c_str());
+                    ScopedHandle hInFlight(OpenEventW(EVENT_MODIFY_STATE, FALSE, inFlightName.c_str()));
                     if (hInFlight)
                     {
-                        SetEvent(hInFlight);
-                        CloseHandle(hInFlight);
+                        SetEvent(hInFlight.get());
                     }
                     std::wstring const releaseName = GetAcTestEventName(L"Release");
-                    HANDLE hRelease = OpenEventW(SYNCHRONIZE, FALSE, releaseName.c_str());
+                    ScopedHandle hRelease(OpenEventW(SYNCHRONIZE, FALSE, releaseName.c_str()));
                     if (hRelease)
                     {
-                        DWORD waitRes = WaitForSingleObject(hRelease, 15000);
-                        CloseHandle(hRelease);
+                        DWORD waitTimeoutMs = 15000;
+                        wchar_t envBuf[32];
+                        if (GetEnvironmentVariableW(L"MAYASABA_TEST_AC_WAIT_MS", envBuf, 32) > 0)
+                        {
+                            unsigned long val = wcstoul(envBuf, nullptr, 10);
+                            if (val > 0) waitTimeoutMs = val;
+                        }
+                        DWORD waitRes = WaitForSingleObject(hRelease.get(), waitTimeoutMs);
                         if (waitRes != WAIT_OBJECT_0)
                         {
+                            waitFailedOrTimedOut = true;
                             // Invalidate observation on timeout or wait failure
                             std::wstring const timedOutName = GetAcTestEventName(L"TimedOut");
-                            HANDLE hTimeout = OpenEventW(EVENT_MODIFY_STATE, FALSE, timedOutName.c_str());
+                            ScopedHandle hTimeout(OpenEventW(EVENT_MODIFY_STATE, FALSE, timedOutName.c_str()));
                             if (hTimeout)
                             {
-                                SetEvent(hTimeout);
-                                CloseHandle(hTimeout);
+                                SetEvent(hTimeout.get());
                             }
-                            break;
                         }
                     }
                 }
             }
 
-            if (!co_await resume_foreground(ui)) co_return;
+            // Dispatcher ownership: ALWAYS resume UI thread before touching UI-owned state or exiting!
+            if (!co_await resume_foreground(ui))
+            {
+                cleanup.self = nullptr;
+                co_return;
+            }
+
+            // Safely back on UI thread:
+            if (waitFailedOrTimedOut)
+            {
+                // Invalidate observation: held query timed out or failed to wait for release.
+                // Exiting the loop now runs post-loop logic and cleanup safely on the UI dispatcher.
+                break;
+            }
 
             bool rerunNeeded = false;
             bool accepted = actionCenterPresenter_.ApplyRefreshResult(servicedSeq, projectId, currentGen, result, rerunNeeded);
@@ -6348,11 +6396,10 @@ namespace winrt::Mayasaba::implementation
                 std::wstring const rejectedName = GetAcTestEventName(L"Rejected");
                 if (!rejectedName.empty())
                 {
-                    HANDLE hRejected = OpenEventW(EVENT_MODIFY_STATE, FALSE, rejectedName.c_str());
+                    ScopedHandle hRejected(OpenEventW(EVENT_MODIFY_STATE, FALSE, rejectedName.c_str()));
                     if (hRejected)
                     {
-                        SetEvent(hRejected);
-                        CloseHandle(hRejected);
+                        SetEvent(hRejected.get());
                     }
                 }
                 break;

@@ -9041,10 +9041,103 @@ fs::remove(bigManaged);
             store.SetCapacityProbeForTesting(nullptr);
 
             auto const resumedActiveReclaim = store.ReclaimEligibleCleanup();
-                        EXPECT(resumedActiveReclaim.removed >= 1);
-            EXPECT(!fs::exists(orphanActive2));
             EXPECT(resumedActiveReclaim.removed >= 1);
             EXPECT(!fs::exists(orphanActive2));
+
+            // Regression for failed-admission scope leakage (Review 83128f1 / P1):
+            // Bind a dedicated clean project with no draft attachments to isolate the submission capacity test:
+            std::string const scopeProj = "scope-proj-leak-test";
+            store.BindProject(scopeProj, "Scope", "C:/Projects/ScopeProj");
+
+            // 1. Ordinary StageSubmission refuses above the ceiling.
+            // 2. EvaluateCleanup fails the free-space reserve check.
+            // 3. Free space recovers while managed bytes remain above the ceiling.
+            // 4. Ordinary StageSubmission MUST independently select Ordinary admission and be refused.
+            //    Assert both the exception AND the physical database postcondition (Pending is empty).
+            constexpr auto g = 1024ull * 1024 * 1024;
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3 * g, 20 * g };
+            });
+            bool baselineSubmissionRefused = false;
+            try
+            {
+                store.StageSubmission(scopeProj, mayasaba::NewUuid(), "baseline-submission");
+            }
+            catch (std::runtime_error const& ex)
+            {
+                baselineSubmissionRefused = (std::string(ex.what()).find("ceiling") != std::string::npos);
+            }
+            EXPECT(baselineSubmissionRefused);
+            EXPECT(!store.Pending(scopeProj).has_value());
+
+            // Step 2: EvaluateCleanup fails volume reserve check (< 5 GiB free space)
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3 * g, 1 * g };
+            });
+            bool recoveryReserveRefused = false;
+            try
+            {
+                (void)store.EvaluateCleanup("EXPLICIT");
+            }
+            catch (std::runtime_error const& ex)
+            {
+                recoveryReserveRefused = (std::string(ex.what()).find("free-space reserve") != std::string::npos);
+            }
+            EXPECT(recoveryReserveRefused);
+
+            // Step 3: Free space recovers to 20 GiB, but managed bytes remain at 3 GiB (above 2 GiB ceiling)
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3 * g, 20 * g };
+            });
+            bool laterSubmissionRefused = false;
+            std::string subId = mayasaba::NewUuid();
+            try
+            {
+                (void)store.StageSubmission(scopeProj, subId, "later-ordinary-submission");
+            }
+            catch (std::runtime_error const& ex)
+            {
+                laterSubmissionRefused = (std::string(ex.what()).find("ceiling") != std::string::npos);
+            }
+            EXPECT(laterSubmissionRefused);
+            // Assert database records: Pending MUST be empty, no row recorded above ceiling!
+            auto const pendingAfterLeakCheck = store.Pending(scopeProj);
+            EXPECT(!pendingAfterLeakCheck.has_value());
+
+            // Restoration coverage: when capacity drops below ceiling (1 GiB managed), StageSubmission succeeds
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 1 * g, 20 * g };
+            });
+            std::string validSubId = mayasaba::NewUuid();
+            bool belowCeilingSubmissionSucceeded = false;
+            try
+            {
+                auto const staged = store.StageSubmission(scopeProj, validSubId, "valid-submission-below-ceiling");
+                belowCeilingSubmissionSucceeded = (staged == validSubId);
+            }
+            catch (...) {}
+            EXPECT(belowCeilingSubmissionSucceeded);
+            auto const pendingValid = store.Pending(scopeProj);
+            EXPECT(pendingValid.has_value());
+            EXPECT(pendingValid->id == validSubId);
+
+            // Restoration coverage: failure restoration back at ceiling
+            store.SetCapacityProbeForTesting([]() -> mayasaba::Storage::CapacityObservation {
+                return { 3 * g, 20 * g };
+            });
+            bool backAtCeilingRefused = false;
+            try
+            {
+                store.StageSubmission(scopeProj, mayasaba::NewUuid(), "back-at-ceiling-submission");
+            }
+            catch (std::runtime_error const& ex)
+            {
+                backAtCeilingRefused = (std::string(ex.what()).find("ceiling") != std::string::npos);
+            }
+            EXPECT(backAtCeilingRefused);
+
+            // Reset capacity probe
+            store.SetCapacityProbeForTesting(nullptr);
 
             CASES_END();
         }

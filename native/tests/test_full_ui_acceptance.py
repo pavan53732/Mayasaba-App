@@ -2167,6 +2167,7 @@ def main():
         env["MAYASABA_UI_TRACE"] = os.path.join(os.path.dirname(STORE_PATH), "ui-trace.log")
         ac_hold_token = f"run_{os.getpid()}_{int(time.time())}"
         env["MAYASABA_TEST_HOLD_AC_QUERY"] = ac_hold_token
+        env["MAYASABA_TEST_AC_WAIT_MS"] = "4500" 
 
         proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env)
         log(f"Launched Mayasaba.exe (PID {proc.pid})")
@@ -5097,8 +5098,29 @@ def main():
                     log("FAIL: CloseActionCenterButton not visible on Chat before triggering held query")
                     return 1
 
-                # Trigger the background refresh query via the deterministic test hook
-                log("Triggering background Action Center refresh query while card is presented on Chat...")
+                # Sequence 0: Deliberately unreleased wait scenario (proves wait timeout handled safely under dispatcher)
+                log("Testing Sequence 0: Deliberately unreleased query times out safely under dispatcher ownership...")
+                kernel32.SetEvent(h_trigger)
+                wait_inflight_0 = kernel32.WaitForSingleObject(h_inflight, 5000)
+                if wait_inflight_0 != 0:
+                    log(f"FAIL: In-flight refresh event was not signaled for timeout test within 5s (wait result: {wait_inflight_0})")
+                    return 1
+                log("PASS: In-flight query confirmed held for deliberate timeout scenario.")
+
+                # Do NOT signal h_release; wait for production to time out (configured at 4500ms)
+                wait_timed_out = kernel32.WaitForSingleObject(h_timeout, 8000)
+                if wait_timed_out != 0:
+                    log(f"FAIL: Production query did not signal TimedOut within 8s (wait result: {wait_timed_out})")
+                    return 1
+                log("PASS: Deliberately unreleased query correctly timed out and signaled TimedOut event under dispatcher ownership.")
+                time.sleep(0.5)
+
+                # Reset events for Sequence 1
+                kernel32.ResetEvent(h_inflight)
+                kernel32.ResetEvent(h_timeout)
+
+                # Trigger the background refresh query for Sequence 1
+                log("Triggering background Action Center refresh query for Sequence 1 (dismissal and rejection)...")
                 kernel32.SetEvent(h_trigger)
 
                 # Wait for the background query to hit the hold hook
