@@ -277,7 +277,12 @@ namespace winrt::Mayasaba::implementation
         void UiTraceEvent(char const* label, std::string const& fields = {});
         std::ofstream uiTraceFile_;
         LARGE_INTEGER uiTraceFrequency_{}, uiTraceStart_{};
-        uint64_t uiTraceLines_{};
+        static constexpr uint64_t kMaxOrdinaryTraceLines = 80000;
+        static constexpr uint64_t kMaxLifecycleTraceLines = 20000;
+        static constexpr uint64_t kMaxTotalTraceLines = kMaxOrdinaryTraceLines + kMaxLifecycleTraceLines;
+        uint64_t uiTraceTotalLines_{};
+        uint64_t uiTraceOrdinaryLines_{};
+        uint64_t uiTraceLifecycleLines_{};
         std::mutex uiTraceMutex_;
 
         void InitPerfMeasurement();

@@ -102,6 +102,33 @@ namespace winrt::Mayasaba::implementation
         }
     }
 
+    struct ScopedHandle
+    {
+        HANDLE h{nullptr};
+        ScopedHandle(HANDLE handle = nullptr) noexcept : h(handle) {}
+        ~ScopedHandle() noexcept { if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h); }
+        ScopedHandle(ScopedHandle const&) = delete;
+        ScopedHandle& operator=(ScopedHandle const&) = delete;
+        ScopedHandle(ScopedHandle&& o) noexcept : h(o.h) { o.h = nullptr; }
+        ScopedHandle& operator=(ScopedHandle&& o) noexcept
+        {
+            if (this != &o)
+            {
+                if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h);
+                h = o.h;
+                o.h = nullptr;
+            }
+            return *this;
+        }
+        explicit operator bool() const noexcept { return h != nullptr && h != INVALID_HANDLE_VALUE; }
+        HANDLE get() const noexcept { return h; }
+        void reset(HANDLE handle = nullptr) noexcept
+        {
+            if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h);
+            h = handle;
+        }
+    };
+
     static std::wstring GetAcTestEventName(wchar_t const* baseName)
     {
         wchar_t buf[64]{};
@@ -109,6 +136,17 @@ namespace winrt::Mayasaba::implementation
         {
             if (wcscmp(buf, L"1") == 0) return std::wstring(L"Local\\Mayasaba_Ac_") + baseName;
             return std::wstring(L"Local\\Mayasaba_Ac_") + buf + L"_" + baseName;
+        }
+        return {};
+    }
+
+    static std::wstring GetOlderPageTestEventName(wchar_t const* baseName)
+    {
+        wchar_t buf[64]{};
+        if (GetEnvironmentVariableW(L"MAYASABA_TEST_HOLD_OLDER_PAGE", buf, 64) > 0)
+        {
+            if (wcscmp(buf, L"1") == 0) return std::wstring(L"Local\\Mayasaba_OlderPage_") + baseName;
+            return std::wstring(L"Local\\Mayasaba_OlderPage_") + buf + L"_" + baseName;
         }
         return {};
     }
@@ -1086,6 +1124,30 @@ namespace winrt::Mayasaba::implementation
             query.limit = 50;
             query.beforeRowId = beforeRowId;
             olderPage = storage_->ContributionsPaged(query);
+
+            std::wstring const holdName = GetOlderPageTestEventName(L"HoldRequested");
+            if (!holdName.empty())
+            {
+                ScopedHandle hHold(OpenEventW(SYNCHRONIZE, FALSE, holdName.c_str()));
+                if (hHold && WaitForSingleObject(hHold.get(), 0) == WAIT_OBJECT_0)
+                {
+                    hHold.reset();
+                    std::wstring const inFlightName = GetOlderPageTestEventName(L"InFlight");
+                    ScopedHandle hInFlight(OpenEventW(EVENT_MODIFY_STATE, FALSE, inFlightName.c_str()));
+                    if (hInFlight) SetEvent(hInFlight.get());
+
+                    std::wstring const releaseName = GetOlderPageTestEventName(L"Release");
+                    ScopedHandle hRelease(OpenEventW(SYNCHRONIZE, FALSE, releaseName.c_str()));
+                    if (hRelease)
+                    {
+                        DWORD waitTimeoutMs = 15000;
+                        WaitForSingleObject(hRelease.get(), waitTimeoutMs);
+                    }
+                    std::wstring const releasedName = GetOlderPageTestEventName(L"Released");
+                    ScopedHandle hReleased(OpenEventW(EVENT_MODIFY_STATE, FALSE, releasedName.c_str()));
+                    if (hReleased) SetEvent(hReleased.get());
+                }
+            }
         }
         catch (std::exception const& e) { error = e.what(); }
 
@@ -5710,10 +5772,42 @@ namespace winrt::Mayasaba::implementation
             std::strncmp(label, "loadchat-", 9) == 0 ||
             std::strncmp(label, "ac-", 3) == 0 ||
             std::strncmp(label, "anchor-", 7) == 0);
-        if (!isLifecycle && ++uiTraceLines_ > 100000) return;
+
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
         auto const ms = (now.QuadPart - uiTraceStart_.QuadPart) * 1000.0 / uiTraceFrequency_.QuadPart;
+
+        if (isLifecycle)
+        {
+            if (uiTraceLifecycleLines_ >= kMaxLifecycleTraceLines || uiTraceTotalLines_ >= kMaxTotalTraceLines)
+            {
+                if (uiTraceLifecycleLines_ == kMaxLifecycleTraceLines)
+                {
+                    ++uiTraceLifecycleLines_;
+                    uiTraceFile_ << "t+" << ms << "ms trace-lifecycle-truncated count=" << kMaxLifecycleTraceLines << "\n";
+                    uiTraceFile_.flush();
+                }
+                return;
+            }
+            ++uiTraceLifecycleLines_;
+            ++uiTraceTotalLines_;
+        }
+        else
+        {
+            if (uiTraceOrdinaryLines_ >= kMaxOrdinaryTraceLines || uiTraceTotalLines_ >= kMaxTotalTraceLines)
+            {
+                if (uiTraceOrdinaryLines_ == kMaxOrdinaryTraceLines)
+                {
+                    ++uiTraceOrdinaryLines_;
+                    uiTraceFile_ << "t+" << ms << "ms trace-ordinary-truncated count=" << kMaxOrdinaryTraceLines << "\n";
+                    uiTraceFile_.flush();
+                }
+                return;
+            }
+            ++uiTraceOrdinaryLines_;
+            ++uiTraceTotalLines_;
+        }
+
         uiTraceFile_ << "t+" << ms << "ms " << label;
         if (!fields.empty()) uiTraceFile_ << ' ' << fields;
         uiTraceFile_ << '\n';
@@ -6262,32 +6356,6 @@ namespace winrt::Mayasaba::implementation
         actionCenterContinuationToken_.clear();
         actionCenterActivePagingId_ = 0;
         actionCenterPaging_ = false;
-        struct ScopedHandle
-        {
-            HANDLE h{nullptr};
-            ScopedHandle(HANDLE handle = nullptr) noexcept : h(handle) {}
-            ~ScopedHandle() noexcept { if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h); }
-            ScopedHandle(ScopedHandle const&) = delete;
-            ScopedHandle& operator=(ScopedHandle const&) = delete;
-            ScopedHandle(ScopedHandle&& o) noexcept : h(o.h) { o.h = nullptr; }
-            ScopedHandle& operator=(ScopedHandle&& o) noexcept
-            {
-                if (this != &o)
-                {
-                    if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h);
-                    h = o.h;
-                    o.h = nullptr;
-                }
-                return *this;
-            }
-            explicit operator bool() const noexcept { return h != nullptr && h != INVALID_HANDLE_VALUE; }
-            HANDLE get() const noexcept { return h; }
-            void reset(HANDLE handle = nullptr) noexcept
-            {
-                if (h && h != INVALID_HANDLE_VALUE) CloseHandle(h);
-                h = handle;
-            }
-        };
 
         auto const flightReq = actionCenterFlightOwner_.RequestFlight();
         if (!flightReq.admitted)

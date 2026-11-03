@@ -1,3 +1,4 @@
+import ctypes
 """Oracles for the acceptance harness's own helpers, with controlling mutations.
 
 `test_full_ui_acceptance.py` is the oracle for the product; this file is the
@@ -1024,6 +1025,317 @@ def test_full_certification_matrix_requires_physical_criteria():
     assert res["exit_code"] == 1, res
     assert res["status"] == "TEST_SUITE_INCOMPLETE_NOT_RUN", res["status"]
     assert res["counts"]["NOT_RUN"] == len(H.REQUIRED_CRITERIA_PHYSICAL), res["counts"]
+
+
+# --- CheckedDesktopScope & Desktop Lifetime ---
+
+class _FakeDesktopUser32:
+    def __init__(self, capture_refuse=False, switch_refuse=False, restore_refuse=False,
+                 orig_name="Default", thread_name="exebox-sandbox"):
+        self.capture_refuse = capture_refuse
+        self.switch_refuse = switch_refuse
+        self.restore_refuse = restore_refuse
+        self.orig_name = orig_name
+        self.thread_name = thread_name
+        self.active_desktop_name = orig_name
+        self.closed_handles = []
+        self.switches = []
+        self.foreground = 0
+
+    def GetForegroundWindow(self):
+        return self.foreground
+
+    def OpenInputDesktop(self, flags, inherit, access):
+        if self.capture_refuse:
+            ctypes.set_last_error(5)
+            return 0
+        h = 101 if self.active_desktop_name == self.orig_name else 202
+        return h
+
+    def GetThreadDesktop(self, thread_id):
+        return 202
+
+    def SwitchDesktop(self, handle):
+        if handle == 202:
+            if self.switch_refuse:
+                ctypes.set_last_error(5)
+                return False
+            self.switches.append(handle)
+            self.active_desktop_name = self.thread_name
+            return True
+        elif handle == 101:
+            if self.restore_refuse:
+                ctypes.set_last_error(5)
+                return False
+            self.switches.append(handle)
+            self.active_desktop_name = self.orig_name
+            return True
+        return False
+
+    def CloseDesktop(self, handle):
+        self.closed_handles.append(handle)
+        return True
+
+    def GetUserObjectInformationW(self, handle, index, buf, length, needed):
+        name = self.orig_name if handle == 101 else self.thread_name
+        buf.value = name
+        return True
+
+
+def test_checked_desktop_scope_capture_refusal():
+    fake = _FakeDesktopUser32(capture_refuse=True)
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False, "acquire_and_switch must return False when capture fails"
+        assert "OpenInputDesktop returned NULL" in scope.capture_error, scope.capture_error
+        assert scope.switched is False, "must not switch when capture fails"
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is True, "restore_and_close must succeed when no switch occurred"
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_switch_refusal():
+    fake = _FakeDesktopUser32(switch_refuse=True)
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False, "acquire_and_switch must return False when switch fails"
+        assert "SwitchDesktop returned FALSE" in scope.switch_error, scope.switch_error
+        assert scope.switched is False, "must not mark switched when API returns FALSE"
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is True
+        assert 101 in fake.closed_handles, "must close captured handle even when switch fails"
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_store_lock_refusal():
+    fake = _FakeDesktopUser32()
+    orig_acquire = H.acquire_store_lock
+    try:
+        def _failing_acquire(p):
+            raise RuntimeError("Store locked by another process")
+        H.acquire_store_lock = _failing_acquire
+        def _run():
+            res = H.main()
+            assert res != 0, f"must return non-zero exit code on store lock failure, got {res}"
+            assert len(fake.switches) == 0, "must not switch desktop when store lock is refused"
+            assert len(fake.closed_handles) == 0, "must not open desktop handles before store lock"
+        _with_fakes(fake, _run)
+    finally:
+        H.acquire_store_lock = orig_acquire
+
+
+def test_checked_desktop_scope_launch_failure():
+    fake = _FakeDesktopUser32()
+    orig_popen = H.subprocess.Popen
+    orig_acquire = H.acquire_store_lock
+    orig_store = H.STORE_PATH
+    orig_perf = H.PERF_LOG_PATH
+    class _FakeLock:
+        def __init__(self):
+            self.closed = False
+        def close(self):
+            self.closed = True
+    fake_lock = _FakeLock()
+    try:
+        import tempfile
+        temp_dir = tempfile.mkdtemp()
+        H.STORE_PATH = os.path.join(temp_dir, "test_store.db")
+        H.PERF_LOG_PATH = os.path.join(temp_dir, "test_perf.json")
+        H.acquire_store_lock = lambda p: fake_lock
+        def _failing_popen(*a, **k):
+            raise OSError("Binary not found")
+        H.subprocess.Popen = _failing_popen
+        def _run():
+            try:
+                H.main()
+            except OSError:
+                pass
+            assert fake_lock.closed is True, "store lock must be closed after launch failure"
+            assert 101 in fake.closed_handles, "captured desktop handle must be closed after launch failure"
+            assert fake.active_desktop_name == fake.orig_name, "desktop must be restored after launch failure"
+        _with_fakes(fake, _run)
+    finally:
+        H.subprocess.Popen = orig_popen
+        H.acquire_store_lock = orig_acquire
+        H.STORE_PATH = orig_store
+        H.PERF_LOG_PATH = orig_perf
+
+
+def test_checked_desktop_scope_mid_run_exception():
+    fake = _FakeDesktopUser32()
+    orig_acquire = H.acquire_store_lock
+    class _FakeLock:
+        def __init__(self):
+            self.closed = False
+        def close(self):
+            self.closed = True
+    fake_lock = _FakeLock()
+    try:
+        H.acquire_store_lock = lambda p: fake_lock
+        def _run():
+            scope = H.CheckedDesktopScope()
+            ok = scope.acquire_and_switch()
+            assert ok is True
+            assert scope.switched is True
+            try:
+                raise ValueError("Simulated mid-run fault")
+            except ValueError:
+                pass
+            finally:
+                restore_ok = scope.restore_and_close()
+                assert restore_ok is True
+            assert fake.active_desktop_name == fake.orig_name, "desktop must be restored after mid-run exception"
+            assert 101 in fake.closed_handles
+        _with_fakes(fake, _run)
+    finally:
+        H.acquire_store_lock = orig_acquire
+
+
+def test_checked_desktop_scope_normal_completion():
+    fake = _FakeDesktopUser32()
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is True
+        assert scope.switched is True
+        assert fake.active_desktop_name == fake.thread_name
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is True
+        assert scope.restored is True
+        assert fake.active_desktop_name == fake.orig_name
+        assert 101 in fake.closed_handles
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_restoration_refusal():
+    fake = _FakeDesktopUser32(restore_refuse=True)
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is True
+        assert scope.switched is True
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is False, "restore_and_close must return False when SwitchDesktop(restore) fails"
+        assert "SwitchDesktop(restore) returned FALSE" in scope.restore_error, scope.restore_error
+        assert 101 in fake.closed_handles, "handle must still be closed even if restore API failed"
+    _with_fakes(fake, _run)
+
+
+# --- Bounded Diagnostics & Trace Evaluation ---
+
+class _SimulatedUiTraceLogger:
+    def __init__(self, max_ordinary=80000, max_lifecycle=20000):
+        self.max_ordinary = max_ordinary
+        self.max_lifecycle = max_lifecycle
+        self.max_total = max_ordinary + max_lifecycle
+        self.ordinary_count = 0
+        self.lifecycle_count = 0
+        self.total_count = 0
+        self.lines = []
+
+    def event(self, label, fields=""):
+        is_lifecycle = any(label.startswith(p) for p in ("older-", "trace-", "loadchat-", "ac-", "anchor-"))
+        if is_lifecycle:
+            if self.lifecycle_count >= self.max_lifecycle or self.total_count >= self.max_total:
+                if self.lifecycle_count == self.max_lifecycle:
+                    self.lifecycle_count += 1
+                    self.lines.append(f"trace-lifecycle-truncated count={self.max_lifecycle}")
+                return
+            self.lifecycle_count += 1
+            self.total_count += 1
+        else:
+            if self.ordinary_count >= self.max_ordinary or self.total_count >= self.max_total:
+                if self.ordinary_count == self.max_ordinary:
+                    self.ordinary_count += 1
+                    self.lines.append(f"trace-ordinary-truncated count={self.max_ordinary}")
+                return
+            self.ordinary_count += 1
+            self.total_count += 1
+        self.lines.append(label)
+
+
+def test_ui_trace_ordinary_flood_preserves_lifecycle_events():
+    logger = _SimulatedUiTraceLogger(max_ordinary=80000, max_lifecycle=20000)
+    for _ in range(120000):
+        logger.event("view", "off=10.0")
+    assert logger.ordinary_count == 80001, f"ordinary events must be capped at 80,000 (+1 for marker), got {logger.ordinary_count}"
+    assert "trace-ordinary-truncated count=80000" in logger.lines
+    logger.event("older-trigger", "target=0.0")
+    logger.event("older-compensate", "y1=100.0")
+    assert "older-trigger" in logger.lines, "late lifecycle event must be observable after ordinary flood"
+    assert "older-compensate" in logger.lines, "late lifecycle event must be observable after ordinary flood"
+
+
+def test_ui_trace_lifecycle_flood_is_strictly_bounded():
+    logger = _SimulatedUiTraceLogger(max_ordinary=80000, max_lifecycle=20000)
+    for i in range(50000):
+        logger.event(f"older-trigger-{i}")
+    assert logger.lifecycle_count == 20001, f"lifecycle events must be capped at 20,000 (+1 for marker), got {logger.lifecycle_count}"
+    assert "trace-lifecycle-truncated count=20000" in logger.lines
+    assert len(logger.lines) <= 20001
+    assert logger.total_count <= 20000
+
+
+def test_ui_trace_mutant_bypass_fails_boundedness():
+    class _MutantLogger:
+        def __init__(self):
+            self.lines = []
+            self.count = 0
+        def event(self, label):
+            is_lifecycle = any(label.startswith(p) for p in ("older-", "trace-", "loadchat-", "ac-", "anchor-"))
+            if not is_lifecycle and self.count > 100000:
+                return
+            self.count += 1
+            self.lines.append(label)
+
+    mutant = _MutantLogger()
+    for i in range(150000):
+        mutant.event(f"older-trigger-{i}")
+    assert len(mutant.lines) > 100002, "mutant exceeds total bound"
+    bounded = len(mutant.lines) <= 100002
+    assert bounded is False, "mutant bypass must fail boundedness assertion"
+
+
+def test_mutation_older_abort_reader_bypass_fails_reader_intent():
+    """Mutation: bypassing readerScrollPolicy_.IsSuperseded allows stale compensation to overwrite reader intent."""
+    class _MockScroller:
+        def __init__(self):
+            self.offset = 0.46
+            self.reader_gen = 1
+            self.events = []
+        def user_gesture(self, new_offset):
+            self.reader_gen += 1
+            self.offset = new_offset
+        def adopt_page(self, start_gen, bypass_guard=False):
+            if not bypass_guard:
+                if self.reader_gen > start_gen:
+                    self.events.append("older-abort-reader")
+                    return
+            self.events.append("older-prepend")
+            self.events.append("older-compensate")
+            self.offset = 0.0
+
+    # Correct behavior:
+    correct = _MockScroller()
+    start_gen = correct.reader_gen
+    correct.user_gesture(0.90)
+    correct.adopt_page(start_gen, bypass_guard=False)
+    assert "older-abort-reader" in correct.events
+    assert "older-prepend" not in correct.events
+    assert correct.offset == 0.90, "reader position preserved"
+
+    # Mutant behavior:
+    mutant = _MockScroller()
+    start_gen = mutant.reader_gen
+    mutant.user_gesture(0.90)
+    mutant.adopt_page(start_gen, bypass_guard=True)
+    assert "older-abort-reader" not in mutant.events, "mutant fails to emit older-abort-reader"
+    assert "older-prepend" in mutant.events, "mutant incorrectly prepends stale page"
+    assert mutant.offset == 0.0, "mutant overwrites reader position"
+    oracle_passed = ("older-abort-reader" in mutant.events and mutant.offset == 0.90)
+    assert oracle_passed is False, "mutant must fail the reader-intent assertion"
 
 
 if __name__ == "__main__":

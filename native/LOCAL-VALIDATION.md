@@ -6552,3 +6552,149 @@ directories):
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
+
+
+---
+
+## Native Acceptance Verification: Verified Desktop Scope Lifetime, Bounded Diagnostics & Delayed-Load Reader Intent (2026-11-04)
+
+### 1. Artifact Identities & Test Suite Manifest
+
+- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`  
+  SHA-256: `aa063f25a024e762906c798e76ae3ddcbb0d4f618e9756129a848ac054e05dcf`
+- **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf`  
+  SHA-256: `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`
+- **Storage Tests Executable:** `native/tests/bin/storage_tests.exe`  
+  SHA-256: `03842440c0c44ef82fa94943df90dc57d0ebf52be5aeb950fbbae50b61882f14`
+- **Verify AC/AI Executable:** `native/tests/bin/verify_ac_ai.exe`  
+  SHA-256: `49570f6a62f55f5a08cf95570ad54f2405a78dfd7e9a121d693bedda04267210`
+- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe`  
+  SHA-256: `6b7214822ff533f9c4ff40bdc515ca9c768e558d9f436af482b954e39ccfd7b3`
+- **Production Store Hash:** `%LOCALAPPDATA%\Mayasaba\mayasaba.db`  
+  SHA-256: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified baseline).
+- **Source Revisions:** `native/Mayasaba/MainWindow.xaml.h`, `native/Mayasaba/MainWindow.xaml.cpp`, `native/tests/test_full_ui_acceptance.py`, `native/tests/test_harness_oracles.py`.
+- **Managed Python Environment:** `C:\Users\pavan\.workbuddy-ai\binaries\python\envs\default\Scripts\python.exe`
+
+### 2. Verified Corrections & Discoveries
+
+1. **Desktop Lifetime Management & Setup Safety (Review c08c48c / Finding 1):**
+   - Removed `kernel32` local-variable shadowing in `test_full_ui_acceptance.py` by binding `GetCurrentThreadId`, `GetCurrentProcess`, `CreateEventW`, `SetEvent`, `ResetEvent`, `WaitForSingleObject`, and `CloseHandle` at module level.
+   - Replaced unmanaged desktop switching with `CheckedDesktopScope`:
+     - Covers capture of a restorable original input desktop (`OpenInputDesktop(0, False, 0x01FF)`).
+     - Validates against thread desktop via `GetThreadDesktop` and `_object_name()`.
+     - Switches only when validated desktop names differ (`thread_desktop != orig_desktop`), avoiding redundant switching.
+     - Verifies active input desktop immediately post-switch via `OpenInputDesktop`.
+     - Tracks exact errors (`capture_error`, `switch_error`, `restore_error`).
+     - Ensures verified restoration and handle closure on teardown via `restore_and_close()`, failing the run if restoration fails.
+   - Refactored `main()` lifecycle ordering:
+     - Store lock acquisition strictly precedes desktop acquisition and switching. If store lock fails, the harness exits without modifying interactive desktop state or leaking handles.
+     - A single outer `try ... finally` block encloses setup, process launch, test execution, process termination, store lock release, and desktop restoration. Guarded `proc.poll() is None` prevents `AttributeError` when launch fails.
+   - Added 7 dedicated production-path lifecycle tests in `test_harness_oracles.py`:
+     - `test_checked_desktop_scope_capture_refusal`: handles capture failure gracefully, forbids switching, reports error.
+     - `test_checked_desktop_scope_switch_refusal`: handles API refusal, closes captured handle, reports error.
+     - `test_checked_desktop_scope_store_lock_refusal`: confirms zero desktop API calls when store lock is refused.
+     - `test_checked_desktop_scope_launch_failure`: ensures captured desktop handle is restored and closed if process launch throws.
+     - `test_checked_desktop_scope_mid_run_exception`: verifies restoration and handle cleanup during unhandled mid-run exceptions.
+     - `test_checked_desktop_scope_normal_completion`: verifies full normal cycle with clean restoration.
+     - `test_checked_desktop_scope_restoration_refusal`: confirms failure to restore prevents clean zero exit code.
+
+2. **Bounded Diagnostics with Lifecycle Protection (Review c08c48c / Finding 2):**
+   - Eliminated indefinite bypass in `MainWindow::UiTraceEvent`.
+   - Introduced explicit two-tier finite line budget in `MainWindow.xaml.h` and `MainWindow.xaml.cpp`:
+     - `kMaxOrdinaryTraceLines = 80000`
+     - `kMaxLifecycleTraceLines = 20000`
+     - `kMaxTotalTraceLines = 100000`
+     - Dedicated atomic-backed counters: `uiTraceOrdinaryLines_`, `uiTraceLifecycleLines_`, and `uiTraceTotalLines_`.
+   - Enforced truncation markers:
+     - When ordinary events reach 80,000, `trace-ordinary-truncated count=80000` is emitted once, dropping subsequent ordinary events while preserving lifecycle capacity.
+     - When lifecycle events (`older-*`, `trace-*`, `loadchat-*`, `ac-*`, `anchor-*`) reach 20,000, `trace-lifecycle-truncated count=20000` is emitted once.
+     - Absolute total cap of 100,000 strictly halts all further emissions, guaranteeing the log cannot grow indefinitely.
+   - Verified via 3 new oracle discrimination tests in `test_harness_oracles.py`:
+     - `test_ui_trace_ordinary_flood_preserves_lifecycle_events`: floods 120,000 ordinary view events, confirms truncation marker at 80,000, and verifies late `older-trigger` and `older-compensate` lifecycle events remain captured and visible.
+     - `test_ui_trace_lifecycle_flood_is_strictly_bounded`: floods 50,000 lifecycle events, confirms strict truncation at 20,000.
+     - `test_ui_trace_mutant_bypass_fails_boundedness`: mutant restoring previous lifecycle bypass fails boundedness assertion.
+
+3. **Delayed-Load Reader Intent & Stale Compensation Suppression (Review c08c48c / Finding 3):**
+   - Retained stationary reading-anchor verification (Subcase A).
+   - Added background query hold hook in `MainWindow::LoadOlderHistoryAsync` controlled via `MAYASABA_TEST_HOLD_OLDER_PAGE` named Win32 events (`HoldRequested`, `InFlight`, `Release`, `Released`).
+   - Implemented Subcase B in `test_full_ui_acceptance.py`:
+     - Pre-arms `HoldRequested`.
+     - Delivers 277 upward scroll batches to bring scroller to the top and trigger `older-trigger`.
+     - Waits for background thread to signal `InFlight` (background SQLite page query completed, prior to UI thread adoption).
+     - Delivers verified 8-notch downward wheel gesture during hold, advancing `readerScrollPolicy_.RecordUserInteraction` and incrementing `readerGeneration_`.
+     - Records intended scroll position: `(0.3715, 0.9042)`.
+     - Signals `Release` to allow `LoadOlderHistoryAsync` to resume on the UI thread.
+     - Resumed UI method evaluates `readerScrollPolicy_.IsSuperseded(readerGenAtStart) == true`.
+     - Emits `older-abort-reader` and suppresses stale compensation: `older-prepend` count stays at 1 (no new prepend adopted).
+     - Confirms settled scroll position matches intended downward reading position (`0.9042`), proving stale compensation did not overwrite the reader's intent.
+   - Tested mutation discrimination in `test_harness_oracles.py`:
+     - `test_mutation_older_abort_reader_bypass_fails_reader_intent`: mutant bypassing the `IsSuperseded` check fails to emit `older-abort-reader`, applies stale compensation, and fails the reader-intent assertion.
+
+4. **Geometry Unit Separation & Performance Provenance (Review c08c48c / Finding 4):**
+   - Separated physical Win32 pixel dimensions from logical client DIPs for C17:
+     - Outer window: `818 x 647 px` (physical, including OS borders/titlebar)
+     - Measured client area: `800 x 600 px` (physical)
+     - Display scale: `120 DPI` (`125%` per-monitor scaling)
+     - Logical client size: `640.0 x 480.0 DIPs`
+     - Search overlay height: `390 px / 312.0 DIPs`
+     - Viewport height: `199 px / 159.2 DIPs`
+     - Paging action remains bounded and reachable within logical viewport without clipping.
+   - Fresh performance figures extracted directly from matching final run (`perf.json`):
+     - Total render callbacks: 160,280 | Avg interval: 7.05 ms | Max interval: 293.93 ms | Dropped >33ms: 58 | Stalls >100ms: 22
+     - Typing samples: 29 | Typing p50: 9.49 ms | Typing p95: 38.94 ms | Max: 49.16 ms
+     - Scroll samples: 5,000 | Scroll p50: 6.96 ms | Scroll p95: 7.64 ms
+     - UI thread sampler: 11,804 samples, 11,804 answered; p50 = 0.11 ms, p95 = 1.50 ms, p99 = 7.30 ms, max = 45.27 ms; >250ms = 0; >1000ms = 0.
+   - Honest representation of C11/C12:
+     - Retained as `INCONCLUSIVE` due to the lack of an active File Explorer COM OLE drag source (data transfer object `IDataObject`) within automated synthetic desktop tests, rather than claiming desktop non-interactivity.
+     - Physical acceptance criteria P01–P06 remain open.
+
+### 3. Preserved Raw Native Acceptance Table (23 Criteria)
+
+- Executed against fresh `Mayasaba.exe` (SHA-256 `aa063f25a024e762906c798e76ae3ddcbb0d4f618e9756129a848ac054e05dcf`) and `MainWindow.xbf` (SHA-256 `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`):
+
+| #   | Criterion                                                      | Result           | Measured Context / Reason                                                                                                                                                                                                                                        |
+| --- | -------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | Recent Projects & Startup Filtering                            | **PASS**         | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only'                                                                                                                    |
+| C02 | Message Search Pagination & Continuation                       | **PASS**         | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen                                                                                                                                                   |
+| C03 | Older Message Navigation & Selection                           | **PASS**         | Seeded message selection, scroll observation, timeline integrity                                                                                                                                                                                                 |
+| C04 | Search Mode Project Switch Safety                              | **PASS**         | Switching project during active search preserves target project isolation and cleanly resets search overlay                                                                                                                                                      |
+| C05 | Narrow 520px Responsive Layout                                 | **PASS**         | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable                                                                                                                                                                                    |
+| C06 | Rapid Hover Sweeps & Animation Stability                       | **PASS**         | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles                                                                                                                                                                          |
+| C07 | Display DPI Scaling Simulation                                 | **PASS**         | Per-monitor DPI awareness verified (API-level check + scaling reflow)                                                                                                                                                                                            |
+| C08 | Action Center Pagination & Resumption                          | **PASS**         | Obligations list pagination, continuation tokens, item count updates                                                                                                                                                                                             |
+| C09 | Action Center Stale Invalidation & Refresh                     | **PASS**         | Obligation dismissal, project switch -> cancel refresh reactivation under production contract                                                                                                                                                                    |
+| C10 | Action Center Panel Dismissal Stability                        | **PASS**         | Sequence 0 (in-flight timeout, fresh result application, pending-rerun ownership), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership                                 |
+| C11 | Native OLE Desktop Drag-and-Drop Execution                     | **INCONCLUSIVE** | Automated test constraint: absence of an active File Explorer COM drag source (`IDataObject`) during headless desktop execution                                                                                                                                  |
+| C12 | Mixed-Batch Folder Rejection on Drop                           | **INCONCLUSIVE** | Automated test constraint: absence of an active File Explorer COM drag source (`IDataObject`) during headless desktop execution                                                                                                                                  |
+| C13 | Seeded Attachment Chip Realization & Diagnostics               | **PASS**         | Attachment chips realized, metadata inspectable, diagnostic details displayed                                                                                                                                                                                    |
+| C14 | Strict Non-English Prose Preview Withholding                   | **PASS**         | Non-English preview withheld with English reason label; metadata and digest preserved                                                                                                                                                                            |
+| C15 | WinUI 3 CompositionTarget Performance Profiling                | **PASS**         | 160,280 frames, avg interval 7.05 ms; typing p50 = 9.49 ms, p95 = 38.94 ms; UI thread sampler: 11,804 samples, p50 = 0.11 ms, p95 = 1.50 ms                                                                                                                    |
+| C16 | Search Overlay Flat Resting Orientation                        | **PASS**         | Overlay resting orientation verified flat (0 deg rotation)                                                                                                                                                                                                       |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **PASS**         | Verified foreground on sandbox desktop; outer 818x647 px / client 640x480 DIPs at 120 DPI; overlay 312.0 DIPs, viewport 159.2 DIPs, paging reachable; wheel delivered; vertical scroll advanced from 0.000% to 10.345%                                        |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat  | **PASS**         | Repeated reveal/dismiss cycles preserve flat geometry and reading position                                                                                                                                                                                       |
+| C19 | Empty-Chat Hero Perspective Preserved                          | **PASS**         | 3D perspective projection preserved on empty-chat hero container                                                                                                                                                                                                 |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat                  | **PASS**         | System reduced-motion preference toggle disables transition animations, overlay remains flat                                                                                                                                                                     |
+| C21 | CLI Readiness Projection & Non-Gating                          | **PASS**         | CLI status indicators accurately project probe results; Send/Chat remain non-gated                                                                                                                                                                               |
+| C22 | Bounded History Paging Save & Newest Rendering                 | **PASS**         | Message paging, chronological timeline rendering, docked composer transition                                                                                                                                                                                     |
+| C23 | Reading Anchor Preserved Across Older Prepend                  | **PASS**         | Subcase A: anchor row preserved across stationary prepend; Subcase B: reader gesture during held older-page load aborts stale adoption ('older-abort-reader'), suppresses stale compensation, and settles at intended reading position (0.9042 vs stale 0.0000) |
+
+**Acceptance Totals:** 23 criteria | 21 PASS | 2 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
+
+### 4. Full Verification Summary
+
+| Test Target                               | Command                                                                                                                | Result                              |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Layout budget & scroll policy             | `native/tests/bin/layout_budget_tests.exe`                                                                             | **8/8 PASS**                        |
+| Verify AC/AI presentation & ownership     | `native/tests/bin/verify_ac_ai.exe`                                                                                    | **15/15 PASS**                      |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py`                                                                          | **64/64 PASS**                      |
+| Contract registry & Screen 2 schemas      | `python native/tests/validate_contract_registry.py` (managed venv)                                                     | **124/124 PASS**                    |
+| Storage regressions                       | `native/tests/bin/storage_tests.exe`                                                                                   | **115/115 PASS**                    |
+| Application build (`Mayasaba.exe`)        | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors**            |
+| Native UI acceptance runner               | `python native/tests/test_full_ui_acceptance.py`                                                                       | **21 PASS, 2 INCONCLUSIVE, 0 FAIL** |
+
+### 5. Remaining Scope & Open Obligations
+
+- **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
+- **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
+- **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
+- **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.

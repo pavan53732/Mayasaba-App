@@ -163,6 +163,34 @@ if hasattr(user32, "CloseDesktop"):
     user32.CloseDesktop.argtypes = [wintypes.HANDLE]
     user32.CloseDesktop.restype = wintypes.BOOL
 
+if hasattr(kernel32, "GetCurrentThreadId"):
+    kernel32.GetCurrentThreadId.argtypes = []
+    kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+if hasattr(kernel32, "GetCurrentProcess"):
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+
+if hasattr(kernel32, "CreateEventW"):
+    kernel32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
+    kernel32.CreateEventW.restype = wintypes.HANDLE
+
+if hasattr(kernel32, "SetEvent"):
+    kernel32.SetEvent.argtypes = [wintypes.HANDLE]
+    kernel32.SetEvent.restype = wintypes.BOOL
+
+if hasattr(kernel32, "ResetEvent"):
+    kernel32.ResetEvent.argtypes = [wintypes.HANDLE]
+    kernel32.ResetEvent.restype = wintypes.BOOL
+
+if hasattr(kernel32, "WaitForSingleObject"):
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+
+if hasattr(kernel32, "CloseHandle"):
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
 def establish_dpi_awareness():
     """Establish and explicitly verify effective DPI awareness using supported Win32 APIs.
 
@@ -914,6 +942,127 @@ def desktop_context():
     }
 
 
+class CheckedDesktopScope:
+    """Checked interactive Windows desktop scope.
+
+    Covers capture of a restorable original input desktop, validation against the
+    calling thread desktop, checked switching only when validated desktops differ,
+    error tracking, handle closure, and verified restoration on every exit path.
+    """
+    def __init__(self):
+        self.orig_desktop_handle = None
+        self.orig_desktop_name = None
+        self.thread_desktop_handle = None
+        self.thread_desktop_name = None
+        self.switched = False
+        self.restored = False
+        self.capture_error = None
+        self.switch_error = None
+        self.restore_error = None
+        self.closed = False
+
+    def acquire_and_switch(self):
+        """Captures a restorable original desktop and switches to thread desktop if different."""
+        if not hasattr(user32, "OpenInputDesktop"):
+            self.capture_error = "OpenInputDesktop not available"
+            return False
+        try:
+            h_orig = user32.OpenInputDesktop(0, False, 0x01FF)
+            if not h_orig:
+                err = ctypes.get_last_error()
+                self.capture_error = f"OpenInputDesktop returned NULL (error {err})"
+                return False
+            self.orig_desktop_handle = h_orig
+            self.orig_desktop_name = _object_name(h_orig)
+        except Exception as exc:
+            self.capture_error = f"OpenInputDesktop exception: {type(exc).__name__}: {exc}"
+            return False
+
+        if not hasattr(user32, "GetThreadDesktop"):
+            self.capture_error = "GetThreadDesktop not available"
+            return False
+        try:
+            th_id = kernel32.GetCurrentThreadId()
+            h_th = user32.GetThreadDesktop(th_id)
+            if not h_th:
+                err = ctypes.get_last_error()
+                self.capture_error = f"GetThreadDesktop returned NULL (error {err})"
+                return False
+            self.thread_desktop_handle = h_th
+            self.thread_desktop_name = _object_name(h_th)
+        except Exception as exc:
+            self.capture_error = f"GetThreadDesktop exception: {type(exc).__name__}: {exc}"
+            return False
+
+        # Switch only when validated desktops differ
+        if not self.orig_desktop_name or not self.thread_desktop_name:
+            if self.orig_desktop_handle == self.thread_desktop_handle:
+                return True
+        elif self.orig_desktop_name == self.thread_desktop_name:
+            return True
+
+        if not hasattr(user32, "SwitchDesktop"):
+            self.switch_error = "SwitchDesktop not available"
+            return False
+        try:
+            ok = user32.SwitchDesktop(self.thread_desktop_handle)
+            if not ok:
+                err = ctypes.get_last_error()
+                self.switch_error = f"SwitchDesktop returned FALSE (error {err})"
+                return False
+            self.switched = True
+            # Verify active desktop after switch
+            h_v = user32.OpenInputDesktop(0, False, 0x01FF)
+            if h_v:
+                v_name = _object_name(h_v)
+                user32.CloseDesktop(h_v)
+                if self.thread_desktop_name and v_name != self.thread_desktop_name:
+                    self.switch_error = f"Post-switch verification mismatch: expected '{self.thread_desktop_name}', got '{v_name}'"
+                    return False
+            return True
+        except Exception as exc:
+            self.switch_error = f"SwitchDesktop exception: {type(exc).__name__}: {exc}"
+            return False
+
+    def restore_and_close(self):
+        """Restores original desktop if switched, and closes owned desktop handles."""
+        if self.closed:
+            return not bool(self.restore_error)
+        self.closed = True
+        restore_ok = True
+        if self.switched and self.orig_desktop_handle:
+            try:
+                ok = user32.SwitchDesktop(self.orig_desktop_handle)
+                if not ok:
+                    err = ctypes.get_last_error()
+                    self.restore_error = f"SwitchDesktop(restore) returned FALSE (error {err})"
+                    restore_ok = False
+                else:
+                    h_v = user32.OpenInputDesktop(0, False, 0x01FF)
+                    if h_v:
+                        v_name = _object_name(h_v)
+                        user32.CloseDesktop(h_v)
+                        if self.orig_desktop_name and v_name != self.orig_desktop_name:
+                            self.restore_error = f"Post-restore verification mismatch: expected '{self.orig_desktop_name}', got '{v_name}'"
+                            restore_ok = False
+                        else:
+                            self.restored = True
+                    else:
+                        self.restored = True
+            except Exception as exc:
+                self.restore_error = f"SwitchDesktop(restore) exception: {type(exc).__name__}: {exc}"
+                restore_ok = False
+
+        if self.orig_desktop_handle:
+            try:
+                user32.CloseDesktop(self.orig_desktop_handle)
+            except Exception:
+                pass
+            self.orig_desktop_handle = None
+
+        return restore_ok
+
+
 def establish_foreground(win, attempts=3, settle=0.7):
     """Make the application window the OS foreground window, and verify it.
 
@@ -924,12 +1073,11 @@ def establish_foreground(win, attempts=3, settle=0.7):
     never delivered.
 
     The documented way to take the foreground from a background process is to
-    switch the input desktop to the thread's desktop (if running on a dedicated
-    sandbox desktop), attach this thread's input queue to the current foreground
-    and target thread's input queues, which lifts the restriction, and then to
-    VERIFY the result by reading GetForegroundWindow() back. A foreground that
-    was never verified is not a foreground, so the return value is the verified
-    reading and not the return code of the API call.
+    ensure the thread's desktop is active, attach this thread's input queue to
+    the current foreground and target thread's input queues, which lifts the
+    restriction, and then to VERIFY the result by reading GetForegroundWindow()
+    back. A foreground that was never verified is not a foreground, so the return
+    value is the verified reading and not the return code of the API call.
 
     Returns (established, detail). `detail` names the method used and every
     reading taken, so a failure states which attempt failed and what the
@@ -937,16 +1085,26 @@ def establish_foreground(win, attempts=3, settle=0.7):
     """
     handle = int(win.handle)
     observations = []
+    current_thread = 0
     try:
-        current_thread = kernel32.GetCurrentThreadId()
-        if hasattr(user32, "GetThreadDesktop") and hasattr(user32, "SwitchDesktop"):
+        if hasattr(kernel32, "GetCurrentThreadId"):
+            current_thread = kernel32.GetCurrentThreadId()
+        if hasattr(user32, "GetThreadDesktop") and hasattr(user32, "SwitchDesktop") and current_thread:
             thread_desktop = user32.GetThreadDesktop(current_thread)
-            switched = user32.SwitchDesktop(thread_desktop)
-        if not switched:
-            observations.append(f"SwitchDesktop returned {switched} err={ctypes.get_last_error()}")
+            th_name = _object_name(thread_desktop)
+            in_desk = user32.OpenInputDesktop(0, False, 0x01FF) if hasattr(user32, "OpenInputDesktop") else None
+            in_name = _object_name(in_desk) if in_desk else None
+            if in_desk:
+                try:
+                    user32.CloseDesktop(in_desk)
+                except Exception:
+                    pass
+            if th_name and in_name and th_name != in_name:
+                switched = user32.SwitchDesktop(thread_desktop)
+                if not switched:
+                    observations.append(f"SwitchDesktop returned {switched} err={ctypes.get_last_error()}")
     except Exception as exc:
-        current_thread = 0
-        observations.append(f"GetCurrentThreadId/SwitchDesktop failed: {type(exc).__name__}: {exc}")
+        observations.append(f"Desktop verification/switch failed: {type(exc).__name__}: {exc}")
     for attempt in range(1, attempts + 1):
         try:
             foreground = user32.GetForegroundWindow()
@@ -1992,26 +2150,6 @@ def main():
     log(f"Store:      {STORE_PATH}")
     log(f"Perf log:   {PERF_LOG_PATH}")
     record_artifact_identity()
-    orig_input_desk = None
-    try:
-        orig_input_desk = user32.OpenInputDesktop(0, False, 0x01FF)
-        cur_th_desk = user32.GetThreadDesktop(kernel32.GetCurrentThreadId())
-        user32.SwitchDesktop(cur_th_desk)
-    except Exception:
-        pass
-    # The session's desktop context is recorded once, at the start, so that every
-    # later foreground reading in this run can be interpreted against the desktop
-    # it was taken on. A foreground of 0 means "no foreground window" only on the
-    # input desktop; on any other desktop the same call cannot see one at all.
-    try:
-        _context = desktop_context()
-        log(f"Desktop context at start: thread_desktop={_context['thread_desktop']} "
-            f"input_desktop={_context['input_desktop']} "
-            f"on_input_desktop={_context['on_input_desktop']} "
-            f"foreground_hwnd={_context['foreground_hwnd']} "
-            f"errors={_context['errors']}")
-    except Exception as exc:
-        log(f"Desktop context at start could not be read: {type(exc).__name__}: {exc}")
 
     # -------------------------------------------------------------------------
     # Acceptance criteria.
@@ -2180,10 +2318,23 @@ def main():
         return emit_report()
     log(f"Store lock held: {os.path.abspath(STORE_PATH)}.harness.lock")
 
-    # Everything from here to the launch is inside its own try, because the
-    # lock is held from this point on: if any of it fails, the lock has to be
-    # released or every later run refuses to start on a store nobody is using.
+    desktop_scope = CheckedDesktopScope()
+    proc = None
+    report_done = False
+    exit_code = 0
     try:
+        desktop_ok = desktop_scope.acquire_and_switch()
+        if not desktop_ok:
+            log(f"Notice during desktop scope initialization: capture_error={desktop_scope.capture_error} switch_error={desktop_scope.switch_error}")
+        try:
+            _context = desktop_context()
+            log(f"Desktop context at start: thread_desktop={_context['thread_desktop']} "
+                f"input_desktop={_context['input_desktop']} "
+                f"on_input_desktop={_context['on_input_desktop']} "
+                f"foreground_hwnd={_context['foreground_hwnd']} "
+                f"errors={_context['errors']}")
+        except Exception as exc:
+            log(f"Desktop context at start could not be read: {type(exc).__name__}: {exc}")
         # Ensure store schema is in clean state before launch
         try:
             conn = sqlite3.connect(STORE_PATH)
@@ -2216,19 +2367,13 @@ def main():
         env["MAYASABA_UI_TRACE"] = os.path.join(os.path.dirname(STORE_PATH), "ui-trace.log")
         ac_hold_token = f"run_{os.getpid()}_{int(time.time())}"
         env["MAYASABA_TEST_HOLD_AC_QUERY"] = ac_hold_token
-        env["MAYASABA_TEST_AC_WAIT_MS"] = "4500" 
+        env["MAYASABA_TEST_AC_WAIT_MS"] = "4500"
+        older_hold_token = f"older_{os.getpid()}_{int(time.time())}"
+        env["MAYASABA_TEST_HOLD_OLDER_PAGE"] = older_hold_token
 
         proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env)
         log(f"Launched Mayasaba.exe (PID {proc.pid})")
-    except BaseException:
-        try:
-            store_lock.close()
-            log("Store lock released after a pre-launch failure.")
-        except Exception:
-            pass
-        raise
 
-    try:
         # Bounded wait rather than a fixed sleep: the window appears after roughly
         # 10-25 s on a cold binary, and a short fixed wait reports a false "no window".
         d = Desktop(backend="uia")
@@ -3077,9 +3222,9 @@ def main():
         load_rect = load_more.rectangle() if load_more else None
 
         if panel_rect is not None:
-            log(f"Overlay: T{panel_rect.top}, B{panel_rect.bottom}, H{panel_rect.height()}")
+            log(f"Overlay: T{panel_rect.top}, B{panel_rect.bottom}, H{panel_rect.height()} px ({panel_rect.height() / scale_short:.1f} DIPs)")
         if list_rect is not None:
-            log(f"Results list: T{list_rect.top}, B{list_rect.bottom}, H{list_rect.height()}")
+            log(f"Results list: T{list_rect.top}, B{list_rect.bottom}, H{list_rect.height()} px ({list_rect.height() / scale_short:.1f} DIPs)")
         if composer_rect is not None:
             log(f"Composer top: {composer_rect.top}")
         if load_rect is not None:
@@ -4783,7 +4928,7 @@ def main():
                             elif (hold_tv_val == _exp_id
                                     and hold_counts.get("older-trigger", 0) == trigger_count
                                     and 22 not in hold_indices):
-                                log("PASS: the reading anchor is preserved across the "
+                                log("PASS: Subcase A: the reading anchor is preserved across the "
                                     "older-page prepend (the published physical top edge "
                                     f"read the anchored row {_exp_id!r} before and after "
                                     f"the hold, the prepended row 22 was never realized, "
@@ -4791,6 +4936,101 @@ def main():
                                     f"({comp_now.get('older-page', 0)} older-page events), "
                                     "and no second prepend chain started).")
                                 criterion_reading_anchor = "PASS"
+
+                                # -------------------------------------------------------------
+                                # Subcase B: Reader intent preservation during held older-page load
+                                # -------------------------------------------------------------
+                                log("\n  --- Subcase B: Reader intent preservation during held older-page load ---")
+                                def older_event_name(base):
+                                    if not older_hold_token or older_hold_token == "1":
+                                        return f"Local\\Mayasaba_OlderPage_{base}"
+                                    return f"Local\\Mayasaba_OlderPage_{older_hold_token}_{base}"
+
+                                h_older_hold = kernel32.CreateEventW(None, True, True, older_event_name("HoldRequested"))
+                                h_older_inflight = kernel32.CreateEventW(None, True, False, older_event_name("InFlight"))
+                                h_older_release = kernel32.CreateEventW(None, True, False, older_event_name("Release"))
+                                h_older_released = kernel32.CreateEventW(None, True, False, older_event_name("Released"))
+
+                                try:
+                                    sub_b_trigger_count = ui_trace_label_counts().get("older-trigger", 0)
+                                    sub_b_abort_count = ui_trace_label_counts().get("older-abort-reader", 0)
+                                    sub_b_prepend_count = ui_trace_label_counts().get("older-prepend", 0)
+
+                                    log(f"  subcase B setup: armed HoldRequested, trigger={sub_b_trigger_count}, abort={sub_b_abort_count}")
+                                    b_batches = 0
+                                    while ui_trace_label_counts().get("older-trigger", 0) == sub_b_trigger_count and b_batches < 500:
+                                        target = paging_wheel_target()
+                                        if target is None:
+                                            break
+                                        send_wheel_at_point(win, target[0], target[1], 120, steps=3, pause=0.25)
+                                        b_batches += 1
+                                        time.sleep(0.35)
+
+                                    log(f"  subcase B stimulus: delivered {b_batches} batches upward, awaiting InFlight...")
+                                    wait_res = kernel32.WaitForSingleObject(h_older_inflight, 10000)
+                                    if wait_res != 0:
+                                        log(f"  subcase B: InFlight was not signaled within 10s (wait result: {wait_res})")
+                                        criterion_reading_anchor = "FAIL"
+                                    else:
+                                        log("  subcase B: InFlight signaled! Older-page query is held before UI adoption.")
+                                        state_before_gesture = paging_scroll_state()
+                                        log(f"  subcase B: scroll state before gesture: {state_before_gesture}")
+
+                                        # Deliver verified reader input while the load is held:
+                                        # 8 wheel notches down to move reader away from top
+                                        target = paging_wheel_target()
+                                        if target:
+                                            send_wheel_at_point(win, target[0], target[1], -120, steps=8, pause=0.08)
+                                        time.sleep(0.5)
+
+                                        state_after_gesture = paging_scroll_state()
+                                        log(f"  subcase B: verified reader gesture delivered. New intended scroll state: {state_after_gesture}")
+
+                                        # Release the held load
+                                        kernel32.SetEvent(h_older_release)
+                                        rel_res = kernel32.WaitForSingleObject(h_older_released, 5000)
+                                        log(f"  subcase B: load released, Released event wait result: {rel_res}")
+
+                                        # Await UI thread post-condition:
+                                        # readerScrollPolicy_.IsSuperseded(readerGenAtStart) == true
+                                        # emits 'older-abort-reader' and co_returns without prepending or compensating
+                                        abort_deadline = time.time() + 8.0
+                                        sub_b_aborted = False
+                                        while time.time() < abort_deadline:
+                                            counts_now = ui_trace_label_counts()
+                                            if counts_now.get("older-abort-reader", 0) > sub_b_abort_count:
+                                                sub_b_aborted = True
+                                                break
+                                            time.sleep(0.2)
+
+                                        counts_final = ui_trace_label_counts()
+                                        prepends_now = counts_final.get("older-prepend", 0)
+                                        aborts_now = counts_final.get("older-abort-reader", 0)
+                                        log(f"  subcase B post-condition: older-abort-reader={aborts_now} (was {sub_b_abort_count}), older-prepend={prepends_now} (was {sub_b_prepend_count})")
+
+                                        if not sub_b_aborted:
+                                            criterion_reading_anchor = "FAIL"
+                                            log("  FAIL: Subcase B: older-abort-reader was not emitted after reader interaction during held load!")
+                                        elif prepends_now > sub_b_prepend_count:
+                                            criterion_reading_anchor = "FAIL"
+                                            log("  FAIL: Subcase B: older-prepend occurred despite reader interaction during held load!")
+                                        else:
+                                            time.sleep(1.2)
+                                            state_final = paging_scroll_state()
+                                            log(f"  subcase B: settled scroll state: {state_final} (intended: {state_after_gesture})")
+                                            if state_final and state_after_gesture and abs(state_final[1] - state_after_gesture[1]) > 5.0 and state_final[1] < 1.0:
+                                                criterion_reading_anchor = "FAIL"
+                                                log(f"  FAIL: Subcase B: stale compensation overwrote reader position (settled at {state_final[1]}% vs intended {state_after_gesture[1]}%)")
+                                            else:
+                                                log("PASS: Subcase B: reader intent preserved: reader gesture during held older-page load aborted stale adoption ('older-abort-reader') and preserved the reader's intended position.")
+                                                criterion_reading_anchor = "PASS"
+                                finally:
+                                    for h in (h_older_hold, h_older_inflight, h_older_release, h_older_released):
+                                        if h:
+                                            try:
+                                                kernel32.CloseHandle(h)
+                                            except Exception:
+                                                pass
                             else:
                                 criterion_reading_anchor = "FAIL"
                                 log(f"  FAIL: anchor did not hold (top-visible "
@@ -5110,18 +5350,7 @@ def main():
             # Reject its result without reopening or repopulating.
             # -------------------------------------------------------------
             log("\nTesting Sequence 1: In-flight refresh completing after dismissal...")
-            # Set up named Win32 events for deterministic hold
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel32.CreateEventW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR]
-            kernel32.CreateEventW.restype = wintypes.HANDLE
-            kernel32.SetEvent.argtypes = [wintypes.HANDLE]
-            kernel32.SetEvent.restype = wintypes.BOOL
-            kernel32.ResetEvent.argtypes = [wintypes.HANDLE]
-            kernel32.ResetEvent.restype = wintypes.BOOL
-            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-            kernel32.WaitForSingleObject.restype = wintypes.DWORD
-            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-            kernel32.CloseHandle.restype = wintypes.BOOL
+            # Set up named Win32 events for deterministic hold using module-level bindings
 
             # Create the hold trigger, in-flight notification, release, rejection acknowledgement, and trigger events
             def ac_event_name(base):
@@ -6690,7 +6919,7 @@ def main():
         except Exception:
             pass
 
-        if proc.poll() is None:
+        if proc is not None and proc.poll() is None:
             log("Terminating Mayasaba.exe test process...")
             proc.terminate()
             try:
@@ -6709,19 +6938,22 @@ def main():
             except Exception as exc:
                 log(f"Notice while releasing the store lock: {exc}")
 
-        if orig_input_desk:
-            try:
-                user32.SwitchDesktop(orig_input_desk)
-                user32.CloseDesktop(orig_input_desk)
-            except Exception:
-                pass
+        restore_ok = desktop_scope.restore_and_close()
+        if not restore_ok:
+            log(f"FATAL: Desktop restoration failed: {desktop_scope.restore_error}")
+            exit_code = 1
 
         # A phase that returned early never reached the normal report call, and a
         # run whose only output was a FAIL line left no table saying which criteria
         # were actually exercised. The table is therefore emitted here too. It does
         # not change the exit code: an early return already decided that.
         if not report_done:
-            emit_report()
+            report_done = True
+            rep_res = emit_report()
+            if exit_code == 0:
+                exit_code = rep_res
+
+    return exit_code
 
 if __name__ == "__main__":
     sys.exit(main())
