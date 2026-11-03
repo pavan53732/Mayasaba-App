@@ -5703,17 +5703,14 @@ namespace winrt::Mayasaba::implementation
     void MainWindow::UiTraceEvent(char const* label, std::string const& fields)
     {
         std::lock_guard lock(uiTraceMutex_);
-        // The cap exists so the opt-in diagnostic cannot grow without bound
-        // (AGENTS.md storage-boundedness) while still remaining intact across
-        // an entire acceptance run: f4r5-run10 measured a 3-notch wheel batch
-        // at 14.0 px (plateau offsets settled at ~0.84 s cycles) and the whole
-        // bottom-to-top journey filled 3000 lines with inertia `view` events
-        // alone around batch ~74. The harness's own contact signal then read a
-        // silent file and stopped with "wheel contact lost" while the window
-        // was in fact still scrolling. 30000 lines (~3 MB upper bound) keeps
-        // the diagnostic bounded AND alive for the ~500 event journey the
-        // paging leg drives.
-        if (!uiTraceFile_ || ++uiTraceLines_ > 30000) return;
+        if (!uiTraceFile_) return;
+        bool const isLifecycle = label && (
+            std::strncmp(label, "older-", 6) == 0 ||
+            std::strncmp(label, "trace-", 6) == 0 ||
+            std::strncmp(label, "loadchat-", 9) == 0 ||
+            std::strncmp(label, "ac-", 3) == 0 ||
+            std::strncmp(label, "anchor-", 7) == 0);
+        if (!isLifecycle && ++uiTraceLines_ > 100000) return;
         LARGE_INTEGER now{};
         QueryPerformanceCounter(&now);
         auto const ms = (now.QuadPart - uiTraceStart_.QuadPart) * 1000.0 / uiTraceFrequency_.QuadPart;

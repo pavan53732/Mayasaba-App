@@ -10,7 +10,6 @@
 **Current binary.** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-26 (0 warnings, 0 errors).
 **Test binary.** `native/tests/storage_tests.exe`, built 2026-10-26 with MSVC `14.44.35207` x64 (0 warnings, 0 errors).
 
-
 ---
 
 ## What is built and what is not (2026-10-22)
@@ -21,20 +20,20 @@ This section exists because the acceptance harness reports numbers that are easy
 
 One WinUI 3 desktop application, `native/Mayasaba/`, 41 source files, 18,028 lines of C++ and headers, plus `MainWindow.xaml`. It contains:
 
-| Area | What exists | Where |
-| --- | --- | --- |
-| Three screens and their navigation | Welcome, project selection, Chat. First-run introduction, later-launch selector, `File → Switch Project`, Escape/Back/Skip semantics, composer placement rules, empty-vs-docked composer transition. | `MainWindow.xaml`, `MainWindow.xaml.cpp` |
-| Project identity and binding | Canonical root validation, `FILE_ID_INFO` stable identity, reparse/ancestor checks, recent-project filtering and paging, project closure and reopen records, safe-switch refusal when isolation is unproven. | `ProjectRoot.cpp`, `ProjectService.h`, `Storage.cpp` |
-| Storage | The whole SQLite layer: schema and migrations, write admission, quarantine backstop via `sqlite3_set_authorizer`, single-writer mutex, WAL, drafts, contributions, attachments, selection events and receipts. | `Storage.cpp` (the largest file in the slice) |
-| Durable delivery primitives | `mayasaba-jcs-1` canonical bytes with the registered vectors, SHA-256 digests, envelope and receipt validation, the idempotency and gap decisions, and the transactional `CommitCommand` that writes an owner mutation, its causal outbox envelopes and its receipt in one transaction. **No dispatcher and no transport exist**, so nothing is delivered: a queued envelope is a durable intent (§26). | `CanonicalJson.cpp`, `Sha256Hex.cpp`, `DeliveryContract.cpp`, `Storage.cpp` |
-| Chat contributions and drafts | Immutable `UserContribution` persistence with a submission identity, draft preservation across navigation, recovery notices for failed or uncertain saves, and a classified failure path: a missing project record unbinds and continues instead of wedging navigation and the window close, while a store refusal keeps the binding and refuses only that attempt (§25.2–25.4). | `Storage.cpp`, `NavigationRecovery.h`, `MainWindow.xaml.cpp` |
-| Attachment pipeline | Admission limits, active-time accounting, digest verification, protected-draft handling, recovery policy, non-English preview withholding with metadata inspection preserved. | `AttachmentService.cpp`, `AttachmentAdmission.h`, `AttachmentIngestionCoordinator.h`, `AttachmentRecoveryPolicy.h`, `ProtectedDraft.h` |
-| Search | Saved-message search, pagination and continuation tokens, project-switch safety while a search is open, overlay geometry and paging reachability. | `SearchController.h`, `MainWindow.xaml.cpp` |
-| Action Center | A read-only owner-obligation projection with paging, stale-item revalidation and dismissal that survives background refresh. | `ActionCenterPresenter.h` |
-| Presentation | The motion and depth system, theme brushes, light/dark/high-contrast handling, reduced-motion alternatives, DPI and responsive layout, the timeline renderer, and the heroes' declared resting orientation published on a named container so it is readable by a UIA client (§25.5). | `Motion.cpp`, `ThemeBrushes.cpp`, `Timeline.cpp`, `RichText.cpp`, `MainWindow.xaml` |
-| Deterministic core independence | Storage, project identity, the presentation helpers, the Local Execution Kernel and the Agent Gateway's detection path are separable from the window; the unit-test runners exercise them without creating one. | `native/tests/storage_tests.cpp`, `execution_tests.cpp`, `gateway_tests.cpp` |
-| Local Execution Kernel (layer 9) | Controller-owned launch: suspended creation, an explicit inherited-handle list, Job Object assignment **before** resume, bounded redirected capture, cancellation, and reaping of survivors when the launched process exits. Its oracle is §14 prototype 2, 11 criteria, and it prints on every run that this is lifecycle ownership and not containment. **The kernel is used by exactly one product path: the readiness probe.** | `ExecutionKernel.h/.cpp`, `native/tests/execution_tests.cpp` |
-| Agent Gateway detection (layer 4) | Executable discovery, `FILE_ID_INFO` stable identity, canonical path, SHA-256, Authenticode signer observation, the D-11 selection rule, and one bounded non-mutating `--version` probe launched through the kernel. Readiness is projected into all three screens as a truthful status entry. **No adapter, no session identity, no health, no native CLI protocol, and no provider interaction.** | `AgentGateway.h/.cpp`, `native/tests/gateway_tests.cpp`, `MainWindow.xaml.cpp` |
+| Area                               | What exists                                                                                                                                                                                                                                                                                                                                                                                                                        | Where                                                                                                                                  |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Three screens and their navigation | Welcome, project selection, Chat. First-run introduction, later-launch selector, `File → Switch Project`, Escape/Back/Skip semantics, composer placement rules, empty-vs-docked composer transition.                                                                                                                                                                                                                               | `MainWindow.xaml`, `MainWindow.xaml.cpp`                                                                                               |
+| Project identity and binding       | Canonical root validation, `FILE_ID_INFO` stable identity, reparse/ancestor checks, recent-project filtering and paging, project closure and reopen records, safe-switch refusal when isolation is unproven.                                                                                                                                                                                                                       | `ProjectRoot.cpp`, `ProjectService.h`, `Storage.cpp`                                                                                   |
+| Storage                            | The whole SQLite layer: schema and migrations, write admission, quarantine backstop via `sqlite3_set_authorizer`, single-writer mutex, WAL, drafts, contributions, attachments, selection events and receipts.                                                                                                                                                                                                                     | `Storage.cpp` (the largest file in the slice)                                                                                          |
+| Durable delivery primitives        | `mayasaba-jcs-1` canonical bytes with the registered vectors, SHA-256 digests, envelope and receipt validation, the idempotency and gap decisions, and the transactional `CommitCommand` that writes an owner mutation, its causal outbox envelopes and its receipt in one transaction. **No dispatcher and no transport exist**, so nothing is delivered: a queued envelope is a durable intent (§26).                            | `CanonicalJson.cpp`, `Sha256Hex.cpp`, `DeliveryContract.cpp`, `Storage.cpp`                                                            |
+| Chat contributions and drafts      | Immutable `UserContribution` persistence with a submission identity, draft preservation across navigation, recovery notices for failed or uncertain saves, and a classified failure path: a missing project record unbinds and continues instead of wedging navigation and the window close, while a store refusal keeps the binding and refuses only that attempt (§25.2–25.4).                                                   | `Storage.cpp`, `NavigationRecovery.h`, `MainWindow.xaml.cpp`                                                                           |
+| Attachment pipeline                | Admission limits, active-time accounting, digest verification, protected-draft handling, recovery policy, non-English preview withholding with metadata inspection preserved.                                                                                                                                                                                                                                                      | `AttachmentService.cpp`, `AttachmentAdmission.h`, `AttachmentIngestionCoordinator.h`, `AttachmentRecoveryPolicy.h`, `ProtectedDraft.h` |
+| Search                             | Saved-message search, pagination and continuation tokens, project-switch safety while a search is open, overlay geometry and paging reachability.                                                                                                                                                                                                                                                                                  | `SearchController.h`, `MainWindow.xaml.cpp`                                                                                            |
+| Action Center                      | A read-only owner-obligation projection with paging, stale-item revalidation and dismissal that survives background refresh.                                                                                                                                                                                                                                                                                                       | `ActionCenterPresenter.h`                                                                                                              |
+| Presentation                       | The motion and depth system, theme brushes, light/dark/high-contrast handling, reduced-motion alternatives, DPI and responsive layout, the timeline renderer, and the heroes' declared resting orientation published on a named container so it is readable by a UIA client (§25.5).                                                                                                                                               | `Motion.cpp`, `ThemeBrushes.cpp`, `Timeline.cpp`, `RichText.cpp`, `MainWindow.xaml`                                                    |
+| Deterministic core independence    | Storage, project identity, the presentation helpers, the Local Execution Kernel and the Agent Gateway's detection path are separable from the window; the unit-test runners exercise them without creating one.                                                                                                                                                                                                                    | `native/tests/storage_tests.cpp`, `execution_tests.cpp`, `gateway_tests.cpp`                                                           |
+| Local Execution Kernel (layer 9)   | Controller-owned launch: suspended creation, an explicit inherited-handle list, Job Object assignment **before** resume, bounded redirected capture, cancellation, and reaping of survivors when the launched process exits. Its oracle is §14 prototype 2, 11 criteria, and it prints on every run that this is lifecycle ownership and not containment. **The kernel is used by exactly one product path: the readiness probe.** | `ExecutionKernel.h/.cpp`, `native/tests/execution_tests.cpp`                                                                           |
+| Agent Gateway detection (layer 4)  | Executable discovery, `FILE_ID_INFO` stable identity, canonical path, SHA-256, Authenticode signer observation, the D-11 selection rule, and one bounded non-mutating `--version` probe launched through the kernel. Readiness is projected into all three screens as a truthful status entry. **No adapter, no session identity, no health, no native CLI protocol, and no provider interaction.**                                | `AgentGateway.h/.cpp`, `native/tests/gateway_tests.cpp`, `MainWindow.xaml.cpp`                                                         |
 
 The executable is a real, running application. A person can launch it, pick a folder, type a message, and have that message durably saved and restored. That much is observed, repeatedly, by the harness.
 
@@ -42,23 +41,23 @@ The executable is a real, running application. A person can launch it, pick a fo
 
 **Eleven of the thirteen architectural layers do not exist in source at all.** Not as stubs, not as interfaces, not as empty headers. Searching `native/Mayasaba/*.cpp` and `*.h`:
 
-| Layer (`AGENTS.md` §4.1) | Source files | Note |
-| --- | --- | --- |
-| 1. Control Room UI | Present | The slice described above |
-| 2. Controller Application Services / Orchestrator | **Absent** | No orchestrator type, no scheduling, no barriers, no phase transitions |
-| 3. MCF-v2 Communication Fabric | **Absent** | The string "MCF-v2" appears once, inside a UI card that says it is not implemented. The I1 slice adds the *durable facts* Message Delivery needs — outbox rows, inbox admission, receipts — but no fabric: no transport, no dispatcher, no retry, no dead letters, no replay driver (§26.7). |
-| 4. Agent Gateway / Adapters | **Partial** | Detection only (§28.4): discovery, stable identity, digest, signer observation, the D-11 rule and a bounded readiness probe. **Absent:** any adapter, session identity, session health, native CLI protocol translation, and session launch. |
-| 5. Council Engine | **Absent** | The words "council" and "orchestrator" appear in `Storage.cpp` only as entries in an English-word list used for non-English prose detection |
-| 6. Context Synchronizer | **Absent** | No snapshot, no context version, no digest |
-| 7. Task/DAG Engine | **Absent** | No graph, no attempt, no lease, no fencing version |
-| 8. Workspace Manager | **Absent** | No staging, no integration journal, no publication |
-| 9. Local Execution Kernel | **Present** | Suspended `CreateProcessW`, `CreateJobObjectW` with `AssignProcessToJobObject` before `ResumeThread`, `TerminateJobObject`, bounded redirected capture (§28.3). **Not an access boundary:** it owns a process tree’s lifecycle and bounds nothing that tree reads, writes or sends. §14 prototype 2 is satisfied; prototype 3 is not. |
-| 10. Validation / Repair Engine | **Absent** | No verdict record, no diagnostic, no repair disposition |
-| 11. Evidence Engine | **Absent** | No evidence record, no hash chain, no provenance store |
-| 12. Policy Engine | **Absent** | No material-action authorization, no deny reason |
-| 13. SQLite Storage | Present | Layer 13 is complete enough to hold the slice's state |
+| Layer (`AGENTS.md` §4.1)                          | Source files | Note                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Control Room UI                                | Present      | The slice described above                                                                                                                                                                                                                                                                                                             |
+| 2. Controller Application Services / Orchestrator | **Absent**   | No orchestrator type, no scheduling, no barriers, no phase transitions                                                                                                                                                                                                                                                                |
+| 3. MCF-v2 Communication Fabric                    | **Absent**   | The string "MCF-v2" appears once, inside a UI card that says it is not implemented. The I1 slice adds the _durable facts_ Message Delivery needs — outbox rows, inbox admission, receipts — but no fabric: no transport, no dispatcher, no retry, no dead letters, no replay driver (§26.7).                                          |
+| 4. Agent Gateway / Adapters                       | **Partial**  | Detection only (§28.4): discovery, stable identity, digest, signer observation, the D-11 rule and a bounded readiness probe. **Absent:** any adapter, session identity, session health, native CLI protocol translation, and session launch.                                                                                          |
+| 5. Council Engine                                 | **Absent**   | The words "council" and "orchestrator" appear in `Storage.cpp` only as entries in an English-word list used for non-English prose detection                                                                                                                                                                                           |
+| 6. Context Synchronizer                           | **Absent**   | No snapshot, no context version, no digest                                                                                                                                                                                                                                                                                            |
+| 7. Task/DAG Engine                                | **Absent**   | No graph, no attempt, no lease, no fencing version                                                                                                                                                                                                                                                                                    |
+| 8. Workspace Manager                              | **Absent**   | No staging, no integration journal, no publication                                                                                                                                                                                                                                                                                    |
+| 9. Local Execution Kernel                         | **Present**  | Suspended `CreateProcessW`, `CreateJobObjectW` with `AssignProcessToJobObject` before `ResumeThread`, `TerminateJobObject`, bounded redirected capture (§28.3). **Not an access boundary:** it owns a process tree’s lifecycle and bounds nothing that tree reads, writes or sends. §14 prototype 2 is satisfied; prototype 3 is not. |
+| 10. Validation / Repair Engine                    | **Absent**   | No verdict record, no diagnostic, no repair disposition                                                                                                                                                                                                                                                                               |
+| 11. Evidence Engine                               | **Absent**   | No evidence record, no hash chain, no provenance store                                                                                                                                                                                                                                                                                |
+| 12. Policy Engine                                 | **Absent**   | No material-action authorization, no deny reason                                                                                                                                                                                                                                                                                      |
+| 13. SQLite Storage                                | Present      | Layer 13 is complete enough to hold the slice's state                                                                                                                                                                                                                                                                                 |
 
-**No CLI working session is ever launched.** The three readiness entries on Welcome, on Screen 2 and in the Chat header are now a *measured* projection (§28.7): each names the installed executable the Agent Gateway discovered, its stable identity, and the result of one bounded `--version` probe launched through the Local Execution Kernel. On this machine that reads Hermes `READY`, Kilo Code `READY`, Claude Code `CHECKING` with the stated reason that two installations were found and D-11 requires the user to choose. **What still does not exist:** any adapter, any project-scoped session, any applied context, any agent turn, and any provider interaction. Start remains blocked and says so, now naming the readiness result explicitly so it cannot be misread as permission: `MainWindow.xaml.cpp` `OnStart`. A `READY` here means one version question was answered inside its bound, and nothing more.
+**No CLI working session is ever launched.** The three readiness entries on Welcome, on Screen 2 and in the Chat header are now a _measured_ projection (§28.7): each names the installed executable the Agent Gateway discovered, its stable identity, and the result of one bounded `--version` probe launched through the Local Execution Kernel. On this machine that reads Hermes `READY`, Kilo Code `READY`, Claude Code `CHECKING` with the stated reason that two installations were found and D-11 requires the user to choose. **What still does not exist:** any adapter, any project-scoped session, any applied context, any agent turn, and any provider interaction. Start remains blocked and says so, now naming the readiness result explicitly so it cannot be misread as permission: `MainWindow.xaml.cpp` `OnStart`. A `READY` here means one version question was answered inside its bound, and nothing more.
 
 **No agent turn exists.** There is no three-agent response, no rotating writer, no peer review, no consolidated reply, no turn finalization. The Chat card at `MainWindow.xaml.cpp:938` says so in the product itself: `"Saved only · agent replies are unavailable in this build"`.
 
@@ -82,7 +81,7 @@ The harness that produces these numbers is itself instrumented, and what it repo
 
 ## Current milestone and its gates (2026-10-22)
 
-This section records the milestone decision so the next session does not re-derive the survey above or re-argue the ordering. It is a *plan of record*, not a result: nothing in it is claimed as built. The gates named here are the C10 implementation-entry gates; the tier names are this project's own grouping.
+This section records the milestone decision so the next session does not re-derive the survey above or re-argue the ordering. It is a _plan of record_, not a result: nothing in it is claimed as built. The gates named here are the C10 implementation-entry gates; the tier names are this project's own grouping.
 
 ### Where the work stands
 
@@ -90,17 +89,17 @@ The slice described under "What is built and what is not" is a UI shell over a d
 
 ### The order of work
 
-| Order | Item | Why here |
-| --- | --- | --- |
-| 1 | **B-slice** — outbox/inbox tables, `mayasaba-jcs-1` canonical bytes with the registered vectors, transactional receipts (C10 gate **I1**) | Invisible to the user, cheap now and expensive later, and it is the C10 order (I1 before I3), so doing it first removes the ordering objection entirely. **Status: implemented and proven for this slice — see §26.** It does not complete gate I1. |
-| 2 | **A + C paired** — Local Execution Kernel (layer 9, prototype 2) with Agent Gateway detection (layer 4) | A alone satisfies §14 prototype 2 and changes nothing user-visible; C converts the hardcoded `UNSUPPORTED` readiness line into a measured one and needs A. Paired, the milestone ends with a user-visible statement that is true *and* measured. **Status: not started.** |
-| — | **D (MSI) deferred** | Nothing to install yet |
-| — | **Containment** | **Explicitly not claimed in either item.** See below |
-| — | **Harness close-out** (not a gate) | Done first, because a harness that cannot state what it measured cannot certify A+C. §27 |
+| Order | Item                                                                                                                                      | Why here                                                                                                                                                                                                                                                                  |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1     | **B-slice** — outbox/inbox tables, `mayasaba-jcs-1` canonical bytes with the registered vectors, transactional receipts (C10 gate **I1**) | Invisible to the user, cheap now and expensive later, and it is the C10 order (I1 before I3), so doing it first removes the ordering objection entirely. **Status: implemented and proven for this slice — see §26.** It does not complete gate I1.                       |
+| 2     | **A + C paired** — Local Execution Kernel (layer 9, prototype 2) with Agent Gateway detection (layer 4)                                   | A alone satisfies §14 prototype 2 and changes nothing user-visible; C converts the hardcoded `UNSUPPORTED` readiness line into a measured one and needs A. Paired, the milestone ends with a user-visible statement that is true _and_ measured. **Status: not started.** |
+| —     | **D (MSI) deferred**                                                                                                                      | Nothing to install yet                                                                                                                                                                                                                                                    |
+| —     | **Containment**                                                                                                                           | **Explicitly not claimed in either item.** See below                                                                                                                                                                                                                      |
+| —     | **Harness close-out** (not a gate)                                                                                                        | Done first, because a harness that cannot state what it measured cannot certify A+C. §27                                                                                                                                                                                  |
 
 ### The three gates that must not be confused
 
-1. **A passing launch is not a passing I3.** A successful `CreateProcess` + `CreateJobObject` + teardown proves *ownership and cleanup of a process tree*. It proves nothing about confinement of that tree's file or network effects. `AGENTS.md` §9 requires pre-effect mediation or a tested effective operating-system access boundary for every prohibited read, write, network effect and stale write; a Job Object is neither. A launch milestone must be reported as prototype 2 only, and must not be summarized as making the architecture deployable.
+1. **A passing launch is not a passing I3.** A successful `CreateProcess` + `CreateJobObject` + teardown proves _ownership and cleanup of a process tree_. It proves nothing about confinement of that tree's file or network effects. `AGENTS.md` §9 requires pre-effect mediation or a tested effective operating-system access boundary for every prohibited read, write, network effect and stale write; a Job Object is neither. A launch milestone must be reported as prototype 2 only, and must not be summarized as making the architecture deployable.
 2. **The `UNSUPPORTED` line is Agent Gateway work, not Kernel work.** The Kernel alone does not make the readiness projection true. The readiness entry is layer 4's observation, and the probe needs a launch path — which is why C is paired with A rather than sequenced after it.
 3. **`INCONCLUSIVE` is a verdict, not a to-do.** Criteria 11 and 12 stay INCONCLUSIVE as a permanent evidenced environment limit (§24.4). Criterion 19 left that class only because the application changed (§25.5), not because the harness was re-tuned.
 
@@ -110,7 +109,7 @@ The slice described under "What is built and what is not" is a UI shell over a d
 
 **C — Agent Gateway detection (layer 4).** Executable identity plus a bounded, non-mutating readiness probe, replacing the hardcoded line at `MainWindow.xaml.cpp:3476-3478` (`… UNSUPPORTED. Executable identity and native probes are not implemented; no provider calls.`) with an observed result. The five readiness states the header already declares — `CHECKING`, `READY`, `MISSING`, `UNSUPPORTED`, `PROBE_FAILED` — become reachable rather than constant.
 
-**Paired, not sequenced.** A alone satisfies a prototype and changes nothing a user can see; C is what turns a hardcoded statement into a measured one, and C needs A's launch path. The user-visible statement that becomes true is narrow and specific: *the readiness line for each of the three CLIs is the result of a probe this application actually ran, not a constant this application printed.*
+**Paired, not sequenced.** A alone satisfies a prototype and changes nothing a user can see; C is what turns a hardcoded statement into a measured one, and C needs A's launch path. The user-visible statement that becomes true is narrow and specific: _the readiness line for each of the three CLIs is the result of a probe this application actually ran, not a constant this application printed._
 
 **Three things the milestone must not be read as claiming:**
 
@@ -118,7 +117,7 @@ The slice described under "What is built and what is not" is a UI shell over a d
 2. **No provider usage.** The probe must be bounded and non-mutating. The user's model, provider and authentication settings are theirs (§6); Mayasaba may not select, rewrite or fall back to any of them, and a probe that consumed provider capacity would be a different action requiring different authority.
 3. **No D-11 candidate selection.** Executable identity must not silently pick a CLI. Resolving which binary is Hermes, Kilo Code or Claude Code is the user's decision and a registered choice; a probe that guessed would be exercising an authority it does not have.
 
-**Carried forward from §26.7, not redefined.** The I1 slice has no dispatcher, no transport, no path that sends a queued envelope, and no UI path that calls `CommitCommand`. A+C builds on that contract, so it inherits a *declared* boundary. If A+C changes what any of those sentences means, the record must say which and why; it must not quietly stop being true.
+**Carried forward from §26.7, not redefined.** The I1 slice has no dispatcher, no transport, no path that sends a queued envelope, and no UI path that calls `CommitCommand`. A+C builds on that contract, so it inherits a _declared_ boundary. If A+C changes what any of those sentences means, the record must say which and why; it must not quietly stop being true.
 
 ### What each item must produce before it is called done
 
@@ -166,38 +165,38 @@ Per `AGENTS.md` section 13, each criterion ends in exactly one of `PASS`, `FAIL`
 
 ## Current acceptance matrix (S2-01 through S2-30)
 
-| ID | Criterion | Verdict | Class | Evidence / limit |
-| --- | --- | --- | --- | --- |
-| S2-01 | Fresh isolated store launches Welcome; Next, Skip and Escape from the expected focused controls enter Screen 2; no rootless Chat path. | PASS | Agent-observed runtime | Verified 2026-10-15: with isolated store injected, launch rendered `#WelcomeScreen`, `#WelcomeHeading`, `#NextButton`, `#SkipButton`. Next, Skip and Escape advance to `#FolderScreen`. Escape on `#FolderScreen` is inert and cannot reach Chat. Production store was completely untouched. |
-| S2-02 | After first successful binding and relaunch, Screen 2 appears with no automatic active root, Chat or Start permission. | PASS | Agent-observed runtime / Unit test | `MainWindow.xaml.cpp` constructor lines 126–130 checks `storage_->HasAnyProjects()` and calls `ShowFolder(SelectorContext::Startup)`, leaving `activeProject_` empty, Chat hidden, and Start permission ungranted. `storage_tests.cpp` suite 1 & 2 confirms recent project records exist while active project remains unbound. |
-| S2-03 | Missing/stale last-project pointer does not incorrectly repeat Welcome when successful binding history remains. Storage failure is distinct from “no recent projects.” | PASS | Unit test / Source inspection | `HasAnyProjects()` queries `SELECT 1 FROM projects LIMIT 1`, independent of `ui_state.last_project`. If `last_project` is null or corrupted, Screen 2 still opens. A SQLite exception is caught separately in constructor, displaying diagnostic `#NoticeBanner` error rather than falling back to Welcome. |
-| S2-04 | Empty list, many projects/paging, unknown legacy timestamps, equal timestamps and deterministic ordering render truthfully. Read-only refresh does not mutate last-opened time. | PASS | Unit test / Source inspection | `storage_tests.cpp` suite 1, 4, 8: empty list returns empty vector; paged recent query orders by `last_opened_at DESC, id ASC`; legacy projects have empty `last_opened_at` ("Unknown"). `RefreshRecentProjectsAsync` executes a read-only `QueryRecentProjects`; `TouchProjectOpened` executes only on explicit user selection. |
-| S2-05 | Open existing empty/nonempty folders through native picker; no content scan, Git, template files, provider call or CLI session. | PASS | Unit test / Source inspection | `ValidateProjectRoot` inspects `FILE_ID_INFO`, canonicalizes path via `GetFinalPathNameByHandleW`, and checks ancestor reparse points. It never executes git, touches files, scans contents, or calls external providers. |
-| S2-06 | Picker cancellation/failure leaves binding, drafts and history unchanged and returns focus correctly. Errors are not all mislabeled cancellation. | PASS | Unit test / Source inspection | `PickFolderDialogAsync` distinguishes user cancel (empty return) from HRESULT error; `PickFolderAsync` checks `if (folderPath.empty()) co_return;` without mutating state. HRESULT errors and root refusal exceptions display distinct diagnostic notices via `ShowNotice` on the UI thread. |
-| S2-07 | Recent selection restores the exact project; selecting again creates no duplicate identity or history. | PASS | Unit test | `storage_tests.cpp` suite 1 & 6: `BindProject` on matching `filesystem_identity` returns existing domain ID, preserving project records, drafts, and contribution foreign keys with 0 duplicate rows. |
-| S2-08 | Missing/inaccessible/root-replaced paths refuse binding with precise recovery. Repeated failures do not erase the recent entry. | PASS | Unit test / Source inspection | `storage_tests.cpp` suite 4; `MainWindow.xaml.cpp`: inaccessible path reports "Folder does not exist or is inaccessible. Use Locate folder to find it." Replaced directory with differing `FILE_ID_INFO` reports "Folder identity changed... Cannot open mismatched root." The recent entry in SQLite `projects` table is preserved. |
-| S2-09 | Locate preserves the old record on cancel or mismatch; proven same-identity rename restores original history. Different identity never inherits it. | PASS | Unit test | `storage_tests.cpp` suite 4: `LocateProject` checks `root.stableIdentity == expectedIdentity`; mismatch throws and leaves record unchanged. When identity matches, `RelocateProject` updates `canonical_path` and `display_name` preserving project ID, history and version. |
-| S2-10 | Closed project remains closed, history readable, Send/Start gated; selection does not call Reopen. | PASS | Unit test / Source inspection | `storage_tests.cpp` suite 1: `SaveContribution` on closed project returns `SaveDisposition::RejectedClosed`; `MainWindow.xaml.cpp` disables `SendButton` and `ComposerBox`, rendering amber "CLOSED · Read-only" badge. Selection opens Chat without calling `SetClosure(..., false)`. |
-| S2-11 | File → Switch Project opens selector, not picker. Cancel/Escape restores old Chat, draft, pending identity, focus and reading position. | PASS | Source inspection / Agent-observed runtime | `MainWindow.xaml.cpp` `OnSwitchProject` calls `ShowFolder(SelectorContext::Switching)`. `OnCancelSwitch` and Escape handler restore `ShowChat()` for the existing project, restoring text in `ComposerBox()`, scroll position, and focus without altering active project authority. |
-| S2-12 | Startup Escape cannot bypass selection. Escape in picker/dialog affects only that modal layer. Preserve Welcome and Chat key behavior. | PASS | Agent-observed runtime | Runtime observation: Escape on `#FolderScreen` is inert when `SelectorContext::Startup` or `FirstRun`; cannot open Chat without an authorized bound root. Escape in modal picker cancels picker dialog only. Escape on Welcome advances to Screen 2. |
-| S2-13 | A/B drafts and histories remain separate across selection, cancel, restart and closure; latest unsaved keystrokes survive handoff. | PASS | Unit test | `storage_tests.cpp` suite 1: project-A and project-B drafts and contributions are completely isolated; draft debouncing flushes before switching (`PersistDraft()` called before `ShowFolder`). |
-| S2-14 | Pre-binding draft UI path | NOT_APPLICABLE (2026-10-17) | Source inspection | The pre-binding draft composer was removed from Screen 2 at the user's direction on 2026-10-17, so there is no UI path that writes, loads or transfers a pre-binding draft. The storage-level transfer remains covered by `storage_tests.cpp` suite 7 and still passes; the selector-side handlers and `PrebindDraftBox` were removed rather than left unreachable. |
-| S2-15 | Draft save/transfer failure or lost commit receipt never clears the only copy or submits text. | PASS | Unit test | `storage_tests.cpp` suite 7: `TransferPrebindDraftToProject` wraps version increment and draft update in `BEGIN IMMEDIATE ... COMMIT`. If any step fails or a pending submission exists, the transaction rolls back and the draft is never cleared. Retained for the storage layer; no UI path writes a pre-binding draft since 2026-10-17. |
-| S2-16 | Explicit creation makes exactly one requested empty child; cancellation makes none; no .git/config/templates are created. | PASS | Unit test | `storage_tests.cpp` suite 4: `CreateProjectFolder` calls Win32 `CreateDirectoryW` for single child only. No git, templates, or config files created. Verified empty directory on disk. |
-| S2-17 | Invalid/reserved/traversing names, collision, inaccessible parent and unsafe reparse paths are refused before mutation; existing bytes remain unchanged. | PASS | Unit test | `storage_tests.cpp` suite 4: tests empty name, trailing periods/spaces, reserved names (`CON`, `nul.txt`), traversal, collisions. All throw before any filesystem mutation. |
-| S2-18 | Duplicate create clicks/commands have one effect; altered payload under the same identity is refused. | PASS | Unit test / Source inspection | `storage_tests.cpp` suite 5: `RecordDirectoryIntent` uses primary key `operation_id`. Duplicate intent with same ID is rejected or idempotent; collision at filesystem target path throws. |
-| S2-19 | Crash/fault before intent, after intent, after directory creation and before/after binding receipt follows the declared recovery branch. Unknown outcomes never blindly retry. | PASS | Unit test | `storage_tests.cpp` suite 5 & 9: `INTENDED` only before crash retains `state='INTENDED'` with `error_message='PHYSICAL_OUTCOME_UNKNOWN'` until reconciled; `CREATED` with verified observed identity is reconciled to `BOUND`. Unreconciled / rogue directories are never adopted. |
-| S2-20 | Creation succeeds but binding fails: the directory remains intact; exact path and safe recovery are shown. Competing directory identity is never adopted. | PASS | Unit test / Source inspection | `storage_tests.cpp` suite 5 & 9: if binding fails, directory is preserved (never deleted), operation is recorded as `CREATED` with observed identity. Recovery branch never adopts competing identity. |
-| S2-21 | Root/parent rename, replacement or reparse change during validation/use is detected or safely prevented; no unintended directory or binding. | PASS | Unit test / Source inspection | `ProjectRoot.cpp` opens parent directory handle without `FILE_SHARE_DELETE` held across child creation, verifying `FILE_ID_INFO` before and after creation. Child containment verified under parent canonical path; ancestor reparse traversal verified. |
-| S2-22 | Unknown switch isolation/activity keeps candidate unbound and old project authoritative. No implicit Stop, Close or session retarget. Service-level fault cases are separate from real CLI proof. | PASS | Source inspection | In `MainWindow.xaml.cpp` `OnSwitchProject()`, `activeProject_` remains bound and authoritative until candidate project passes full validation, identity check, and draft resolution. |
-| S2-23 | Database contention, slow validation, query failure and migration failure leave UI responsive and prevent false success/empty-list claims. | PASS | Unit test / Source inspection | All SQLite operations, folder validation and draft transfers execute on `winrt::resume_background()`. `resume_foreground`'s `await_resume()` returns `bool` (`queue && queue.HasThreadAccess()`). Dispatcher rejection or coroutine shutdown resumes on background and immediately terminates without touching UI controls. Contention timeout is set to 5000 ms. |
-| S2-24 | Late callbacks after Cancel, a newer request or window closure cannot mutate another project's view/data or touch closed XAML. | PASS | Source inspection / Unit test | `selectorGeneration_` monotonically incremented on each user cancellation (`OnCancelSwitch`, `OnCancelDraftCollision`, `OnCancelCreateFolder`, Escape handlers), navigation transition (`ShowFolder`, `ShowChat`, `ShowWelcome`), and window `Closed`. Every background completion verifies `if (windowClosed_ || selectorGeneration_ != gen) co_return;`. |
-| S2-25 | Migration preserves legacy project mappings, contributions, pending submissions, drafts, closure and versions; interrupted migration restores/reconciles without data loss. Verified backup restore demonstrated. | PASS | Unit test | `storage_tests.cpp` suite 8: verified backup `.pre_migration.bak` created via `sqlite3_backup`, integrity verified with `PRAGMA integrity_check == "ok"` before any `ALTER TABLE`. Legacy projects (`filesystem_identity` defaulted to `id`, `last_opened_at` preserved as unknown), contributions, pending submissions, and versions preserved 100%. |
-| S2-26 | Concurrent instances cannot become competing writers. Test-store isolation does not weaken production exclusion. | PASS | Unit test | `storage_tests.cpp` suite 10: `Storage` constructor acquires `Local\Mayasaba.AppStore.SingleWriter.v1` mutex. Creating a concurrent second instance throws `std::runtime_error("Another Mayasaba instance is already using its store")`. Injected test stores scope mutex by store path hash. |
-| S2-27 | Keyboard-only access, focus/announcements, full-path access, normal/narrow window, text/DPI scaling, light/dark/high contrast and live reduced motion. | PASS | Agent-observed runtime | Verified live via UIA & Win32 APIs: 120 DPI (1.25x scale, PerMonitorV2 `awareness=2`); responsive narrow-window resize (520px) adapts cleanly without clipping; live OS animation setting toggle (`SPI_SETCLIENTAREAANIMATION` 1 -> 0 -> 1) triggers `AnimationsEnabledChanged`, stops ambient storyboards and eliminates entrance transitions under reduced motion, then restores them; keyboard tab order sequence and Space/Enter/UIA invocation verified. |
-| S2-28 | Empty Chat remains centered, restored history docked, pending Send reconciliation intact; no Chat redesign or fabricated CLI status. | PASS | Agent-observed runtime / Source inspection | Empty project centers `#ComposerBox`; confirmed persisted history docks composer below chronological timeline; CLI chips display truthful `UNSUPPORTED`. |
-| S2-29 | Slice schemas accept valid instances and reject wrong owners, stale/altered duplicates, invalid IDs, oversized payloads and unsupported versions; canonical/ref/digest/registry tests pass. | PASS | Unit test | `scratch/test_selector_contracts.py` validates `CrossProjectQueryRequest` and `CrossProjectQueryResult` against `boundaries.schema.json` and `core.schema.json` with 100% pass; `registry-manifest.json` sha256 digests verified matching. |
-| S2-30 | Existing storage regression tests actually execute their assertions and side effects in the chosen configuration; new native build and runtime evidence match the exact source/artifact. | PASS | Unit test / Compilation | `storage_tests.exe` executed via MSVC Release build without NDEBUG macro omission; all 10 test suites executed with explicit `EXPECT` macro throwing on false assertions. Output: `PASS: native store migrations, recent projects ordering, prebinding draft transfer, folder creation, and locate checks`. |
+| ID    | Criterion                                                                                                                                                                                                         | Verdict                     | Class                                      | Evidence / limit                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- | ----------------------------------------- |
+| S2-01 | Fresh isolated store launches Welcome; Next, Skip and Escape from the expected focused controls enter Screen 2; no rootless Chat path.                                                                            | PASS                        | Agent-observed runtime                     | Verified 2026-10-15: with isolated store injected, launch rendered `#WelcomeScreen`, `#WelcomeHeading`, `#NextButton`, `#SkipButton`. Next, Skip and Escape advance to `#FolderScreen`. Escape on `#FolderScreen` is inert and cannot reach Chat. Production store was completely untouched.                                                                                                                                                                  |
+| S2-02 | After first successful binding and relaunch, Screen 2 appears with no automatic active root, Chat or Start permission.                                                                                            | PASS                        | Agent-observed runtime / Unit test         | `MainWindow.xaml.cpp` constructor lines 126–130 checks `storage_->HasAnyProjects()` and calls `ShowFolder(SelectorContext::Startup)`, leaving `activeProject_` empty, Chat hidden, and Start permission ungranted. `storage_tests.cpp` suite 1 & 2 confirms recent project records exist while active project remains unbound.                                                                                                                                |
+| S2-03 | Missing/stale last-project pointer does not incorrectly repeat Welcome when successful binding history remains. Storage failure is distinct from “no recent projects.”                                            | PASS                        | Unit test / Source inspection              | `HasAnyProjects()` queries `SELECT 1 FROM projects LIMIT 1`, independent of `ui_state.last_project`. If `last_project` is null or corrupted, Screen 2 still opens. A SQLite exception is caught separately in constructor, displaying diagnostic `#NoticeBanner` error rather than falling back to Welcome.                                                                                                                                                   |
+| S2-04 | Empty list, many projects/paging, unknown legacy timestamps, equal timestamps and deterministic ordering render truthfully. Read-only refresh does not mutate last-opened time.                                   | PASS                        | Unit test / Source inspection              | `storage_tests.cpp` suite 1, 4, 8: empty list returns empty vector; paged recent query orders by `last_opened_at DESC, id ASC`; legacy projects have empty `last_opened_at` ("Unknown"). `RefreshRecentProjectsAsync` executes a read-only `QueryRecentProjects`; `TouchProjectOpened` executes only on explicit user selection.                                                                                                                              |
+| S2-05 | Open existing empty/nonempty folders through native picker; no content scan, Git, template files, provider call or CLI session.                                                                                   | PASS                        | Unit test / Source inspection              | `ValidateProjectRoot` inspects `FILE_ID_INFO`, canonicalizes path via `GetFinalPathNameByHandleW`, and checks ancestor reparse points. It never executes git, touches files, scans contents, or calls external providers.                                                                                                                                                                                                                                     |
+| S2-06 | Picker cancellation/failure leaves binding, drafts and history unchanged and returns focus correctly. Errors are not all mislabeled cancellation.                                                                 | PASS                        | Unit test / Source inspection              | `PickFolderDialogAsync` distinguishes user cancel (empty return) from HRESULT error; `PickFolderAsync` checks `if (folderPath.empty()) co_return;` without mutating state. HRESULT errors and root refusal exceptions display distinct diagnostic notices via `ShowNotice` on the UI thread.                                                                                                                                                                  |
+| S2-07 | Recent selection restores the exact project; selecting again creates no duplicate identity or history.                                                                                                            | PASS                        | Unit test                                  | `storage_tests.cpp` suite 1 & 6: `BindProject` on matching `filesystem_identity` returns existing domain ID, preserving project records, drafts, and contribution foreign keys with 0 duplicate rows.                                                                                                                                                                                                                                                         |
+| S2-08 | Missing/inaccessible/root-replaced paths refuse binding with precise recovery. Repeated failures do not erase the recent entry.                                                                                   | PASS                        | Unit test / Source inspection              | `storage_tests.cpp` suite 4; `MainWindow.xaml.cpp`: inaccessible path reports "Folder does not exist or is inaccessible. Use Locate folder to find it." Replaced directory with differing `FILE_ID_INFO` reports "Folder identity changed... Cannot open mismatched root." The recent entry in SQLite `projects` table is preserved.                                                                                                                          |
+| S2-09 | Locate preserves the old record on cancel or mismatch; proven same-identity rename restores original history. Different identity never inherits it.                                                               | PASS                        | Unit test                                  | `storage_tests.cpp` suite 4: `LocateProject` checks `root.stableIdentity == expectedIdentity`; mismatch throws and leaves record unchanged. When identity matches, `RelocateProject` updates `canonical_path` and `display_name` preserving project ID, history and version.                                                                                                                                                                                  |
+| S2-10 | Closed project remains closed, history readable, Send/Start gated; selection does not call Reopen.                                                                                                                | PASS                        | Unit test / Source inspection              | `storage_tests.cpp` suite 1: `SaveContribution` on closed project returns `SaveDisposition::RejectedClosed`; `MainWindow.xaml.cpp` disables `SendButton` and `ComposerBox`, rendering amber "CLOSED · Read-only" badge. Selection opens Chat without calling `SetClosure(..., false)`.                                                                                                                                                                        |
+| S2-11 | File → Switch Project opens selector, not picker. Cancel/Escape restores old Chat, draft, pending identity, focus and reading position.                                                                           | PASS                        | Source inspection / Agent-observed runtime | `MainWindow.xaml.cpp` `OnSwitchProject` calls `ShowFolder(SelectorContext::Switching)`. `OnCancelSwitch` and Escape handler restore `ShowChat()` for the existing project, restoring text in `ComposerBox()`, scroll position, and focus without altering active project authority.                                                                                                                                                                           |
+| S2-12 | Startup Escape cannot bypass selection. Escape in picker/dialog affects only that modal layer. Preserve Welcome and Chat key behavior.                                                                            | PASS                        | Agent-observed runtime                     | Runtime observation: Escape on `#FolderScreen` is inert when `SelectorContext::Startup` or `FirstRun`; cannot open Chat without an authorized bound root. Escape in modal picker cancels picker dialog only. Escape on Welcome advances to Screen 2.                                                                                                                                                                                                          |
+| S2-13 | A/B drafts and histories remain separate across selection, cancel, restart and closure; latest unsaved keystrokes survive handoff.                                                                                | PASS                        | Unit test                                  | `storage_tests.cpp` suite 1: project-A and project-B drafts and contributions are completely isolated; draft debouncing flushes before switching (`PersistDraft()` called before `ShowFolder`).                                                                                                                                                                                                                                                               |
+| S2-14 | Pre-binding draft UI path                                                                                                                                                                                         | NOT_APPLICABLE (2026-10-17) | Source inspection                          | The pre-binding draft composer was removed from Screen 2 at the user's direction on 2026-10-17, so there is no UI path that writes, loads or transfers a pre-binding draft. The storage-level transfer remains covered by `storage_tests.cpp` suite 7 and still passes; the selector-side handlers and `PrebindDraftBox` were removed rather than left unreachable.                                                                                           |
+| S2-15 | Draft save/transfer failure or lost commit receipt never clears the only copy or submits text.                                                                                                                    | PASS                        | Unit test                                  | `storage_tests.cpp` suite 7: `TransferPrebindDraftToProject` wraps version increment and draft update in `BEGIN IMMEDIATE ... COMMIT`. If any step fails or a pending submission exists, the transaction rolls back and the draft is never cleared. Retained for the storage layer; no UI path writes a pre-binding draft since 2026-10-17.                                                                                                                   |
+| S2-16 | Explicit creation makes exactly one requested empty child; cancellation makes none; no .git/config/templates are created.                                                                                         | PASS                        | Unit test                                  | `storage_tests.cpp` suite 4: `CreateProjectFolder` calls Win32 `CreateDirectoryW` for single child only. No git, templates, or config files created. Verified empty directory on disk.                                                                                                                                                                                                                                                                        |
+| S2-17 | Invalid/reserved/traversing names, collision, inaccessible parent and unsafe reparse paths are refused before mutation; existing bytes remain unchanged.                                                          | PASS                        | Unit test                                  | `storage_tests.cpp` suite 4: tests empty name, trailing periods/spaces, reserved names (`CON`, `nul.txt`), traversal, collisions. All throw before any filesystem mutation.                                                                                                                                                                                                                                                                                   |
+| S2-18 | Duplicate create clicks/commands have one effect; altered payload under the same identity is refused.                                                                                                             | PASS                        | Unit test / Source inspection              | `storage_tests.cpp` suite 5: `RecordDirectoryIntent` uses primary key `operation_id`. Duplicate intent with same ID is rejected or idempotent; collision at filesystem target path throws.                                                                                                                                                                                                                                                                    |
+| S2-19 | Crash/fault before intent, after intent, after directory creation and before/after binding receipt follows the declared recovery branch. Unknown outcomes never blindly retry.                                    | PASS                        | Unit test                                  | `storage_tests.cpp` suite 5 & 9: `INTENDED` only before crash retains `state='INTENDED'` with `error_message='PHYSICAL_OUTCOME_UNKNOWN'` until reconciled; `CREATED` with verified observed identity is reconciled to `BOUND`. Unreconciled / rogue directories are never adopted.                                                                                                                                                                            |
+| S2-20 | Creation succeeds but binding fails: the directory remains intact; exact path and safe recovery are shown. Competing directory identity is never adopted.                                                         | PASS                        | Unit test / Source inspection              | `storage_tests.cpp` suite 5 & 9: if binding fails, directory is preserved (never deleted), operation is recorded as `CREATED` with observed identity. Recovery branch never adopts competing identity.                                                                                                                                                                                                                                                        |
+| S2-21 | Root/parent rename, replacement or reparse change during validation/use is detected or safely prevented; no unintended directory or binding.                                                                      | PASS                        | Unit test / Source inspection              | `ProjectRoot.cpp` opens parent directory handle without `FILE_SHARE_DELETE` held across child creation, verifying `FILE_ID_INFO` before and after creation. Child containment verified under parent canonical path; ancestor reparse traversal verified.                                                                                                                                                                                                      |
+| S2-22 | Unknown switch isolation/activity keeps candidate unbound and old project authoritative. No implicit Stop, Close or session retarget. Service-level fault cases are separate from real CLI proof.                 | PASS                        | Source inspection                          | In `MainWindow.xaml.cpp` `OnSwitchProject()`, `activeProject_` remains bound and authoritative until candidate project passes full validation, identity check, and draft resolution.                                                                                                                                                                                                                                                                          |
+| S2-23 | Database contention, slow validation, query failure and migration failure leave UI responsive and prevent false success/empty-list claims.                                                                        | PASS                        | Unit test / Source inspection              | All SQLite operations, folder validation and draft transfers execute on `winrt::resume_background()`. `resume_foreground`'s `await_resume()` returns `bool` (`queue && queue.HasThreadAccess()`). Dispatcher rejection or coroutine shutdown resumes on background and immediately terminates without touching UI controls. Contention timeout is set to 5000 ms.                                                                                             |
+| S2-24 | Late callbacks after Cancel, a newer request or window closure cannot mutate another project's view/data or touch closed XAML.                                                                                    | PASS                        | Source inspection / Unit test              | `selectorGeneration_` monotonically incremented on each user cancellation (`OnCancelSwitch`, `OnCancelDraftCollision`, `OnCancelCreateFolder`, Escape handlers), navigation transition (`ShowFolder`, `ShowChat`, `ShowWelcome`), and window `Closed`. Every background completion verifies `if (windowClosed\_                                                                                                                                               |     | selectorGeneration\_ != gen) co_return;`. |
+| S2-25 | Migration preserves legacy project mappings, contributions, pending submissions, drafts, closure and versions; interrupted migration restores/reconciles without data loss. Verified backup restore demonstrated. | PASS                        | Unit test                                  | `storage_tests.cpp` suite 8: verified backup `.pre_migration.bak` created via `sqlite3_backup`, integrity verified with `PRAGMA integrity_check == "ok"` before any `ALTER TABLE`. Legacy projects (`filesystem_identity` defaulted to `id`, `last_opened_at` preserved as unknown), contributions, pending submissions, and versions preserved 100%.                                                                                                         |
+| S2-26 | Concurrent instances cannot become competing writers. Test-store isolation does not weaken production exclusion.                                                                                                  | PASS                        | Unit test                                  | `storage_tests.cpp` suite 10: `Storage` constructor acquires `Local\Mayasaba.AppStore.SingleWriter.v1` mutex. Creating a concurrent second instance throws `std::runtime_error("Another Mayasaba instance is already using its store")`. Injected test stores scope mutex by store path hash.                                                                                                                                                                 |
+| S2-27 | Keyboard-only access, focus/announcements, full-path access, normal/narrow window, text/DPI scaling, light/dark/high contrast and live reduced motion.                                                            | PASS                        | Agent-observed runtime                     | Verified live via UIA & Win32 APIs: 120 DPI (1.25x scale, PerMonitorV2 `awareness=2`); responsive narrow-window resize (520px) adapts cleanly without clipping; live OS animation setting toggle (`SPI_SETCLIENTAREAANIMATION` 1 -> 0 -> 1) triggers `AnimationsEnabledChanged`, stops ambient storyboards and eliminates entrance transitions under reduced motion, then restores them; keyboard tab order sequence and Space/Enter/UIA invocation verified. |
+| S2-28 | Empty Chat remains centered, restored history docked, pending Send reconciliation intact; no Chat redesign or fabricated CLI status.                                                                              | PASS                        | Agent-observed runtime / Source inspection | Empty project centers `#ComposerBox`; confirmed persisted history docks composer below chronological timeline; CLI chips display truthful `UNSUPPORTED`.                                                                                                                                                                                                                                                                                                      |
+| S2-29 | Slice schemas accept valid instances and reject wrong owners, stale/altered duplicates, invalid IDs, oversized payloads and unsupported versions; canonical/ref/digest/registry tests pass.                       | PASS                        | Unit test                                  | `scratch/test_selector_contracts.py` validates `CrossProjectQueryRequest` and `CrossProjectQueryResult` against `boundaries.schema.json` and `core.schema.json` with 100% pass; `registry-manifest.json` sha256 digests verified matching.                                                                                                                                                                                                                    |
+| S2-30 | Existing storage regression tests actually execute their assertions and side effects in the chosen configuration; new native build and runtime evidence match the exact source/artifact.                          | PASS                        | Unit test / Compilation                    | `storage_tests.exe` executed via MSVC Release build without NDEBUG macro omission; all 10 test suites executed with explicit `EXPECT` macro throwing on false assertions. Output: `PASS: native store migrations, recent projects ordering, prebinding draft transfer, folder creation, and locate checks`.                                                                                                                                                   |
 
 ---
 
@@ -247,11 +246,11 @@ self-contained.
 
 **Artifacts.**
 
-| Artifact | SHA-256 |
-| --- | --- |
+| Artifact                                       | SHA-256                                                            |
+| ---------------------------------------------- | ------------------------------------------------------------------ |
 | `native/Mayasaba/bin/x64/Release/Mayasaba.exe` | `41b8f55b72e615a1b96d9f9f531d93d42af88d5ae01a11595f3dd2969bb48724` |
-| `native/tests/bin/storage_tests.exe` | `35a71987cc45490c1e1467971511f096ee62d95cf1045456849ab36f82deaeaf` |
-| `native/tests/bin/seed_store.exe` | `3a929756fcccaf0cfb5aedc2d4ddf21af636e9c18d02e491292115f7ef2a9d46` |
+| `native/tests/bin/storage_tests.exe`           | `35a71987cc45490c1e1467971511f096ee62d95cf1045456849ab36f82deaeaf` |
+| `native/tests/bin/seed_store.exe`              | `3a929756fcccaf0cfb5aedc2d4ddf21af636e9c18d02e491292115f7ef2a9d46` |
 
 `native-build.log` (from the final logged build) records **Build succeeded, 0 Warning(s),
 0 Error(s)**. That log is overwritten by each build, so it is only meaningful together with
@@ -282,12 +281,12 @@ Native implementation (all under `native/`):
 
 ## Verification results
 
-| Check | Command | Result |
-| --- | --- | --- |
-| App build | MSBuild `Mayasaba.vcxproj` Release x64 v145 | exit 0, 0 warnings, 0 errors |
-| Native regression suite | `native/tests/bin/storage_tests.exe` | exit 0 — `PASS: 18 isolated native regression groups` |
-| Contract registry | `python native/tests/validate_contract_registry.py` | exit 0 — `PASS: 124 contract-registry and Screen 2 slice schema checks` |
-| Seed utility production guard | `seed_store.exe %LOCALAPPDATA%\Mayasaba\mayasaba.db ...` | exit 1 — refused, production store path |
+| Check                         | Command                                                  | Result                                                                  |
+| ----------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
+| App build                     | MSBuild `Mayasaba.vcxproj` Release x64 v145              | exit 0, 0 warnings, 0 errors                                            |
+| Native regression suite       | `native/tests/bin/storage_tests.exe`                     | exit 0 — `PASS: 18 isolated native regression groups`                   |
+| Contract registry             | `python native/tests/validate_contract_registry.py`      | exit 0 — `PASS: 124 contract-registry and Screen 2 slice schema checks` |
+| Seed utility production guard | `seed_store.exe %LOCALAPPDATA%\Mayasaba\mayasaba.db ...` | exit 1 — refused, production store path                                 |
 
 The registry script needs `jsonschema`; the managed Python environment lacks it and
 `C:\Python314\python.exe` (4.25.1) was used instead. That is a tooling note, not a product
@@ -298,27 +297,27 @@ result.
 Observed on the built executable at the hash above, 1920x1080 at 125% scaling, Windows dark
 theme, isolated store.
 
-| Observation | Result |
-| --- | --- |
-| Fresh isolated store renders Welcome: brand bar with all three **full** CLI names and truthful `UNSUPPORTED`, dimensional hero, reachable action footer | PASS |
-| `Next` advances Welcome to Project selection; the selector shows a persistent CLI-readiness header | PASS |
-| `Escape` on Welcome advances to Project selection and cannot reach Chat | PASS |
-| Selecting an existing folder binds the project and opens Chat with the canonical path and `Bound · No working CLI session admitted` | PASS |
-| Empty Chat centres one composer with the hero as a single adaptive group (no fixed offsets) | PASS |
-| Typing and pressing **Enter** sends; the contribution is durably saved and the **same** composer docks below the timeline | PASS |
-| The timeline shows the user message with author/state/local timestamp, then exactly **one** controller condition card (not a repeated warning per message) | PASS |
-| `Show details` expands inline with the rich-text block renderer (headings, bullets, quotes, fenced code with a Copy control) | PASS |
-| `Jump to latest` appears only when the reader is not at the end, with a truthful unseen count | PASS |
-| Fixture harness (`MAYASABA_UI_FIXTURES=mixed`) renders banner + reply + work + blocked + unknown cards with distinct titles, states and semantic edges | PASS (presentation fixture only) |
-| Narrow window (460x732 and 692x732): CLI names stack instead of clipping, the footer keeps both actions, no unreadable narrow column, composer fully visible | PASS |
-| Production store byte-identical after all runs | PASS |
+| Observation                                                                                                                                                  | Result                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- |
+| Fresh isolated store renders Welcome: brand bar with all three **full** CLI names and truthful `UNSUPPORTED`, dimensional hero, reachable action footer      | PASS                             |
+| `Next` advances Welcome to Project selection; the selector shows a persistent CLI-readiness header                                                           | PASS                             |
+| `Escape` on Welcome advances to Project selection and cannot reach Chat                                                                                      | PASS                             |
+| Selecting an existing folder binds the project and opens Chat with the canonical path and `Bound · No working CLI session admitted`                          | PASS                             |
+| Empty Chat centres one composer with the hero as a single adaptive group (no fixed offsets)                                                                  | PASS                             |
+| Typing and pressing **Enter** sends; the contribution is durably saved and the **same** composer docks below the timeline                                    | PASS                             |
+| The timeline shows the user message with author/state/local timestamp, then exactly **one** controller condition card (not a repeated warning per message)   | PASS                             |
+| `Show details` expands inline with the rich-text block renderer (headings, bullets, quotes, fenced code with a Copy control)                                 | PASS                             |
+| `Jump to latest` appears only when the reader is not at the end, with a truthful unseen count                                                                | PASS                             |
+| Fixture harness (`MAYASABA_UI_FIXTURES=mixed`) renders banner + reply + work + blocked + unknown cards with distinct titles, states and semantic edges       | PASS (presentation fixture only) |
+| Narrow window (460x732 and 692x732): CLI names stack instead of clipping, the footer keeps both actions, no unreadable narrow column, composer fully visible | PASS                             |
+| Production store byte-identical after all runs                                                                                                               | PASS                             |
 
 ### Defects found and fixed during this work
 
 1. **Motion end-state reverted (blank screens).** A held animation clock reverts the
    animated property to its underlying local value when stopped, so stopping the clock in
    the completion handler reverted every entrance to opacity 0. Fixed by committing the end
-   state as a local value *before* stopping (`MotionController::Track` now takes a commit
+   state as a local value _before_ stopping (`MotionController::Track` now takes a commit
    action). Evidence: before the fix the Welcome body and footer rendered empty.
 2. **Enter did not send.** The multiline `TextBox` class handler consumes Enter and marks
    `KeyDown` handled, so the instance handler never ran and Enter inserted a newline
@@ -342,40 +341,40 @@ theme, isolated store.
 Verdicts: PASS, FAIL, INCONCLUSIVE, BLOCKED, NOT_APPLICABLE. `Fixture` means proven with
 the explicitly identified fixture harness; it never proves live agent work.
 
-| ID | Verdict | Class | Evidence / limit |
-| --- | --- | --- | --- |
-| UX-01 | PASS | Agent-observed runtime | All three screens exist in the executable and share `App.xaml` tokens and `MotionController`. |
-| UX-02 | PASS | Agent-observed runtime | `Next` and `Escape` advance to the selector; no rootless Chat path; first-run recurrence unchanged. |
-| UX-03 | PASS | Agent-observed runtime | At 460x732 the three full CLI names stack and both footer actions stay visible. |
-| UX-04 | PASS | Agent-observed runtime / Source inspection | Dimensional hero uses `PerspectiveTransform3D` plus `CompositeTransform3D`; tilt bounded to about 4 degrees; the static mark carries the same information; loops stop when the screen hides. |
-| UX-05 | PASS | Agent-observed runtime / Source inspection | Recent rows show name, open/closed, canonical path, local last-opened date-time and `Activity: unknown`; a store failure is reported, never as an empty list. |
-| UX-06 | PASS | Agent-observed runtime / Unit test | Picker, cancel, Locate, explicit creation and recovery paths preserved; the 18-group suite still passes. |
-| UX-07 | PASS | Unit test | Draft separation, collision choices and uncertain-send handling unchanged and covered by the existing suite. |
-| UX-08 | PASS | Source inspection | Selection motion is applied only after the service receipt; `SelectAsync` animates only the inline collision panel. |
-| UX-09 | PASS | Agent-observed runtime | Empty Chat groups hero and composer through row geometry; no fixed offsets; verified at 460x732 and maximized. |
-| UX-10 | PASS | Agent-observed runtime | First confirmed save animates a connected Dock (compensating translate); a failed or uncertain save keeps the centred recoverable draft and never docks. |
-| UX-11 | PASS | Source inspection | The composer is never re-parented; Dock changes only row geometry, so text, caret, selection and focus survive. A live caret-position assertion was not automated. |
-| UX-12 | PASS | Agent-observed runtime | User bubble, agent reply and controller card have distinct anatomy, edges and accessible names. |
-| UX-13 | PASS | Fixture / Source inspection | Reply renderer handles headings, paragraphs, lists, quotes and fenced code with Copy; input bounded to 256 KiB and 4000 blocks. |
-| UX-14 | BLOCKED | Fixture / Source inspection | Exactly one primary reply; details expose three contributions, the recorded writer and both peer reviews. Live owner record absent: no live three-agent reply orchestration exists. Fixture presentation proof is recorded separately and does not establish live capability. |
-| UX-15 | PASS | Source inspection | No provisional or raw stream is rendered; the reply path only renders a finalized record. No live non-English stream exists to test. |
-| UX-16 | Fixture PASS | Fixture | Waiting, Running, Blocked and Unknown are distinct titles, state labels and semantic edges. |
-| UX-17 | PASS | Agent-observed runtime / Source inspection | Start/Pause/Stop report unavailable truthfully; fixtures activate only via `MAYASABA_UI_FIXTURES`, carry a banner and never touch the store. |
-| UX-18 | PASS | Source inspection | Start/Pause/Stop handlers are unchanged and never wait for an animation. |
-| UX-19 | PASS | Agent-observed runtime | Header shows all three full CLI names with text status; readiness is separate from session activity. |
-| UX-20 | PASS | Source inspection / Agent-observed runtime | `ItemsRepeater` with `StackLayout` virtualizes realization; stable monotonic tokens; `ReplaceAll` versus `Append` keep identity. Exercised 2026-10-18 with a 300-contribution isolated history: the UIA tree realized 51 elements (virtualization held), open-to-heading took 2.1s including harness overhead, and scrolling stayed responsive. No frame-time instrumentation was used. |
-| UX-21 | PASS | Agent-observed runtime | `Jump to latest` appeared with the correct state; restored history is marked shown so it never replays entrance motion. |
-| UX-22 | PASS | Agent-observed runtime | Details open and close inline with `Appear`; the toggle's accessible name tracks the action; no new route is introduced. |
-| UX-23 | PASS | Native unit test / Live WinUI runtime | Native attachment pipeline implemented: FileOpenPicker, 50-file limit, 100 MiB single, 500 MiB aggregate, BCrypt SHA-256 chunked preparation, Win32 source change detection, SQLite draft & committed attachments, and timeline chip rendering. |
-| UX-24 | PASS | Agent-observed runtime | Live app-theme change exercised 2026-10-18 in one running window: dark frame mean `(35,37,44)` (`10-welcome-dark.png`) and light frame mean `(236,237,243)` (`11-welcome-light.png`) at the same 1424x732 client size. Project, draft, focus and scroll state survived the change; the setting was restored afterwards. |
-| UX-25 | PASS | Agent-observed runtime | Live high contrast exercised 2026-10-18 through `SPI_SETHIGHCONTRAST` (`HCF_HIGHCONTRASTON`): the same window dropped from ~3,500 rendered colours to 597, took the system yellow focus/border colour `(245,197,42)` at the frame edge, and kept every control and label (`12-welcome-highcontrast.png`). The setting was restored afterwards. |
-| UX-26 | PASS | Agent-observed runtime | Live reduced motion exercised 2026-10-18 through the real Settings toggle (`ms-settings:easeofaccess-visualeffects`, `#SystemSettings_Accessibility_IsAnimationsEnabled_ToggleSwitch`): with motion enabled the visible hero changed 1,984–4,284 pixels between frames 0.9s apart; after switching **Animation effects** off in the running window, three consecutive frames differed by **0 pixels**; switching it back on resumed motion (1,914–3,518 px). Startup with the preference already off also produced 0 changed pixels. An unreadable preference fails closed to no motion. |
-| UX-27 | INCONCLUSIVE | Agent-observed runtime | Strict UIA accessible names, heading levels, and independent keyboard focus asserted on navigated message card (`test_full_ui_acceptance.py`); synthetic Narrator speech audio capture remains inconclusive in headless environment without physical audio routing. |
-| UX-28 | INCONCLUSIVE | Agent-observed runtime | 520px narrow window layout verified with zero controls clipped or collapsed (`ProjectHeading` W393, `ProjectPathLabel` W393, `ChatReadinessPanel` W227, `ComposerBox` W423, `SendButton` W112, `StartButton` W76). Window procedure cleanly processes dynamic `WM_DPICHANGED` messages for 150% and 200% suggested rects; however, real OS-level display scaling (effective font scaling, per-monitor V2 DPI awareness, and control metrics across sign-out) was not executed and remains **INCONCLUSIVE**. |
-| UX-29 | PASS | Source inspection | `Window.Closed` cancels all motion, revokes both subscriptions and releases the copy handler; generation guards reject stale callbacks. |
-| UX-30 | PASS | Compilation / Unit test | Release build 0/0; 22 native groups PASS (including groups 21-23); 124 registry checks PASS. |
-| UX-31 | PASS | Agent-observed runtime | WinUI 3 CompositionTarget::Rendering UI-thread callback interval measurement with uncapped stall retention (17,868 callbacks, avg 7.00 ms, max stall 162.39 ms, 10 callbacks >33.3ms, 1 stall >100ms; typing p50 4.68 ms / p95 16.40 ms; consecutive scroll ViewChanged interval p50 5.81 ms / p95 23.96 ms with 0 intervals >33.3ms). Diagnostics gated strictly behind `MAYASABA_PERF_LOG` with 5,000-sample bounded storage. |
-| UX-32 | PASS | Agent-observed runtime | Screenshots, artifact hashes, changed files and the remaining blockers are delivered in this section. |
+| ID    | Verdict      | Class                                      | Evidence / limit                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----- | ------------ | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| UX-01 | PASS         | Agent-observed runtime                     | All three screens exist in the executable and share `App.xaml` tokens and `MotionController`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| UX-02 | PASS         | Agent-observed runtime                     | `Next` and `Escape` advance to the selector; no rootless Chat path; first-run recurrence unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| UX-03 | PASS         | Agent-observed runtime                     | At 460x732 the three full CLI names stack and both footer actions stay visible.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| UX-04 | PASS         | Agent-observed runtime / Source inspection | Dimensional hero uses `PerspectiveTransform3D` plus `CompositeTransform3D`; tilt bounded to about 4 degrees; the static mark carries the same information; loops stop when the screen hides.                                                                                                                                                                                                                                                                                                                                                                                             |
+| UX-05 | PASS         | Agent-observed runtime / Source inspection | Recent rows show name, open/closed, canonical path, local last-opened date-time and `Activity: unknown`; a store failure is reported, never as an empty list.                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| UX-06 | PASS         | Agent-observed runtime / Unit test         | Picker, cancel, Locate, explicit creation and recovery paths preserved; the 18-group suite still passes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| UX-07 | PASS         | Unit test                                  | Draft separation, collision choices and uncertain-send handling unchanged and covered by the existing suite.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| UX-08 | PASS         | Source inspection                          | Selection motion is applied only after the service receipt; `SelectAsync` animates only the inline collision panel.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| UX-09 | PASS         | Agent-observed runtime                     | Empty Chat groups hero and composer through row geometry; no fixed offsets; verified at 460x732 and maximized.                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| UX-10 | PASS         | Agent-observed runtime                     | First confirmed save animates a connected Dock (compensating translate); a failed or uncertain save keeps the centred recoverable draft and never docks.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| UX-11 | PASS         | Source inspection                          | The composer is never re-parented; Dock changes only row geometry, so text, caret, selection and focus survive. A live caret-position assertion was not automated.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| UX-12 | PASS         | Agent-observed runtime                     | User bubble, agent reply and controller card have distinct anatomy, edges and accessible names.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| UX-13 | PASS         | Fixture / Source inspection                | Reply renderer handles headings, paragraphs, lists, quotes and fenced code with Copy; input bounded to 256 KiB and 4000 blocks.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| UX-14 | BLOCKED      | Fixture / Source inspection                | Exactly one primary reply; details expose three contributions, the recorded writer and both peer reviews. Live owner record absent: no live three-agent reply orchestration exists. Fixture presentation proof is recorded separately and does not establish live capability.                                                                                                                                                                                                                                                                                                            |
+| UX-15 | PASS         | Source inspection                          | No provisional or raw stream is rendered; the reply path only renders a finalized record. No live non-English stream exists to test.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| UX-16 | Fixture PASS | Fixture                                    | Waiting, Running, Blocked and Unknown are distinct titles, state labels and semantic edges.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| UX-17 | PASS         | Agent-observed runtime / Source inspection | Start/Pause/Stop report unavailable truthfully; fixtures activate only via `MAYASABA_UI_FIXTURES`, carry a banner and never touch the store.                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| UX-18 | PASS         | Source inspection                          | Start/Pause/Stop handlers are unchanged and never wait for an animation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| UX-19 | PASS         | Agent-observed runtime                     | Header shows all three full CLI names with text status; readiness is separate from session activity.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| UX-20 | PASS         | Source inspection / Agent-observed runtime | `ItemsRepeater` with `StackLayout` virtualizes realization; stable monotonic tokens; `ReplaceAll` versus `Append` keep identity. Exercised 2026-10-18 with a 300-contribution isolated history: the UIA tree realized 51 elements (virtualization held), open-to-heading took 2.1s including harness overhead, and scrolling stayed responsive. No frame-time instrumentation was used.                                                                                                                                                                                                  |
+| UX-21 | PASS         | Agent-observed runtime                     | `Jump to latest` appeared with the correct state; restored history is marked shown so it never replays entrance motion.                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| UX-22 | PASS         | Agent-observed runtime                     | Details open and close inline with `Appear`; the toggle's accessible name tracks the action; no new route is introduced.                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| UX-23 | PASS         | Native unit test / Live WinUI runtime      | Native attachment pipeline implemented: FileOpenPicker, 50-file limit, 100 MiB single, 500 MiB aggregate, BCrypt SHA-256 chunked preparation, Win32 source change detection, SQLite draft & committed attachments, and timeline chip rendering.                                                                                                                                                                                                                                                                                                                                          |
+| UX-24 | PASS         | Agent-observed runtime                     | Live app-theme change exercised 2026-10-18 in one running window: dark frame mean `(35,37,44)` (`10-welcome-dark.png`) and light frame mean `(236,237,243)` (`11-welcome-light.png`) at the same 1424x732 client size. Project, draft, focus and scroll state survived the change; the setting was restored afterwards.                                                                                                                                                                                                                                                                  |
+| UX-25 | PASS         | Agent-observed runtime                     | Live high contrast exercised 2026-10-18 through `SPI_SETHIGHCONTRAST` (`HCF_HIGHCONTRASTON`): the same window dropped from ~3,500 rendered colours to 597, took the system yellow focus/border colour `(245,197,42)` at the frame edge, and kept every control and label (`12-welcome-highcontrast.png`). The setting was restored afterwards.                                                                                                                                                                                                                                           |
+| UX-26 | PASS         | Agent-observed runtime                     | Live reduced motion exercised 2026-10-18 through the real Settings toggle (`ms-settings:easeofaccess-visualeffects`, `#SystemSettings_Accessibility_IsAnimationsEnabled_ToggleSwitch`): with motion enabled the visible hero changed 1,984–4,284 pixels between frames 0.9s apart; after switching **Animation effects** off in the running window, three consecutive frames differed by **0 pixels**; switching it back on resumed motion (1,914–3,518 px). Startup with the preference already off also produced 0 changed pixels. An unreadable preference fails closed to no motion. |
+| UX-27 | INCONCLUSIVE | Agent-observed runtime                     | Strict UIA accessible names, heading levels, and independent keyboard focus asserted on navigated message card (`test_full_ui_acceptance.py`); synthetic Narrator speech audio capture remains inconclusive in headless environment without physical audio routing.                                                                                                                                                                                                                                                                                                                      |
+| UX-28 | INCONCLUSIVE | Agent-observed runtime                     | 520px narrow window layout verified with zero controls clipped or collapsed (`ProjectHeading` W393, `ProjectPathLabel` W393, `ChatReadinessPanel` W227, `ComposerBox` W423, `SendButton` W112, `StartButton` W76). Window procedure cleanly processes dynamic `WM_DPICHANGED` messages for 150% and 200% suggested rects; however, real OS-level display scaling (effective font scaling, per-monitor V2 DPI awareness, and control metrics across sign-out) was not executed and remains **INCONCLUSIVE**.                                                                              |
+| UX-29 | PASS         | Source inspection                          | `Window.Closed` cancels all motion, revokes both subscriptions and releases the copy handler; generation guards reject stale callbacks.                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| UX-30 | PASS         | Compilation / Unit test                    | Release build 0/0; 22 native groups PASS (including groups 21-23); 124 registry checks PASS.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| UX-31 | PASS         | Agent-observed runtime                     | WinUI 3 CompositionTarget::Rendering UI-thread callback interval measurement with uncapped stall retention (17,868 callbacks, avg 7.00 ms, max stall 162.39 ms, 10 callbacks >33.3ms, 1 stall >100ms; typing p50 4.68 ms / p95 16.40 ms; consecutive scroll ViewChanged interval p50 5.81 ms / p95 23.96 ms with 0 intervals >33.3ms). Diagnostics gated strictly behind `MAYASABA_PERF_LOG` with 5,000-sample bounded storage.                                                                                                                                                          |
+| UX-32 | PASS         | Agent-observed runtime                     | Screenshots, artifact hashes, changed files and the remaining blockers are delivered in this section.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 ## Remaining runtime dependencies and incomplete UI proof
 
@@ -407,7 +406,7 @@ observation is claimed.
 
 **Original observation, kept as history.** The composer-only-in-Chat requirement does not permit silent deletion of an earlier draft. At this documentation review, `MainWindow::InitializeStoreAsync` still called `ClearPrebindDraft()` when a legacy unbound draft was nonempty. That startup cleanup conflicted with the existing no-automatic-draft-deletion rule. Removing entry controls and marking the former entry-only S2-14 case not applicable did not close this preservation/recovery obligation.
 
-**Resolution (2026-10-18).** Startup no longer deletes the record. `MainWindow::InitializeStoreAsync` now reads it once (`legacyDraftPresent_ = !store->GetPrebindDraft().empty()`) and leaves the stored bytes untouched; `ClearPrebindDraft` is no longer called on the startup path. The Screen 2 recovery panel (`PrebindDraftPreviewBox`, `UsePrebindDraftButton`, `KeepTargetDraftButton`) remains the only route that moves the text, and a confirmed transfer now discloses it: *"A draft preserved from an earlier version was carried into this project's draft. Nothing was sent. Review it in the composer before sending."*
+**Resolution (2026-10-18).** Startup no longer deletes the record. `MainWindow::InitializeStoreAsync` now reads it once (`legacyDraftPresent_ = !store->GetPrebindDraft().empty()`) and leaves the stored bytes untouched; `ClearPrebindDraft` is no longer called on the startup path. The Screen 2 recovery panel (`PrebindDraftPreviewBox`, `UsePrebindDraftButton`, `KeepTargetDraftButton`) remains the only route that moves the text, and a confirmed transfer now discloses it: _"A draft preserved from an earlier version was carried into this project's draft. Nothing was sent. Review it in the composer before sending."_
 
 Evidence: native regression group 23 (`Legacy unbound draft preservation and recovery`) seeds a draft, reopens the store through the real startup path and asserts the exact text survives; a second assertion block proves a locked target produces `collision`/`pending`, that a forced `DraftChoice::UseSelector` under a new operation id throws, and that both the selector draft and the target draft are unchanged afterwards. Live check `run6-legacy-draft.sh` injected `LEGACY-DRAFT-TEXT-MUST-SURVIVE-STARTUP` into an isolated store, launched the built binary, confirmed the text survived startup, and confirmed it moved only through the explicit recovery action. Production store: untouched.
 
@@ -422,13 +421,13 @@ the historical row should be read as describing the current source.
 
 This reconciliation started from `e45332d` while native implementation continued separately. These results concern the documentation changes, not a newly built executable or fresh UI/CLI runtime acceptance.
 
-| Criterion | Verdict | Evidence |
-| --- | --- | --- |
-| DOC-01: consistent three-screen navigation and composer placement | PASS | Authoritative description, AGENTS, C01, UI/UX, selector guide, screen diagrams and implementation guide align with the user's Chat-only composer confirmation. Stale positive selector-draft instructions were removed. |
-| DOC-02: local references resolve | PASS | Checked 175 local Markdown file/anchor references across the changed documentation; no missing target or anchor. |
-| DOC-03: shared visual and acceptance vocabulary | PASS | Ten motion names agree between the specification and UI/UX; the guide contains exactly UX-01–UX-32, once each. |
-| DOC-04: existing registry/schema regression | PASS | `python native/tests/validate_contract_registry.py` reported 124 checks passing. This does not prove native behavior. |
-| DOC-05: documentation diff hygiene | PASS | Scoped `git diff --check` passed; native implementation changes are excluded from this documentation batch. |
+| Criterion                                                         | Verdict | Evidence                                                                                                                                                                                                                |
+| ----------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DOC-01: consistent three-screen navigation and composer placement | PASS    | Authoritative description, AGENTS, C01, UI/UX, selector guide, screen diagrams and implementation guide align with the user's Chat-only composer confirmation. Stale positive selector-draft instructions were removed. |
+| DOC-02: local references resolve                                  | PASS    | Checked 175 local Markdown file/anchor references across the changed documentation; no missing target or anchor.                                                                                                        |
+| DOC-03: shared visual and acceptance vocabulary                   | PASS    | Ten motion names agree between the specification and UI/UX; the guide contains exactly UX-01–UX-32, once each.                                                                                                          |
+| DOC-04: existing registry/schema regression                       | PASS    | `python native/tests/validate_contract_registry.py` reported 124 checks passing. This does not prove native behavior.                                                                                                   |
+| DOC-05: documentation diff hygiene                                | PASS    | Scoped `git diff --check` passed; native implementation changes are excluded from this documentation batch.                                                                                                             |
 
 ---
 
@@ -444,13 +443,13 @@ Following the initial native attachment milestone, five concrete review findings
 
 ### Validation Summary
 
-| Test suite / Gate | Verdict | Evidence |
-| --- | --- | --- |
-| Group 19 Native Regression (Tests 1–20) | PASS | `native/tests/bin/storage_tests.exe` executed all 19 test groups including 20 attachment and hardening cases. |
-| Contract Registry Validation | PASS | `python native/tests/validate_contract_registry.py` reported 124/124 checks passing. |
-| Native WinUI 3 Compilation | PASS | `Mayasaba.vcxproj` built clean with MSBuild Release x64 (0 warnings, 0 errors). |
-| Tooling Compilation | PASS | `storage_tests.vcxproj` and `seed_store.vcxproj` built clean with MSBuild Release x64. |
-| Production DB Preservation | PASS | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 verified untouched: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
+| Test suite / Gate                       | Verdict | Evidence                                                                                                                              |
+| --------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Group 19 Native Regression (Tests 1–20) | PASS    | `native/tests/bin/storage_tests.exe` executed all 19 test groups including 20 attachment and hardening cases.                         |
+| Contract Registry Validation            | PASS    | `python native/tests/validate_contract_registry.py` reported 124/124 checks passing.                                                  |
+| Native WinUI 3 Compilation              | PASS    | `Mayasaba.vcxproj` built clean with MSBuild Release x64 (0 warnings, 0 errors).                                                       |
+| Tooling Compilation                     | PASS    | `storage_tests.vcxproj` and `seed_store.vcxproj` built clean with MSBuild Release x64.                                                |
+| Production DB Preservation              | PASS    | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 verified untouched: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
 
 ---
 
@@ -474,17 +473,17 @@ Following the commit `cfdb7f6` code review, four additional findings and one per
    - `AttachmentService::PrepareBatch` and `PrepareAttachment` accept an injectable `SteadyClockFn` (`std::function<std::chrono::steady_clock::time_point()>`).
    - Automated test 19 in `storage_tests.cpp` exercises active-time progression and simulates a 130-second system suspend/resume leap, verifying that files prepared within active time reach `AttachmentStatus::Ready` while post-suspend files exceed the 120-second batch deadline and transition cleanly to `AttachmentStatus::TimedOut`.
 5. **Out-of-Transaction Pre-Hashing Performance Optimization:**
-   - Physical disk reads, file existence checks, handle queries, and cryptographic SHA-256 computation via BCrypt now execute *outside* the `mutex_` lock and outside the `BEGIN IMMEDIATE;` SQLite write transaction in `Storage::SaveContribution`.
+   - Physical disk reads, file existence checks, handle queries, and cryptographic SHA-256 computation via BCrypt now execute _outside_ the `mutex_` lock and outside the `BEGIN IMMEDIATE;` SQLite write transaction in `Storage::SaveContribution`.
    - Up to 500 MiB of physical file I/O is completed without holding the SQLite database write lock, eliminating write contention on `mayasaba.db` while preserving strict cryptographic admission guarantees.
 
 ### Follow-up Hardening Verification Results
 
-| Verification Gate | Result | Evidence |
-| --- | --- | --- |
-| 19 Regression Groups (Tests 1–20) | PASS | `native/tests/bin/storage_tests.exe` executed all 20 tests cleanly. |
-| Contract Registry & Slice Schemas | PASS | `python native/tests/validate_contract_registry.py` passed 124/124 checks. |
-| Full Application Build | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). |
-| Production Store Hash | PASS | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified). |
+| Verification Gate                 | Result | Evidence                                                                                                                                |
+| --------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 19 Regression Groups (Tests 1–20) | PASS   | `native/tests/bin/storage_tests.exe` executed all 20 tests cleanly.                                                                     |
+| Contract Registry & Slice Schemas | PASS   | `python native/tests/validate_contract_registry.py` passed 124/124 checks.                                                              |
+| Full Application Build            | PASS   | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings).     |
+| Production Store Hash             | PASS   | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified). |
 
 ---
 
@@ -509,12 +508,12 @@ Following the commit `9584118` code review, three critical architectural guarant
 
 ### Final Verification Results
 
-| Verification Gate | Result | Evidence |
-| --- | --- | --- |
-| 19 Regression Groups (Tests 1–22) | PASS | `native/tests/bin/storage_tests.exe` executed all 22 tests cleanly with 0 failures. |
-| Contract Registry & Slice Schemas | PASS | `python native/tests/validate_contract_registry.py` passed 124/124 checks. |
-| Full Application Build | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). |
-| Production Store Hash | PASS | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified). |
+| Verification Gate                 | Result | Evidence                                                                                                                                |
+| --------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| 19 Regression Groups (Tests 1–22) | PASS   | `native/tests/bin/storage_tests.exe` executed all 22 tests cleanly with 0 failures.                                                     |
+| Contract Registry & Slice Schemas | PASS   | `python native/tests/validate_contract_registry.py` passed 124/124 checks.                                                              |
+| Full Application Build            | PASS   | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings).     |
+| Production Store Hash             | PASS   | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified). |
 
 ## Dimensional visual system — native implementation and verification (2026-10-18)
 
@@ -531,12 +530,12 @@ single persistent Chat workspace are unchanged.
 
 ### What the working tree adds
 
-| File | Change |
-| --- | --- |
-| `native/Mayasaba/App.xaml` | `MayasabaContactShadowBrush`, `MayasabaPlateEdgeBrush` and `MayasabaFaceLightBrush` in the Light, Dark and HighContrast dictionaries. High contrast collapses each to a system colour or removes it. |
-| `native/Mayasaba/MainWindow.xaml` | Sculpted mark: the three stacked plates now sit at negative Z (`10,12,-34`, `6,7,-18`, `3,3,-7`) under a `PerspectiveTransform3D Depth="900"`, with `WelcomeHeroFaceLight` / `EmptyHeroFaceLight` top-light and `WelcomeHeroContactShadow` / `EmptyHeroContactShadow` resting contact shadows. The composer became `ComposerStack` with a `ComposerPlateEdge` that gives the raised plate a visible thickness under `ComposerPanel`. |
-| `native/Mayasaba/MainWindow.xaml.cpp` / `.h` | A pre-binding draft written by an older build is read once (`legacyDraftPresent_`) and never deleted at startup; a confirmed transfer into a project's draft is disclosed in Chat. |
-| `native/tests/storage_tests.cpp` | Group 23 (legacy unbound draft preservation through the real startup path) and refused-recovery assertions (locked target, forced `DraftSelector` choice, both drafts unchanged). |
+| File                                         | Change                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `native/Mayasaba/App.xaml`                   | `MayasabaContactShadowBrush`, `MayasabaPlateEdgeBrush` and `MayasabaFaceLightBrush` in the Light, Dark and HighContrast dictionaries. High contrast collapses each to a system colour or removes it.                                                                                                                                                                                                                                 |
+| `native/Mayasaba/MainWindow.xaml`            | Sculpted mark: the three stacked plates now sit at negative Z (`10,12,-34`, `6,7,-18`, `3,3,-7`) under a `PerspectiveTransform3D Depth="900"`, with `WelcomeHeroFaceLight` / `EmptyHeroFaceLight` top-light and `WelcomeHeroContactShadow` / `EmptyHeroContactShadow` resting contact shadows. The composer became `ComposerStack` with a `ComposerPlateEdge` that gives the raised plate a visible thickness under `ComposerPanel`. |
+| `native/Mayasaba/MainWindow.xaml.cpp` / `.h` | A pre-binding draft written by an older build is read once (`legacyDraftPresent_`) and never deleted at startup; a confirmed transfer into a project's draft is disclosed in Chat.                                                                                                                                                                                                                                                   |
+| `native/tests/storage_tests.cpp`             | Group 23 (legacy unbound draft preservation through the real startup path) and refused-recovery assertions (locked target, forced `DraftSelector` choice, both drafts unchanged).                                                                                                                                                                                                                                                    |
 
 The pre-existing motion vocabulary is unchanged and remains the only permitted custom motion:
 `Enter`, `Appear`, `SlideIn`, `Dock`, `Levitate`, `Glow`, `Orbit`, `DepthReveal`, `HoverLift`,
@@ -553,46 +552,46 @@ production store `%LOCALAPPDATA%\Mayasaba\mayasaba.db` was never opened, migrate
 
 ### Results
 
-| Check | Verdict | Evidence |
-| --- | --- | --- |
-| Release build of the changed projects | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj` and `native/tests/storage_tests.vcxproj`, 0 errors, 0 warnings; `Mayasaba.exe` rebuilt. |
-| Native regressions | PASS | `native/tests/bin/storage_tests.exe` → `PASS: 20 isolated native regression groups`, exit 0. |
-| Contract registry | PASS | `validate_contract_registry.py` → 124 checks PASS, exit 0. |
-| Welcome → Project selection → Chat, and switching | PASS | UIA-driven runs: `WelcomeScreen`/`WelcomeHeroStage` → `Continue to project selection` → `FolderScreen` → `Open project chat-project` → `ProjectHeading`, `ProjectPathLabel`, `ProjectCondition`. |
-| Live light/dark change in one window | PASS | Dark mean `(35,37,44)` vs light mean `(236,237,243)` at 1424x732 (`shots/10-welcome-dark.png`, `shots/11-welcome-light.png`). |
-| Live high contrast | PASS | 3,573 → 597 rendered colours, system border `(245,197,42)`, all labels retained (`shots/12-welcome-highcontrast.png`). |
-| Live reduced motion | PASS | Through the real Settings toggle: hero changed 1,984–4,284 px between frames while enabled, **0 px** in three consecutive frames after switching *Animation effects* off, 1,914–3,518 px after switching it back on. |
-| Ambient motion stops when the screen hides | PASS | CPU over 10s windows on the same process: visible Welcome 3.9% of one core, Project selection 0.8%, Welcome again 1.6%; 0.0% when the app started with animation effects off. |
-| Fixture presentation (reply, work, blocked) | PASS (fixture) | `MAYASABA_UI_FIXTURES=mixed` on an empty isolated project renders the fixture banner, a reply card with writer and both reviews, `Copy the consolidated reply`, a fenced code block with `Copy code block`, `Show reply details`, a running task card with `Show card details`, and a blocked card. `Show reply details` expands to `Preserved disagreement` and the control becomes `Hide reply details`. |
-| Large history | PASS | 300 contributions in an isolated store: 51 UIA elements realized (virtualization held), open-to-heading 2.1s including harness overhead, scrolling responsive (`shots/28-large-history.png`). |
-| Short window | PASS | 900x520 physical = 720x416 logical: composer, Send, Start, Pause and Stop reachable, no clipping (`shots/21-chat-short.png`). |
-| Legacy pre-binding draft preserved | PASS | Group 23 plus `run6-legacy-draft.sh`, which injected `LEGACY-DRAFT-TEXT-MUST-SURVIVE-STARTUP`, launched the built binary, confirmed survival across startup and confirmed the text moved only through the explicit recovery action. |
-| Frame timing / render callback statistics | PASS | UI-thread callback interval profiling via CompositionTarget::Rendering (17,868 callbacks, avg 7.00 ms, max stall 162.39 ms, 10 callbacks >33.3ms, 1 stall >100ms, typing p95 16.40 ms, consecutive scroll ViewChanged p95 23.96 ms). |
-| 150% and 200% DPI | INCONCLUSIVE | Window procedure processes dynamic WM_DPICHANGED messages (150% and 200%) without collapse; real OS-level display scaling across sign-out remains unexecuted. |
-| Narrator speech walkthrough | INCONCLUSIVE | Accessible names, heading levels, and independent keyboard focus verified; synthetic speech audio playback unmeasured in headless subshell without physical audio loopback. |
-| Live three-agent reply and work records | BLOCKED | No native CLI adapters, session admission, confinement proof or orchestration owner exists, so no live record can be produced. Fixture presentation proves the renderer only. |
+| Check                                             | Verdict        | Evidence                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Release build of the changed projects             | PASS           | `MSBuild native/Mayasaba/Mayasaba.vcxproj` and `native/tests/storage_tests.vcxproj`, 0 errors, 0 warnings; `Mayasaba.exe` rebuilt.                                                                                                                                                                                                                                                                         |
+| Native regressions                                | PASS           | `native/tests/bin/storage_tests.exe` → `PASS: 20 isolated native regression groups`, exit 0.                                                                                                                                                                                                                                                                                                               |
+| Contract registry                                 | PASS           | `validate_contract_registry.py` → 124 checks PASS, exit 0.                                                                                                                                                                                                                                                                                                                                                 |
+| Welcome → Project selection → Chat, and switching | PASS           | UIA-driven runs: `WelcomeScreen`/`WelcomeHeroStage` → `Continue to project selection` → `FolderScreen` → `Open project chat-project` → `ProjectHeading`, `ProjectPathLabel`, `ProjectCondition`.                                                                                                                                                                                                           |
+| Live light/dark change in one window              | PASS           | Dark mean `(35,37,44)` vs light mean `(236,237,243)` at 1424x732 (`shots/10-welcome-dark.png`, `shots/11-welcome-light.png`).                                                                                                                                                                                                                                                                              |
+| Live high contrast                                | PASS           | 3,573 → 597 rendered colours, system border `(245,197,42)`, all labels retained (`shots/12-welcome-highcontrast.png`).                                                                                                                                                                                                                                                                                     |
+| Live reduced motion                               | PASS           | Through the real Settings toggle: hero changed 1,984–4,284 px between frames while enabled, **0 px** in three consecutive frames after switching _Animation effects_ off, 1,914–3,518 px after switching it back on.                                                                                                                                                                                       |
+| Ambient motion stops when the screen hides        | PASS           | CPU over 10s windows on the same process: visible Welcome 3.9% of one core, Project selection 0.8%, Welcome again 1.6%; 0.0% when the app started with animation effects off.                                                                                                                                                                                                                              |
+| Fixture presentation (reply, work, blocked)       | PASS (fixture) | `MAYASABA_UI_FIXTURES=mixed` on an empty isolated project renders the fixture banner, a reply card with writer and both reviews, `Copy the consolidated reply`, a fenced code block with `Copy code block`, `Show reply details`, a running task card with `Show card details`, and a blocked card. `Show reply details` expands to `Preserved disagreement` and the control becomes `Hide reply details`. |
+| Large history                                     | PASS           | 300 contributions in an isolated store: 51 UIA elements realized (virtualization held), open-to-heading 2.1s including harness overhead, scrolling responsive (`shots/28-large-history.png`).                                                                                                                                                                                                              |
+| Short window                                      | PASS           | 900x520 physical = 720x416 logical: composer, Send, Start, Pause and Stop reachable, no clipping (`shots/21-chat-short.png`).                                                                                                                                                                                                                                                                              |
+| Legacy pre-binding draft preserved                | PASS           | Group 23 plus `run6-legacy-draft.sh`, which injected `LEGACY-DRAFT-TEXT-MUST-SURVIVE-STARTUP`, launched the built binary, confirmed survival across startup and confirmed the text moved only through the explicit recovery action.                                                                                                                                                                        |
+| Frame timing / render callback statistics         | PASS           | UI-thread callback interval profiling via CompositionTarget::Rendering (17,868 callbacks, avg 7.00 ms, max stall 162.39 ms, 10 callbacks >33.3ms, 1 stall >100ms, typing p95 16.40 ms, consecutive scroll ViewChanged p95 23.96 ms).                                                                                                                                                                       |
+| 150% and 200% DPI                                 | INCONCLUSIVE   | Window procedure processes dynamic WM_DPICHANGED messages (150% and 200%) without collapse; real OS-level display scaling across sign-out remains unexecuted.                                                                                                                                                                                                                                              |
+| Narrator speech walkthrough                       | INCONCLUSIVE   | Accessible names, heading levels, and independent keyboard focus verified; synthetic speech audio playback unmeasured in headless subshell without physical audio loopback.                                                                                                                                                                                                                                |
+| Live three-agent reply and work records           | BLOCKED        | No native CLI adapters, session admission, confinement proof or orchestration owner exists, so no live record can be produced. Fixture presentation proves the renderer only.                                                                                                                                                                                                                              |
 
 ### Criterion verdicts for the visual refinement
 
-| ID | Criterion | Verdict | Note |
-| --- | --- | --- | --- |
-| D-01 | Sculpted three-node mark with layered edges and restrained lighting | PASS | Negative-Z plates plus face light and contact shadow, in both heroes. |
-| D-02 | Consistent background, content and temporary-overlay planes | PASS | Theme brushes per plane; high contrast collapses to system colours. |
-| D-03 | Raised project rows with resting and interaction states | PASS | `HoverLift` on rows; paths never rotate; hover/focus feedback observed. |
-| D-04 | Floating composer with clear separation from the timeline | PASS | `ComposerStack` + `ComposerPlateEdge` under one `ComposerPanel`; single submission path unchanged. |
-| D-05 | Readable reply surfaces and layered detail expansion | PASS (fixture) | Opaque surfaces under text; `Appear` expansion; reading position retained. Live reply remains BLOCKED. |
-| D-06 | Smooth connected transitions that explain where content moved | PASS | `Dock` animates a compensating translate from the composer's previous bounds to its new ones; entrance motions are ordered and finite. Smoothness itself is unmeasured (see frame timing). |
-| D-07 | Bounded hero perspective and optional pointer tilt | PASS | `PerspectiveTransform3D Depth=900`, tilt clamped to ±4°, static equivalent retained. |
-| D-08 | Ambient effects only on visible idle heroes, stopped when hidden | PASS | Ambient loops exist only on the Welcome hero and the empty-Chat hero. The first persisted contribution stops the Chat loops (0 px changed across three consecutive frames); CPU drops when the screen hides; 0 px with the preference off. |
-| D-09 | Preference changes take effect live | PASS | Settings toggle applied to a running window in both directions. |
-| D-10 | High contrast uses system colours and removes decorative depth | PASS | 597 colours, no gradients or shadows, system border colour. |
-| D-11 | Lifecycle, teardown and stale-callback safety | PASS (source) | `CancelAll` on hide/close, both subscriptions revoked, weak references and generation guards on every callback. |
-|| D-12 | Frame timing and 150/200% DPI | INCONCLUSIVE | Not instrumented; DPI change needs a sign-out. |
-|| AC-01 | Action Center panel toggles read-only owner projection; empty/loading/partial/stale/unavailable states distinguished | INCONCLUSIVE | Storage projection verified via standalone regression (query, revalidation, isolation, integrity); native UI acceptance (pywinauto) not yet executed against Action Center panel/item/details/close. |
-|| AC-02 | Action Center item click shows source-linked explanation; dismissal is presentation-only, no durable mutation | INCONCLUSIVE | Handler revalidates project+kind and routes through existing services; native UI acceptance pending. |
-|| AC-03 | Action Center revalidates project, source identity, record version, state, and authorization on invocation | INCONCLUSIVE | Project mismatch guard implemented; live owner-record revalidation not yet exercised end-to-end. |
-|| AI-01 | Attachment inspection resolves staged draft then committed managed attachment; metadata-only for unsupported types | INCONCLUSIVE | Draft-branch inspection + SHA-256 integrity verification verified via standalone regression; committed branch implemented, native UI acceptance pending. |
-|| AI-02 | Inspection never reopens originalPath; integrity of managed file rechecked before rendering | INCONCLUSIVE | Integrity uses ComputeFileSha256 on managed storagePath only (never originalPath); native UI acceptance pending. |
+| ID   | Criterion                                                           | Verdict                                                                                                              | Note                                                                                                                                                                                                                                       |
+| ---- | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| D-01 | Sculpted three-node mark with layered edges and restrained lighting | PASS                                                                                                                 | Negative-Z plates plus face light and contact shadow, in both heroes.                                                                                                                                                                      |
+| D-02 | Consistent background, content and temporary-overlay planes         | PASS                                                                                                                 | Theme brushes per plane; high contrast collapses to system colours.                                                                                                                                                                        |
+| D-03 | Raised project rows with resting and interaction states             | PASS                                                                                                                 | `HoverLift` on rows; paths never rotate; hover/focus feedback observed.                                                                                                                                                                    |
+| D-04 | Floating composer with clear separation from the timeline           | PASS                                                                                                                 | `ComposerStack` + `ComposerPlateEdge` under one `ComposerPanel`; single submission path unchanged.                                                                                                                                         |
+| D-05 | Readable reply surfaces and layered detail expansion                | PASS (fixture)                                                                                                       | Opaque surfaces under text; `Appear` expansion; reading position retained. Live reply remains BLOCKED.                                                                                                                                     |
+| D-06 | Smooth connected transitions that explain where content moved       | PASS                                                                                                                 | `Dock` animates a compensating translate from the composer's previous bounds to its new ones; entrance motions are ordered and finite. Smoothness itself is unmeasured (see frame timing).                                                 |
+| D-07 | Bounded hero perspective and optional pointer tilt                  | PASS                                                                                                                 | `PerspectiveTransform3D Depth=900`, tilt clamped to ±4°, static equivalent retained.                                                                                                                                                       |
+| D-08 | Ambient effects only on visible idle heroes, stopped when hidden    | PASS                                                                                                                 | Ambient loops exist only on the Welcome hero and the empty-Chat hero. The first persisted contribution stops the Chat loops (0 px changed across three consecutive frames); CPU drops when the screen hides; 0 px with the preference off. |
+| D-09 | Preference changes take effect live                                 | PASS                                                                                                                 | Settings toggle applied to a running window in both directions.                                                                                                                                                                            |
+| D-10 | High contrast uses system colours and removes decorative depth      | PASS                                                                                                                 | 597 colours, no gradients or shadows, system border colour.                                                                                                                                                                                |
+| D-11 | Lifecycle, teardown and stale-callback safety                       | PASS (source)                                                                                                        | `CancelAll` on hide/close, both subscriptions revoked, weak references and generation guards on every callback.                                                                                                                            |
+|      | D-12                                                                | Frame timing and 150/200% DPI                                                                                        | INCONCLUSIVE                                                                                                                                                                                                                               | Not instrumented; DPI change needs a sign-out.                                                                                                                                                       |
+|      | AC-01                                                               | Action Center panel toggles read-only owner projection; empty/loading/partial/stale/unavailable states distinguished | INCONCLUSIVE                                                                                                                                                                                                                               | Storage projection verified via standalone regression (query, revalidation, isolation, integrity); native UI acceptance (pywinauto) not yet executed against Action Center panel/item/details/close. |
+|      | AC-02                                                               | Action Center item click shows source-linked explanation; dismissal is presentation-only, no durable mutation        | INCONCLUSIVE                                                                                                                                                                                                                               | Handler revalidates project+kind and routes through existing services; native UI acceptance pending.                                                                                                 |
+|      | AC-03                                                               | Action Center revalidates project, source identity, record version, state, and authorization on invocation           | INCONCLUSIVE                                                                                                                                                                                                                               | Project mismatch guard implemented; live owner-record revalidation not yet exercised end-to-end.                                                                                                     |
+|      | AI-01                                                               | Attachment inspection resolves staged draft then committed managed attachment; metadata-only for unsupported types   | INCONCLUSIVE                                                                                                                                                                                                                               | Draft-branch inspection + SHA-256 integrity verification verified via standalone regression; committed branch implemented, native UI acceptance pending.                                             |
+|      | AI-02                                                               | Inspection never reopens originalPath; integrity of managed file rechecked before rendering                          | INCONCLUSIVE                                                                                                                                                                                                                               | Integrity uses ComputeFileSha256 on managed storagePath only (never originalPath); native UI acceptance pending.                                                                                     |
 
 ### Fixture-harness behaviour worth knowing
 
@@ -631,13 +630,13 @@ their timing, their guard conditions and their teardown.
 
 Measurements on the rebuilt binary (isolated stores, 1424x732 client, 125% DPI):
 
-| Check | Result | Evidence |
-| --- | --- | --- |
-| Empty-Chat hero, animation effects on | 898 / 964 / 220 px changed against frame 1 | `dimensional-20261018b/empty-chat/E-empty-hero-1..4.png` |
-| Same region after the first persisted contribution | 0 / 0 / 0 px; heading removed | `dimensional-20261018b/empty-chat/E-after-send-1..4.png` |
-| Empty-Chat hero with animation effects off (`SPI_SETCLIENTAREAANIMATION = 0x1043`) | 0 / 0 / 0 px | `dimensional-20261018b/empty-chat/RM-empty-hero-1..4.png` |
-| Welcome hero, animation effects on | 2,794 / 4,948 / 5,433 px changed against frame 1 | `dimensional-20261018b/welcome-ambient/W-on-1..4.png` |
-| Welcome hero with animation effects off | 0 / 0 / 0 px | `dimensional-20261018b/welcome-ambient/W-off-1..4.png` |
+| Check                                                                              | Result                                           | Evidence                                                  |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------- |
+| Empty-Chat hero, animation effects on                                              | 898 / 964 / 220 px changed against frame 1       | `dimensional-20261018b/empty-chat/E-empty-hero-1..4.png`  |
+| Same region after the first persisted contribution                                 | 0 / 0 / 0 px; heading removed                    | `dimensional-20261018b/empty-chat/E-after-send-1..4.png`  |
+| Empty-Chat hero with animation effects off (`SPI_SETCLIENTAREAANIMATION = 0x1043`) | 0 / 0 / 0 px                                     | `dimensional-20261018b/empty-chat/RM-empty-hero-1..4.png` |
+| Welcome hero, animation effects on                                                 | 2,794 / 4,948 / 5,433 px changed against frame 1 | `dimensional-20261018b/welcome-ambient/W-on-1..4.png`     |
+| Welcome hero with animation effects off                                            | 0 / 0 / 0 px                                     | `dimensional-20261018b/welcome-ambient/W-off-1..4.png`    |
 
 The Settings preference was restored to its original value after the run (`SPI_GETCLIENTAREAANIMATION`
 reads 1).
@@ -666,12 +665,12 @@ The approved interactive design reference (`mayasaba-dimensional-proposal.html`)
 
 #### Build and verification results
 
-| Verification | Status | Command / Details |
-| --- | --- | --- |
-| Full Application Build | PASS | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). Executable: `native/Mayasaba/bin/x64/Release/Mayasaba.exe`. |
-| Test Tooling Build | PASS | `MSBuild native/tests/storage_tests.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). |
-| Storage & Regression Suite | PASS | `native/tests/bin/storage_tests.exe`: all 20 test groups PASS (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation). |
-| Contract Registry Validator | PASS | `python native/tests/validate_contract_registry.py`: all 124 schema and slice checks PASS. |
+| Verification                | Status | Command / Details                                                                                                                                                                               |
+| --------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full Application Build      | PASS   | `MSBuild native/Mayasaba/Mayasaba.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings). Executable: `native/Mayasaba/bin/x64/Release/Mayasaba.exe`. |
+| Test Tooling Build          | PASS   | `MSBuild native/tests/storage_tests.vcxproj /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v145` (0 errors, 0 warnings).                                                           |
+| Storage & Regression Suite  | PASS   | `native/tests/bin/storage_tests.exe`: all 20 test groups PASS (storage, migration, identity locks, ordered drafts, services, creation, recovery, FIFO, attachments, legacy draft preservation). |
+| Contract Registry Validator | PASS   | `python native/tests/validate_contract_registry.py`: all 124 schema and slice checks PASS.                                                                                                      |
 
 ### What this does not establish
 
@@ -687,6 +686,7 @@ and work rows above stay BLOCKED until those owner services exist.
 ## 1. Scope and Authority
 
 This historical report records implementation and partial verification of three ordered UX milestones. The 2026-10-19 integration review below supersedes aggregate completion claims; source walkthroughs do not establish native interaction acceptance:
+
 1. **Milestone 1 — Accessibility, performance verification and dimensional-motion refinement.**
 2. **Milestone 2 — Recent-project filtering on Screen 2 (UXE-04 subset).**
 3. **Milestone 3 — Current-project saved-message search in Chat (UXE-02 subset).**
@@ -698,7 +698,9 @@ Per repository precedence, the user's current explicit instruction governs, pres
 ## 2. Milestone 1 — Motion Lifecycle Hardening, Accessibility & Performance (PARTIALLY VERIFIED)
 
 ### 2.1 Motion Lifecycle Hardening under Stress
+
 In `native/Mayasaba/Motion.h` and `Motion.cpp`:
+
 - **Tracking Registry Bounded Capacity:** `MotionController::Track` maintains a bounded registry of active storyboards (`tracked_`, capped at `MaxTracked = 96` items). When tracked count exceeds capacity, stopped entries are pruned first; if still exceeding `MaxTracked`, the oldest storyboard is evicted after explicitly invoking `board.Stop()` to release composition resources, animation clocks, and target properties before dropping the reference.
 - **Per-Target Active Hover Tracking:** Replaced the previous single shared `activeHoverBoard_` slot with per-target tracking using `struct ActiveHover { weak_ref<FrameworkElement> element; Storyboard board; uint64_t generation; }` stored in `activeHovers_`. Starting a hover animation on project row B stops only row B's prior storyboard, ensuring row A's ongoing return to resting position is never cancelled or frozen mid-transition.
 - **Pointer-Tilt Management:** Added `activeTiltBoard_` storyboard reference alongside monotonic generation counter (`tiltGeneration_`). When a new `HeroTilt` or `ResetTilt` animation is requested, any in-flight storyboard for that target is immediately stopped.
@@ -706,52 +708,55 @@ In `native/Mayasaba/Motion.h` and `Motion.cpp`:
 - **Smooth Resting Return:** `ResetTilt` smoothly animates the brand hero back to the shared resting perspective `(RotationX="15" RotationY="-22" RotationZ="-9")` over 260 ms with easing in standard mode, and collapses immediately to `(0, 0, 0)` under reduced-motion or high-contrast preferences.
 
 ### 2.2 Performance Benchmark Results (SQLite Background Query Engine)
+
 Measurements executed using `native/tests/bin/perf_benchmarks.exe` on a Release x64 binary with isolated test stores outside `%LOCALAPPDATA%\Mayasaba\`:
+
 - **Hardware & Environment:** Windows 11 x64 (Build 26200), MSVC v145 Release Build, 125% DPI (`GetDpiForWindow` = 120), isolated SQLite stores in `$env:TEMP\mayasaba_perf_benchmarks\`.
 - **Target Engineering Threshold:** < 100 ms p95 latency for interactive input and queries (strictly checked and enforced by `perf_benchmarks.exe`, throwing a runtime error if violated).
 - **Measurement Scope Notice:** This benchmark measures SQLite storage engine query and filtering execution time on a background worker thread under controlled synthetic workloads. It does **NOT** measure WinUI 3 UI-thread compositor frame presentation rates, input typing latency, or XAML ListView layout / scrolling frame rates, which require live UI automation or ETW traces.
 
 #### Recent-Project Filtering Latencies (1,000 Recorded Projects)
 
-| Query Scenario                         | Min Latency | Mean Latency | p95 Latency | Max Latency | Samples | Target Threshold | Verdict |
-|:---------------------------------------|------------:|-------------:|------------:|------------:|--------:|-----------------:|:-------:|
-| Unfiltered (pageSize 20, offset 0)     |     1.27 ms |     1.35 ms |     1.56 ms |     1.81 ms |     100 |         < 100 ms |  PASS   |
-| Status: Open only (pageSize 20)        |     1.32 ms |     1.42 ms |     1.61 ms |     2.09 ms |     100 |         < 100 ms |  PASS   |
-| Status: Closed only (pageSize 20)      |     0.17 ms |     0.19 ms |     0.24 ms |     0.25 ms |     100 |         < 100 ms |  PASS   |
-| Substring match 'service_alpha'        |     0.79 ms |     0.83 ms |     0.94 ms |     1.04 ms |     100 |         < 100 ms |  PASS   |
-| Literal '%' match 'special_%'          |     0.70 ms |     0.76 ms |     0.89 ms |     1.47 ms |     100 |         < 100 ms |  PASS   |
-| Deep paging (offset 500)               |     2.35 ms |     2.72 ms |     3.50 ms |     4.36 ms |     100 |         < 100 ms |  PASS   |
-| Full scan (0 matches)                  |     0.50 ms |     0.54 ms |     0.67 ms |     1.21 ms |     100 |         < 100 ms |  PASS   |
+| Query Scenario                     | Min Latency | Mean Latency | p95 Latency | Max Latency | Samples | Target Threshold | Verdict |
+| :--------------------------------- | ----------: | -----------: | ----------: | ----------: | ------: | ---------------: | :-----: |
+| Unfiltered (pageSize 20, offset 0) |     1.27 ms |      1.35 ms |     1.56 ms |     1.81 ms |     100 |         < 100 ms |  PASS   |
+| Status: Open only (pageSize 20)    |     1.32 ms |      1.42 ms |     1.61 ms |     2.09 ms |     100 |         < 100 ms |  PASS   |
+| Status: Closed only (pageSize 20)  |     0.17 ms |      0.19 ms |     0.24 ms |     0.25 ms |     100 |         < 100 ms |  PASS   |
+| Substring match 'service_alpha'    |     0.79 ms |      0.83 ms |     0.94 ms |     1.04 ms |     100 |         < 100 ms |  PASS   |
+| Literal '%' match 'special\_%'     |     0.70 ms |      0.76 ms |     0.89 ms |     1.47 ms |     100 |         < 100 ms |  PASS   |
+| Deep paging (offset 500)           |     2.35 ms |      2.72 ms |     3.50 ms |     4.36 ms |     100 |         < 100 ms |  PASS   |
+| Full scan (0 matches)              |     0.50 ms |      0.54 ms |     0.67 ms |     1.21 ms |     100 |         < 100 ms |  PASS   |
 
 #### Saved-Message Search Latencies (300, 3,000, and 10,000 Messages)
 
-| Dataset Size | Query Scenario                         | Min Latency | Mean Latency | p95 Latency | Max Latency | DB Size  | Target Threshold | Verdict |
-|:-------------|:---------------------------------------|------------:|-------------:|------------:|------------:|:---------|-----------------:|:-------:|
-| 300 msgs     | Cold query (first execution)           |     0.39 ms |     0.39 ms |     0.39 ms |     0.39 ms | 224 KiB  |         < 100 ms |  PASS   |
-| 300 msgs     | Substring 'algorithm' (~10% hits)      |     0.26 ms |     0.27 ms |     0.29 ms |     0.34 ms | 224 KiB  |         < 100 ms |  PASS   |
-| 300 msgs     | Rare needle (exact 1 match)            |     0.28 ms |     0.28 ms |     0.30 ms |     0.31 ms | 224 KiB  |         < 100 ms |  PASS   |
-| 300 msgs     | Literal wildcard '100%_verified'       |     0.25 ms |     0.26 ms |     0.31 ms |     0.38 ms | 224 KiB  |         < 100 ms |  PASS   |
-| 300 msgs     | Non-ASCII query '日本語テスト'   |     0.21 ms |     0.23 ms |     0.31 ms |     0.37 ms | 224 KiB  |         < 100 ms |  PASS   |
-| 300 msgs     | Deep paging (offset = count/2)         |     0.16 ms |     0.18 ms |     0.28 ms |     0.32 ms | 224 KiB  |         < 100 ms |  PASS   |
-| 300 msgs     | Worst-case full scan (0 hits)          |     0.27 ms |     0.29 ms |     0.38 ms |     0.60 ms | 224 KiB  |         < 100 ms |  PASS   |
-| 3,000 msgs   | Cold query (first execution)           |     1.33 ms |     1.33 ms |     1.33 ms |     1.33 ms | 1384 KiB |         < 100 ms |  PASS   |
-| 3,000 msgs   | Substring 'algorithm' (~10% hits)      |     1.33 ms |     1.42 ms |     1.59 ms |     1.74 ms | 1384 KiB |         < 100 ms |  PASS   |
-| 3,000 msgs   | Rare needle (exact 1 match)            |     2.44 ms |     2.62 ms |     2.97 ms |     3.65 ms | 1384 KiB |         < 100 ms |  PASS   |
-| 3,000 msgs   | Literal wildcard '100%_verified'       |     1.48 ms |     1.55 ms |     1.63 ms |     1.94 ms | 1384 KiB |         < 100 ms |  PASS   |
-| 3,000 msgs   | Non-ASCII query '日本語テスト'   |     1.83 ms |     1.95 ms |     2.07 ms |     2.68 ms | 1384 KiB |         < 100 ms |  PASS   |
-| 3,000 msgs   | Deep paging (offset = count/2)         |     1.17 ms |     1.30 ms |     1.78 ms |     2.27 ms | 1384 KiB |         < 100 ms |  PASS   |
-| 3,000 msgs   | Worst-case full scan (0 hits)          |     2.53 ms |     2.76 ms |     3.27 ms |     4.50 ms | 1384 KiB |         < 100 ms |  PASS   |
-| 10,000 msgs  | Cold query (first execution)           |     6.54 ms |     6.54 ms |     6.54 ms |     6.54 ms | 4460 KiB |         < 100 ms |  PASS   |
-| 10,000 msgs  | Substring 'algorithm' (~10% hits)      |     6.88 ms |     7.25 ms |     8.04 ms |     8.92 ms | 4460 KiB |         < 100 ms |  PASS   |
-| 10,000 msgs  | Rare needle (exact 1 match)            |    13.61 ms |    15.54 ms |    23.35 ms |    27.81 ms | 4460 KiB |         < 100 ms |  PASS   |
-| 10,000 msgs  | Literal wildcard '100%_verified'       |     6.83 ms |     7.20 ms |     7.81 ms |     8.52 ms | 4460 KiB |         < 100 ms |  PASS   |
-| 10,000 msgs  | Non-ASCII query '日本語テスト'   |     6.71 ms |     7.21 ms |     7.79 ms |     9.90 ms | 4460 KiB |         < 100 ms |  PASS   |
-| 10,000 msgs  | Deep paging (offset = count/2)         |     7.35 ms |     8.46 ms |     9.75 ms |    10.39 ms | 4460 KiB |         < 100 ms |  PASS   |
-| 10,000 msgs  | Worst-case full scan (0 hits)          |    13.56 ms |    14.27 ms |    16.20 ms |    16.80 ms | 4460 KiB |         < 100 ms |  PASS   |
+| Dataset Size | Query Scenario                    | Min Latency | Mean Latency | p95 Latency | Max Latency | DB Size  | Target Threshold | Verdict |
+| :----------- | :-------------------------------- | ----------: | -----------: | ----------: | ----------: | :------- | ---------------: | :-----: |
+| 300 msgs     | Cold query (first execution)      |     0.39 ms |      0.39 ms |     0.39 ms |     0.39 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Substring 'algorithm' (~10% hits) |     0.26 ms |      0.27 ms |     0.29 ms |     0.34 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Rare needle (exact 1 match)       |     0.28 ms |      0.28 ms |     0.30 ms |     0.31 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Literal wildcard '100%\_verified' |     0.25 ms |      0.26 ms |     0.31 ms |     0.38 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Non-ASCII query '日本語テスト'    |     0.21 ms |      0.23 ms |     0.31 ms |     0.37 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Deep paging (offset = count/2)    |     0.16 ms |      0.18 ms |     0.28 ms |     0.32 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 300 msgs     | Worst-case full scan (0 hits)     |     0.27 ms |      0.29 ms |     0.38 ms |     0.60 ms | 224 KiB  |         < 100 ms |  PASS   |
+| 3,000 msgs   | Cold query (first execution)      |     1.33 ms |      1.33 ms |     1.33 ms |     1.33 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Substring 'algorithm' (~10% hits) |     1.33 ms |      1.42 ms |     1.59 ms |     1.74 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Rare needle (exact 1 match)       |     2.44 ms |      2.62 ms |     2.97 ms |     3.65 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Literal wildcard '100%\_verified' |     1.48 ms |      1.55 ms |     1.63 ms |     1.94 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Non-ASCII query '日本語テスト'    |     1.83 ms |      1.95 ms |     2.07 ms |     2.68 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Deep paging (offset = count/2)    |     1.17 ms |      1.30 ms |     1.78 ms |     2.27 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 3,000 msgs   | Worst-case full scan (0 hits)     |     2.53 ms |      2.76 ms |     3.27 ms |     4.50 ms | 1384 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Cold query (first execution)      |     6.54 ms |      6.54 ms |     6.54 ms |     6.54 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Substring 'algorithm' (~10% hits) |     6.88 ms |      7.25 ms |     8.04 ms |     8.92 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Rare needle (exact 1 match)       |    13.61 ms |     15.54 ms |    23.35 ms |    27.81 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Literal wildcard '100%\_verified' |     6.83 ms |      7.20 ms |     7.81 ms |     8.52 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Non-ASCII query '日本語テスト'    |     6.71 ms |      7.21 ms |     7.79 ms |     9.90 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Deep paging (offset = count/2)    |     7.35 ms |      8.46 ms |     9.75 ms |    10.39 ms | 4460 KiB |         < 100 ms |  PASS   |
+| 10,000 msgs  | Worst-case full scan (0 hits)     |    13.56 ms |     14.27 ms |    16.20 ms |    16.80 ms | 4460 KiB |         < 100 ms |  PASS   |
 
 All observed query latencies met the enforced 100 ms p95 threshold, with worst-case 10,000-row table scans peaking at 23.35 ms p95.
 
 ### 2.3 Outstanding Accessibility & Display Scaling Checks (Inconclusive)
+
 - **150% and 200% Display Scaling:** INCONCLUSIVE. The test session ran at 125% DPI (`GetDpiForWindow` = 120); 150% and 200% were not exercised in that session. Whether this machine requires sign-out for a particular scaling change must be checked rather than assumed.
 - **Narrator Speech Walkthrough:** INCONCLUSIVE. All controls expose stable UI Automation properties, heading levels, and accessible names (`AutomationProperties.Name`); live synthetic Narrator speech audio capture was not instrumented.
 - **Milestone 1 Completion Status:** **PARTIALLY VERIFIED**. Backend query latency and motion lifecycle hardening are verified. Live UI Automation focus/cancellation coverage, Narrator speech verification, and multi-DPI display scaling remain inconclusive.
@@ -761,6 +766,7 @@ All observed query latencies met the enforced 100 ms p95 threshold, with worst-c
 ## 3. Milestone 2 — Recent-Project Filtering on Screen 2 (IMPLEMENTED; native acceptance incomplete)
 
 ### 3.1 Implementation Summary
+
 - **UI Surface (`MainWindow.xaml`):** Added `RecentProjectsFilterBox` (placeholder: "Filter recent projects..."), `RecentProjectsClearFilterButton` (clear icon `\uE894`), `RecentProjectsStatusFilter` (ComboBox with items "All", "Open", "Closed"), and `RecentProjectsFilterCountLabel`.
 - **Query Boundary (`Storage.h`, `Storage.cpp`):**
   - Extended `CrossProjectRecentProjectsQuery` with `pageSize`, `offset`, `filterText`, and `statusFilter` (`ProjectStatusFilter` enum: `All`, `Open`, `Closed`).
@@ -775,6 +781,7 @@ All observed query latencies met the enforced 100 ms p95 threshold, with worst-c
 - **Zero-Filesystem Scan Guarantee:** The query runs strictly against recorded SQLite project rows; no filesystem directories or untracked paths are scanned.
 
 ### 3.2 Unit Test Evidence
+
 - **Test Group 21 in `native/tests/storage_tests.cpp`:**
   - Case 21A: Name substring matching.
   - Case 21B: Canonical path substring matching.
@@ -789,6 +796,7 @@ All observed query latencies met the enforced 100 ms p95 threshold, with worst-c
 ## 4. Milestone 3 — Current-Project Saved-Message Search in Chat (IMPLEMENTED; native acceptance incomplete)
 
 ### 4.1 Implementation Summary & Search Lifecycle Hardening (`SearchController.h`)
+
 - **Shared Production Search Controller (`native/Mayasaba/SearchController.h`):**
   - Encapsulates deterministic search state machine across UI events and background database queries: `Open()`, `Close()`, `SetQuery()`, `RequestLoadMore()`, `ApplyResult()`, `CanLoadMore()`, `ShouldShowLoadMoreButton()`.
   - Used directly by both `MainWindow.xaml.cpp` and native regression unit test suite (`storage_tests.cpp`).
@@ -832,7 +840,9 @@ All observed query latencies met the enforced 100 ms p95 threshold, with worst-c
   - Drafts, pending submissions, attachment contents, raw CLI output, and fixtures are strictly excluded.
 
 ### 4.2 Shared Production Logic Unit Test Evidence (`storage_tests.cpp`)
+
 Test Group 22 in `native/tests/storage_tests.cpp` executes directly against the real SQLite storage engine and `mayasaba::SearchController`:
+
 - **Case 22A:** Case-insensitive substring matching.
 - **Case 22B:** Strict project isolation (Project A queries never return Project B contributions).
 - **Case 22C:** Exclusion of unsaved drafts and pending submissions.
@@ -907,23 +917,25 @@ Automated end-to-end execution of `native/tests/walkthrough_run.py` was conducte
 
 ## 5. Regression & Validation Matrix
 
-| Verification Check | Result | Command / Details |
-|:-------------------|:------:|:------------------|
-| Contract Registry Validation | **PASS** | `python native/tests/validate_contract_registry.py` (124/124 checks PASS) |
-| Native Storage Regression Suite | **PASS** | `native/tests/bin/storage_tests.exe` (22/22 test groups PASS, including SearchController error-handling Test 14) |
-| Performance Benchmark Tool | **PASS** | `native/tests/bin/perf_benchmarks.exe` (enforced p95 <= 100 ms, all assertions verified) |
-| Native WinUI 3 Compilation | **PASS** | MSBuild `native/Mayasaba/Mayasaba.vcxproj` Release x64 v145. Binary: `native/Mayasaba/bin/x64/Release/Mayasaba.exe` |
-| Tooling Compilation | **PASS** | MSBuild `storage_tests.vcxproj`, `seed_store.vcxproj`, and `perf_benchmarks.vcxproj` Release x64 |
-| Live UI Interaction Walkthrough | **PASS** | `walkthrough_run.py` (all 7 steps passed against live `Mayasaba.exe` PID 4100 via UIA) |
-| Production Store Protection | **PASS** | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 verified untouched: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` |
+| Verification Check              |  Result  | Command / Details                                                                                                                    |
+| :------------------------------ | :------: | :----------------------------------------------------------------------------------------------------------------------------------- |
+| Contract Registry Validation    | **PASS** | `python native/tests/validate_contract_registry.py` (124/124 checks PASS)                                                            |
+| Native Storage Regression Suite | **PASS** | `native/tests/bin/storage_tests.exe` (22/22 test groups PASS, including SearchController error-handling Test 14)                     |
+| Performance Benchmark Tool      | **PASS** | `native/tests/bin/perf_benchmarks.exe` (enforced p95 <= 100 ms, all assertions verified)                                             |
+| Native WinUI 3 Compilation      | **PASS** | MSBuild `native/Mayasaba/Mayasaba.vcxproj` Release x64 v145. Binary: `native/Mayasaba/bin/x64/Release/Mayasaba.exe`                  |
+| Tooling Compilation             | **PASS** | MSBuild `storage_tests.vcxproj`, `seed_store.vcxproj`, and `perf_benchmarks.vcxproj` Release x64                                     |
+| Live UI Interaction Walkthrough | **PASS** | `walkthrough_run.py` (all 7 steps passed against live `Mayasaba.exe` PID 4100 via UIA)                                               |
+| Production Store Protection     | **PASS** | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 verified untouched: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` |
 
 ### Binary SHA-256 Hashes
+
 - `native/Mayasaba/bin/x64/Release/Mayasaba.exe`: `4ABF8F6E609E9A4852B86706FDC21A05F0D9414D5E6649CB33FB429763850075`
 - `native/tests/bin/storage_tests.exe`: `BCF9847DFC53F17D8C5E105EB6D438B3A711F3A864FE734B45D9EFC99688EB35`
 - `native/tests/bin/seed_store.exe`: `3D2CF4EB9864159A9159C09DC602D1446C259A3B9D430DC317C8114C60AA8779`
 - `native/tests/bin/perf_benchmarks.exe`: `E07989A5D64E290C62A049DAA3CF0226B34D750EBDC801DF66424F75933F12AD`
 
 ### Milestone Acceptance Status Summary
+
 - **Milestone 1 (Accessibility, Performance & Motion):** **PARTIALLY VERIFIED**.
   - Motion lifecycle hardening: VERIFIED with per-target hover tracking (`activeHovers_`) and 96-storyboard capacity limit.
   - Rapid hover/focus sweeps: VERIFIED live across 7 realized timeline cards with zero pointer lockup or crash.
@@ -954,18 +966,20 @@ Automated end-to-end execution of `native/tests/walkthrough_run.py` was conducte
 **Scope.** `ActionCenterKind` enum (`UnresolvedSubmission`, `FailedAttachment`, `ClosedProjectRestriction`, `StorageFailure`, `UnknownOutcome`), `ActionCenterItem`, `ActionCenterQuery`, `ActionCenterResult` structs in `Storage.h`; `Storage::QueryActionCenter` projecting `pending_submissions`, `failed_attachments`, `closed_projects`, `directory_operations` as read-only items in `Storage.cpp`; `AttachmentInspectionQuery`/`AttachmentInspectionResult` for draft and committed attachment inspection; `MainWindow.xaml` `ActionCenterPanel` Border + `ActionCenterList` ListView + `ShowActionCenterDetailsButton`; handler declarations `OnCloseActionCenter`, `OnShowActionCenterDetails`, `OnActionCenterItemClick` and state `actionCenterRefreshing_`, `actionCenterItems_` in `MainWindow.xaml.h`; handler implementations `OnCloseActionCenter`, `OnShowActionCenterDetails`, `OnActionCenterItemClick`, `RefreshActionCenterAsync` in `MainWindow.xaml.cpp`. Chat refresh wired after `LoadChatAsync`.
 
 **Verified.**
+
 - MSBuild Release x64 v145 `Mayasaba.vcxproj`: exit 0, 0 warnings, 0 errors (rebuilt 2026-10-19).
 - `validate_contract_registry.py`: 124 checks PASS, exit 0.
 - `storage_tests.cpp` updated to mention action center and attachment inspection coverage.
 
 **Not yet verified.**
+
 - Native UI acceptance (pywinauto) for Action Center panel toggle, item click, details button, close, revalidation-on-invocation states.
 - Live owner records (submissions, attachments, directory operations) queried end-to-end through the projection.
-
 
 ## 6. Remaining Dependency Blockers
 
 In accordance with repository truthfulness standards:
+
 - **Live Three-Agent Reply Orchestration:** BLOCKED. Requires native Hermes, Kilo Code, and Claude Code capability probes, session admission, confinement, rotating writer, and peer review orchestration.
 - **Narrator Speech Audio Verification:** INCONCLUSIVE. Accessible names, heading levels, and keyboard focus verified; synthetic speech audio capture unmeasured in headless subshell.
 - **150% and 200% Display Scaling:** INCONCLUSIVE. Window procedure cleanly handles dynamic `WM_DPICHANGED` messages without collapse; real OS-level display scale factor validation across sign-out remains unexecuted.
@@ -978,41 +992,41 @@ This section records empirical end-to-end evidence from executing `native/tests/
 
 ### 7.1 Verified Real Interactions Matrix
 
-| Interaction Scenario | Verification Method | Empirical Result | Status |
-| --- | --- | --- | --- |
-| **Screen 2 Project Filtering** | Type 'alpha' in `RecentProjectsFilterBox` | Count updated to `1 matching project`; only 'alpha' visible, 'beta' hidden | **PASS** |
-| **Screen 2 Non-Matching Query** | Type 'nonexistent_project_query_xyz' | Count truthfully updated to `0 matching projects`; empty text displayed | **PASS** |
-| **Screen 2 Escape Filter Clearance** | Post `VK_ESCAPE` to `InputSiteWindowClass` | Query cleared; count restored to `3 projects recorded` | **PASS** |
-| **Screen 2 Clear Button** | Click `RecentProjectsClearFilterButton` | Query cleared; count restored to `3 projects recorded`; focus retained | **PASS** |
-| **Screen 2 Status Filtering** | Select `Closed projects only` in `RecentProjectsStatusFilter` | Count updated to `1 matching project`; only closed project 'gamma' shown | **PASS** |
-| **Screen 2 Status Reset** | Select `All projects` in `RecentProjectsStatusFilter` | Count restored to `3 projects recorded` | **PASS** |
-| **Screen 3 Chat Binding** | Click `Open project alpha` | Screen 3 Chat opened with 50 seeded messages; composer docked below timeline | **PASS** |
-| **Search Panel Activation** | Click `SearchMessagesButton` | `MessageSearchPanel` animated reveal, `MessageSearchBox` focused | **PASS** |
-| **Search Pagination Page 1** | Query 'contribution' (Page 1) | `Showing 20 of 50 matching messages`; 20 cards rendered; `SearchLoadMoreButton` visible and enabled | **PASS** |
-| **Search Pagination Page 2** | Click `SearchLoadMoreButton` | `Showing 40 of 50 matching messages`; 40 cards accumulated sequentially | **PASS** |
-| **Search Pagination Page 3** | Click `SearchLoadMoreButton` | `Showing 50 of 50 matching messages`; 50 cards accumulated; `SearchLoadMoreButton` collapsed | **PASS** |
-| **Search Dismissal (Escape)** | Post `VK_ESCAPE` | Search panel closed immediately; Chat focus restored | **PASS** |
-| **Search Reopening Reset** | Reopen search via `SearchMessagesButton` | Continuation reset to page 0; `Showing 20 of 50 matching messages` rendered afresh | **PASS** |
-| **Query Change Invalidation** | Change query to 'contribution 4' | Stale paged items cleared immediately; fresh 11 matches rendered (`Showing 11 of 11`) | **PASS** |
-| **Failed-Query Recovery (Search)** | Query 'no_matching_messages_expected_999' | Truthful notice: `No saved user messages match your query.` | **PASS** |
-| **Actual Database Query Failure** | Query while SQLite `contributions` table is temporarily altered | Exception caught and truthfully displayed (`Search failed: no such table: contributions`); matches cleared | **PASS** |
-| **Database Failure Recovery** | Restore schema, query again | Clean recovery to valid matching set (`Showing 11 of 11 matching messages`) | **PASS** |
-| **Older Message Navigation** | Click `View saved message in conversation` on Seeded contribution 5 | Search panel dismissed; `HistoryScroller` scrolled; Message 5 brought into visible viewport bounds | **PASS** |
-| **Target Highlight, Focus & Elevation** | Read `CurrentItemStatus` and `has_keyboard_focus` immediately after navigation | Target card verified with `item_status='highlighted_14dp'` (14.0 dp elevation) and active keyboard focus (`has_keyboard_focus() == True`) | **PASS** |
-| **Highlight Reset Timer** | Wait 2.0s for 1.5s reset timer to expire | Card safely returned to `item_status='resting_8dp'` (8.0 dp resting elevation) | **PASS** |
-| **Project Switch During Search** | Open search with query, invoke `File -> Switch Project` | `CloseSearch()` dismissed overlay; Screen 2 selector opened; `SearchMessagesBox` collapsed | **PASS** |
-| **Switch Cancellation Safe Return** | Click `Cancel` on Screen 2 | Returned to active 'alpha' project Chat; draft and history intact | **PASS** |
-| **Multi-DPI Message Handling (150% / 144 DPI)** | Send `WM_DPICHANGED` with 144 DPI rect | Window resized to `1728x888` without collapse; effective DPI, font metrics, and control clipping unverified | **INCONCLUSIVE** |
-| **Multi-DPI Message Handling (200% / 192 DPI)** | Send `WM_DPICHANGED` with 192 DPI rect | Window resized to `1942x1102` without collapse; effective DPI, font metrics, and control clipping unverified | **INCONCLUSIVE** |
-| **Action Center Status Reporting** | Read status in clean 'alpha' project | Count truthfully reports `No unresolved owner obligations need your attention.` | **PASS** |
-| **Action Center Dismissal** | Click `CloseActionCenterButton` | Panel cleanly dismissed / collapsed (`Visibility::Collapsed`) | **PASS** |
-| **Action Center Closed Project Obligation** | Switch to closed project 'gamma' | Count truthfully reports `1 item(s) need your attention.` with `ClosedProjectRestriction` obligation | **PASS** |
-| **Action Center Show Details Notice** | Click `ShowActionCenterDetailsButton` | Read-only owner projection notice displayed truthfully in `NoticeBar` | **PASS** |
-| **Action Center Stale Item Revalidation** | Reopen 'gamma' in SQLite concurrently, click obligation item in `ActionCenterList` | Invocation revalidation detects stale record, displays `Action Center item is stale: project is already open.`, and refreshes list | **PASS** |
-| **Action Center Project Isolation** | Switch back to project 'alpha' | `ActionCenterList` cleared during navigation; refreshed to alpha's isolated obligations | **PASS** |
-| **Composer Drop Target Capability** | Verify `ComposerBox` and `AttachButton` in UIA tree | Both present and enabled; `AllowDrop="True"` with `OnComposerDragOver`/`OnComposerDrop` handlers wired | **PASS** |
-| **Draft Attachment Chip Realization** | Seed staged test file `sample_spec.txt` and reload 'alpha' | Attachment chip realized in `AttachmentChipsPanel` with `Inspect sample_spec.txt` button | **PASS** |
-| **Attachment Inspection Diagnostics** | Click `Inspect sample_spec.txt` button | NoticeBar displays full truthful diagnostics: digest verified (`8e2fcbfa…`), managed copy confirmed, text MIME preview eligible (`Preview: Eligible`) | **PASS** |
+| Interaction Scenario                            | Verification Method                                                                | Empirical Result                                                                                                                                      | Status           |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| **Screen 2 Project Filtering**                  | Type 'alpha' in `RecentProjectsFilterBox`                                          | Count updated to `1 matching project`; only 'alpha' visible, 'beta' hidden                                                                            | **PASS**         |
+| **Screen 2 Non-Matching Query**                 | Type 'nonexistent_project_query_xyz'                                               | Count truthfully updated to `0 matching projects`; empty text displayed                                                                               | **PASS**         |
+| **Screen 2 Escape Filter Clearance**            | Post `VK_ESCAPE` to `InputSiteWindowClass`                                         | Query cleared; count restored to `3 projects recorded`                                                                                                | **PASS**         |
+| **Screen 2 Clear Button**                       | Click `RecentProjectsClearFilterButton`                                            | Query cleared; count restored to `3 projects recorded`; focus retained                                                                                | **PASS**         |
+| **Screen 2 Status Filtering**                   | Select `Closed projects only` in `RecentProjectsStatusFilter`                      | Count updated to `1 matching project`; only closed project 'gamma' shown                                                                              | **PASS**         |
+| **Screen 2 Status Reset**                       | Select `All projects` in `RecentProjectsStatusFilter`                              | Count restored to `3 projects recorded`                                                                                                               | **PASS**         |
+| **Screen 3 Chat Binding**                       | Click `Open project alpha`                                                         | Screen 3 Chat opened with 50 seeded messages; composer docked below timeline                                                                          | **PASS**         |
+| **Search Panel Activation**                     | Click `SearchMessagesButton`                                                       | `MessageSearchPanel` animated reveal, `MessageSearchBox` focused                                                                                      | **PASS**         |
+| **Search Pagination Page 1**                    | Query 'contribution' (Page 1)                                                      | `Showing 20 of 50 matching messages`; 20 cards rendered; `SearchLoadMoreButton` visible and enabled                                                   | **PASS**         |
+| **Search Pagination Page 2**                    | Click `SearchLoadMoreButton`                                                       | `Showing 40 of 50 matching messages`; 40 cards accumulated sequentially                                                                               | **PASS**         |
+| **Search Pagination Page 3**                    | Click `SearchLoadMoreButton`                                                       | `Showing 50 of 50 matching messages`; 50 cards accumulated; `SearchLoadMoreButton` collapsed                                                          | **PASS**         |
+| **Search Dismissal (Escape)**                   | Post `VK_ESCAPE`                                                                   | Search panel closed immediately; Chat focus restored                                                                                                  | **PASS**         |
+| **Search Reopening Reset**                      | Reopen search via `SearchMessagesButton`                                           | Continuation reset to page 0; `Showing 20 of 50 matching messages` rendered afresh                                                                    | **PASS**         |
+| **Query Change Invalidation**                   | Change query to 'contribution 4'                                                   | Stale paged items cleared immediately; fresh 11 matches rendered (`Showing 11 of 11`)                                                                 | **PASS**         |
+| **Failed-Query Recovery (Search)**              | Query 'no_matching_messages_expected_999'                                          | Truthful notice: `No saved user messages match your query.`                                                                                           | **PASS**         |
+| **Actual Database Query Failure**               | Query while SQLite `contributions` table is temporarily altered                    | Exception caught and truthfully displayed (`Search failed: no such table: contributions`); matches cleared                                            | **PASS**         |
+| **Database Failure Recovery**                   | Restore schema, query again                                                        | Clean recovery to valid matching set (`Showing 11 of 11 matching messages`)                                                                           | **PASS**         |
+| **Older Message Navigation**                    | Click `View saved message in conversation` on Seeded contribution 5                | Search panel dismissed; `HistoryScroller` scrolled; Message 5 brought into visible viewport bounds                                                    | **PASS**         |
+| **Target Highlight, Focus & Elevation**         | Read `CurrentItemStatus` and `has_keyboard_focus` immediately after navigation     | Target card verified with `item_status='highlighted_14dp'` (14.0 dp elevation) and active keyboard focus (`has_keyboard_focus() == True`)             | **PASS**         |
+| **Highlight Reset Timer**                       | Wait 2.0s for 1.5s reset timer to expire                                           | Card safely returned to `item_status='resting_8dp'` (8.0 dp resting elevation)                                                                        | **PASS**         |
+| **Project Switch During Search**                | Open search with query, invoke `File -> Switch Project`                            | `CloseSearch()` dismissed overlay; Screen 2 selector opened; `SearchMessagesBox` collapsed                                                            | **PASS**         |
+| **Switch Cancellation Safe Return**             | Click `Cancel` on Screen 2                                                         | Returned to active 'alpha' project Chat; draft and history intact                                                                                     | **PASS**         |
+| **Multi-DPI Message Handling (150% / 144 DPI)** | Send `WM_DPICHANGED` with 144 DPI rect                                             | Window resized to `1728x888` without collapse; effective DPI, font metrics, and control clipping unverified                                           | **INCONCLUSIVE** |
+| **Multi-DPI Message Handling (200% / 192 DPI)** | Send `WM_DPICHANGED` with 192 DPI rect                                             | Window resized to `1942x1102` without collapse; effective DPI, font metrics, and control clipping unverified                                          | **INCONCLUSIVE** |
+| **Action Center Status Reporting**              | Read status in clean 'alpha' project                                               | Count truthfully reports `No unresolved owner obligations need your attention.`                                                                       | **PASS**         |
+| **Action Center Dismissal**                     | Click `CloseActionCenterButton`                                                    | Panel cleanly dismissed / collapsed (`Visibility::Collapsed`)                                                                                         | **PASS**         |
+| **Action Center Closed Project Obligation**     | Switch to closed project 'gamma'                                                   | Count truthfully reports `1 item(s) need your attention.` with `ClosedProjectRestriction` obligation                                                  | **PASS**         |
+| **Action Center Show Details Notice**           | Click `ShowActionCenterDetailsButton`                                              | Read-only owner projection notice displayed truthfully in `NoticeBar`                                                                                 | **PASS**         |
+| **Action Center Stale Item Revalidation**       | Reopen 'gamma' in SQLite concurrently, click obligation item in `ActionCenterList` | Invocation revalidation detects stale record, displays `Action Center item is stale: project is already open.`, and refreshes list                    | **PASS**         |
+| **Action Center Project Isolation**             | Switch back to project 'alpha'                                                     | `ActionCenterList` cleared during navigation; refreshed to alpha's isolated obligations                                                               | **PASS**         |
+| **Composer Drop Target Capability**             | Verify `ComposerBox` and `AttachButton` in UIA tree                                | Both present and enabled; `AllowDrop="True"` with `OnComposerDragOver`/`OnComposerDrop` handlers wired                                                | **PASS**         |
+| **Draft Attachment Chip Realization**           | Seed staged test file `sample_spec.txt` and reload 'alpha'                         | Attachment chip realized in `AttachmentChipsPanel` with `Inspect sample_spec.txt` button                                                              | **PASS**         |
+| **Attachment Inspection Diagnostics**           | Click `Inspect sample_spec.txt` button                                             | NoticeBar displays full truthful diagnostics: digest verified (`8e2fcbfa…`), managed copy confirmed, text MIME preview eligible (`Preview: Eligible`) | **PASS**         |
 
 ### 7.2 Accessibility, Motion & Responsive Layout Checks
 
@@ -1067,12 +1081,12 @@ Measurements were captured directly on the UI presentation thread using `Microso
 
 ### 7.4 Verified Executable Hashes & Integrity
 
-| Binary / Asset | Path | SHA-256 Digest |
-| --- | --- | --- |
-| `Mayasaba.exe` | `native/Mayasaba/bin/x64/Release/Mayasaba.exe` | `86E0A8386EE1ED87EDABF31E72C97FD571627714BF5F80661A34B3E89BCF4873` |
-| `storage_tests.exe` | `native/tests/bin/storage_tests.exe` | `4E1EDAABF2F3FD07EDDAE01834BF67E62D0EB6E472A857F530637FF5E1606D2B` |
-| `verify_ac_ai.exe` | `native/tests/bin/verify_ac_ai.exe` | `0624E49372263E7531F992E2BC695734D07A3C660A64E57876580600B2B92842` |
-| Production DB | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` | `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly untouched) |
+| Binary / Asset      | Path                                           | SHA-256 Digest                                                                          |
+| ------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `Mayasaba.exe`      | `native/Mayasaba/bin/x64/Release/Mayasaba.exe` | `86E0A8386EE1ED87EDABF31E72C97FD571627714BF5F80661A34B3E89BCF4873`                      |
+| `storage_tests.exe` | `native/tests/bin/storage_tests.exe`           | `4E1EDAABF2F3FD07EDDAE01834BF67E62D0EB6E472A857F530637FF5E1606D2B`                      |
+| `verify_ac_ai.exe`  | `native/tests/bin/verify_ac_ai.exe`            | `0624E49372263E7531F992E2BC695734D07A3C660A64E57876580600B2B92842`                      |
+| Production DB       | `%LOCALAPPDATA%\Mayasaba\mayasaba.db`          | `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly untouched) |
 
 ### 7.5 Verification Milestone Status
 
@@ -1187,6 +1201,7 @@ This section documents the root cause, actual correction, regression and native 
 ## 9. Interim Review Resolution & Native Verification Evidence
 
 ### 9.1 Defect 1: Non-English ASCII Rejection & Presentation Policy
+
 - **Defect:** `IsEnglishSafeText()` previously accepted all printable ASCII plus selected punctuation, treating ASCII prose such as `hola mundo` as proof of English.
 - **Correction:** Implemented presentation policy in `Storage.cpp`:
   - `IsEnglishSafeText()` verifies that text does not contain explicit non-English vocabulary markers (e.g., `hola`, `mundo`, `gracias`, `bonjour`, `merci`, `danke`, etc.).
@@ -1197,6 +1212,7 @@ This section documents the root cause, actual correction, regression and native 
   - Live WinUI 3 UI acceptance (`test_full_ui_acceptance.py` Phase 10.3): inspected `hola_mundo.txt`; verified NoticeBar displayed `Preview unavailable: Attachment contains non-English characters or unverifiable prose; English-only preview rule applies. Metadata inspection is preserved.`, `AttachmentPreviewUnavailableNotice` was realized, and content box remained clear.
 
 ### 9.2 Defect 2: Zero Filesystem Mutation & Source Independence in Attachment Inspection
+
 - **Defect:** `InspectAttachment()` previously called `create_directories` when the managed attachment storage folder was absent (mutating filesystem on read-only query) and attempted to open `snap.sourcePath`.
 - **Correction:**
   - `InspectAttachment()` enforces strictly read-only semantics. If `ManagedAttachmentRoot()` does not exist on disk, it creates nothing, returning `isManaged = false` with error message `"Managed attachment storage directory is unavailable."`
@@ -1207,6 +1223,7 @@ This section documents the root cause, actual correction, regression and native 
   - `verify_ac_ai.cpp` (Test 8): source file locked with exclusive access (`dwShareMode = 0`); `InspectAttachment()` succeeded completely without touching or opening the locked source path.
 
 ### 9.3 Defect 3: Action Center Continuation Token Integrity & Composite SHA-256 Signature
+
 - **Defect:** Action Center continuation tokens used simple record counts or timestamps, vulnerable to stale resumption if participating records mutated between pages.
 - **Correction:**
   - Continuation tokens format: `ac:v2:<project_id>:<sha256_signature>:<offset>`.
@@ -1216,6 +1233,7 @@ This section documents the root cause, actual correction, regression and native 
   - `storage_tests.cpp` (Suite 21) & `verify_ac_ai.cpp` (Test 9): verified pagination continuation token format and verified invalidation when a draft attachment version was mutated concurrently between pages.
 
 ### 9.4 Defect 4: Obsolete Completion Rejection in Action Center Paging
+
 - **Defect:** Rapidly clicking "Load more" or initiating refresh/dismissal could leave in-flight pagination requests pending, potentially appending obsolete results out of order.
 - **Correction:**
   - In `MainWindow.xaml.h`, added `bool actionCenterPaging_{false};`.
@@ -1226,6 +1244,7 @@ This section documents the root cause, actual correction, regression and native 
   - Verified live in `test_full_ui_acceptance.py` Phase 9 across rapid multi-page consumption and concurrent store mutation.
 
 ### 9.5 Defect 5: Inspection Post-Work Record Revalidation Under Mutex
+
 - **Defect:** File hashing and MIME detection executed outside the mutex; if the attachment record in SQLite was modified or deleted concurrently while hashing was underway, stale or mismatched inspection results could be returned.
 - **Correction:**
   - `InspectAttachment()` re-acquires `mutex_` after completing file hashing and preview loading.
@@ -1235,6 +1254,7 @@ This section documents the root cause, actual correction, regression and native 
   - `verify_ac_ai.cpp` (Test 9): mutated attachment version in SQLite while inspection was in flight; verified `InspectAttachment()` rejected the stale result with `found == false`.
 
 ### 9.6 Defect 6: Targeted Process Lifecycle Management
+
 - **Defect:** Test automation previously used blanket `taskkill /F /IM Mayasaba.exe`, which violated targeted lifecycle management and risked terminating unowned instances.
 - **Correction:**
   - Replaced all blanket process termination with strict PID-only management (`proc.pid`).
@@ -1246,16 +1266,17 @@ This section documents the root cause, actual correction, regression and native 
 
 ## 10. Comprehensive Verification Summary
 
-| Suite / Test Target | Verification Type | Coverage / Invariants Tested | Verdict |
-| :--- | :--- | :--- | :---: |
-| `storage_tests.exe` | Native C++20 Regression | 22 test groups: storage, migrations, identity locks, ordered drafts, project service, FIFO, attachments, search, action center, inspection | **PASS (22/22)** |
-| `verify_ac_ai.exe` | Native C++20 Standalone | 10 tests: Action Center pagination, composite token signature, ActionCenterPresenter dismissal & paging sequence races, zero filesystem mutation, exclusive source lock independence, strict English lexicon verification & presentation policy, project switch draft preservation, staged path traversal rejection, in-flight mutation/deletion race under mutex, atomic read transaction snapshot with concurrent writer | **PASS (10/10)** |
-| `ole_drop.exe` | Native C++20 Helper | OLE IDropSource / IDataObject (CF_HDROP) helper with 2-second background watchdog thread | **COMPILED & VERIFIED** |
-| `validate_contract_registry.py` | Schema & Contract Registry | 124 schema and contract checks for Screen 2 slice, state machines, and authority models | **PASS (124/124)** |
-| `test_full_ui_acceptance.py` | Live Native WinUI 3 UIA | 15 criteria across Phases 1–10: Recent filtering, message search pagination & recovery, older message navigation & highlight elevation, project switching during search, responsive 520px layout, rapid hover sweeps, DPI simulation, Action Center paging & stale invalidation, panel dismissal stability (Phase 9.2), native OLE desktop drop execution (Phase 10.1), mixed-batch folder drop rejection, seeded attachment inspection & preview (Phase 10.2), strict non-English preview withholding (Phase 10.3), UI performance profiling | **13 PASS, 2 INCONCLUSIVE** (Synthetic drop execution) |
-| UI Performance Profiling | WinUI 3 CompositionTarget | 30,451 render callbacks, avg interval 7.06ms, typing p50 2.85ms, typing p95 25.76ms (no stalls discarded) | **PASS** |
+| Suite / Test Target             | Verification Type          | Coverage / Invariants Tested                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |                        Verdict                         |
+| :------------------------------ | :------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :----------------------------------------------------: |
+| `storage_tests.exe`             | Native C++20 Regression    | 22 test groups: storage, migrations, identity locks, ordered drafts, project service, FIFO, attachments, search, action center, inspection                                                                                                                                                                                                                                                                                                                                                                                                    |                    **PASS (22/22)**                    |
+| `verify_ac_ai.exe`              | Native C++20 Standalone    | 10 tests: Action Center pagination, composite token signature, ActionCenterPresenter dismissal & paging sequence races, zero filesystem mutation, exclusive source lock independence, strict English lexicon verification & presentation policy, project switch draft preservation, staged path traversal rejection, in-flight mutation/deletion race under mutex, atomic read transaction snapshot with concurrent writer                                                                                                                    |                    **PASS (10/10)**                    |
+| `ole_drop.exe`                  | Native C++20 Helper        | OLE IDropSource / IDataObject (CF_HDROP) helper with 2-second background watchdog thread                                                                                                                                                                                                                                                                                                                                                                                                                                                      |                **COMPILED & VERIFIED**                 |
+| `validate_contract_registry.py` | Schema & Contract Registry | 124 schema and contract checks for Screen 2 slice, state machines, and authority models                                                                                                                                                                                                                                                                                                                                                                                                                                                       |                   **PASS (124/124)**                   |
+| `test_full_ui_acceptance.py`    | Live Native WinUI 3 UIA    | 15 criteria across Phases 1–10: Recent filtering, message search pagination & recovery, older message navigation & highlight elevation, project switching during search, responsive 520px layout, rapid hover sweeps, DPI simulation, Action Center paging & stale invalidation, panel dismissal stability (Phase 9.2), native OLE desktop drop execution (Phase 10.1), mixed-batch folder drop rejection, seeded attachment inspection & preview (Phase 10.2), strict non-English preview withholding (Phase 10.3), UI performance profiling | **13 PASS, 2 INCONCLUSIVE** (Synthetic drop execution) |
+| UI Performance Profiling        | WinUI 3 CompositionTarget  | 30,451 render callbacks, avg interval 7.06ms, typing p50 2.85ms, typing p95 25.76ms (no stalls discarded)                                                                                                                                                                                                                                                                                                                                                                                                                                     |                        **PASS**                        |
 
 ### Note on Remaining Inconclusive Items & Fixture Distinctions
+
 - **Inconclusive Verifications:**
   1. Dynamic multi-monitor display scaling across physical monitor boundaries remains unexecuted and is documented truthfully as **INCONCLUSIVE** (`WM_DPICHANGED` message handling in code verified).
   2. Live Narrator screen reader speech synthesis verification remains unexecuted and is documented truthfully as **INCONCLUSIVE** (UIA accessibility names, control types, and states verified).
@@ -1453,15 +1474,15 @@ This section documents the specific corrections and empirical evidence resolving
 
 ### 13.4 Summary Acceptance Matrix
 
-| Verification Suite | Result | Details |
-| --- | --- | --- |
-| Drop Verdict Classification Unit Tests | PASS (6/6) | Zero records (`INCONCLUSIVE`), one record (`PASS`), multiple records (`FAIL`), unexpected pending submission (`FAIL`), unexpected contribution (`FAIL`), missing staged file (`FAIL`). |
-| Standalone AC + AI Suites (`verify_ac_ai.exe`) | PASS (10/10) | Tests 1–10 pass, including 4a, 4b, and 4c in-flight project switch tests with draft preservation. |
-| Core Native Regressions (`storage_tests.exe`) | PASS (22/22) | 22 isolated native regression groups pass cleanly. |
-| Contract Registry (`validate_contract_registry.py`) | PASS (124/124) | 124 schema and slice contract checks pass. |
-| Live UI Acceptance (`test_full_ui_acceptance.py`) | 13 PASS, 2 INCONCLUSIVE, 0 FAIL | Inconclusive synthetic desktop OLE drag-drop execution retained truthfully. All other 13 criteria PASS. |
-| Production Database Checksum | UNTOUCHED | SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
-| Real Multi-DPI & Narrator Speech | INCOMPLETE | Retained as separately incomplete per project acceptance rules. |
+| Verification Suite                                  | Result                          | Details                                                                                                                                                                                |
+| --------------------------------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Drop Verdict Classification Unit Tests              | PASS (6/6)                      | Zero records (`INCONCLUSIVE`), one record (`PASS`), multiple records (`FAIL`), unexpected pending submission (`FAIL`), unexpected contribution (`FAIL`), missing staged file (`FAIL`). |
+| Standalone AC + AI Suites (`verify_ac_ai.exe`)      | PASS (10/10)                    | Tests 1–10 pass, including 4a, 4b, and 4c in-flight project switch tests with draft preservation.                                                                                      |
+| Core Native Regressions (`storage_tests.exe`)       | PASS (22/22)                    | 22 isolated native regression groups pass cleanly.                                                                                                                                     |
+| Contract Registry (`validate_contract_registry.py`) | PASS (124/124)                  | 124 schema and slice contract checks pass.                                                                                                                                             |
+| Live UI Acceptance (`test_full_ui_acceptance.py`)   | 13 PASS, 2 INCONCLUSIVE, 0 FAIL | Inconclusive synthetic desktop OLE drag-drop execution retained truthfully. All other 13 criteria PASS.                                                                                |
+| Production Database Checksum                        | UNTOUCHED                       | SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`.                                                                                                            |
+| Real Multi-DPI & Narrator Speech                    | INCOMPLETE                      | Retained as separately incomplete per project acceptance rules.                                                                                                                        |
 
 ---
 
@@ -1535,7 +1556,7 @@ This section documents the specific corrections and empirical evidence resolving
 - **Actual correction:**
   - **Atomic In-Memory Mutation in `CommitDraftBatch`:**
     - Updated `AttachmentIngestionCoordinator::CommitDraftBatch` to prepare candidate drafts in a local copy first.
-    - Invokes `saveDrafts(activeProject, candidateDrafts)` *before* modifying `draftAttachments`.
+    - Invokes `saveDrafts(activeProject, candidateDrafts)` _before_ modifying `draftAttachments`.
     - Only updates `draftAttachments = std::move(candidateDrafts)` once `saveDrafts` succeeds without throwing. If `saveDrafts` throws or fails, `draftAttachments` remains strictly unmutated.
   - **Exception-Safe Production Coordination in `ValidateAndCommitPreparedBatch`:**
     - Wrapped commit execution in try/catch capturing `std::exception const& ex` into `outError` and returning `false`.
@@ -1550,36 +1571,36 @@ This section documents the specific corrections and empirical evidence resolving
     - On commit failure (`!committed`): removes uncommitted preparing placeholders (`preparingIds`) from `draftAttachments_` so existing drafts are preserved and no broken chips remain.
     - Exposes accurate English notice: `ShowNotice(L"Attachment draft persistence failed: " + Utf16(saveError) + L". Existing drafts preserved; please retry.", true);`.
   - **Targeted Unit Tests in `verify_ac_ai.cpp` Test 5 Case 4e:**
-    - *Mid-batch write failure:* Seeded 2 candidate items with durable `PREPARING` records; injected write failure at item index 2 via `SetSaveDraftAttachmentsItemHookForTesting`. Verified `failCommitted == false`, `capturedError` captured without unhandled crash, in-memory drafts retained `Preparing` status (no false saved state), MainWindow placeholder cleanup preserved existing `existing_a.txt`, SQLite rolled back to `PREPARING` (zero partial `READY` updates), zero automatic submissions, and clean retry without duplicate IDs.
-    - *SQLite mutex contention:* Held `store.MutexForTesting()` from a background thread; verified `ValidateAndCommitPreparedBatch` aborted within bounded timeout (<1500ms, observed ~100ms) with `"contention"` error, preserved drafts without hang, and succeeded cleanly on retry once the blocker released.
+    - _Mid-batch write failure:_ Seeded 2 candidate items with durable `PREPARING` records; injected write failure at item index 2 via `SetSaveDraftAttachmentsItemHookForTesting`. Verified `failCommitted == false`, `capturedError` captured without unhandled crash, in-memory drafts retained `Preparing` status (no false saved state), MainWindow placeholder cleanup preserved existing `existing_a.txt`, SQLite rolled back to `PREPARING` (zero partial `READY` updates), zero automatic submissions, and clean retry without duplicate IDs.
+    - _SQLite mutex contention:_ Held `store.MutexForTesting()` from a background thread; verified `ValidateAndCommitPreparedBatch` aborted within bounded timeout (<1500ms, observed ~100ms) with `"contention"` error, preserved drafts without hang, and succeeded cleanly on retry once the blocker released.
 
 ### 14.4 Acceptance Summary Reconciliation & Retained Inconclusive Matrix [Milestone Closure]
 
 - Historical UI evidence from prior revisions (`dimensional-20261018`, `3ffd482`, `5be6833`, `684e44a`, `abe596a`) is preserved with revision labels.
 - Fresh native runtime execution evidence is recorded below from the rebuilt binary:
 
-| Verification Suite | Result | Details |
-| --- | --- | --- |
-| Drop Verdict Classification Unit Tests | PASS (6/6) | All 6 violation classification test cases pass. |
-| Standalone AC + AI Suites (`verify_ac_ai.exe`) | PASS (10/10) | Tests 1–10 pass, including active preparation hook (4b), retrieval hook (4c), shared `CoordinateDrop` (4d), mid-batch write rollback & contention mitigation (4e). |
-| Core Native Regressions (`storage_tests.exe`) | PASS (22/22) | 22 isolated native regression groups pass cleanly. |
-| Contract Registry (`validate_contract_registry.py`) | PASS (124/124) | 124 schema and slice contract checks pass. |
+| Verification Suite                                      | Result                          | Details                                                                                                                                                                           |
+| ------------------------------------------------------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Drop Verdict Classification Unit Tests                  | PASS (6/6)                      | All 6 violation classification test cases pass.                                                                                                                                   |
+| Standalone AC + AI Suites (`verify_ac_ai.exe`)          | PASS (10/10)                    | Tests 1–10 pass, including active preparation hook (4b), retrieval hook (4c), shared `CoordinateDrop` (4d), mid-batch write rollback & contention mitigation (4e).                |
+| Core Native Regressions (`storage_tests.exe`)           | PASS (22/22)                    | 22 isolated native regression groups pass cleanly.                                                                                                                                |
+| Contract Registry (`validate_contract_registry.py`)     | PASS (124/124)                  | 124 schema and slice contract checks pass.                                                                                                                                        |
 | Fresh Live UI Acceptance (`test_full_ui_acceptance.py`) | 13 PASS, 2 INCONCLUSIVE, 0 FAIL | Re-executed on running `Mayasaba.exe` (PID 28268, CompositionTarget 31,766 callbacks, avg 7.15ms). 13 criteria PASS; 2 desktop-drop criteria truthfully retained as INCONCLUSIVE. |
-| Native WinUI 3 App Compilation (`Mayasaba.exe`) | PASS | MSBuild Release x64 Toolset v145 built clean with 0 warnings, 0 errors (`native/Mayasaba/bin/x64/Release/Mayasaba.exe`). |
-| Production Database Checksum | UNTOUCHED | SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`. |
+| Native WinUI 3 App Compilation (`Mayasaba.exe`)         | PASS                            | MSBuild Release x64 Toolset v145 built clean with 0 warnings, 0 errors (`native/Mayasaba/bin/x64/Release/Mayasaba.exe`).                                                          |
+| Production Database Checksum                            | UNTOUCHED                       | SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272`.                                                                                                       |
 
 #### Delineation of Retained Inconclusive Criteria & Precise Missing Observations
 
 1. **Criterion 11: `Native OLE Desktop Drag-and-Drop Execution` [INCONCLUSIVE]**
-   - *Missing observation:* Cross-process synthetic OLE drag-drop execution via `ole_drop.exe` timed out in its watchdog loop (exit code 4). Genuinely insufficient delivery evidence (0 records admitted, exit code 4). Production ingestion, digest calculation, and boundary validation independently proven in unit tests.
-   - *Observed versus inferred (corrected 2026-10-20):* the timeout and the zero admitted records are observed. **UIPI is a hypothesis, not a proven cause.** No integrity-level comparison between the injecting process and the target was performed, and no diagnostic distinguished an integrity-level rejection from a modal-loop or session-delivery failure. The earlier text asserted UIPI as the cause; that assertion was unsupported and is retracted here.
+   - _Missing observation:_ Cross-process synthetic OLE drag-drop execution via `ole_drop.exe` timed out in its watchdog loop (exit code 4). Genuinely insufficient delivery evidence (0 records admitted, exit code 4). Production ingestion, digest calculation, and boundary validation independently proven in unit tests.
+   - _Observed versus inferred (corrected 2026-10-20):_ the timeout and the zero admitted records are observed. **UIPI is a hypothesis, not a proven cause.** No integrity-level comparison between the injecting process and the target was performed, and no diagnostic distinguished an integrity-level rejection from a modal-loop or session-delivery failure. The earlier text asserted UIPI as the cause; that assertion was unsupported and is retracted here.
 2. **Criterion 12: `Mixed-Batch Folder Rejection on Drop` [INCONCLUSIVE]**
-   - *Missing observation:* Because synthetic desktop drop delivery did not complete under the automation session, the mixed-batch folder rejection notice was not observed in the live NoticeBar. Folder rejection logic independently verified in `verify_ac_ai.exe` Test 5 Case 2.
+   - _Missing observation:_ Because synthetic desktop drop delivery did not complete under the automation session, the mixed-batch folder rejection notice was not observed in the live NoticeBar. Folder rejection logic independently verified in `verify_ac_ai.exe` Test 5 Case 2.
 3. **Display DPI Scaling (150%/200%) [INCONCLUSIVE / INCOMPLETE]**
-   - *Missing observation:* WinUI 3 display DPI simulation passed in automated acceptance; real OS display setting changes were not executed. Retained as incomplete.
-   - *Corrected 2026-10-20:* the earlier claim that a real scale change "requires a Windows display reconfiguration and user session sign-out" was **not checked against this environment** and is withdrawn. Checked here instead: the machine has one monitor (`\\.\DISPLAY1`, 1536×864), the session is at 96 DPI / 100% (`GetDpiForMonitor` returned 96×96, `LOGPIXELSX` 96), and no `HKCU\Control Panel\Desktop\PerMonitorSettings` key exists yet. Whether a 150% or 200% change needs sign-out on Windows 11 build 26200 has **not** been established, so no such requirement is claimed. The criterion stays INCONCLUSIVE for the honest reason that the change was not performed.
+   - _Missing observation:_ WinUI 3 display DPI simulation passed in automated acceptance; real OS display setting changes were not executed. Retained as incomplete.
+   - _Corrected 2026-10-20:_ the earlier claim that a real scale change "requires a Windows display reconfiguration and user session sign-out" was **not checked against this environment** and is withdrawn. Checked here instead: the machine has one monitor (`\\.\DISPLAY1`, 1536×864), the session is at 96 DPI / 100% (`GetDpiForMonitor` returned 96×96, `LOGPIXELSX` 96), and no `HKCU\Control Panel\Desktop\PerMonitorSettings` key exists yet. Whether a 150% or 200% change needs sign-out on Windows 11 build 26200 has **not** been established, so no such requirement is claimed. The criterion stays INCONCLUSIVE for the honest reason that the change was not performed.
 4. **Narrator Speech Verification [INCONCLUSIVE / INCOMPLETE]**
-   - *Missing observation:* Programmatic UI Automation names, roles, and focus restoration verified; real spoken audio delivery via Windows Narrator requires an active audio endpoint and human listening verification.
+   - _Missing observation:_ Programmatic UI Automation names, roles, and focus restoration verified; real spoken audio delivery via Windows Narrator requires an active audio endpoint and human listening verification.
 
 > [!NOTE]
 > **Milestone Boundary:** The current native UX milestone is closed with verified unit, storage, contract registry, and UI automation evidence. Live CLI discovery/execution (M3), agent orchestration/replies (M4), advanced inspectors (M5), and MSI packaging (M7) remain separate future implementation milestones.
@@ -1592,14 +1613,14 @@ This section is the single current summary for the stabilization assignment. It 
 
 ### 15.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Source revision | `main` at `3789fb9` plus the uncommitted stabilization change set described in §15.4 |
-| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-20 09:07 local, SHA-256 `8052c8095c713f01b8a7634f49201457008a26fab9adf8aac4e73192dae58eb2` |
-| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, built 2026-10-20 16:18 local, SHA-256 `50353cd298844f5cca9c72ac094dd92b1e59f04c1497819c15e58c34335901bc` |
-| Test binaries | `native/tests/bin/storage_tests.exe` and `native/tests/bin/verify_ac_ai.exe`, rebuilt 2026-10-20 with MSVC x64 toolset `v145`, 0 warnings, 0 errors |
-| Toolchain | MSBuild from Visual Studio 18 Enterprise, Windows 11 Pro build 26200, single display `\\.\DISPLAY1` at 120 DPI (125% scaling) |
-| Evidence classes used | Agent-observed runtime, Unit test, Source inspection, Compilation (as defined in the section "Evidence classes" above) |
+| Field                 | Value                                                                                                                                                      |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source revision       | `main` at `3789fb9` plus the uncommitted stabilization change set described in §15.4                                                                       |
+| Application binary    | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-20 09:07 local, SHA-256 `8052c8095c713f01b8a7634f49201457008a26fab9adf8aac4e73192dae58eb2`   |
+| Compiled XAML         | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, built 2026-10-20 16:18 local, SHA-256 `50353cd298844f5cca9c72ac094dd92b1e59f04c1497819c15e58c34335901bc` |
+| Test binaries         | `native/tests/bin/storage_tests.exe` and `native/tests/bin/verify_ac_ai.exe`, rebuilt 2026-10-20 with MSVC x64 toolset `v145`, 0 warnings, 0 errors        |
+| Toolchain             | MSBuild from Visual Studio 18 Enterprise, Windows 11 Pro build 26200, single display `\\.\DISPLAY1` at 120 DPI (125% scaling)                              |
+| Evidence classes used | Agent-observed runtime, Unit test, Source inspection, Compilation (as defined in the section "Evidence classes" above)                                     |
 
 The application binary hash above identifies the artifact produced **after** the item 9 and item 10 changes. It is not the artifact used for the 2026-10-19 runtime observations, which remain labelled with their own revision.
 
@@ -1614,22 +1635,22 @@ Two harness defects were found and repaired while producing that result, and are
 
 ### 15.2 Current criteria
 
-| ID | Criterion and exact scope | Evidence type | Command or procedure and actual observation | Verdict | Remaining limitation |
-| --- | --- | --- | --- | --- | --- |
-| S-01 | Storage contention is bounded for material draft persistence, measured against an **independent** SQLite connection holding a write transaction, not the C++ mutex. | Unit test | `storage_tests.exe` group 31, "Real SQLite write contention from an INDEPENDENT connection": a separate connection opens `BEGIN IMMEDIATE` and holds it while the production save path is invoked. Observed bounded failure with a truthful error, drafts preserved, and clean success on retry after release. | PASS | Does not prove a specific wall-clock bound on every device; it proves the path fails boundedly instead of blocking on SQLite's five-second busy timeout. |
-| S-02 | Blocking persistence and material storage work run off the UI thread through the existing controlled background lane. | Source inspection / Unit test | `MainWindow.xaml.cpp` routes the save through `SerialQueue::Background()` and returns with `resume_foreground`; no mutex is held across an await; `activeProject_` is read only on the UI thread. Group 31 exercises the production operation. | PASS | Thread placement is verified by inspection and by the contention test; no profiler trace of UI-thread stall is recorded. |
-| S-03 | Appended Chat messages show their attachments; both timeline realization paths agree. | Unit test | `storage_tests.exe` group 30, "Both timeline realization paths project an attachment-bearing contribution", asserts `entry.attachments.size() == 1` through the shared `ProjectContribution` projection used by both the append path and the render path. | PASS | The projection is unified; a live appended-message render was not separately screenshotted. |
-| S-04 | Action Center offers meaningful source-linked details in an inline expansion or dismissible sheet, without a standalone page, and does not silently execute recovery when the user asked to inspect. | Native interaction / Unit test | `verify_ac_ai.exe` Test 3 (production `ActionCenterPresenter` and presentation invariants) and Test 4 (expected-version verification at invocation) pass. The live harness Phase 9.4 opens the sheet on the built binary and asserts a usable rendered size (926×536 px measured, minimum 120 px enforced), the read-only projection summary, one source-linked row per listed item (52 realized), the required `Record identity` / `Record version` / `Source reference` / `Projection state` fields, an unchanged projection status across inspection, focus moving into the sheet and returning to **Show details** on close, and that the item list and **Show details** keep rendered size afterwards. | PASS | The detail is now a dismissible sheet rather than an in-place expander; see §15.5 for the defect that motivated the change. Escape-to-close and Close-button parity were observed on a live window; the harness exercises the Close button path only. |
-| S-05 | English preview eligibility accepts ordinary prose and still refuses non-English text, and no caller claims a pass proves arbitrary prose is English. | Unit test | `storage_tests.exe` group 24b, "English preview eligibility": 13 table-driven cases through the real `InspectAttachment` path. Positives include function words (`of`, `not`, `one`, `no`), hyphenated compounds, contractions, report prose, engineering prose and release notes; negatives include Spanish, mixed-language, French-with-an-English-word, underscore-dressed foreign tokens, a foreign hyphenated compound and CJK. Positives assert the preview equals the body; negatives assert empty content, a non-empty reason, verified integrity and preserved metadata. | PASS | A vocabulary pass is a necessary condition, not proof of language; the code and its comment state that explicitly. Coverage is representative, not exhaustive. |
-| S-06 | Dynamically generated cards, attachment chips, overlays and text follow a live light/dark switch without losing draft, focus, scroll or controller state. | Source inspection / Compilation | All 79 code-built brush assignments resolve through the shared `mayasaba::ui::Token` cache; `RootLayout().ActualThemeChanged` triggers `RefreshThemeBrushes()`, which recolours the shared instances in place rather than rebuilding cards. `Mayasaba.vcxproj` built clean with the new `ThemeBrushes` translation unit. | INCONCLUSIVE | The code path is implemented and compiles; a live light/dark switch was not visually observed in this pass. The visual observation belongs to §15.3. |
-| S-07 | Test reporting is derived from executed named cases, names the failing case, and would actually detect a regression. | Unit test / Controlled mutation | Both executables print `PASS: N of N executed ...` derived from the `ExecutedCases` record and list every group by name. A controlled mutation (dropping `entry.attachments = item.attachments;` from `TimelineEntry.h`) was compiled in; the run then reported `FAIL 30. Both timeline realization paths project an attachment-bearing contribution`, named the group, and exited 1. The mutation was reverted and the clean run reported `PASS: 30 of 30`. | PASS | The mutation demonstrates detection for one assertion; it is not a proof for every group. |
-| S-08 | Native harness runs against the final built artifact with an isolated database. | Native interaction / Compilation / Unit test | `Mayasaba.exe` rebuilt (SHA-256 in §15.1) and `python native/tests/test_full_ui_acceptance.py` executed against the isolated store `_ui-verify\multi_test\store.db`: 13 PASS, 2 INCONCLUSIVE, 0 FAIL. Both test executables rebuilt from current sources and executed; `storage_tests.exe` exits 0 and contract registry `validate_contract_registry.py` reports `PASS: 124 contract-registry and Screen 2 slice schema checks`. | PASS | Test executables use temporary directories per run; they do not exercise the packaged MSI. The harness uses seeded fixture records, not live agent traffic. |
-| S-09 | Real desktop drop of a single file from Explorer. | Agent-observed runtime | Not performed in this pass. Prior synthetic attempts timed out with 0 records admitted (exit code 4); cause unproven. | INCONCLUSIVE | Requires an interactive desktop drop by the user. Procedure in §15.3. |
-| S-10 | Mixed-batch folder rejection observed in the live NoticeBar on drop. | Agent-observed runtime | Not performed in this pass; rejection logic is verified by `verify_ac_ai.exe` Test 5 Case 2. | INCONCLUSIVE | Depends on S-09 delivery succeeding. |
-| S-11 | Actual 150% and 200% display scaling. | Agent-observed runtime | Not performed. Environment measured this pass: one display, 96 DPI (100%), no `PerMonitorSettings` key. | INCONCLUSIVE | Requires the user to change display scaling. No sign-out requirement is claimed; see the correction in §14.4. |
-| S-12 | Narrator speech walkthrough. | Agent-observed runtime | Not performed. UIA names, roles, heading levels and focus restoration are verified programmatically. | INCONCLUSIVE | Requires human listening. |
-| S-13 | Live high-contrast switch. | Agent-observed runtime | Not performed in this pass. The high-contrast path keeps each cached brush's type and paints it flat with the system colour, alongside the pre-existing decoration removal. | INCONCLUSIVE | Requires a live high-contrast toggle. |
-| S-14 | Live reduced-motion preference change. | Agent-observed runtime | Not performed in this pass. Previously observed PASS at revision `684e44a`; not re-observed against the current binary. | INCONCLUSIVE | Not re-observed after the current change set. |
+| ID   | Criterion and exact scope                                                                                                                                                                            | Evidence type                                | Command or procedure and actual observation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Verdict      | Remaining limitation                                                                                                                                                                                                                                  |
+| ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S-01 | Storage contention is bounded for material draft persistence, measured against an **independent** SQLite connection holding a write transaction, not the C++ mutex.                                  | Unit test                                    | `storage_tests.exe` group 31, "Real SQLite write contention from an INDEPENDENT connection": a separate connection opens `BEGIN IMMEDIATE` and holds it while the production save path is invoked. Observed bounded failure with a truthful error, drafts preserved, and clean success on retry after release.                                                                                                                                                                                                                                                                                                                                                                                              | PASS         | Does not prove a specific wall-clock bound on every device; it proves the path fails boundedly instead of blocking on SQLite's five-second busy timeout.                                                                                              |
+| S-02 | Blocking persistence and material storage work run off the UI thread through the existing controlled background lane.                                                                                | Source inspection / Unit test                | `MainWindow.xaml.cpp` routes the save through `SerialQueue::Background()` and returns with `resume_foreground`; no mutex is held across an await; `activeProject_` is read only on the UI thread. Group 31 exercises the production operation.                                                                                                                                                                                                                                                                                                                                                                                                                                                              | PASS         | Thread placement is verified by inspection and by the contention test; no profiler trace of UI-thread stall is recorded.                                                                                                                              |
+| S-03 | Appended Chat messages show their attachments; both timeline realization paths agree.                                                                                                                | Unit test                                    | `storage_tests.exe` group 30, "Both timeline realization paths project an attachment-bearing contribution", asserts `entry.attachments.size() == 1` through the shared `ProjectContribution` projection used by both the append path and the render path.                                                                                                                                                                                                                                                                                                                                                                                                                                                   | PASS         | The projection is unified; a live appended-message render was not separately screenshotted.                                                                                                                                                           |
+| S-04 | Action Center offers meaningful source-linked details in an inline expansion or dismissible sheet, without a standalone page, and does not silently execute recovery when the user asked to inspect. | Native interaction / Unit test               | `verify_ac_ai.exe` Test 3 (production `ActionCenterPresenter` and presentation invariants) and Test 4 (expected-version verification at invocation) pass. The live harness Phase 9.4 opens the sheet on the built binary and asserts a usable rendered size (926×536 px measured, minimum 120 px enforced), the read-only projection summary, one source-linked row per listed item (52 realized), the required `Record identity` / `Record version` / `Source reference` / `Projection state` fields, an unchanged projection status across inspection, focus moving into the sheet and returning to **Show details** on close, and that the item list and **Show details** keep rendered size afterwards. | PASS         | The detail is now a dismissible sheet rather than an in-place expander; see §15.5 for the defect that motivated the change. Escape-to-close and Close-button parity were observed on a live window; the harness exercises the Close button path only. |
+| S-05 | English preview eligibility accepts ordinary prose and still refuses non-English text, and no caller claims a pass proves arbitrary prose is English.                                                | Unit test                                    | `storage_tests.exe` group 24b, "English preview eligibility": 13 table-driven cases through the real `InspectAttachment` path. Positives include function words (`of`, `not`, `one`, `no`), hyphenated compounds, contractions, report prose, engineering prose and release notes; negatives include Spanish, mixed-language, French-with-an-English-word, underscore-dressed foreign tokens, a foreign hyphenated compound and CJK. Positives assert the preview equals the body; negatives assert empty content, a non-empty reason, verified integrity and preserved metadata.                                                                                                                           | PASS         | A vocabulary pass is a necessary condition, not proof of language; the code and its comment state that explicitly. Coverage is representative, not exhaustive.                                                                                        |
+| S-06 | Dynamically generated cards, attachment chips, overlays and text follow a live light/dark switch without losing draft, focus, scroll or controller state.                                            | Source inspection / Compilation              | All 79 code-built brush assignments resolve through the shared `mayasaba::ui::Token` cache; `RootLayout().ActualThemeChanged` triggers `RefreshThemeBrushes()`, which recolours the shared instances in place rather than rebuilding cards. `Mayasaba.vcxproj` built clean with the new `ThemeBrushes` translation unit.                                                                                                                                                                                                                                                                                                                                                                                    | INCONCLUSIVE | The code path is implemented and compiles; a live light/dark switch was not visually observed in this pass. The visual observation belongs to §15.3.                                                                                                  |
+| S-07 | Test reporting is derived from executed named cases, names the failing case, and would actually detect a regression.                                                                                 | Unit test / Controlled mutation              | Both executables print `PASS: N of N executed ...` derived from the `ExecutedCases` record and list every group by name. A controlled mutation (dropping `entry.attachments = item.attachments;` from `TimelineEntry.h`) was compiled in; the run then reported `FAIL 30. Both timeline realization paths project an attachment-bearing contribution`, named the group, and exited 1. The mutation was reverted and the clean run reported `PASS: 30 of 30`.                                                                                                                                                                                                                                                | PASS         | The mutation demonstrates detection for one assertion; it is not a proof for every group.                                                                                                                                                             |
+| S-08 | Native harness runs against the final built artifact with an isolated database.                                                                                                                      | Native interaction / Compilation / Unit test | `Mayasaba.exe` rebuilt (SHA-256 in §15.1) and `python native/tests/test_full_ui_acceptance.py` executed against the isolated store `_ui-verify\multi_test\store.db`: 13 PASS, 2 INCONCLUSIVE, 0 FAIL. Both test executables rebuilt from current sources and executed; `storage_tests.exe` exits 0 and contract registry `validate_contract_registry.py` reports `PASS: 124 contract-registry and Screen 2 slice schema checks`.                                                                                                                                                                                                                                                                            | PASS         | Test executables use temporary directories per run; they do not exercise the packaged MSI. The harness uses seeded fixture records, not live agent traffic.                                                                                           |
+| S-09 | Real desktop drop of a single file from Explorer.                                                                                                                                                    | Agent-observed runtime                       | Not performed in this pass. Prior synthetic attempts timed out with 0 records admitted (exit code 4); cause unproven.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | INCONCLUSIVE | Requires an interactive desktop drop by the user. Procedure in §15.3.                                                                                                                                                                                 |
+| S-10 | Mixed-batch folder rejection observed in the live NoticeBar on drop.                                                                                                                                 | Agent-observed runtime                       | Not performed in this pass; rejection logic is verified by `verify_ac_ai.exe` Test 5 Case 2.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | INCONCLUSIVE | Depends on S-09 delivery succeeding.                                                                                                                                                                                                                  |
+| S-11 | Actual 150% and 200% display scaling.                                                                                                                                                                | Agent-observed runtime                       | Not performed. Environment measured this pass: one display, 96 DPI (100%), no `PerMonitorSettings` key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | INCONCLUSIVE | Requires the user to change display scaling. No sign-out requirement is claimed; see the correction in §14.4.                                                                                                                                         |
+| S-12 | Narrator speech walkthrough.                                                                                                                                                                         | Agent-observed runtime                       | Not performed. UIA names, roles, heading levels and focus restoration are verified programmatically.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | INCONCLUSIVE | Requires human listening.                                                                                                                                                                                                                             |
+| S-13 | Live high-contrast switch.                                                                                                                                                                           | Agent-observed runtime                       | Not performed in this pass. The high-contrast path keeps each cached brush's type and paints it flat with the system colour, alongside the pre-existing decoration removal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | INCONCLUSIVE | Requires a live high-contrast toggle.                                                                                                                                                                                                                 |
+| S-14 | Live reduced-motion preference change.                                                                                                                                                               | Agent-observed runtime                       | Not performed in this pass. Previously observed PASS at revision `684e44a`; not re-observed against the current binary.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | INCONCLUSIVE | Not re-observed after the current change set.                                                                                                                                                                                                         |
 
 ### 15.3 Outstanding interaction procedures
 
@@ -1678,14 +1699,14 @@ This section supersedes §15 as the current summary. §15 and everything above i
 
 ### 16.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Source revision | `main` at `ee0be9de578f66249a71ea79944fe1f011d8eba4` (parent `0fe09fb`) |
-| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-20 20:45 local from the working tree that became `ee0be9d`, SHA-256 `CBCE9878D0DB8185FCD7A5D569F0DB6FE0769D0DFE82F9C1C64B502831B35DBB` |
-| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `50353CD298844F5CCA9C72AC094DD92B1E59F04C1497819C15E58C34335901BC` |
-| Test binaries | `storage_tests.exe` `9106AA4C347A8622522F78DE43BF386E14ABA5594A171B2D46966C0A72303D41`; `verify_ac_ai.exe` `752F2B09885DAB4A6E2257DBE62F5C180374334722BF964A510549635EBD32BF`; `perf_benchmarks.exe` `43C5CDD0ACC6D67A363793602B6B638D3CA8FFE874AB4D68D12837586D5123FF` |
-| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 125% scaling |
-| Build hygiene | Application rebuild: 0 warnings, 0 errors. `perf_benchmarks` reports two pre-existing `C4100` unreferenced-parameter warnings (`argc`, `argv` at `perf_benchmarks.cpp:379`) that are not from this change set. |
+| Field              | Value                                                                                                                                                                                                                                                                   |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source revision    | `main` at `ee0be9de578f66249a71ea79944fe1f011d8eba4` (parent `0fe09fb`)                                                                                                                                                                                                 |
+| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-20 20:45 local from the working tree that became `ee0be9d`, SHA-256 `CBCE9878D0DB8185FCD7A5D569F0DB6FE0769D0DFE82F9C1C64B502831B35DBB`                                                                    |
+| Compiled XAML      | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `50353CD298844F5CCA9C72AC094DD92B1E59F04C1497819C15E58C34335901BC`                                                                                                                                            |
+| Test binaries      | `storage_tests.exe` `9106AA4C347A8622522F78DE43BF386E14ABA5594A171B2D46966C0A72303D41`; `verify_ac_ai.exe` `752F2B09885DAB4A6E2257DBE62F5C180374334722BF964A510549635EBD32BF`; `perf_benchmarks.exe` `43C5CDD0ACC6D67A363793602B6B638D3CA8FFE874AB4D68D12837586D5123FF` |
+| Toolchain          | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 125% scaling                                                                                                                                                               |
+| Build hygiene      | Application rebuild: 0 warnings, 0 errors. `perf_benchmarks` reports two pre-existing `C4100` unreferenced-parameter warnings (`argc`, `argv` at `perf_benchmarks.cpp:379`) that are not from this change set.                                                          |
 
 No source file changed between the application build and commit `ee0be9d`, so the hash above identifies the binary built from that commit. `MainWindow.xbf` is **unchanged** from the previous build: this change set touches no XAML, so the compiled XAML identity is identical while the executable identity is not. Recording both is what makes that visible.
 
@@ -1697,49 +1718,49 @@ No source file changed between the application build and commit `ee0be9d`, so th
 
 The corrected protocol makes authorization and record removal one serialized step and lets the caller delete only what that step authorized:
 
-| Property | How it is now guaranteed |
-| --- | --- |
-| Authorization precedes deletion | Storage decides and removes in the same `mutex_`-held `BEGIN IMMEDIATE` transaction; the staged path is returned only for a row that was actually deleted. |
-| No check-then-delete window | A refusal throws before any filesystem call; a pending submission cannot appear between the decision and the delete because both are in one serialized section. |
-| No stale-path deletion | The deleted row's own `staged_path` is returned, so the caller never deletes a path it read earlier and recovery may since have replaced. |
+| Property                          | How it is now guaranteed                                                                                                                                                                                                                                                |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authorization precedes deletion   | Storage decides and removes in the same `mutex_`-held `BEGIN IMMEDIATE` transaction; the staged path is returned only for a row that was actually deleted.                                                                                                              |
+| No check-then-delete window       | A refusal throws before any filesystem call; a pending submission cannot appear between the decision and the delete because both are in one serialized section.                                                                                                         |
+| No stale-path deletion            | The deleted row's own `staged_path` is returned, so the caller never deletes a path it read earlier and recovery may since have replaced.                                                                                                                               |
 | Recoverable after cleanup failure | Order is record-then-bytes; a failed byte deletion leaves an untracked file inside the managed staging directory, which the containment-checked reconciliation reclaims. It is reported via `DraftRemovalOutcome.unresolvedReason`, never presented as a clean removal. |
-| Project isolation | The pending check and the delete are both scoped by `project_id`; a lock in one project neither blocks nor endangers another. |
+| Project isolation                 | The pending check and the delete are both scoped by `project_id`; a lock in one project neither blocks nor endangers another.                                                                                                                                           |
 
 The `PREPARING` reclaim path in `ReconcileStagedFiles` now reference-fences before any deletion: `CountProtectedReferencesExcluding(path, projectId, id)` counts every equivalent reference across all projects (drafts and committed attachments), canonicalizing path spellings via `weakly_canonical` so that a dot-segment or case-variant alias cannot slip through, and excluding the PREPARING row itself. An unknown or uncanonicalizable path yields a fail-closed sentinel (`INT_MAX`) and the bytes are retained. Only when zero other references protect the object does containment get proven and the staged copy removed. The file-then-record order is preserved, but it is now bounded by the global reference fence rather than by a project-local, text-only scan. This closes two reproduced attachment failures: Failure A (equivalent path spelling bypassed reference counting during single/ clear-all removal) and Failure B (an interrupted PREPARING cleanup deleted bytes still protected by another project's READY record).
 
 ### 16.3 Criteria for this assignment
 
-| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
-| --- | --- | --- | --- | --- | --- |
-| A-01 | A refused single removal preserves the SQLite record, the staged file and the pending row. | Unit test | `storage_tests.exe` group 41: `service.RemoveDraftAttachment` on a locked project throws; `fs::exists(staged)` true; one `READY` row retained; `Pending` still present. | PASS | Service-level; the composer already refuses earlier, so this is the boundary a direct caller reaches. |
-| A-02 | A refused clear preserves the whole set. | Unit test | Group 41: `service.ClearDraftAttachments` throws; file and row retained; pending retained. | PASS | Same boundary as A-01. |
-| A-03 | Legitimate removal and clear still work. | Unit test | Group 42: single removal and clear both return `recordRemoved` and `bytesRemoved` true; files gone; rows gone. | PASS | Uses isolated temp stores, not the production database. |
-| A-04 | Partial cleanup failure is reported and stays recoverable. | Unit test | Group 42: file held open without delete sharing yields `recordRemoved=true`, `bytesRemoved=false`, non-empty `unresolvedReason`, file still present; after the handle closes, `ReclaimInterruptedPreparation` deletes it. | PASS | The failure is induced by a sharing violation, not by a disk or ACL fault. |
-| A-05 | No cross-project regression. | Unit test | Group 41: while one project is locked, a second project's attachment is removed normally and the locked project's file and row are untouched. | PASS | Two projects in one store; not a concurrency test. |
-| A-06 | Existing S1–S3 protections continue to pass. | Unit test / Registry | `storage_tests.exe` `PASS: 54 of 54 executed native regression groups`; `verify_ac_ai.exe` 12/12 `PASS Test`; `validate_contract_registry.py` `PASS: 124 contract-registry and Screen 2 slice schema checks`. | PASS | Counts are what executed; none were skipped. |
-| A-07 | The new test detects the original defect (controlled mutation). | Controlled mutation | The service was reverted to delete-first, rebuilt, and run: `FAIL: Assertion failed: fs::exists(guardedFile)` in group 41 — the protected file was destroyed. Restored, rebuilt, `PASS: 54 of 54 executed native regression groups`. | PASS | Demonstrates detection for this defect; not a proof for every assertion in the group. |
-| A-08b | A path-spelling alias protects staged bytes from early deletion (Failure A). | Unit test + controlled mutation | Group 53: a second `AttachmentRecord` names the same file through `staging/proj/./original.txt` (different text, same object). `RemoveDraftAttachment` of the primary reports the bytes shared/retained; the file and the alias record survive; removing the alias finally reclaims the bytes. Mutation: replacing `weakly_canonical` with text-only comparison in `PathMatchesReference` fails only group 53 (`COUNT protected references >= 1`). | PASS | Exercises `CountProtectedReferencesExcluding` canonicalization for the single/ clear-all removal path. |
-| A-09b | An interrupted PREPARING cleanup is fenced by cross-project references (Failure B). | Unit test + controlled mutation | Group 54: Project P holds a PREPARING row; Project Q holds a READY record to the same bytes. `ReconcileStagedFiles("P", false)` leaves both the file and the PREPARING row. Removing Q's reference and re-reconciling then deletes the file and retires the PREPARING row. Mutation: neutralizing the `CountProtectedReferencesExcluding > 0` fence fails only group 54 (`fs::exists(pFile)`). | PASS | Exercises the global reference fence in the PREPARING reclaim path. |
-| A-08 | Each result can be tied to the exact executable and compiled XAML. | Source inspection / Compilation | `test_full_ui_acceptance.py` accepts `--exe/--store/--perf-log/--evidence-dir`, computes SHA-256 of the executable and of `MainWindow.xbf`, records the source commit, and writes `artifact-identity.json` into the evidence directory; `py_compile` succeeds. | PASS (code) | The harness was not executed end-to-end this pass, so no identity-stamped harness report exists yet. |
-| A-09 | UI performance measured on this build. | — | `perf_benchmarks.exe` completes with database query timings (e.g. substring search median 11.17 ms, worst-case full scan median 18.87 ms over 100 samples). | INCONCLUSIVE as UI evidence | These are storage benchmarks. Input latency, frame pacing and UI-thread stall were **not** measured on this build. |
+| ID    | Criterion and exact scope                                                                  | Evidence type                   | Command and actual observation                                                                                                                                                                                                                                                                                                                                                                                                                     | Verdict                     | Remaining limitation                                                                                               |
+| ----- | ------------------------------------------------------------------------------------------ | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| A-01  | A refused single removal preserves the SQLite record, the staged file and the pending row. | Unit test                       | `storage_tests.exe` group 41: `service.RemoveDraftAttachment` on a locked project throws; `fs::exists(staged)` true; one `READY` row retained; `Pending` still present.                                                                                                                                                                                                                                                                            | PASS                        | Service-level; the composer already refuses earlier, so this is the boundary a direct caller reaches.              |
+| A-02  | A refused clear preserves the whole set.                                                   | Unit test                       | Group 41: `service.ClearDraftAttachments` throws; file and row retained; pending retained.                                                                                                                                                                                                                                                                                                                                                         | PASS                        | Same boundary as A-01.                                                                                             |
+| A-03  | Legitimate removal and clear still work.                                                   | Unit test                       | Group 42: single removal and clear both return `recordRemoved` and `bytesRemoved` true; files gone; rows gone.                                                                                                                                                                                                                                                                                                                                     | PASS                        | Uses isolated temp stores, not the production database.                                                            |
+| A-04  | Partial cleanup failure is reported and stays recoverable.                                 | Unit test                       | Group 42: file held open without delete sharing yields `recordRemoved=true`, `bytesRemoved=false`, non-empty `unresolvedReason`, file still present; after the handle closes, `ReclaimInterruptedPreparation` deletes it.                                                                                                                                                                                                                          | PASS                        | The failure is induced by a sharing violation, not by a disk or ACL fault.                                         |
+| A-05  | No cross-project regression.                                                               | Unit test                       | Group 41: while one project is locked, a second project's attachment is removed normally and the locked project's file and row are untouched.                                                                                                                                                                                                                                                                                                      | PASS                        | Two projects in one store; not a concurrency test.                                                                 |
+| A-06  | Existing S1–S3 protections continue to pass.                                               | Unit test / Registry            | `storage_tests.exe` `PASS: 54 of 54 executed native regression groups`; `verify_ac_ai.exe` 12/12 `PASS Test`; `validate_contract_registry.py` `PASS: 124 contract-registry and Screen 2 slice schema checks`.                                                                                                                                                                                                                                      | PASS                        | Counts are what executed; none were skipped.                                                                       |
+| A-07  | The new test detects the original defect (controlled mutation).                            | Controlled mutation             | The service was reverted to delete-first, rebuilt, and run: `FAIL: Assertion failed: fs::exists(guardedFile)` in group 41 — the protected file was destroyed. Restored, rebuilt, `PASS: 54 of 54 executed native regression groups`.                                                                                                                                                                                                               | PASS                        | Demonstrates detection for this defect; not a proof for every assertion in the group.                              |
+| A-08b | A path-spelling alias protects staged bytes from early deletion (Failure A).               | Unit test + controlled mutation | Group 53: a second `AttachmentRecord` names the same file through `staging/proj/./original.txt` (different text, same object). `RemoveDraftAttachment` of the primary reports the bytes shared/retained; the file and the alias record survive; removing the alias finally reclaims the bytes. Mutation: replacing `weakly_canonical` with text-only comparison in `PathMatchesReference` fails only group 53 (`COUNT protected references >= 1`). | PASS                        | Exercises `CountProtectedReferencesExcluding` canonicalization for the single/ clear-all removal path.             |
+| A-09b | An interrupted PREPARING cleanup is fenced by cross-project references (Failure B).        | Unit test + controlled mutation | Group 54: Project P holds a PREPARING row; Project Q holds a READY record to the same bytes. `ReconcileStagedFiles("P", false)` leaves both the file and the PREPARING row. Removing Q's reference and re-reconciling then deletes the file and retires the PREPARING row. Mutation: neutralizing the `CountProtectedReferencesExcluding > 0` fence fails only group 54 (`fs::exists(pFile)`).                                                     | PASS                        | Exercises the global reference fence in the PREPARING reclaim path.                                                |
+| A-08  | Each result can be tied to the exact executable and compiled XAML.                         | Source inspection / Compilation | `test_full_ui_acceptance.py` accepts `--exe/--store/--perf-log/--evidence-dir`, computes SHA-256 of the executable and of `MainWindow.xbf`, records the source commit, and writes `artifact-identity.json` into the evidence directory; `py_compile` succeeds.                                                                                                                                                                                     | PASS (code)                 | The harness was not executed end-to-end this pass, so no identity-stamped harness report exists yet.               |
+| A-09  | UI performance measured on this build.                                                     | —                               | `perf_benchmarks.exe` completes with database query timings (e.g. substring search median 11.17 ms, worst-case full scan median 18.87 ms over 100 samples).                                                                                                                                                                                                                                                                                        | INCONCLUSIVE as UI evidence | These are storage benchmarks. Input latency, frame pacing and UI-thread stall were **not** measured on this build. |
 
 ### 16.4 S4 native acceptance matrix
 
 Evidence class `Agent-observed runtime` means a screenshot and/or UIA snapshot taken from the running binary identified in §16.1 at 125% scaling with an isolated store.
 
-| ID | Criterion | Evidence type | Observation | Verdict |
-| --- | --- | --- | --- | --- |
-| K-01 | Keyboard-only Welcome → Screen 2, and Escape does not bypass selection into Chat. | Agent-observed runtime | Focus starts on `Continue to project selection`; Enter reaches Screen 2 showing `Pick up where you left off`, `Open an existing project folder`, `Create a new project folder`, `0 projects recorded`, `No recorded projects yet...`, and disabled `Previous/Next projects`. Escape on Screen 2 keeps Screen 2. Screenshots `s4-welcome.png`, `s4-screen2.png`. | PASS |
-| K-02 | Chat workflows: Enter/Shift+Enter, Ctrl+F search, attachment chips, Action Center traversal. | Agent-observed runtime | Not performed: no project was bound, so Chat was never reached in this pass. | INCONCLUSIVE |
-| D-01 | Real Explorer drag-and-drop of one file admitted with correct size and SHA-256. | Agent-observed runtime | Not performed. Procedure: bind a folder under `C:\Users\pavan\PROJECTS\` (the picker fails for `%TEMP%` paths), type a draft, drag one `.txt` from Explorer onto the composer, confirm the chip reaches READY and that no contribution is created by the drop alone. | INCONCLUSIVE |
-| D-02 | Mixed file+folder batch rejected as a whole. | Agent-observed runtime | Not performed; refusal logic is covered by `verify_ac_ai.exe` Test 5 Case 2 at the service level. | INCONCLUSIVE |
-| D-03 | Drop refused while a submission is unresolved. | Agent-observed runtime | Not performed. Admission policy is covered by `storage_tests` group 34. | INCONCLUSIVE |
-| D-04 | Second drop during preparation refused rather than validated against a stale set. | Agent-observed runtime | Not performed. Single-flight reservation covered by `storage_tests` group 35. | INCONCLUSIVE |
-| N-01 | Narrator announces screens, controls and states without false completion claims. | Agent-observed runtime (human listening) | Not performed. UIA exposes accessible names for every control observed on both screens (e.g. `Skip the introduction`, `Continue to project selection`, `Open an existing project folder`, `Filter recent projects`, `Filter by project status`), which is a necessary but not sufficient condition. | INCONCLUSIVE |
-| P-01 | 150% and 200% display scaling. | Agent-observed runtime | Not performed. Environment measured at 125% (one display, 1920×1080, window 1424×732 physical). Changing the scale alters the user's display configuration and was not done unasked. | INCONCLUSIVE |
-| T-01 | Live high-contrast switch. | Agent-observed runtime | Not performed; requires toggling a system accessibility theme. | INCONCLUSIVE |
-| T-02 | Live light/dark switch while Chat is open. | Agent-observed runtime | Not performed; the window rendered in dark theme because the system is dark, but no live switch was observed. | INCONCLUSIVE |
-| T-03 | Reduced-motion preference change during a transition. | Agent-observed runtime | Not performed. | INCONCLUSIVE |
+| ID   | Criterion                                                                                    | Evidence type                            | Observation                                                                                                                                                                                                                                                                                                                                                     | Verdict      |
+| ---- | -------------------------------------------------------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| K-01 | Keyboard-only Welcome → Screen 2, and Escape does not bypass selection into Chat.            | Agent-observed runtime                   | Focus starts on `Continue to project selection`; Enter reaches Screen 2 showing `Pick up where you left off`, `Open an existing project folder`, `Create a new project folder`, `0 projects recorded`, `No recorded projects yet...`, and disabled `Previous/Next projects`. Escape on Screen 2 keeps Screen 2. Screenshots `s4-welcome.png`, `s4-screen2.png`. | PASS         |
+| K-02 | Chat workflows: Enter/Shift+Enter, Ctrl+F search, attachment chips, Action Center traversal. | Agent-observed runtime                   | Not performed: no project was bound, so Chat was never reached in this pass.                                                                                                                                                                                                                                                                                    | INCONCLUSIVE |
+| D-01 | Real Explorer drag-and-drop of one file admitted with correct size and SHA-256.              | Agent-observed runtime                   | Not performed. Procedure: bind a folder under `C:\Users\pavan\PROJECTS\` (the picker fails for `%TEMP%` paths), type a draft, drag one `.txt` from Explorer onto the composer, confirm the chip reaches READY and that no contribution is created by the drop alone.                                                                                            | INCONCLUSIVE |
+| D-02 | Mixed file+folder batch rejected as a whole.                                                 | Agent-observed runtime                   | Not performed; refusal logic is covered by `verify_ac_ai.exe` Test 5 Case 2 at the service level.                                                                                                                                                                                                                                                               | INCONCLUSIVE |
+| D-03 | Drop refused while a submission is unresolved.                                               | Agent-observed runtime                   | Not performed. Admission policy is covered by `storage_tests` group 34.                                                                                                                                                                                                                                                                                         | INCONCLUSIVE |
+| D-04 | Second drop during preparation refused rather than validated against a stale set.            | Agent-observed runtime                   | Not performed. Single-flight reservation covered by `storage_tests` group 35.                                                                                                                                                                                                                                                                                   | INCONCLUSIVE |
+| N-01 | Narrator announces screens, controls and states without false completion claims.             | Agent-observed runtime (human listening) | Not performed. UIA exposes accessible names for every control observed on both screens (e.g. `Skip the introduction`, `Continue to project selection`, `Open an existing project folder`, `Filter recent projects`, `Filter by project status`), which is a necessary but not sufficient condition.                                                             | INCONCLUSIVE |
+| P-01 | 150% and 200% display scaling.                                                               | Agent-observed runtime                   | Not performed. Environment measured at 125% (one display, 1920×1080, window 1424×732 physical). Changing the scale alters the user's display configuration and was not done unasked.                                                                                                                                                                            | INCONCLUSIVE |
+| T-01 | Live high-contrast switch.                                                                   | Agent-observed runtime                   | Not performed; requires toggling a system accessibility theme.                                                                                                                                                                                                                                                                                                  | INCONCLUSIVE |
+| T-02 | Live light/dark switch while Chat is open.                                                   | Agent-observed runtime                   | Not performed; the window rendered in dark theme because the system is dark, but no live switch was observed.                                                                                                                                                                                                                                                   | INCONCLUSIVE |
+| T-03 | Reduced-motion preference change during a transition.                                        | Agent-observed runtime                   | Not performed.                                                                                                                                                                                                                                                                                                                                                  | INCONCLUSIVE |
 
 ### 16.5 Observations not promoted to defects
 
@@ -1766,15 +1787,15 @@ This section supersedes §16 as the current summary. §16 and everything above i
 
 ### 17.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Source revision | working tree at `c3332d0` (HEAD) plus this change set (`Storage.h`, `Storage.cpp`, `winsqlite3_compat.h`, `storage_tests.cpp`); no source file changed between the final builds below and the commit that follows |
-| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-21 from the final working tree, SHA-256 `9FF21B8894AB3F87F9429C65CF4C7E2B4B291285B9E3C34B6D0EC86F2E3A3B51` |
-| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `50353CD298844F5CCA9C72AC094DD92B1E59F04C1497819C15E58C34335901BC` |
-| Test binaries | `storage_tests.exe` `6802022643AD31E127022831599A33B7CC34DB61993AAD4A0E74E1E6C7FC1AB8`; `verify_ac_ai.exe` `63CC10D3B80E7383C9710F8F04723759CCE4D3C9AB8A85B5D9990A9E2E4AADD4`; `perf_benchmarks.exe` `B29BD07F739671E606CF19030421A7C11714A3653E98B369F6E0DBA74E3CC0FA` |
-| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145` (MSVC 14.50.35717), Windows 11 build 26200, one display at 125% scaling |
-| Build hygiene | Application rebuild: 0 warnings, 0 errors. `storage_tests`, `verify_ac_ai` and `perf_benchmarks` were rebuilt from the same final source: 0 warnings, 0 errors in the captured logs. §16 recorded two pre-existing `C4100` unreferenced-parameter warnings from an earlier `perf_benchmarks` build; that observation is not re-claimed here, and no cause for its absence from this pass's captured log is asserted. MSVC links on this toolchain are not byte-reproducible, so relinking identical sources yields a new executable hash; the hashes above are those of the exact binaries whose runs are cited in §17.3, all executed after the final rebuild from the final source. |
-| Production store | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` — byte-identical before and after this pass; no test in this pass opened it (all stores are isolated temp paths). |
+| Field              | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source revision    | working tree at `c3332d0` (HEAD) plus this change set (`Storage.h`, `Storage.cpp`, `winsqlite3_compat.h`, `storage_tests.cpp`); no source file changed between the final builds below and the commit that follows                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, built 2026-10-21 from the final working tree, SHA-256 `9FF21B8894AB3F87F9429C65CF4C7E2B4B291285B9E3C34B6D0EC86F2E3A3B51`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Compiled XAML      | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `50353CD298844F5CCA9C72AC094DD92B1E59F04C1497819C15E58C34335901BC`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Test binaries      | `storage_tests.exe` `6802022643AD31E127022831599A33B7CC34DB61993AAD4A0E74E1E6C7FC1AB8`; `verify_ac_ai.exe` `63CC10D3B80E7383C9710F8F04723759CCE4D3C9AB8A85B5D9990A9E2E4AADD4`; `perf_benchmarks.exe` `B29BD07F739671E606CF19030421A7C11714A3653E98B369F6E0DBA74E3CC0FA`                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Toolchain          | MSBuild, Visual Studio 18 Enterprise, toolset `v145` (MSVC 14.50.35717), Windows 11 build 26200, one display at 125% scaling                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Build hygiene      | Application rebuild: 0 warnings, 0 errors. `storage_tests`, `verify_ac_ai` and `perf_benchmarks` were rebuilt from the same final source: 0 warnings, 0 errors in the captured logs. §16 recorded two pre-existing `C4100` unreferenced-parameter warnings from an earlier `perf_benchmarks` build; that observation is not re-claimed here, and no cause for its absence from this pass's captured log is asserted. MSVC links on this toolchain are not byte-reproducible, so relinking identical sources yields a new executable hash; the hashes above are those of the exact binaries whose runs are cited in §17.3, all executed after the final rebuild from the final source. |
+| Production store   | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` — byte-identical before and after this pass; no test in this pass opened it (all stores are isolated temp paths).                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 
 `MainWindow.xbf` is **unchanged** from §16.1: this change set touches no XAML, so the compiled XAML identity is identical while the executable identity is not. Recording both is what makes that visible.
 
@@ -1782,39 +1803,39 @@ This section supersedes §16 as the current summary. §16 and everything above i
 
 ### 17.2 The defects
 
-**F1 — an attachment identity could be written through another project.** `Storage::SaveDraftAttachment` (and the batch `SaveDraftAttachments`) upserted `draft_attachments` matching on `attachment_id` alone. The pending-manifest guards received the *supplied* project, so a write naming another project silently rewrote the owner's row — path, digest, error message, version — while the caller was told it succeeded. `SaveDraftAttachment` also ran with no transaction at all.
+**F1 — an attachment identity could be written through another project.** `Storage::SaveDraftAttachment` (and the batch `SaveDraftAttachments`) upserted `draft_attachments` matching on `attachment_id` alone. The pending-manifest guards received the _supplied_ project, so a write naming another project silently rewrote the owner's row — path, digest, error message, version — while the caller was told it succeeded. `SaveDraftAttachment` also ran with no transaction at all.
 
 The fix adds `RefuseForeignAttachmentIdentity_locked`, which checks both `draft_attachments` and committed `attachments` for existing ownership of the identity, and runs ownership check, pending-manifest check and upsert as **one** `BEGIN IMMEDIATE` transaction. A committed attachment owns its identity too: reusing it as a draft elsewhere would make inspection ambiguous about which record the identity names. A rejected batch therefore leaves no partial update, not even the innocent element that preceded the conflicting one.
 
-**F2 — quarantine admission was bypassed by any mutation that did not begin with `BEGIN IMMEDIATE`.** The poisoned-connection check lived inside `Exec`, only on the `BEGIN IMMEDIATE` branch, so a direct prepared write — `SaveDraftAttachment` is one — reached SQLite on a connection whose transaction outcome was unknown. The rollback-after-failure paths also *assumed* the rollback worked.
+**F2 — quarantine admission was bypassed by any mutation that did not begin with `BEGIN IMMEDIATE`.** The poisoned-connection check lived inside `Exec`, only on the `BEGIN IMMEDIATE` branch, so a direct prepared write — `SaveDraftAttachment` is one — reached SQLite on a connection whose transaction outcome was unknown. The rollback-after-failure paths also _assumed_ the rollback worked.
 
 The fix has three parts, in this order of reliance:
 
-| Property | How it is now guaranteed |
-| --- | --- |
-| Every mutation is admitted | `AdmitWrite_locked()` is the single admission point; every mutation entry point calls it and fails closed **before any statement is prepared**. It performs the quarantine check and the free-space check together, so a caller can no longer pass one by doing the other's work. |
-| Admission cannot be forgotten | A SQLite authorizer installed at open (`WriteAdmissionAuthorizer`) denies every write action at the SQLite layer while the connection is quarantined, so an entry point that forgets admission still fails closed. Reads stay permitted so the Action Center can describe the unresolved state the quarantine protects; a denied statement is translated from SQLite's bare "not authorized" into the quarantine reason. |
-| The rollback is proven, not assumed | `RollbackAfterFailure_locked()` issues the rollback and then checks `sqlite3_get_autocommit`; a connection still inside a transaction is quarantined rather than presented as usable. |
+| Property                            | How it is now guaranteed                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Every mutation is admitted          | `AdmitWrite_locked()` is the single admission point; every mutation entry point calls it and fails closed **before any statement is prepared**. It performs the quarantine check and the free-space check together, so a caller can no longer pass one by doing the other's work.                                                                                                                                        |
+| Admission cannot be forgotten       | A SQLite authorizer installed at open (`WriteAdmissionAuthorizer`) denies every write action at the SQLite layer while the connection is quarantined, so an entry point that forgets admission still fails closed. Reads stay permitted so the Action Center can describe the unresolved state the quarantine protects; a denied statement is translated from SQLite's bare "not authorized" into the quarantine reason. |
+| The rollback is proven, not assumed | `RollbackAfterFailure_locked()` issues the rollback and then checks `sqlite3_get_autocommit`; a connection still inside a transaction is quarantined rather than presented as usable.                                                                                                                                                                                                                                    |
 
-**A second defect in this change set, found by its own verification.** The first expression of the authorizer backstop translated a denied statement's message only in `Storage::Check`, which covers `sqlite3_step`. The `Statement` constructor prepares with `sqlite3_prepare_v2` and threw SQLite's bare `sqlite3_errmsg` — which for a denial is `not authorized` — so an entry point that forgot admission and was stopped by the backstop would have surfaced an unexplained "not authorized" instead of the quarantine guidance. The controlled experiment in B-13 caught this: with admission stripped from one direct-write method, group 44 failed on the *message*, proving the denial fired but spoke wrongly. The repair is one translation point, `StatementFailureMessage`, now used by prepare (`Statement`), step (`Check`) and `sqlite3_exec` (`Exec`), so admission and backstop refusals are indistinguishable to a caller. Re-running the same experiment after the repair passes (B-13), which demonstrates both the defect and its repair. A denial on this connection can only come from this authorizer — no other authorizer is installed and `ATTACH`/`DETACH` are themselves denied while quarantined — so the translation is unambiguous.
+**A second defect in this change set, found by its own verification.** The first expression of the authorizer backstop translated a denied statement's message only in `Storage::Check`, which covers `sqlite3_step`. The `Statement` constructor prepares with `sqlite3_prepare_v2` and threw SQLite's bare `sqlite3_errmsg` — which for a denial is `not authorized` — so an entry point that forgot admission and was stopped by the backstop would have surfaced an unexplained "not authorized" instead of the quarantine guidance. The controlled experiment in B-13 caught this: with admission stripped from one direct-write method, group 44 failed on the _message_, proving the denial fired but spoke wrongly. The repair is one translation point, `StatementFailureMessage`, now used by prepare (`Statement`), step (`Check`) and `sqlite3_exec` (`Exec`), so admission and backstop refusals are indistinguishable to a caller. Re-running the same experiment after the repair passes (B-13), which demonstrates both the defect and its repair. A denial on this connection can only come from this authorizer — no other authorizer is installed and `ATTACH`/`DETACH` are themselves denied while quarantined — so the translation is unambiguous.
 
 ### 17.3 Criteria for this assignment
 
-| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
-| --- | --- | --- | --- | --- | --- |
-| B-01 | A single foreign write is refused and the owner's row, version, digest, path and error message are untouched; the foreign project sees nothing. | Unit test | `storage_tests.exe` group 43: `SaveDraftAttachment("proj-b", …)` over `proj-a`'s identity throws; `GetDraftAttachments("proj-a")` keeps path, error, digest and version; `GetDraftAttachments("proj-b")` empty. | PASS | Service/storage boundary; no UI path was exercised. |
-| B-02 | A rejected batch leaves no partial update. | Unit test | Group 43: batch `{innocent, foreign}` for `proj-b` throws; `proj-b`'s drafts remain empty and `proj-a`'s single row survives. | PASS | Two projects in one store; not a concurrency test. |
-| B-03 | A legitimate same-project update still applies and bumps the version. | Unit test | Group 43: `SaveDraftAttachment("proj-a", …)` updates the error message and `version == versionBefore + 1`. | PASS | — |
-| B-04 | With a locked pending submission, a foreign write leaves record, version, digest, staged path, staged bytes and the pending identity exactly as they were. | Unit test | Group 43: after `StageSubmission`, a foreign write throws; `Pending("proj-c")->id` unchanged; staged file still exists. | PASS | — |
-| B-05 | Every mutation is refused on a quarantined connection, and the refusal reason names the quarantine (proving admission, not an incidental "transaction within a transaction"). | Unit test | Group 44: after the forced-rollback injection yields `SaveDisposition::Unknown` and `IsQuarantinedForTesting()`, the refusal reasons for `SaveDraftAttachment`, `SaveDraftAttachments`, `SaveDraft`, `StageSubmission` and `BindProject` all contain "quarantined"; `SetClosure`, `RemoveDraftAttachment`, `ClearDraftAttachments`, `TouchProjectOpened` and `RelocateProject` all throw. Nothing changed (draft row, pending id, closure flag, canonical path all verified after the refusals). | PASS | Exercised through production methods; no synthetic entry point was added to test the authorizer backstop directly. |
-| B-06 | Reads remain available under quarantine. | Unit test | Group 44: `GetDraftAttachments`, `Pending` and `Project` all succeed while quarantined. | PASS | — |
-| B-07 | Reopening clears the quarantine and writes resume. | Unit test | Group 44: a fresh `Storage` on the same file is not quarantined, and `SaveDraft` succeeds. | PASS | The unknown transaction died with the connection; this is the documented recovery, not a repair. |
-| B-08 | Existing S1–S3 protections continue to pass. | Unit test / Registry | `storage_tests.exe` `PASS: 43 of 43 executed native regression groups` (`sweep-tests-run.log`); `verify_ac_ai.exe` 12/12 `PASS Test` (`sweep-verify-run.log`); `validate_contract_registry.py` `PASS: 124 contract-registry and Screen 2 slice schema checks` (`sweep-registry-run.log`). | PASS | Counts are what executed; none were skipped. |
-| B-09 | The new group detects the F1 defect (controlled mutation). | Controlled mutation | Both `RefuseForeignAttachmentIdentity_locked` call sites were removed, rebuilt (`mut-f1b-build.log`, exit 0) and run: `FAIL: Assertion failed: singleRefused at storage_tests.cpp:3869`, `FAIL 43. …` (`mut-f1b-run.log`), exit 1. Restored byte-identically (SHA-256 `0A2711B9…`) and rebuilt. | PASS | Demonstrates detection for the assertions that ran in group 43; not a proof for every assertion in the group. |
-| B-10 | The new group detects the F2 defect (controlled mutation). | Controlled mutation | Pre-fix quarantine behaviour restored three ways — authorizer not installed, poison checked only on the `BEGIN IMMEDIATE` branch of `Exec`, `AdmitWrite_locked` reduced to the capacity check — rebuilt (`mut-f2-final-build.log`, exit 0) and run: `FAIL: Assertion failed: draftText.find("quarantined") != std::string::npos at storage_tests.cpp:4013`, `FAIL 44. …` (`mut-f2-final-run.log`), exit 1. Restored byte-identically (SHA-256 `0A2711B9…`) and rebuilt. | PASS | The mutated failure lands on `SaveDraft`, the direct prepared write, which is exactly the hole F2 closed. The run aborts at the first failed assertion, so detection for the remaining group-44 assertions is not individually demonstrated. |
-| B-13 | The authorizer backstop fires and speaks correctly when an entry point forgets admission. | Controlled mutation | Admission was stripped from `SaveDraft` alone (authorizer retained, everything else fixed), rebuilt (`mut-f2b2-build.log`, exit 0) and run: `PASS: 43 of 43` (`mut-f2b2-run.log`), exit 0 — the UPDATE was denied at prepare and the caller received the quarantine message. The identical mutation with the translation repair reverted failed at the same assertion (`mut-f2b-prerepair-run.log`, `FAIL 44`, exit 1), which is the evidence for the defect and its repair described in §17.2. Restored byte-identically (SHA-256 `0A2711B9…`) and rebuilt. | PASS | Proves the backstop on the direct-write path it protects. A deliberately admission-forgetting transaction-based entry point would still fail with SQLite's nested-transaction error rather than the quarantine message; no such entry point exists or was added. |
-| B-11 | Each result can be tied to the exact executables. | Source inspection / Compilation | §17.1 records SHA-256 of `Mayasaba.exe`, `MainWindow.xbf` and all three test binaries; the app, test and benchmark builds were separate rebuilds from the same final working tree. | PASS | — |
-| B-12 | UI performance measured on this build. | — | `perf_benchmarks.exe` completes (`sweep-perf-run.log`, exit 0), 100 samples per row: substring match `service_alpha` median 1.64 ms (max 3.05 ms); substring `algorithm` ~10% hits median 12.01 ms (max 17.06 ms); worst-case full scan (0 hits) median 4.53 ms (max 7.08 ms). | INCONCLUSIVE as UI evidence | These are storage benchmarks. Input latency, frame pacing and UI-thread stall were **not** measured on this build. |
+| ID   | Criterion and exact scope                                                                                                                                                     | Evidence type                   | Command and actual observation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Verdict                     | Remaining limitation                                                                                                                                                                                                                                             |
+| ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B-01 | A single foreign write is refused and the owner's row, version, digest, path and error message are untouched; the foreign project sees nothing.                               | Unit test                       | `storage_tests.exe` group 43: `SaveDraftAttachment("proj-b", …)` over `proj-a`'s identity throws; `GetDraftAttachments("proj-a")` keeps path, error, digest and version; `GetDraftAttachments("proj-b")` empty.                                                                                                                                                                                                                                                                                                                                              | PASS                        | Service/storage boundary; no UI path was exercised.                                                                                                                                                                                                              |
+| B-02 | A rejected batch leaves no partial update.                                                                                                                                    | Unit test                       | Group 43: batch `{innocent, foreign}` for `proj-b` throws; `proj-b`'s drafts remain empty and `proj-a`'s single row survives.                                                                                                                                                                                                                                                                                                                                                                                                                                | PASS                        | Two projects in one store; not a concurrency test.                                                                                                                                                                                                               |
+| B-03 | A legitimate same-project update still applies and bumps the version.                                                                                                         | Unit test                       | Group 43: `SaveDraftAttachment("proj-a", …)` updates the error message and `version == versionBefore + 1`.                                                                                                                                                                                                                                                                                                                                                                                                                                                   | PASS                        | —                                                                                                                                                                                                                                                                |
+| B-04 | With a locked pending submission, a foreign write leaves record, version, digest, staged path, staged bytes and the pending identity exactly as they were.                    | Unit test                       | Group 43: after `StageSubmission`, a foreign write throws; `Pending("proj-c")->id` unchanged; staged file still exists.                                                                                                                                                                                                                                                                                                                                                                                                                                      | PASS                        | —                                                                                                                                                                                                                                                                |
+| B-05 | Every mutation is refused on a quarantined connection, and the refusal reason names the quarantine (proving admission, not an incidental "transaction within a transaction"). | Unit test                       | Group 44: after the forced-rollback injection yields `SaveDisposition::Unknown` and `IsQuarantinedForTesting()`, the refusal reasons for `SaveDraftAttachment`, `SaveDraftAttachments`, `SaveDraft`, `StageSubmission` and `BindProject` all contain "quarantined"; `SetClosure`, `RemoveDraftAttachment`, `ClearDraftAttachments`, `TouchProjectOpened` and `RelocateProject` all throw. Nothing changed (draft row, pending id, closure flag, canonical path all verified after the refusals).                                                             | PASS                        | Exercised through production methods; no synthetic entry point was added to test the authorizer backstop directly.                                                                                                                                               |
+| B-06 | Reads remain available under quarantine.                                                                                                                                      | Unit test                       | Group 44: `GetDraftAttachments`, `Pending` and `Project` all succeed while quarantined.                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | PASS                        | —                                                                                                                                                                                                                                                                |
+| B-07 | Reopening clears the quarantine and writes resume.                                                                                                                            | Unit test                       | Group 44: a fresh `Storage` on the same file is not quarantined, and `SaveDraft` succeeds.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | PASS                        | The unknown transaction died with the connection; this is the documented recovery, not a repair.                                                                                                                                                                 |
+| B-08 | Existing S1–S3 protections continue to pass.                                                                                                                                  | Unit test / Registry            | `storage_tests.exe` `PASS: 43 of 43 executed native regression groups` (`sweep-tests-run.log`); `verify_ac_ai.exe` 12/12 `PASS Test` (`sweep-verify-run.log`); `validate_contract_registry.py` `PASS: 124 contract-registry and Screen 2 slice schema checks` (`sweep-registry-run.log`).                                                                                                                                                                                                                                                                    | PASS                        | Counts are what executed; none were skipped.                                                                                                                                                                                                                     |
+| B-09 | The new group detects the F1 defect (controlled mutation).                                                                                                                    | Controlled mutation             | Both `RefuseForeignAttachmentIdentity_locked` call sites were removed, rebuilt (`mut-f1b-build.log`, exit 0) and run: `FAIL: Assertion failed: singleRefused at storage_tests.cpp:3869`, `FAIL 43. …` (`mut-f1b-run.log`), exit 1. Restored byte-identically (SHA-256 `0A2711B9…`) and rebuilt.                                                                                                                                                                                                                                                              | PASS                        | Demonstrates detection for the assertions that ran in group 43; not a proof for every assertion in the group.                                                                                                                                                    |
+| B-10 | The new group detects the F2 defect (controlled mutation).                                                                                                                    | Controlled mutation             | Pre-fix quarantine behaviour restored three ways — authorizer not installed, poison checked only on the `BEGIN IMMEDIATE` branch of `Exec`, `AdmitWrite_locked` reduced to the capacity check — rebuilt (`mut-f2-final-build.log`, exit 0) and run: `FAIL: Assertion failed: draftText.find("quarantined") != std::string::npos at storage_tests.cpp:4013`, `FAIL 44. …` (`mut-f2-final-run.log`), exit 1. Restored byte-identically (SHA-256 `0A2711B9…`) and rebuilt.                                                                                      | PASS                        | The mutated failure lands on `SaveDraft`, the direct prepared write, which is exactly the hole F2 closed. The run aborts at the first failed assertion, so detection for the remaining group-44 assertions is not individually demonstrated.                     |
+| B-13 | The authorizer backstop fires and speaks correctly when an entry point forgets admission.                                                                                     | Controlled mutation             | Admission was stripped from `SaveDraft` alone (authorizer retained, everything else fixed), rebuilt (`mut-f2b2-build.log`, exit 0) and run: `PASS: 43 of 43` (`mut-f2b2-run.log`), exit 0 — the UPDATE was denied at prepare and the caller received the quarantine message. The identical mutation with the translation repair reverted failed at the same assertion (`mut-f2b-prerepair-run.log`, `FAIL 44`, exit 1), which is the evidence for the defect and its repair described in §17.2. Restored byte-identically (SHA-256 `0A2711B9…`) and rebuilt. | PASS                        | Proves the backstop on the direct-write path it protects. A deliberately admission-forgetting transaction-based entry point would still fail with SQLite's nested-transaction error rather than the quarantine message; no such entry point exists or was added. |
+| B-11 | Each result can be tied to the exact executables.                                                                                                                             | Source inspection / Compilation | §17.1 records SHA-256 of `Mayasaba.exe`, `MainWindow.xbf` and all three test binaries; the app, test and benchmark builds were separate rebuilds from the same final working tree.                                                                                                                                                                                                                                                                                                                                                                           | PASS                        | —                                                                                                                                                                                                                                                                |
+| B-12 | UI performance measured on this build.                                                                                                                                        | —                               | `perf_benchmarks.exe` completes (`sweep-perf-run.log`, exit 0), 100 samples per row: substring match `service_alpha` median 1.64 ms (max 3.05 ms); substring `algorithm` ~10% hits median 12.01 ms (max 17.06 ms); worst-case full scan (0 hits) median 4.53 ms (max 7.08 ms).                                                                                                                                                                                                                                                                               | INCONCLUSIVE as UI evidence | These are storage benchmarks. Input latency, frame pacing and UI-thread stall were **not** measured on this build.                                                                                                                                               |
 
 ### 17.4 What this record does not claim
 
@@ -1827,30 +1848,30 @@ The fix has three parts, in this order of reliance:
 
 ### 18.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Source revision | `fb00748` (HEAD) for the harness under test; `native/tests/test_full_ui_acceptance.py` is the only file changed by this assignment |
-| Application binary, flake runs (§18.2) | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `9FF21B8894AB3F87F9429C65CF4C7E2B4B291285B9E3C34B6D0EC86F2E3A3B51` — identical to §17.1 |
-| Application binary, corrected runs (§18.6) | `Mayasaba.exe`, SHA-256 `40C79F1D0916A7E89820C48422455B14D9C2A5777BD702E045AC2BCE75997564`, relinked 12:43:15 |
-| Compiled XAML, both | `MainWindow.xbf`, SHA-256 `50353CD298844F5CCA9C72AC094DD92B1E59F04C1497819C15E58C34335901BC` — identical in both binaries, so no XAML change separates them |
-| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 125% scaling |
-| Build hygiene | **No build was issued by this assignment.** The relink between the flake runs and the corrected runs was performed by a different agent; see the correction below. |
+| Field                                      | Value                                                                                                                                                              |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Source revision                            | `fb00748` (HEAD) for the harness under test; `native/tests/test_full_ui_acceptance.py` is the only file changed by this assignment                                 |
+| Application binary, flake runs (§18.2)     | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `9FF21B8894AB3F87F9429C65CF4C7E2B4B291285B9E3C34B6D0EC86F2E3A3B51` — identical to §17.1                    |
+| Application binary, corrected runs (§18.6) | `Mayasaba.exe`, SHA-256 `40C79F1D0916A7E89820C48422455B14D9C2A5777BD702E045AC2BCE75997564`, relinked 12:43:15                                                      |
+| Compiled XAML, both                        | `MainWindow.xbf`, SHA-256 `50353CD298844F5CCA9C72AC094DD92B1E59F04C1497819C15E58C34335901BC` — identical in both binaries, so no XAML change separates them        |
+| Toolchain                                  | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 125% scaling                                                          |
+| Build hygiene                              | **No build was issued by this assignment.** The relink between the flake runs and the corrected runs was performed by a different agent; see the correction below. |
 
 **Identity correction (recorded rather than silently amended).** An earlier draft of this section stated that every run drove the single binary `9FF21B88…` and that no rebuild occurred. That is true only of the flake runs in §18.2. The corrected-harness runs, the controlled mutation and its restored-state rerun all executed `40C79F1D…`, because a concurrent agent edited `MainWindow.xaml.cpp` at 12:41:43 and relinked at 12:43:15, before corrected run 1. The comparison therefore **crosses a binary boundary**, and no claim in this record treats the flake runs and the corrected runs as the same artifact.
 
-That confound was bounded by inspection rather than assumed away: `git diff` of the concurrent agent's `MainWindow.xaml.cpp` changes **zero** lines in `NavigateAsync`, `ChangeClosureAsync`, `navigationBusy_`, `resume_foreground`, `OnSwitchProject`, `OnShowActionCenterDetails` or the details-sheet focus path. Its edits are confined to attachment stale-completion reporting. The two defects diagnosed below live in code unchanged between the two binaries, so the diagnosis transfers; the *run results* do not, and are recorded per binary.
+That confound was bounded by inspection rather than assumed away: `git diff` of the concurrent agent's `MainWindow.xaml.cpp` changes **zero** lines in `NavigateAsync`, `ChangeClosureAsync`, `navigationBusy_`, `resume_foreground`, `OnSwitchProject`, `OnShowActionCenterDetails` or the details-sheet focus path. Its edits are confined to attachment stale-completion reporting. The two defects diagnosed below live in code unchanged between the two binaries, so the diagnosis transfers; the _run results_ do not, and are recorded per binary.
 
 ### 18.2 The problem: two different assertions failed on one identical binary
 
 Five full harness runs were executed against the artifact above with no source or binary change between them:
 
-| Run | Result | Failing assertion |
-| --- | --- | --- |
-| 1 | FAIL (exit 1) | Phase 4: "Screen 2 Project Selector not reached on Switch Project" |
-| 2 | PASS (exit 0) | — |
-| 3 | FAIL (exit 1) | Phase 9: "Opening details did not move focus into the detail sheet" |
-| 4 | PASS (exit 0) | — |
-| 5 | PASS (exit 0) | — |
+| Run | Result        | Failing assertion                                                   |
+| --- | ------------- | ------------------------------------------------------------------- |
+| 1   | FAIL (exit 1) | Phase 4: "Screen 2 Project Selector not reached on Switch Project"  |
+| 2   | PASS (exit 0) | —                                                                   |
+| 3   | FAIL (exit 1) | Phase 9: "Opening details did not move focus into the detail sheet" |
+| 4   | PASS (exit 0) | —                                                                   |
+| 5   | PASS (exit 0) | —                                                                   |
 
 Two failures in five runs, at **two different** assertions, on one binary. A green run therefore could not be treated as evidence that either property held, and a red run could not be attributed to the product.
 
@@ -1858,13 +1879,13 @@ Two failures in five runs, at **two different** assertions, on one binary. A gre
 
 Each was measured directly rather than reasoned about, because the first four all fit the observed signature.
 
-| Hypothesis | Measurement | Result |
-| --- | --- | --- |
-| `sw_items[0]` sometimes resolves to the `Text` child, which has no `InvokePattern` | Opened the File flyout 15 times and recorded the element order of every "Switch Project" match | **Refuted.** 15/15 identical order `('MenuItem', 'Text')`; `sw_items[0]` always had `iface_invoke`. |
-| The flyout realizes more slowly than the harness's fixed `time.sleep(1.0)` | 20 rounds, polling for the `MenuItem` after invoking File | **Refuted.** Realize latency 0.074–0.232 s (mean 0.098 s); 0/20 exceeded 1.0 s. |
-| `find_by_name(win, "File")` is ambiguous | Enumerated every element matching "File" for 20 rounds | **Refuted.** Exactly one match, always `MenuItem`. |
-| UIA `InvokePattern` on the `MenuBarItem` sometimes fails to expand the flyout | 12 rounds invoking File and polling for the item | **Refuted.** 12/12 expanded, 0.08–0.25 s. |
-| The details-sheet focus transfer is a real app defect | 8 rounds opening and closing the sheet, sampling `CurrentHasKeyboardFocus` every 50 ms while the window was verified foreground | **Refuted.** Focus arrived in 0.08–0.10 s in 8/8 rounds. |
+| Hypothesis                                                                         | Measurement                                                                                                                     | Result                                                                                              |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `sw_items[0]` sometimes resolves to the `Text` child, which has no `InvokePattern` | Opened the File flyout 15 times and recorded the element order of every "Switch Project" match                                  | **Refuted.** 15/15 identical order `('MenuItem', 'Text')`; `sw_items[0]` always had `iface_invoke`. |
+| The flyout realizes more slowly than the harness's fixed `time.sleep(1.0)`         | 20 rounds, polling for the `MenuItem` after invoking File                                                                       | **Refuted.** Realize latency 0.074–0.232 s (mean 0.098 s); 0/20 exceeded 1.0 s.                     |
+| `find_by_name(win, "File")` is ambiguous                                           | Enumerated every element matching "File" for 20 rounds                                                                          | **Refuted.** Exactly one match, always `MenuItem`.                                                  |
+| UIA `InvokePattern` on the `MenuBarItem` sometimes fails to expand the flyout      | 12 rounds invoking File and polling for the item                                                                                | **Refuted.** 12/12 expanded, 0.08–0.25 s.                                                           |
+| The details-sheet focus transfer is a real app defect                              | 8 rounds opening and closing the sheet, sampling `CurrentHasKeyboardFocus` every 50 ms while the window was verified foreground | **Refuted.** Focus arrived in 0.08–0.10 s in 8/8 rounds.                                            |
 
 ### 18.4 Two confirmed defects in the harness
 
@@ -1890,15 +1911,15 @@ The Phase 9 focus assertion now re-establishes foreground first, polls focus for
 
 ### 18.6 Criteria for this assignment
 
-| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
-| --- | --- | --- | --- | --- | --- |
-| H-01 | The observed variation is real and is not a build difference. | Native run | Five full harness runs against one unchanged binary: 3 PASS / 2 FAIL at two different assertions (§18.2). | PASS | The flake rate is 2/5 on this machine and display configuration; it is not an estimate of the rate elsewhere. |
-| H-02 | The dead keyboard fallback cannot reach the menu. | Direct measurement | `diag_expand.py`: with no flyout open, `send_keys("%(FS)")` leaves the flyout closed (`flyout open after %(FS): False`); the XAML declares no `AccessKey` on either item. | PASS | Confirms the fallback is unreachable, not that no keyboard path exists for a user pressing keys directly. |
-| H-03 | The element-order hypothesis is refuted. | Direct measurement | `diag_menu_order.py`: 15/15 rounds `order=('MenuItem','Text')`, `sw_items[0]` invokable every time. | PASS | One store state and one window size. |
-| H-04 | The flyout-latency hypothesis is refuted. | Direct measurement | `diag_flyout_latency.py`: 20 rounds, realize 0.074–0.232 s, 0/20 later than the harness's 1.0 s sleep. | PASS | — |
-| H-05 | The details-focus failure is not an app defect under foreground. | Direct measurement | `diag_details_focus.py`: 8/8 rounds focus arrived in 0.08–0.10 s with the window verified foreground. | PASS | Does **not** establish that focus always arrives; it establishes that it arrives when foreground is held, which is the condition the harness must create. |
-| H-06 | The corrected harness still detects a genuine switch failure. | Controlled mutation | The postcondition was mutated (`find_by_aid(win, "FolderHeading")` → `"FolderHeading__CONTROLLED_MUTATION"`) so the switch could never be observed satisfied. Run: `EXIT=1`, failing at `FAIL: Screen 2 Project Selector not reached on Switch Project` with the specific cause logged (`Switch Project: Screen 2 did not appear within 10s`, `Folder heading after switch request: None`). Harness restored byte-identically (`d8646d53…`, zero mutation markers) and rerun: `EXIT=0`, `Total: 15 \| Passed: 13 \| Inconclusive: 2 \| Failed: 0`. | PASS | The mutation makes the postcondition unsatisfiable by construction, so it proves the assertion discriminates *that* failure. It does not reproduce the original intermittent race, which is timing-dependent and was not forced. |
-| H-07 | The corrected harness runs clean repeatedly. | Native run | Four consecutive runs against `40C79F1D…`: three in the fixed set (`EXIT=0` each, `Total: 15 \| Passed: 13 \| Inconclusive: 2 \| Failed: 0`, zero `FAIL:` lines) plus the post-mutation restored-state rerun (`EXIT=0`, same totals). Both originally-failing assertions pass in every run: Phase 4 logs `Folder heading after switch request: Pick up where you left off`; Phase 9 logs `PASS: Details sheet is focus-safe: opens into the sheet and restores the invoking control.` | PASS | 4/4 on one machine and display configuration. The original flake rate was 2/5, so 4 clean runs is consistent with the defects being removed but is not a statistical proof of zero residual flake. |
+| ID   | Criterion and exact scope                                        | Evidence type       | Command and actual observation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Verdict | Remaining limitation                                                                                                                                                                                                             |
+| ---- | ---------------------------------------------------------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| H-01 | The observed variation is real and is not a build difference.    | Native run          | Five full harness runs against one unchanged binary: 3 PASS / 2 FAIL at two different assertions (§18.2).                                                                                                                                                                                                                                                                                                                                                                                                                                          | PASS    | The flake rate is 2/5 on this machine and display configuration; it is not an estimate of the rate elsewhere.                                                                                                                    |
+| H-02 | The dead keyboard fallback cannot reach the menu.                | Direct measurement  | `diag_expand.py`: with no flyout open, `send_keys("%(FS)")` leaves the flyout closed (`flyout open after %(FS): False`); the XAML declares no `AccessKey` on either item.                                                                                                                                                                                                                                                                                                                                                                          | PASS    | Confirms the fallback is unreachable, not that no keyboard path exists for a user pressing keys directly.                                                                                                                        |
+| H-03 | The element-order hypothesis is refuted.                         | Direct measurement  | `diag_menu_order.py`: 15/15 rounds `order=('MenuItem','Text')`, `sw_items[0]` invokable every time.                                                                                                                                                                                                                                                                                                                                                                                                                                                | PASS    | One store state and one window size.                                                                                                                                                                                             |
+| H-04 | The flyout-latency hypothesis is refuted.                        | Direct measurement  | `diag_flyout_latency.py`: 20 rounds, realize 0.074–0.232 s, 0/20 later than the harness's 1.0 s sleep.                                                                                                                                                                                                                                                                                                                                                                                                                                             | PASS    | —                                                                                                                                                                                                                                |
+| H-05 | The details-focus failure is not an app defect under foreground. | Direct measurement  | `diag_details_focus.py`: 8/8 rounds focus arrived in 0.08–0.10 s with the window verified foreground.                                                                                                                                                                                                                                                                                                                                                                                                                                              | PASS    | Does **not** establish that focus always arrives; it establishes that it arrives when foreground is held, which is the condition the harness must create.                                                                        |
+| H-06 | The corrected harness still detects a genuine switch failure.    | Controlled mutation | The postcondition was mutated (`find_by_aid(win, "FolderHeading")` → `"FolderHeading__CONTROLLED_MUTATION"`) so the switch could never be observed satisfied. Run: `EXIT=1`, failing at `FAIL: Screen 2 Project Selector not reached on Switch Project` with the specific cause logged (`Switch Project: Screen 2 did not appear within 10s`, `Folder heading after switch request: None`). Harness restored byte-identically (`d8646d53…`, zero mutation markers) and rerun: `EXIT=0`, `Total: 15 \| Passed: 13 \| Inconclusive: 2 \| Failed: 0`. | PASS    | The mutation makes the postcondition unsatisfiable by construction, so it proves the assertion discriminates _that_ failure. It does not reproduce the original intermittent race, which is timing-dependent and was not forced. |
+| H-07 | The corrected harness runs clean repeatedly.                     | Native run          | Four consecutive runs against `40C79F1D…`: three in the fixed set (`EXIT=0` each, `Total: 15 \| Passed: 13 \| Inconclusive: 2 \| Failed: 0`, zero `FAIL:` lines) plus the post-mutation restored-state rerun (`EXIT=0`, same totals). Both originally-failing assertions pass in every run: Phase 4 logs `Folder heading after switch request: Pick up where you left off`; Phase 9 logs `PASS: Details sheet is focus-safe: opens into the sheet and restores the invoking control.`                                                              | PASS    | 4/4 on one machine and display configuration. The original flake rate was 2/5, so 4 clean runs is consistent with the defects being removed but is not a statistical proof of zero residual flake.                               |
 
 ### 18.7 What this record does not claim
 
@@ -1912,15 +1933,15 @@ The Phase 9 focus assertion now re-establishes foreground first, polls focus for
 
 ### 19.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Source revision | `1835b656d5529abf281faa7af84f7a6db07fa481` **plus uncommitted working-tree changes** (see build hygiene below). This record does not describe a build of committed source. |
-| Application binary, bisection runs (§19.4) | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, one distinct SHA-256 per variant: `c03e96f3…79848` (A–E), `afd1d071…514ff` (F), `183caf1a…a1602` (G, H), `40833c5d…ad708` (I), `1492f7c0…e9b02` (L), `fe891509…e792` (M). Each row of §19.4 is a separate link. |
-| Application binary, final run (§19.7) | `Mayasaba.exe`, SHA-256 `c8c1d1eb9840f21fba1a0d5c00d16245aaf22a592bb1b82582a413ac4ef08294`, relinked 19:55:06 |
-| Compiled XAML, bisection runs and final run | `MainWindow.xbf`, SHA-256 `fd1b3c02a71f21f564b3b6d6e1f4d54122860f5b6fce9c52cdd7477272862e6d` — **identical in all thirteen binaries**, so no XAML separates any of them and every behavioural difference in §19.4 is a code difference |
-| Compiled XAML, earlier runs of the same day | `09b1b911…5b94`, `f1790d9e…8879`, `2c3ac199…021e`, `c1e76bbc…aaa8`. The XBF changes once, at run `1902`, when the preview panel was moved from `ChatBody` to `ChatScreen`; it is constant from that run onward. Runs before `1902` are not comparable to runs after it and no claim here combines them. |
-| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 100% scaling |
-| Build hygiene | Thirteen builds were issued by this assignment, one per variant plus the final restoration. Each variant was a single-file edit to `MainWindow.xaml.cpp`, rebuilt, run, and reverted before the next. The final binary is a build of the working tree with **all instrumentation removed**; `grep -n "cstdio\|TracePreviewStep\|PreviewVariantChar\|MAYASABA_PREVIEW_VARIANT\|_dupenv_s\|traceHooked\|preview-trace"` over `MainWindow.xaml.cpp` returns no match on the shipped file. |
+| Field                                       | Value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Source revision                             | `1835b656d5529abf281faa7af84f7a6db07fa481` **plus uncommitted working-tree changes** (see build hygiene below). This record does not describe a build of committed source.                                                                                                                                                                                                                                                                                                             |
+| Application binary, bisection runs (§19.4)  | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, one distinct SHA-256 per variant: `c03e96f3…79848` (A–E), `afd1d071…514ff` (F), `183caf1a…a1602` (G, H), `40833c5d…ad708` (I), `1492f7c0…e9b02` (L), `fe891509…e792` (M). Each row of §19.4 is a separate link.                                                                                                                                                                                                                        |
+| Application binary, final run (§19.7)       | `Mayasaba.exe`, SHA-256 `c8c1d1eb9840f21fba1a0d5c00d16245aaf22a592bb1b82582a413ac4ef08294`, relinked 19:55:06                                                                                                                                                                                                                                                                                                                                                                          |
+| Compiled XAML, bisection runs and final run | `MainWindow.xbf`, SHA-256 `fd1b3c02a71f21f564b3b6d6e1f4d54122860f5b6fce9c52cdd7477272862e6d` — **identical in all thirteen binaries**, so no XAML separates any of them and every behavioural difference in §19.4 is a code difference                                                                                                                                                                                                                                                 |
+| Compiled XAML, earlier runs of the same day | `09b1b911…5b94`, `f1790d9e…8879`, `2c3ac199…021e`, `c1e76bbc…aaa8`. The XBF changes once, at run `1902`, when the preview panel was moved from `ChatBody` to `ChatScreen`; it is constant from that run onward. Runs before `1902` are not comparable to runs after it and no claim here combines them.                                                                                                                                                                                |
+| Toolchain                                   | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 100% scaling                                                                                                                                                                                                                                                                                                                                                                              |
+| Build hygiene                               | Thirteen builds were issued by this assignment, one per variant plus the final restoration. Each variant was a single-file edit to `MainWindow.xaml.cpp`, rebuilt, run, and reverted before the next. The final binary is a build of the working tree with **all instrumentation removed**; `grep -n "cstdio\|TracePreviewStep\|PreviewVariantChar\|MAYASABA_PREVIEW_VARIANT\|_dupenv_s\|traceHooked\|preview-trace"` over `MainWindow.xaml.cpp` returns no match on the shipped file. |
 
 **Why a per-variant binary matters.** A WinUI 3 XBF is compiled from XAML, and XAML comments are compiled into it. A comment-only XAML edit therefore changes `MainWindow.xbf` while `Mayasaba.exe` can stay byte-identical, so a run cannot be carried across that boundary. The reverse also holds and is what makes §19.4 readable: a `.cpp`-only edit leaves the XBF byte-identical (verified at `fd1b3c02…` across all thirteen builds), so the XBF column being constant is positive evidence that the variants differ only in the code path under test.
 
@@ -1975,7 +1996,7 @@ timestamps `18:35:21, 18:56:18, 19:03:54, 19:08:51, 19:14:04, 19:20:07, 19:22:28
 
 Three things in that excerpt are load-bearing:
 
-1. **Pass 34 fires between `branch=notice: enter` and `branch=notice: box text cleared`** — that is, *before the branch has set a single property*. A layout pass can therefore run synchronously inside this method, between two statements, not only at a dispatcher turn.
+1. **Pass 34 fires between `branch=notice: enter` and `branch=notice: box text cleared`** — that is, _before the branch has set a single property_. A layout pass can therefore run synchronously inside this method, between two statements, not only at a dispatcher turn.
 2. **The trace stops at `panel: after focus` and there is no pass 35**, while `0x802B0014` is written in the same second. The failure is a **gap in the trace, not a repeated line**: the pass that throws never reaches `LayoutUpdated`, so it cannot log. A reader who expects "a cycle looks like the same numbers over and over" will misread this log as a hang.
 3. **Pass 34 reports `panel=616.8x136.8` while the panel is collapsed.** A collapsed WinUI element retains its last measured size, so these figures are retained geometry, not a visibility reading. Any figure read from this trace while the panel is hidden must be described as retained, and no visibility claim may be inferred from it.
 
@@ -1983,30 +2004,30 @@ Three things in that excerpt are load-bearing:
 
 Each variant is one edit to `MainWindow::InspectAttachmentAsync` (`native/Mayasaba/MainWindow.xaml.cpp:2554`) or to `MainWindow::CloseAttachmentPreview` (`:2649`), rebuilt and run through the whole harness. Verdict counts are the harness's own summary line; the crash column is whether the process fail-fasted during the run.
 
-| Variant | Evidence dir | Shape under test | P / I / F / B / NR | Crashed |
-| --- | --- | --- | --- | --- |
-| A | `1930-varA` | baseline: production notice branch | 15/3/1/1/0 | yes |
-| B | `1934-varB` | notice `TextWrapping::NoWrap` | 15/3/1/1/0 | yes |
-| C | `1938-varC` | content scroller left `Visible` | 14/3/1/2/0 | yes |
-| D | `1942-varD` | no programmatic focus | 14/3/2/1/0 | yes |
-| E | `1945-varE` | notice left `Collapsed` | 15/3/1/1/0 | yes |
-| F | `1952-varF` | box text not cleared — **confounded, see below** | 15/3/1/1/0 | yes |
-| G | `1957-varG` | **no child touched at all, only re-show the panel** | 15/3/1/1/0 | yes |
-| H | `2001-varH` | **all child mutations done, panel never shown** | 14/3/2/1/0 | yes |
-| I | `2006-varI` | `co_return` before the branch is entered | 15/3/2/0/0 | **no** |
-| L | `2012-varL` | notice branch taken on **every** inspection | 14/3/2/1/0 | 1st inspection clean / 2nd crashed |
-| M | `2022-varM` | dismissal leaves the hidden child untouched | 15/3/1/1/0 | yes |
-| — | `2026-final` | production shape restored, instrumentation removed | 15/3/1/1/0 | yes at 10.3 |
+| Variant | Evidence dir | Shape under test                                    | P / I / F / B / NR | Crashed                            |
+| ------- | ------------ | --------------------------------------------------- | ------------------ | ---------------------------------- |
+| A       | `1930-varA`  | baseline: production notice branch                  | 15/3/1/1/0         | yes                                |
+| B       | `1934-varB`  | notice `TextWrapping::NoWrap`                       | 15/3/1/1/0         | yes                                |
+| C       | `1938-varC`  | content scroller left `Visible`                     | 14/3/1/2/0         | yes                                |
+| D       | `1942-varD`  | no programmatic focus                               | 14/3/2/1/0         | yes                                |
+| E       | `1945-varE`  | notice left `Collapsed`                             | 15/3/1/1/0         | yes                                |
+| F       | `1952-varF`  | box text not cleared — **confounded, see below**    | 15/3/1/1/0         | yes                                |
+| G       | `1957-varG`  | **no child touched at all, only re-show the panel** | 15/3/1/1/0         | yes                                |
+| H       | `2001-varH`  | **all child mutations done, panel never shown**     | 14/3/2/1/0         | yes                                |
+| I       | `2006-varI`  | `co_return` before the branch is entered            | 15/3/2/0/0         | **no**                             |
+| L       | `2012-varL`  | notice branch taken on **every** inspection         | 14/3/2/1/0         | 1st inspection clean / 2nd crashed |
+| M       | `2022-varM`  | dismissal leaves the hidden child untouched         | 15/3/1/1/0         | yes                                |
+| —       | `2026-final` | production shape restored, instrumentation removed  | 15/3/1/1/0         | yes at 10.3                        |
 
 Read as a whole, the table eliminates the whole of the branch's content and the visibility change as necessary conditions:
 
-| Hypothesis | Variant | Measurement | Result |
-| --- | --- | --- | --- |
-| A child mutation in the notice branch causes the cycle | G | Panel re-shown with **no child property set at all** | **Refuted.** Still crashed. Nothing the branch sets is necessary. |
-| Making the panel visible causes the cycle | H | All mutations performed, `Visibility` never set | **Refuted.** Still crashed. Showing the panel is not necessary either. |
-| Something outside the preview subtree causes the cycle | I | `co_return` before the branch is entered | **Refuted as a complete explanation.** No crash — and this run is the only one of the twelve with `Blocked: 0`, because the process survived to the end. Some invalidation of this subtree *is* required. |
-| The stale `Text(L"")` on the collapsed box during dismissal causes it | M | Dismissal leaves the hidden child untouched | **Refuted.** Still crashed. |
-| A wrapped `TextBlock` notice inside a content-height `Border`, with the scroller collapsed, is the cyclic shape | L | The **same** branch, **same** content, **same** mutations, run on a first inspection | **Refuted.** It settled to **28 stable layout passes** at `panel=341.6x109.6 notice=65.8x13.8 scroller=0.0x0.0` and then crashed on the **second** inspection with **zero** layout passes. The shape is not inherently cyclic; the discriminator is prior state. |
+| Hypothesis                                                                                                      | Variant | Measurement                                                                          | Result                                                                                                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A child mutation in the notice branch causes the cycle                                                          | G       | Panel re-shown with **no child property set at all**                                 | **Refuted.** Still crashed. Nothing the branch sets is necessary.                                                                                                                                                                                                |
+| Making the panel visible causes the cycle                                                                       | H       | All mutations performed, `Visibility` never set                                      | **Refuted.** Still crashed. Showing the panel is not necessary either.                                                                                                                                                                                           |
+| Something outside the preview subtree causes the cycle                                                          | I       | `co_return` before the branch is entered                                             | **Refuted as a complete explanation.** No crash — and this run is the only one of the twelve with `Blocked: 0`, because the process survived to the end. Some invalidation of this subtree _is_ required.                                                        |
+| The stale `Text(L"")` on the collapsed box during dismissal causes it                                           | M       | Dismissal leaves the hidden child untouched                                          | **Refuted.** Still crashed.                                                                                                                                                                                                                                      |
+| A wrapped `TextBlock` notice inside a content-height `Border`, with the scroller collapsed, is the cyclic shape | L       | The **same** branch, **same** content, **same** mutations, run on a first inspection | **Refuted.** It settled to **28 stable layout passes** at `panel=341.6x109.6 notice=65.8x13.8 scroller=0.0x0.0` and then crashed on the **second** inspection with **zero** layout passes. The shape is not inherently cyclic; the discriminator is prior state. |
 
 **Variant F is recorded as confounded, not as evidence.** Its intended shape was "leave the content box's text in place", but `CloseAttachmentPreview()` already clears `AttachmentPreviewContentBox().Text(L"")` during Phase 10.2's Escape, so the box was empty before the variant could preserve anything. F tested nothing F did not intend to test, and it is listed for completeness of the run record, not as a refutation.
 
@@ -2032,7 +2053,7 @@ The element tree under test, `native/Mayasaba/MainWindow.xaml:978–1031`:
 </Border>
 ```
 
-A content-driven `StackPanel` containing a wrapped `TextBlock`, a `MaxHeight`-bounded `ScrollViewer`, and a second wrapped `TextBlock` whose visibility is toggled is the classic shape in which two measures each change the other's input: the scroller's `MaxHeight` depends on how much height the wrapped notice needs, and the notice's wrapped height depends on the width the scroller leaves. That is a genuinely suspicious shape and it is why it was tested first. Variant `L` is what makes the suspicion insufficient: the identical shape converged to 28 stable passes on a first inspection. The shape is necessary for the *failure to be reachable*, and it is not sufficient to produce it.
+A content-driven `StackPanel` containing a wrapped `TextBlock`, a `MaxHeight`-bounded `ScrollViewer`, and a second wrapped `TextBlock` whose visibility is toggled is the classic shape in which two measures each change the other's input: the scroller's `MaxHeight` depends on how much height the wrapped notice needs, and the notice's wrapped height depends on the width the scroller leaves. That is a genuinely suspicious shape and it is why it was tested first. Variant `L` is what makes the suspicion insufficient: the identical shape converged to 28 stable passes on a first inspection. The shape is necessary for the _failure to be reachable_, and it is not sufficient to produce it.
 
 ### 19.6 The scroll-oracle correction (criteria 16–18)
 
@@ -2058,20 +2079,20 @@ The tuple is `(vertical, horizontal)` — index 0 is the vertical percent — so
 
 Full harness run, evidence dir `native/tests/evidence/ui-acceptance-20261021-2026-final`, `EXIT=1` after 2 m 17 s, log 317 lines, `artifact-identity.json` and `harness-run.log` both written, `Cleanup complete.` reached at line 317 — the run was not abandoned mid-way.
 
-| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
-| --- | --- | --- | --- | --- | --- |
-| N-01 | The reported list-scroll defect is a product defect. | Native run | Short-height leg: offset `0.000%` → `2.859%` under a wheel, 54 px viewport. The old rect-only oracle saw `T294 H54` before and after. | **FAIL (report refuted)** | One window size and one store state. The report is refuted for 640×480; no claim is made about other heights. |
-| N-02 | The corrected scroll oracle detects a non-scrolling list. | Oracle inspection | It fails on `offset_after[0] <= offset_before[0]` **and** unchanged realized identity, and logs the intermediate case separately. | PASS | Not proved by a controlled mutation, unlike §18's H-06. The three-way branch is read, not forced. |
-| N-03 | The attachment-inspect fail-fast is reproducible. | Native run | 15 of 16 harness runs of the day crashed; `unhandled-exception.log` holds 16 `0x802B0014` entries with one per run. | PASS | Reproduction is on one machine, one build configuration, one display scale. |
-| N-04 | The fail-fast is caused by the notice branch's child mutations. | Controlled variant | G (no child mutated) crashed; H (no `Visibility` set) crashed. | **FAIL (refuted)** | Refutes the branch content as a necessary cause; does not identify the actual one. |
-| N-05 | The fail-fast is caused by making the panel visible. | Controlled variant | H performed every mutation and never set `Visibility`; still crashed. | **FAIL (refuted)** | As above. |
-| N-06 | The fail-fast requires invalidation of the preview subtree. | Controlled variant | I (`co_return` before the branch) did not crash and is the only run with `Blocked: 0`. | PASS | Shows a requirement, not a mechanism. |
-| N-07 | The notice shape is cyclic on its own. | Controlled variant | L: 28 stable passes on inspection 1, zero on inspection 2, same shape and same content. | **FAIL (refuted)** | The discriminator is prior state; which state is not established. |
-| N-08 | The production binary produces the same failure as the variants. | Native run | `2026-final`, `c8c1d1eb…`, instrumentation removed: crash at Phase 10.3. | PASS | Confirms the variants were measuring the shipped shape. |
-| N-09 | Criterion 14 is a real product failure. | Native run | `FAIL: The preview panel never opened…` / `FAIL: The notice surface did not report the withholding. element_found=False, texts=[]` | **FAIL** | The user-visible symptom is "no notice"; the cause is a process death, not a suppressed notice. |
-| N-10 | Criterion 13 passes on the shipped binary. | Native run | `13. Seeded Attachment Chip Realization & Diagnostics [PASS]` | PASS | Its FAIL on variant L is an artifact of forcing the notice branch on every inspection, not a product state. |
-| N-11 | Criteria 11, 12 and 19 are genuinely unevidenced. | Native run | `ole_drop.exe exit code: 4`, `WATCHDOG: DoDragDrop modal loop timed out under OS environment.`, `dropped records count: 0`; hero perspective unmeasured. | PASS (as INCONCLUSIVE) | The drop helper cannot complete under this OS environment, so the criterion is not reachable by this harness at all. |
-| N-12 | Criterion 15 is BLOCKED rather than FAIL. | Native run | `BLOCKED: the application had already exited (0xC000027B) when profiling was due to start.` | PASS (as BLOCKED) | No stimulus was applied, so no measurement exists. It must not be read as a performance result. |
+| ID   | Criterion and exact scope                                        | Evidence type      | Command and actual observation                                                                                                                           | Verdict                   | Remaining limitation                                                                                                 |
+| ---- | ---------------------------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| N-01 | The reported list-scroll defect is a product defect.             | Native run         | Short-height leg: offset `0.000%` → `2.859%` under a wheel, 54 px viewport. The old rect-only oracle saw `T294 H54` before and after.                    | **FAIL (report refuted)** | One window size and one store state. The report is refuted for 640×480; no claim is made about other heights.        |
+| N-02 | The corrected scroll oracle detects a non-scrolling list.        | Oracle inspection  | It fails on `offset_after[0] <= offset_before[0]` **and** unchanged realized identity, and logs the intermediate case separately.                        | PASS                      | Not proved by a controlled mutation, unlike §18's H-06. The three-way branch is read, not forced.                    |
+| N-03 | The attachment-inspect fail-fast is reproducible.                | Native run         | 15 of 16 harness runs of the day crashed; `unhandled-exception.log` holds 16 `0x802B0014` entries with one per run.                                      | PASS                      | Reproduction is on one machine, one build configuration, one display scale.                                          |
+| N-04 | The fail-fast is caused by the notice branch's child mutations.  | Controlled variant | G (no child mutated) crashed; H (no `Visibility` set) crashed.                                                                                           | **FAIL (refuted)**        | Refutes the branch content as a necessary cause; does not identify the actual one.                                   |
+| N-05 | The fail-fast is caused by making the panel visible.             | Controlled variant | H performed every mutation and never set `Visibility`; still crashed.                                                                                    | **FAIL (refuted)**        | As above.                                                                                                            |
+| N-06 | The fail-fast requires invalidation of the preview subtree.      | Controlled variant | I (`co_return` before the branch) did not crash and is the only run with `Blocked: 0`.                                                                   | PASS                      | Shows a requirement, not a mechanism.                                                                                |
+| N-07 | The notice shape is cyclic on its own.                           | Controlled variant | L: 28 stable passes on inspection 1, zero on inspection 2, same shape and same content.                                                                  | **FAIL (refuted)**        | The discriminator is prior state; which state is not established.                                                    |
+| N-08 | The production binary produces the same failure as the variants. | Native run         | `2026-final`, `c8c1d1eb…`, instrumentation removed: crash at Phase 10.3.                                                                                 | PASS                      | Confirms the variants were measuring the shipped shape.                                                              |
+| N-09 | Criterion 14 is a real product failure.                          | Native run         | `FAIL: The preview panel never opened…` / `FAIL: The notice surface did not report the withholding. element_found=False, texts=[]`                       | **FAIL**                  | The user-visible symptom is "no notice"; the cause is a process death, not a suppressed notice.                      |
+| N-10 | Criterion 13 passes on the shipped binary.                       | Native run         | `13. Seeded Attachment Chip Realization & Diagnostics [PASS]`                                                                                            | PASS                      | Its FAIL on variant L is an artifact of forcing the notice branch on every inspection, not a product state.          |
+| N-11 | Criteria 11, 12 and 19 are genuinely unevidenced.                | Native run         | `ole_drop.exe exit code: 4`, `WATCHDOG: DoDragDrop modal loop timed out under OS environment.`, `dropped records count: 0`; hero perspective unmeasured. | PASS (as INCONCLUSIVE)    | The drop helper cannot complete under this OS environment, so the criterion is not reachable by this harness at all. |
+| N-12 | Criterion 15 is BLOCKED rather than FAIL.                        | Native run         | `BLOCKED: the application had already exited (0xC000027B) when profiling was due to start.`                                                              | PASS (as BLOCKED)         | No stimulus was applied, so no measurement exists. It must not be read as a performance result.                      |
 
 ### 19.8 What this record does not claim
 
@@ -2087,28 +2108,31 @@ Full harness run, evidence dir `native/tests/evidence/ui-acceptance-20261021-202
 
 ### 20.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Source revision | `b7e9468b3b75956124b41a805c3efa9153c8b6dd` plus committed changes in this assignment. |
-| Application binary, final run | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` |
-| Compiled XAML, final run | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` |
+| Field                                     | Value                                                                                                                                   |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Source revision                           | `b7e9468b3b75956124b41a805c3efa9153c8b6dd` plus committed changes in this assignment.                                                   |
+| Application binary, final run             | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53`              |
+| Compiled XAML, final run                  | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234`            |
 | Application binary, intermediate fix runs | `e5562dc8c7c00969906f5eaf576452abb47afcb01f9529f1b6bc3eec4358b43c` / `fc9e5c3bccda2e207fe7d103dd19855e65940690b6119f630dae3e72c602ecd3` |
-| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 100% scaling |
-| Build hygiene | Clean build; all temporary test scripts kept in scratch directory, no test instrumentation or debug traces left in compiled source. |
+| Toolchain                                 | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 100% scaling                               |
+| Build hygiene                             | Clean build; all temporary test scripts kept in scratch directory, no test instrumentation or debug traces left in compiled source.     |
 
 ### 20.2 Root cause of E_LAYOUTCYCLE (0x802B0014)
 
 Section 19 narrowed the defect to an invalidation of the preview subtree after it had been laid out and collapsed, but did not establish which measure loop oscillated. In this assignment, testing the ranked hypotheses refuted the XAML structure hypotheses:
+
 1. `HorizontalScrollBarVisibility="Disabled"`: refuted (still crashed).
 2. `HorizontalAlignment="Stretch"` on `AttachmentPreviewPanel`: refuted (still crashed).
 3. Panel dimensions / child mutation shapes: refuted (still crashed).
 
 The decisive breakthrough came from hypothesis 4 (`ShowNotice` timing and interaction):
+
 - When `ShowNotice(details, ...)` was commented out, the fail-fast **completely disappeared** (exited 0; panel opened and closed repeatedly across multiple inspections without error).
 - When `ShowNotice(L"test", ...)` (a short single-line string) was passed, the run **passed cleanly** with zero crashes.
 - When `ShowNotice(details, ...)` (a 200-character multi-line string) was passed, `E_LAYOUTCYCLE` immediately reproduced.
 
 **The mechanism:**
+
 1. In `InspectAttachmentAsync`, `ShowNotice(details)` sets a long multi-line text on `Notice` (the root `InfoBar` in Row 2 of `RootLayout`).
 2. The `InfoBar` wraps the text, growing from ~48px to ~96px.
 3. Row 1 of `RootLayout` (`Screens Grid` -> `ChatScreen` -> `ChatBody`) shrinks to yield space to the expanded InfoBar.
@@ -2125,6 +2149,7 @@ The decisive breakthrough came from hypothesis 4 (`ShowNotice` timing and intera
 1. **DispatcherQueue Debouncing for `OnChatBodySizeChanged`**:
    Added `bool responsiveLayoutQueued_{false};` in `MainWindow.xaml.h`.
    In `MainWindow.xaml.cpp`, `OnChatBodySizeChanged` now checks whether the size actually changed (`PreviousSize != NewSize`), and if so, debounces `ApplyResponsiveLayout()` via `DispatcherQueue().TryEnqueue`:
+
    ```cpp
    void MainWindow::OnChatBodySizeChanged(IInspectable const&, SizeChangedEventArgs const& e)
    {
@@ -2143,6 +2168,7 @@ The decisive breakthrough came from hypothesis 4 (`ShowNotice` timing and intera
        });
    }
    ```
+
    This allows the active layout pass (rendering `Notice` and `AttachmentPreviewPanel`) to settle cleanly. Responsive bounds are applied on the subsequent dispatcher tick from settled geometry, eliminating layout recursion.
 
 2. **ShowNotice Ordering**:
@@ -2151,6 +2177,7 @@ The decisive breakthrough came from hypothesis 4 (`ShowNotice` timing and intera
 ### 20.4 Empirical Findings for Work Item B (Early File-Flyout Symptom)
 
 Two distinct manifestations were analyzed:
+
 - **Symptom A ("File menu item is absent from the UIA tree")**: Proved to be a post-crash consequence of the layout cycle (`0xC000027B`). With the cycle eliminated, Symptom A does not occur.
 - **Symptom B ("the File flyout never realized its menu item" while alive)**:
   - In isolated testing, 5 consecutive rounds of Phase 4 (active search overlay -> File -> Switch Project -> verify FolderHeading -> Cancel) passed 5/5 (`ALL 5 CONSECUTIVE ROUNDS PASSED!`).
@@ -2165,21 +2192,21 @@ Two distinct manifestations were analyzed:
     1. The menu item `('MenuItem', 'Switch Project')` was indeed present and realized in the UIA tree.
     2. The UI thread took 11.399 s to respond to the probe, exceeding the harness's 3.0 s polling deadline.
     3. The top-level application window had lost foreground focus to the OS background (`foreground hwnd 0`).
-    This proves that Symptom B is not a missing UI control or broken routing, but an interaction between UI thread responsiveness under disk/database load and harness polling bounds when the window is unfocused.
+       This proves that Symptom B is not a missing UI control or broken routing, but an interaction between UI thread responsiveness under disk/database load and harness polling bounds when the window is unfocused.
 
 ### 20.5 Criteria for this assignment
 
 Evidence directory: `native/tests/evidence/ui-acceptance-20261021-final` and `ui-acceptance-20261021-2105`.
 
-| ID | Criterion and exact scope | Evidence type | Command and actual observation | Verdict | Remaining limitation |
-| --- | --- | --- | --- | --- | --- |
-| N-13 | The attachment-preview layout cycle is resolved. | Native run | Fast repro script ran 2 consecutive inspections cleanly; full harness ran Phase 10.3 without crash; `unhandled-exception.log` line count remained constant with 0 new entries. | **PASS** | Tested on single display at 100% scale. |
-| N-14 | Criterion 14 (Strict Non-English Prose Preview Withholding). | Native run | `PASS: The preview panel withheld the non-English prose and stated the reason; the content scroller is collapsed and the content box is empty.` and `PASS: Non-English ASCII prose ('hola mundo') preview withheld in the preview panel and reported truthfully in the notice surface.` | **PASS** | Verified with seeded ASCII non-English fixture. |
-| N-15 | Criterion 15 (CompositionTarget Performance Profiling) unblocked but FAILED on typing p95 threshold. | Native run | `FAIL: Typing p95 latency exceeded 100ms: 104.767 ms` — the process survived Phase 10.3 and profiling ran to completion, but the criterion verdict is **FAIL** because the typing p95 threshold (≤100 ms) was not met. The sub-claim that the criterion is no longer BLOCKED is correct; the criterion's overall verdict is not. See §20.6 items 4–5 and §21.4. | **FAIL** | The crash previously made this phase unreachable; unblocking it revealed the threshold failure. The profiling window was not a clean foreground interactive session (foreground hwnd 0 throughout). |
-| N-16 | Blocked criteria count in full acceptance suite. | Native run | `Blocked: 0` (reduced from `Blocked: 1`). | **PASS** | All criteria executed. |
-| N-17 | Work Item B File-flyout realization in isolation. | Native run | 5 consecutive rounds of Phase 4 executed; all 5 rounds reached `Folder heading: 'Pick up where you left off'`. | **PASS** | Dedicated multi-round automation. |
-| N-18 | C++ Action Center / Attachment regression suite. | Native binary | `verify_ac_ai.exe`: `PASS: 14 of 14 executed Action Center and attachment inspection verification cases`. | **PASS** | Local binary execution. |
-| N-19 | C++ Storage test regression suite. | Native binary | `storage_tests.exe`: `PASS: 44 of 44 executed native regression groups`. Counter corrected in this assignment (§21.2-C); group 20 lacked its own `CASES_BEGIN`/`CASES_END` pair and was previously counted inside group 19. | **PASS** | Local binary execution. |
+| ID   | Criterion and exact scope                                                                            | Evidence type | Command and actual observation                                                                                                                                                                                                                                                                                                                                  | Verdict  | Remaining limitation                                                                                                                                                                                |
+| ---- | ---------------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| N-13 | The attachment-preview layout cycle is resolved.                                                     | Native run    | Fast repro script ran 2 consecutive inspections cleanly; full harness ran Phase 10.3 without crash; `unhandled-exception.log` line count remained constant with 0 new entries.                                                                                                                                                                                  | **PASS** | Tested on single display at 100% scale.                                                                                                                                                             |
+| N-14 | Criterion 14 (Strict Non-English Prose Preview Withholding).                                         | Native run    | `PASS: The preview panel withheld the non-English prose and stated the reason; the content scroller is collapsed and the content box is empty.` and `PASS: Non-English ASCII prose ('hola mundo') preview withheld in the preview panel and reported truthfully in the notice surface.`                                                                         | **PASS** | Verified with seeded ASCII non-English fixture.                                                                                                                                                     |
+| N-15 | Criterion 15 (CompositionTarget Performance Profiling) unblocked but FAILED on typing p95 threshold. | Native run    | `FAIL: Typing p95 latency exceeded 100ms: 104.767 ms` — the process survived Phase 10.3 and profiling ran to completion, but the criterion verdict is **FAIL** because the typing p95 threshold (≤100 ms) was not met. The sub-claim that the criterion is no longer BLOCKED is correct; the criterion's overall verdict is not. See §20.6 items 4–5 and §21.4. | **FAIL** | The crash previously made this phase unreachable; unblocking it revealed the threshold failure. The profiling window was not a clean foreground interactive session (foreground hwnd 0 throughout). |
+| N-16 | Blocked criteria count in full acceptance suite.                                                     | Native run    | `Blocked: 0` (reduced from `Blocked: 1`).                                                                                                                                                                                                                                                                                                                       | **PASS** | All criteria executed.                                                                                                                                                                              |
+| N-17 | Work Item B File-flyout realization in isolation.                                                    | Native run    | 5 consecutive rounds of Phase 4 executed; all 5 rounds reached `Folder heading: 'Pick up where you left off'`.                                                                                                                                                                                                                                                  | **PASS** | Dedicated multi-round automation.                                                                                                                                                                   |
+| N-18 | C++ Action Center / Attachment regression suite.                                                     | Native binary | `verify_ac_ai.exe`: `PASS: 14 of 14 executed Action Center and attachment inspection verification cases`.                                                                                                                                                                                                                                                       | **PASS** | Local binary execution.                                                                                                                                                                             |
+| N-19 | C++ Storage test regression suite.                                                                   | Native binary | `storage_tests.exe`: `PASS: 44 of 44 executed native regression groups`. Counter corrected in this assignment (§21.2-C); group 20 lacked its own `CASES_BEGIN`/`CASES_END` pair and was previously counted inside group 19.                                                                                                                                     | **PASS** | Local binary execution.                                                                                                                                                                             |
 
 ### 20.6 What this record does not claim
 
@@ -2197,16 +2224,16 @@ Evidence directory: `native/tests/evidence/ui-acceptance-20261021-final` and `ui
 5. **Newly unblocked performance readings from `ui-acceptance-20261021-final` (environmental caveat applies).**
    The crash previously made Phase 7 unreachable. These readings are real product observations, but **the measurement window was not a clean foreground interactive session** (`foreground hwnd 0` throughout the run; background harness load including concurrent disk/database operations). Do not present them as a measured interactive baseline.
 
-   | Metric | Value | Threshold | Verdict |
-   | --- | --- | --- | --- |
-   | Typing p95 latency | 104.767 ms | ≤ 100 ms | **FAIL** |
-   | Typing max latency | 117.48 ms | — | (informational) |
-   | Typing p50 latency | 21.01 ms | — | (informational) |
-   | Scroll ViewChanged p50 | 107.32 ms | — | (informational) |
-   | Scroll ViewChanged p95 | 221.27 ms | — | (informational) |
-   | Scroll ViewChanged max | 583.31 ms | — | (informational) |
-   | Scroll intervals > 33 ms | 1129 | — | (informational) |
-   | Scroll callbacks > 100 ms | 385 | — | (informational) |
+   | Metric                    | Value      | Threshold | Verdict         |
+   | ------------------------- | ---------- | --------- | --------------- |
+   | Typing p95 latency        | 104.767 ms | ≤ 100 ms  | **FAIL**        |
+   | Typing max latency        | 117.48 ms  | —         | (informational) |
+   | Typing p50 latency        | 21.01 ms   | —         | (informational) |
+   | Scroll ViewChanged p50    | 107.32 ms  | —         | (informational) |
+   | Scroll ViewChanged p95    | 221.27 ms  | —         | (informational) |
+   | Scroll ViewChanged max    | 583.31 ms  | —         | (informational) |
+   | Scroll intervals > 33 ms  | 1129       | —         | (informational) |
+   | Scroll callbacks > 100 ms | 385        | —         | (informational) |
 
 **Superseded in part by §22.** Item 3 of §20.6 ("criteria 11 and 12 remain INCONCLUSIVE due to OS-level UIPI/modal loop watchdog timeouts") and the "UI thread took 11.399 s" reading in §20.4 are both superseded. §22 measured the OLE helper as failing identically against a known-good drop target with zero drag-loop iterations, so the timeout is a helper/session limit and not an OS refusal of Mayasaba; and §22 established that the 11.399 s figure was a UIA enumeration cost, not a UI-thread stall. The verdicts themselves do not change — criteria 11 and 12 remain INCONCLUSIVE — only the stated reason does. The Phase 10.2 note in §19.8 item 2 ("not claimed fixed") is likewise superseded by §22.4, which re-ran the scenario on the current binary and recorded PASS.
 
@@ -2214,23 +2241,25 @@ Evidence directory: `native/tests/evidence/ui-acceptance-20261021-final` and `ui
 
 ### 21.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Source revision | `da376ed08273551bfa54e82560700438262a7bd2` plus changes committed in this assignment. |
-| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` |
-| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` |
-| Full harness run | `native/tests/evidence/ui-acceptance-20261022-0031` |
-| Toolchain | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 100% scaling |
+| Field              | Value                                                                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| Source revision    | `da376ed08273551bfa54e82560700438262a7bd2` plus changes committed in this assignment.                                        |
+| Application binary | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53`   |
+| Compiled XAML      | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` |
+| Full harness run   | `native/tests/evidence/ui-acceptance-20261022-0031`                                                                          |
+| Toolchain          | MSBuild, Visual Studio 18 Enterprise, toolset `v145`, Windows 11 build 26200, one display at 100% scaling                    |
 
 ### 21.2 What changed in this assignment
 
 **A. Corrected false acceptance claim for Criterion 15.**
 `da376ed0`’s commit message stated “Criterion 15 PASS: profiling ran to completion; process survived”. The harness run it described (`ui-acceptance-20261021-final`) actually printed:
+
 ```
 15. WinUI 3 CompositionTarget Performance Profiling    [FAIL]
 FAIL: Typing p95 latency exceeded 100ms: 104.767 ms
 Total: 20 criteria | Passed: 15 | Inconclusive: 3 | Failed: 2 | Blocked: 0 | Not run: 0
 ```
+
 The sub-claim that profiling is no longer BLOCKED is true. The criterion’s verdict in that run was **FAIL**. §20.5 row N-15 and §20.6 have been corrected in this record. A new durable rule has been added to `AGENTS.md` §13: a previously BLOCKED criterion does not inherit any verdict — its first measurable outcome determines its verdict.
 
 **B. Reclassified two probe-disclaimed verdicts in the harness (`native/tests/test_full_ui_acceptance.py`).**
@@ -2256,35 +2285,35 @@ Exit code: **0**
 Total: 20 criteria | Passed: 16 | Inconclusive: 4 | Failed: 0 | Blocked: 0 | Not run: 0
 ```
 
-| # | Criterion | Verdict | Notes |
-| --- | --- | --- | --- |
-| 1 | Recent Projects & Startup Filtering | PASS | |
-| 2 | Message Search Pagination & Continuation | PASS | |
-| 3 | Older Message Navigation & Selection | PASS | |
-| 4 | Search Mode Project Switch Safety | PASS | |
-| 5 | Narrow 520px Responsive Layout | PASS | |
-| 6 | Rapid Hover Sweeps & Animation Stability | PASS | |
-| 7 | Display DPI Scaling Simulation | PASS | |
-| 8 | Action Center Pagination & Resumption | PASS | |
-| 9 | Action Center Stale Invalidation & Refresh | PASS | |
-| 10 | Action Center Panel Dismissal Stability | PASS | |
-| 11 | Native OLE Desktop Drag-and-Drop Execution | INCONCLUSIVE | OLE drop cannot complete in this environment (UIPI/modal watchdog). |
-| 12 | Mixed-Batch Folder Rejection on Drop | INCONCLUSIVE | Same OLE constraint. |
-| 13 | Seeded Attachment Chip Realization & Diagnostics | PASS | |
-| 14 | Strict Non-English Prose Preview Withholding | PASS | |
-| 15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | Typing p95 17.23 ms (≤ 100 ms threshold); scroll ViewChanged p95 49.61 ms. Window was foreground during typing. See §21.4. |
-| 16 | Search Overlay Flat Resting Orientation | PASS | |
-| 17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Wheel stimulus not delivered; foreground hwnd 0 at time of wheel send. Reclassified from FAIL per oracle correction B above. |
-| 18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | PASS | |
-| 19 | Empty-Chat Hero Perspective Preserved | INCONCLUSIVE | Hero perspective not measurable by the harness. |
-| 20 | Reduced-Motion Change Leaves The Overlay Flat | PASS | |
+| #   | Criterion                                                      | Verdict          | Notes                                                                                                                        |
+| --- | -------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Recent Projects & Startup Filtering                            | PASS             |                                                                                                                              |
+| 2   | Message Search Pagination & Continuation                       | PASS             |                                                                                                                              |
+| 3   | Older Message Navigation & Selection                           | PASS             |                                                                                                                              |
+| 4   | Search Mode Project Switch Safety                              | PASS             |                                                                                                                              |
+| 5   | Narrow 520px Responsive Layout                                 | PASS             |                                                                                                                              |
+| 6   | Rapid Hover Sweeps & Animation Stability                       | PASS             |                                                                                                                              |
+| 7   | Display DPI Scaling Simulation                                 | PASS             |                                                                                                                              |
+| 8   | Action Center Pagination & Resumption                          | PASS             |                                                                                                                              |
+| 9   | Action Center Stale Invalidation & Refresh                     | PASS             |                                                                                                                              |
+| 10  | Action Center Panel Dismissal Stability                        | PASS             |                                                                                                                              |
+| 11  | Native OLE Desktop Drag-and-Drop Execution                     | INCONCLUSIVE     | OLE drop cannot complete in this environment (UIPI/modal watchdog).                                                          |
+| 12  | Mixed-Batch Folder Rejection on Drop                           | INCONCLUSIVE     | Same OLE constraint.                                                                                                         |
+| 13  | Seeded Attachment Chip Realization & Diagnostics               | PASS             |                                                                                                                              |
+| 14  | Strict Non-English Prose Preview Withholding                   | PASS             |                                                                                                                              |
+| 15  | WinUI 3 CompositionTarget Performance Profiling                | **PASS**         | Typing p95 17.23 ms (≤ 100 ms threshold); scroll ViewChanged p95 49.61 ms. Window was foreground during typing. See §21.4.   |
+| 16  | Search Overlay Flat Resting Orientation                        | PASS             |                                                                                                                              |
+| 17  | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Wheel stimulus not delivered; foreground hwnd 0 at time of wheel send. Reclassified from FAIL per oracle correction B above. |
+| 18  | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat  | PASS             |                                                                                                                              |
+| 19  | Empty-Chat Hero Perspective Preserved                          | INCONCLUSIVE     | Hero perspective not measurable by the harness.                                                                              |
+| 20  | Reduced-Motion Change Leaves The Overlay Flat                  | PASS             |                                                                                                                              |
 
 ### 21.4 Criterion 15 — reconciliation of two runs
 
-| Run | Typing p95 | Verdict | Foreground at typing time |
-| --- | --- | --- | --- |
-| `ui-acceptance-20261021-final` (`da376ed0`) | 104.767 ms | **FAIL** | `foreground hwnd 0` throughout the entire run |
-| `ui-acceptance-20261022-0031` (this assignment) | 17.23 ms | **PASS** | Window foreground during typing; foreground=0 only during Phase 7 scroll |
+| Run                                             | Typing p95 | Verdict  | Foreground at typing time                                                |
+| ----------------------------------------------- | ---------- | -------- | ------------------------------------------------------------------------ |
+| `ui-acceptance-20261021-final` (`da376ed0`)     | 104.767 ms | **FAIL** | `foreground hwnd 0` throughout the entire run                            |
+| `ui-acceptance-20261022-0031` (this assignment) | 17.23 ms   | **PASS** | Window foreground during typing; foreground=0 only during Phase 7 scroll |
 
 When the window is not the OS foreground during typing, WinUI 3 processes keystrokes at lower scheduler priority, inflating p95 above the 100 ms threshold. When it is foreground, the same application scores well under the threshold. Both readings are real. The FAIL from `da376ed0`’s run is not a regression and cannot be reopened as one; the PASS in this run reflects a cleaner execution context. Neither reading should be treated as a stable performance baseline for continuous measurement.
 
@@ -2297,28 +2326,28 @@ When the window is not the OS foreground during typing, WinUI 3 processes keystr
 
 ### 21.6 Criteria for this assignment
 
-| ID | Criterion | Evidence type | Observation | Verdict |
-| --- | --- | --- | --- | --- |
-| N-20 | False acceptance claim for Criterion 15 corrected in §20.5/§20.6. | Documentation correction | §20.5 row N-15 changed from PASS to FAIL; §20.6 items 4–5 added with correction narrative, performance readings table, and environmental caveat. Durable rule added to `AGENTS.md` §13. | **PASS** |
-| N-21 | Criterion 17 scroll probe reclassified INCONCLUSIVE when wheel not delivered. | Harness change + native run | `send_wheel_at_point` returns `bool`; Phase 5B.3 oracle records INCONCLUSIVE when `False`. Confirmed in `ui-acceptance-20261022-0031` line 149. | **PASS** |
-| N-22 | `open_switch_project` distinguishes UI-thread stall from missing control. | Harness change | Post-deadline UIA scan with UI-thread latency probe added. Stall logs with latency; true absence still fires diagnostics path. | **PASS** |
-| N-23 | Storage test counter corrected to 44 of 44. | Native binary | `native/tests/bin/storage_tests.exe`: `PASS: 44 of 44 executed native regression groups`. | **PASS** |
-| N-24 | Full harness EXIT=0, 0 FAILs, 0 BLOCKs. | Native run | `ui-acceptance-20261022-0031`: `Total: 20 criteria | Passed: 16 | Inconclusive: 4 | Failed: 0 | Blocked: 0`. | **PASS** |
-| N-25 | No new `0x802B0014` entries in `unhandled-exception.log` for 2026-10-22. | Log inspection | `Select-String` on 2026-10-22 timestamps: empty result. All existing entries are pre-fix (2026-10-21). | **PASS** |
+| ID   | Criterion                                                                     | Evidence type               | Observation                                                                                                                                                                             | Verdict    |
+| ---- | ----------------------------------------------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------------- | --------- | ------------ | -------- |
+| N-20 | False acceptance claim for Criterion 15 corrected in §20.5/§20.6.             | Documentation correction    | §20.5 row N-15 changed from PASS to FAIL; §20.6 items 4–5 added with correction narrative, performance readings table, and environmental caveat. Durable rule added to `AGENTS.md` §13. | **PASS**   |
+| N-21 | Criterion 17 scroll probe reclassified INCONCLUSIVE when wheel not delivered. | Harness change + native run | `send_wheel_at_point` returns `bool`; Phase 5B.3 oracle records INCONCLUSIVE when `False`. Confirmed in `ui-acceptance-20261022-0031` line 149.                                         | **PASS**   |
+| N-22 | `open_switch_project` distinguishes UI-thread stall from missing control.     | Harness change              | Post-deadline UIA scan with UI-thread latency probe added. Stall logs with latency; true absence still fires diagnostics path.                                                          | **PASS**   |
+| N-23 | Storage test counter corrected to 44 of 44.                                   | Native binary               | `native/tests/bin/storage_tests.exe`: `PASS: 44 of 44 executed native regression groups`.                                                                                               | **PASS**   |
+| N-24 | Full harness EXIT=0, 0 FAILs, 0 BLOCKs.                                       | Native run                  | `ui-acceptance-20261022-0031`: `Total: 20 criteria                                                                                                                                      | Passed: 16 | Inconclusive: 4 | Failed: 0 | Blocked: 0`. | **PASS** |
+| N-25 | No new `0x802B0014` entries in `unhandled-exception.log` for 2026-10-22.      | Log inspection              | `Select-String` on 2026-10-22 timestamps: empty result. All existing entries are pre-fix (2026-10-21).                                                                                  | **PASS**   |
 
 ## 22. UI-thread stall investigation: hypothesis refuted, OLE helper defect found, foreground restored (2026-10-22)
 
 ### 22.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Executable | `Mayasaba.exe` SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` |
-| Compiled XAML | `MainWindow.xbf` SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` |
-| Source commit at run | `61961e101b6bd87cc8dc6c771dd465428c90e4ea` |
-| Application source changed by this assignment | **No.** The executable and XBF are byte-identical to the artifacts recorded in §21. Every conclusion below is about that unchanged build. |
-| Harness binaries changed | `native/tests/ole_drop.exe` rebuilt twice. Final artifact SHA-256 `565af5522bcf5b381b24734f67cb3f008866035594764aaa8a18283420558f2c` (mtime 2026-10-22 01:29:28); the intermediate build measured in §22.5 was `5dd4860dcfe8b305ebac58ec4dffe85dad0ec76d4389df2118bd9c6bbc4ecbb4`. See §22.9 for which observations belong to which artifact. |
-| Evidence directory | `native/tests/evidence/ui-acceptance-20261022-w1w4` (primary run); `native/tests/evidence/ui-acceptance-20261022-w1w4-final` (confirmation run on the committed harness — see §22.10) |
-| Probe workspaces | `C:\Users\pavan\PROJECTS\_ui-verify\{stall,walk,search,fg,fgwalk,ole,harness-stall,probe-discriminate}-probe` |
+| Field                                         | Value                                                                                                                                                                                                                                                                                                                                         |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Executable                                    | `Mayasaba.exe` SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53`                                                                                                                                                                                                                                                     |
+| Compiled XAML                                 | `MainWindow.xbf` SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234`                                                                                                                                                                                                                                                   |
+| Source commit at run                          | `61961e101b6bd87cc8dc6c771dd465428c90e4ea`                                                                                                                                                                                                                                                                                                    |
+| Application source changed by this assignment | **No.** The executable and XBF are byte-identical to the artifacts recorded in §21. Every conclusion below is about that unchanged build.                                                                                                                                                                                                     |
+| Harness binaries changed                      | `native/tests/ole_drop.exe` rebuilt twice. Final artifact SHA-256 `565af5522bcf5b381b24734f67cb3f008866035594764aaa8a18283420558f2c` (mtime 2026-10-22 01:29:28); the intermediate build measured in §22.5 was `5dd4860dcfe8b305ebac58ec4dffe85dad0ec76d4389df2118bd9c6bbc4ecbb4`. See §22.9 for which observations belong to which artifact. |
+| Evidence directory                            | `native/tests/evidence/ui-acceptance-20261022-w1w4` (primary run); `native/tests/evidence/ui-acceptance-20261022-w1w4-final` (confirmation run on the committed harness — see §22.10)                                                                                                                                                         |
+| Probe workspaces                              | `C:\Users\pavan\PROJECTS\_ui-verify\{stall,walk,search,fg,fgwalk,ole,harness-stall,probe-discriminate}-probe`                                                                                                                                                                                                                                 |
 
 The executable mtime (2026-10-21 23:42:20) is later than `MainWindow.xaml.cpp` (23:39:48) and `MainWindow.xaml` (23:40:06), and the XBF (23:40:53) is later than the XAML, so the artifacts exercised correspond to the sources on disk. No relink occurred during this assignment.
 
@@ -2328,12 +2357,12 @@ The assignment proposed that a multi-second UI-thread stall blocked the applicat
 
 **Verdict: REFUTED.** The UI thread was measured continuously across a complete harness run and never blocked for more than 380 ms. Each link of the proposed causal chain was tested separately and each failed:
 
-| Proposed link | Test | Result |
-| --- | --- | --- |
-| A synchronous SQLite call runs on the UI thread | Code inspection of every `storage_->` call site | **False.** All 14 call sites are behind `co_await selectorQueue_.Background()` (`MainWindow.xaml.cpp` 281, 744, 846, 1484, 1899, 2072, 2124, 2171, 2280, 2357, 2582, 2852, 2988, 3199, 3456, 3493, 3933, 4506, 4596, 4754). No `.get()`, `WaitForSingleObject`, or `Sleep` appears on the UI path. |
-| A held write lock blocks the UI thread | 15 s `BEGIN EXCLUSIVE` on the live store from a second connection, with a storage-triggering click driven | **False.** 295/295 pings answered, p50 0.17 ms, max 13.57 ms. |
-| The 11.399 s figure was a UI-thread stall | Re-ran the same diagnostic shape; measured the pump directly | **False.** 11.399 s was the cost of a full UIA descendant enumeration, not the message pump. See §22.3. |
-| The app blocks during the whole run | `WM_NULL` sampled every 50 ms for an entire harness run | **False.** 2601 samples: p50 0.12 ms, p95 10.63 ms, p99 32.12 ms, max 379.7 ms, **0** samples over 1000 ms. |
+| Proposed link                                   | Test                                                                                                      | Result                                                                                                                                                                                                                                                                                             |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A synchronous SQLite call runs on the UI thread | Code inspection of every `storage_->` call site                                                           | **False.** All 14 call sites are behind `co_await selectorQueue_.Background()` (`MainWindow.xaml.cpp` 281, 744, 846, 1484, 1899, 2072, 2124, 2171, 2280, 2357, 2582, 2852, 2988, 3199, 3456, 3493, 3933, 4506, 4596, 4754). No `.get()`, `WaitForSingleObject`, or `Sleep` appears on the UI path. |
+| A held write lock blocks the UI thread          | 15 s `BEGIN EXCLUSIVE` on the live store from a second connection, with a storage-triggering click driven | **False.** 295/295 pings answered, p50 0.17 ms, max 13.57 ms.                                                                                                                                                                                                                                      |
+| The 11.399 s figure was a UI-thread stall       | Re-ran the same diagnostic shape; measured the pump directly                                              | **False.** 11.399 s was the cost of a full UIA descendant enumeration, not the message pump. See §22.3.                                                                                                                                                                                            |
+| The app blocks during the whole run             | `WM_NULL` sampled every 50 ms for an entire harness run                                                   | **False.** 2601 samples: p50 0.12 ms, p95 10.63 ms, p99 32.12 ms, max 379.7 ms, **0** samples over 1000 ms.                                                                                                                                                                                        |
 
 The application's own `CompositionTarget::Rendering` heartbeat, which runs on the UI thread, corroborates this independently: the maximum render-callback interval in the failing run `20261021-final` was **1865 ms**, and in the three runs measured here 492 ms, 432 ms and 632 ms. A thread blocked for 11.4 s cannot report an 1865 ms maximum interval over 43 335 callbacks.
 
@@ -2343,12 +2372,12 @@ The harness diagnostic named "UI thread probe" calls `find_by_aid(win, "SearchMe
 
 Measured walk cost against the same binary:
 
-| State | Elements | Walk | UI-thread pump |
-| --- | --- | --- | --- |
-| Selector screen | 51 | 56 ms | 0.30 ms |
-| Bound chat, 50 contributions | 52 | 103–139 ms | 0.06–0.43 ms |
-| Search overlay, results populated | 8 | 83–145 ms | 0.06–0.15 ms |
-| App **not** foreground | 52 | 42–63 ms | 0.11 ms |
+| State                             | Elements | Walk       | UI-thread pump |
+| --------------------------------- | -------- | ---------- | -------------- |
+| Selector screen                   | 51       | 56 ms      | 0.30 ms        |
+| Bound chat, 50 contributions      | 52       | 103–139 ms | 0.06–0.43 ms   |
+| Search overlay, results populated | 8        | 83–145 ms  | 0.06–0.15 ms   |
+| App **not** foreground            | 52       | 42–63 ms   | 0.11 ms        |
 
 Two further observations bound the original figure. First, the same failing run logged an ordinary notice walk of **7.88 s**, which is the same order as the 11.399 s "stall" and is unambiguously enumeration cost in a `wait_for_notice` loop, not a UI-thread condition. Second, the harness's own comment in `wait_for_notice` already states that "a slow walk and a notice that never opened look identical in a single figure" — the lesson was applied there and not to the probe that produced the stall claim.
 
@@ -2375,15 +2404,15 @@ Criterion 13 is **PASS** in that run, and the File → Switch Project step it de
 
 The helper was instrumented and run while the application's UI thread was sampled. The table below is the measurement on the intermediate helper build `5dd4860d…`; §22.9 re-measures the final artifact, whose foreground outcome differs:
 
-| Measurement | Value |
-| --- | --- |
-| `ole_drop.exe` exit | 4 |
-| Helper's own foreground report | `foreground=app`, `foreground_hwnd` = target |
-| App foreground across the attempt | 332/332 samples (100 %) |
-| App UI-thread p50 during the attempt | 0.14 ms |
-| App UI-thread max during the attempt | 0.98 ms |
-| App UI-thread timeouts | 0 |
-| **`QueryContinueDrag` calls** | **0** |
+| Measurement                          | Value                                        |
+| ------------------------------------ | -------------------------------------------- |
+| `ole_drop.exe` exit                  | 4                                            |
+| Helper's own foreground report       | `foreground=app`, `foreground_hwnd` = target |
+| App foreground across the attempt    | 332/332 samples (100 %)                      |
+| App UI-thread p50 during the attempt | 0.14 ms                                      |
+| App UI-thread max during the attempt | 0.98 ms                                      |
+| App UI-thread timeouts               | 0                                            |
+| **`QueryContinueDrag` calls**        | **0**                                        |
 
 `DoDragDrop` never entered a single drag iteration. No amount of waiting, foreground work, or guard tuning can complete a drag that the OLE loop never starts, so the helper's timeout is not evidence about the drop target.
 
@@ -2402,12 +2431,12 @@ The helper also now reports whether `SetForegroundWindow` actually took effect, 
 
 `GetForegroundWindow()` returned **0** throughout every run in the earlier series. That is not a normal interactive state, and the probe here establishes that it is not a machine limit:
 
-| Attempt | Result |
-| --- | --- |
-| `GetForegroundWindow()` from an ordinary process on this machine | valid HWND (133422) |
-| After launching the app | app is foreground (`match=True`) |
-| `win.set_focus()` (what the harness calls) | foreground = app, still app 3 s later |
-| `AttachThreadInput` + `SetForegroundWindow` | returned `True`, held for 3 s |
+| Attempt                                                          | Result                                |
+| ---------------------------------------------------------------- | ------------------------------------- |
+| `GetForegroundWindow()` from an ordinary process on this machine | valid HWND (133422)                   |
+| After launching the app                                          | app is foreground (`match=True`)      |
+| `win.set_focus()` (what the harness calls)                       | foreground = app, still app 3 s later |
+| `AttachThreadInput` + `SetForegroundWindow`                      | returned `True`, held for 3 s         |
 
 The full harness run in `ui-acceptance-20261022-w1w4` logged **zero** occurrences of "the application window is not the foreground window", against 3 in `20261022-0031`. Criterion 17 consequently returned **PASS**, and criterion 15's typing p95 was 26.26 ms against a 100 ms threshold.
 
@@ -2415,29 +2444,29 @@ The full harness run in `ui-acceptance-20261022-w1w4` logged **zero** occurrence
 
 ### 22.7 Criteria for this assignment
 
-| ID | Criterion | Evidence type | Observation | Verdict |
-| --- | --- | --- | --- | --- |
-| W-01 | The UI-thread stall hypothesis is tested by measurement, not assumed. | Native probe | 2601 samples over a 142.9 s harness run: p50 0.12 ms, p95 10.63 ms, p99 32.12 ms, max 379.7 ms, 0 over 1000 ms. | **PASS** (hypothesis refuted) |
-| W-02 | A held SQLite write lock does not block the UI thread. | Native probe | 15 s `BEGIN EXCLUSIVE` + storage-triggering click: 295/295 pings answered, max 13.57 ms. | **PASS** |
-| W-03 | The 11.399 s figure is attributed to its actual cause. | Native probe + code | Walk cost 42–145 ms while the pump answered in 0.06–0.43 ms; the same run logged a 7.88 s notice walk. | **PASS** |
-| W-04 | The stall diagnostic no longer conflates enumeration cost with a blocked pump. | Harness change + run | `UIA walk cost` and `UI thread latency (WM_NULL)` logged separately; the stall conclusion now requires the pump probe. | **PASS** |
-| W-05 | The new pump probe discriminates a real block. | Native probe | Healthy `True`/0.000 s, 30 threads suspended `False`/1.507 s, resumed `True`/0.000 s. | **PASS** |
-| W-06 | The original Phase 10.2 symptom is re-tested on the current binary. | Native run | `PASS: Attachment chip realized with inspect button 'Inspect sample_spec.txt'.` | **PASS** |
-| W-07 | The OLE failure is attributed to the helper or the application by measurement. | Native probe | `QueryContinueDrag calls: 0` with app foreground 332/332 and UI max 0.98 ms. | **PASS** (attributed to helper) |
-| W-08 | The OLE helper's internal guards are consistent. | Source + rebuild | Self-drop 1200 ms inside a 4000 ms watchdog; the previous 2500 ms guard could never fire before a 2400 ms kill. | **PASS** |
-| W-09 | The OLE helper cannot complete an OLE drag against any target here. | Control experiment | Identical `exit=4`, `QueryContinueDrag calls: 0` against a known-good drop target. | **PASS** (helper/session limit established) |
-| W-10 | Foreground can be established and held. | Native probe + run | `set_focus` and `AttachThreadInput` both hold for 3 s; 0 foreground warnings in the full run. | **PASS** |
-| W-11 | Full harness completes with no failures or blocks. | Native run | `Total: 20 criteria | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0`. | **PASS** |
-| W-12 | `poll_until` cannot degrade into a single snapshot. | Harness change | `min_samples=2` added, matching the guard `wait_for_notice` already had. | **PASS** |
-| W-13 | Criteria 11 and 12 are measurable. | Native run | Not measurable: the synthetic OLE drag never starts. | **INCONCLUSIVE** |
-| W-14 | Criterion 19 (hero perspective) is measurable. | Native run | Not measurable by the harness. | **INCONCLUSIVE** |
-| W-15 | The mechanism behind the earlier `foreground hwnd 0` is identified. | — | Did not reproduce in four runs; the condition was not explained, only not observed. | **INCONCLUSIVE** |
+| ID   | Criterion                                                                      | Evidence type        | Observation                                                                                                            | Verdict                                     |
+| ---- | ------------------------------------------------------------------------------ | -------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- | --------------- | --------- | ---------- | ------------ | -------- |
+| W-01 | The UI-thread stall hypothesis is tested by measurement, not assumed.          | Native probe         | 2601 samples over a 142.9 s harness run: p50 0.12 ms, p95 10.63 ms, p99 32.12 ms, max 379.7 ms, 0 over 1000 ms.        | **PASS** (hypothesis refuted)               |
+| W-02 | A held SQLite write lock does not block the UI thread.                         | Native probe         | 15 s `BEGIN EXCLUSIVE` + storage-triggering click: 295/295 pings answered, max 13.57 ms.                               | **PASS**                                    |
+| W-03 | The 11.399 s figure is attributed to its actual cause.                         | Native probe + code  | Walk cost 42–145 ms while the pump answered in 0.06–0.43 ms; the same run logged a 7.88 s notice walk.                 | **PASS**                                    |
+| W-04 | The stall diagnostic no longer conflates enumeration cost with a blocked pump. | Harness change + run | `UIA walk cost` and `UI thread latency (WM_NULL)` logged separately; the stall conclusion now requires the pump probe. | **PASS**                                    |
+| W-05 | The new pump probe discriminates a real block.                                 | Native probe         | Healthy `True`/0.000 s, 30 threads suspended `False`/1.507 s, resumed `True`/0.000 s.                                  | **PASS**                                    |
+| W-06 | The original Phase 10.2 symptom is re-tested on the current binary.            | Native run           | `PASS: Attachment chip realized with inspect button 'Inspect sample_spec.txt'.`                                        | **PASS**                                    |
+| W-07 | The OLE failure is attributed to the helper or the application by measurement. | Native probe         | `QueryContinueDrag calls: 0` with app foreground 332/332 and UI max 0.98 ms.                                           | **PASS** (attributed to helper)             |
+| W-08 | The OLE helper's internal guards are consistent.                               | Source + rebuild     | Self-drop 1200 ms inside a 4000 ms watchdog; the previous 2500 ms guard could never fire before a 2400 ms kill.        | **PASS**                                    |
+| W-09 | The OLE helper cannot complete an OLE drag against any target here.            | Control experiment   | Identical `exit=4`, `QueryContinueDrag calls: 0` against a known-good drop target.                                     | **PASS** (helper/session limit established) |
+| W-10 | Foreground can be established and held.                                        | Native probe + run   | `set_focus` and `AttachThreadInput` both hold for 3 s; 0 foreground warnings in the full run.                          | **PASS**                                    |
+| W-11 | Full harness completes with no failures or blocks.                             | Native run           | `Total: 20 criteria                                                                                                    | Passed: 17                                  | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0`. | **PASS** |
+| W-12 | `poll_until` cannot degrade into a single snapshot.                            | Harness change       | `min_samples=2` added, matching the guard `wait_for_notice` already had.                                               | **PASS**                                    |
+| W-13 | Criteria 11 and 12 are measurable.                                             | Native run           | Not measurable: the synthetic OLE drag never starts.                                                                   | **INCONCLUSIVE**                            |
+| W-14 | Criterion 19 (hero perspective) is measurable.                                 | Native run           | Not measurable by the harness.                                                                                         | **INCONCLUSIVE**                            |
+| W-15 | The mechanism behind the earlier `foreground hwnd 0` is identified.            | —                    | Did not reproduce in four runs; the condition was not explained, only not observed.                                    | **INCONCLUSIVE**                            |
 
 ### 22.8 What this record does not claim
 
 1. **It does not claim a stall was fixed.** No stall was found to fix. The application's UI thread answered within 380 ms at worst across a full run, and the earlier 11.399 s figure was a UIA enumeration cost that had been mislabelled as a stall. No application source was changed by this assignment.
 2. **It does not claim the original Phase 10.2 flake is reproduced or root-caused.** The symptom did not recur; the control was present and the criterion passes. The earlier run's `foreground hwnd 0` environment was not re-created.
-3. **It does not claim criteria 11 or 12 pass.** They remain INCONCLUSIVE. The measurement shows the harness cannot start an OLE drag in this session — against Mayasaba *and* against a known-good control target — so these criteria carry no information about Mayasaba's drop handling in either direction.
+3. **It does not claim criteria 11 or 12 pass.** They remain INCONCLUSIVE. The measurement shows the harness cannot start an OLE drag in this session — against Mayasaba _and_ against a known-good control target — so these criteria carry no information about Mayasaba's drop handling in either direction.
 4. **It does not claim a foreground defect was fixed.** The foreground was established and held in every run today; the cause of the earlier `foreground hwnd 0` was not determined.
 5. **Criterion 15's PASS is this run's reading, not a stable baseline.** §21.4 remains in force: the metric moves with the execution context.
 6. **The OLE helper fixes do not make criteria 11/12 measurable.** They make the helper's failure report truthful; they do not make it succeed.
@@ -2446,16 +2475,16 @@ The full harness run in `ui-acceptance-20261022-w1w4` logged **zero** occurrence
 
 The helper was rebuilt a second time after §22.5 to remove a use-after-free: the watchdog thread read the `QueryContinueDrag` counter from the `DropSource` object, which `Release()` deletes when `DoDragDrop` returns, so the watchdog could read freed memory in the window between completion and its own observation. The counter is now owned by `wmain`'s stack frame and passed to `DropSource` by reference (`native/tests/ole_drop.cpp` lines 22-24, 261-263). The measurement was then repeated against the final artifact so the record names the binary it belongs to.
 
-| Measurement | Intermediate build `5dd4860d…` (§22.5) | Final build `565af552…` (§22.9) |
-| --- | --- | --- |
-| `ole_drop.exe` exit | 4 | 4 |
-| Elapsed | — | 4.84 s |
-| **`QueryContinueDrag` calls** | **0** | **0** |
-| Helper's own post-call foreground read | `foreground=app` | `foreground=other` (`foreground_hwnd=199242`, target `0x40A42`) |
-| App foreground, sampled over the attempt | 332/332 (100 %) | 282/333 (84.7 %) |
-| App UI-thread p50 | 0.14 ms | 0.14 ms |
-| App UI-thread max | 0.98 ms | 3.59 ms |
-| App UI-thread timeouts | 0 | 0 |
+| Measurement                              | Intermediate build `5dd4860d…` (§22.5) | Final build `565af552…` (§22.9)                                 |
+| ---------------------------------------- | -------------------------------------- | --------------------------------------------------------------- |
+| `ole_drop.exe` exit                      | 4                                      | 4                                                               |
+| Elapsed                                  | —                                      | 4.84 s                                                          |
+| **`QueryContinueDrag` calls**            | **0**                                  | **0**                                                           |
+| Helper's own post-call foreground read   | `foreground=app`                       | `foreground=other` (`foreground_hwnd=199242`, target `0x40A42`) |
+| App foreground, sampled over the attempt | 332/332 (100 %)                        | 282/333 (84.7 %)                                                |
+| App UI-thread p50                        | 0.14 ms                                | 0.14 ms                                                         |
+| App UI-thread max                        | 0.98 ms                                | 3.59 ms                                                         |
+| App UI-thread timeouts                   | 0                                      | 0                                                               |
 
 **The conclusion is unchanged and the lifetime fix did not alter it.** The drag loop still never iterated, so the synthetic drag was never delivered and the timeout remains evidence about the helper, not about the drop target.
 
@@ -2469,20 +2498,20 @@ The residual 15.3 % of samples with another window foreground was not investigat
 
 The primary run in §22.7 exercised the harness as it stood mid-assignment. Two changes were made to the harness afterwards, so the recorded run no longer matched the file being committed:
 
-1. **A message defect in my own diagnostic.** The late-item branch interpolated `probe_elapsed` -- the *UIA walk* duration -- into a sentence claiming the UI thread had not answered. That is precisely the conflation the assignment was about, reintroduced in the code written to fix it. It now interpolates `ui_secs`, the measured pump latency.
+1. **A message defect in my own diagnostic.** The late-item branch interpolated `probe_elapsed` -- the _UIA walk_ duration -- into a sentence claiming the UI thread had not answered. That is precisely the conflation the assignment was about, reintroduced in the code written to fix it. It now interpolates `ui_secs`, the measured pump latency.
 2. **A misleading variable name.** The walk-diagnostic bound the pump result to `ui_ms` while it holds seconds. Renamed to `ui_secs`.
 
 The full harness was re-run against the committed harness, with the same binary:
 
-| Field | Value |
-| --- | --- |
-| Executable SHA-256 | `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` (identical to §22.1) |
-| Compiled XAML SHA-256 | `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` (identical to §22.1) |
-| Evidence directory | `native/tests/evidence/ui-acceptance-20261022-w1w4-final` |
-| Result | `Total: 20 criteria | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0` |
-| Inconclusive criteria | 11, 12, 19 — unchanged |
-| Typing p95 (criterion 15) | 33.91 ms against a 100 ms threshold |
-| Foreground warnings | 0 |
+| Field                     | Value                                                                                   |
+| ------------------------- | --------------------------------------------------------------------------------------- | ---------- | --------------- | --------- | ---------- | ----------- |
+| Executable SHA-256        | `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` (identical to §22.1) |
+| Compiled XAML SHA-256     | `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` (identical to §22.1) |
+| Evidence directory        | `native/tests/evidence/ui-acceptance-20261022-w1w4-final`                               |
+| Result                    | `Total: 20 criteria                                                                     | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0` |
+| Inconclusive criteria     | 11, 12, 19 — unchanged                                                                  |
+| Typing p95 (criterion 15) | 33.91 ms against a 100 ms threshold                                                     |
+| Foreground warnings       | 0                                                                                       |
 
 The confirmation run reproduces the primary run's verdicts exactly, on the same binary, from a fresh store. The two edits are message- and naming-only and cannot change a verdict; that is a claim about the diff, and the re-run is what checks it.
 
@@ -2495,7 +2524,7 @@ FAIL: test_poll_until_takes_more_than_one_sample: only 1 sample(s): the poll deg
 FAIL: 1 failure(s)
 ```
 
-with exit code 1. The fix was restored and the file verified byte-identical by SHA-256 (`38e52bba66168057c498818436d42244e65ad7538ee9d7762c4a9ba6a4b97d50`) before the confirmation run. This mutation makes the postcondition unsatisfiable by construction; it does not reproduce the original timing race, and it proves only that the assertion discriminates *that* degradation.
+with exit code 1. The fix was restored and the file verified byte-identical by SHA-256 (`38e52bba66168057c498818436d42244e65ad7538ee9d7762c4a9ba6a4b97d50`) before the confirmation run. This mutation makes the postcondition unsatisfiable by construction; it does not reproduce the original timing race, and it proves only that the assertion discriminates _that_ degradation.
 
 **A stale test binary was caught and must not be confused with a regression.** `native/tests/storage_tests.exe` (the legacy path, mtime 2026-10-15) failed at a line number that did not match the symbol's location in the current source (`secondaryFailed` is at line 573; the message cited 445). The current build lives at `native/tests/bin/storage_tests.exe` (mtime 2026-10-22 00:14) and reports `PASS: 44 of 44 executed native regression groups`, exit 0. The failing copy predates commit `61961e1`. Recorded here because a stale binary at a legacy path is a recurring trap: check the mtime and the path before attributing a failure to a source change.
 
@@ -2503,14 +2532,14 @@ with exit code 1. The fix was restored and the file verified byte-identical by S
 
 ### 23.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Executable | `Mayasaba.exe` SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` (unchanged from §21/§22) |
-| Compiled XAML | `MainWindow.xbf` SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` (unchanged) |
-| Application source changed | **No.** Third consecutive commit in which the product binary is byte-identical. |
-| Harness binary | `native/tests/bin/ole_drop.exe` SHA-256 `0cf37f55139fc0f017533c378248e6e13f3d2636c61bfbe26a5ac10e7d0cbe9e` |
-| Evidence directory | `native/tests/evidence/ui-acceptance-20261022-r1budget` |
-| Run result | `Total: 20 criteria | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0` |
+| Field                      | Value                                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------- | --------------- | --------- | ---------- | ----------- |
+| Executable                 | `Mayasaba.exe` SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` (unchanged from §21/§22) |
+| Compiled XAML              | `MainWindow.xbf` SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` (unchanged)            |
+| Application source changed | **No.** Third consecutive commit in which the product binary is byte-identical.                                    |
+| Harness binary             | `native/tests/bin/ole_drop.exe` SHA-256 `0cf37f55139fc0f017533c378248e6e13f3d2636c61bfbe26a5ac10e7d0cbe9e`         |
+| Evidence directory         | `native/tests/evidence/ui-acceptance-20261022-r1budget`                                                            |
+| Run result                 | `Total: 20 criteria                                                                                                | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0` |
 
 ### 23.2 The budget coupling, confirmed and fixed
 
@@ -2520,12 +2549,12 @@ The follow-on assignment identified an exact defect: `test_full_ui_acceptance.py
 
 Before and after, in the harness's own words:
 
-| | Observation |
-| --- | --- |
-| Before (§22 run) | `ole_drop.exe invocation reached bounded 4s timeout` — no exit code, no diagnostic, no measurement |
+|                                           | Observation                                                                                                                                                |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Before (§22 run)                          | `ole_drop.exe invocation reached bounded 4s timeout` — no exit code, no diagnostic, no measurement                                                         |
 | After (`ui-acceptance-20261022-r1budget`) | `ole_drop.exe exit code: 4`, stdout `budgets: selfdrop=1200 watchdog=4000 escape=400 total=4400`, stderr `WATCHDOG: ... QueryContinueDrag calls so far: 0` |
 
-The criterion verdict did not change, and was not expected to: the fix restores the *evidence*, not the drag. That is the difference between an INCONCLUSIVE that names its cause and one that does not.
+The criterion verdict did not change, and was not expected to: the fix restores the _evidence_, not the drag. That is the difference between an INCONCLUSIVE that names its cause and one that does not.
 
 ### 23.3 A second evidence-destroying defect, in the helper
 
@@ -2544,31 +2573,31 @@ STDERR: WATCHDOG: DoDragDrop modal loop did not complete. QueryContinueDrag call
 
 Four drag strategies were run against a known-good control target (Notepad), each in a fresh process, each writing every stage to its own log file so a hang could not erase the evidence:
 
-| Strategy | Aim | Input API | `QueryContinueDrag` calls | Exit |
-| --- | --- | --- | --- | --- |
-| `legacy` | `rect.bottom - 75` (what the helper does) | `SetCursorPos` + `mouse_event` | 0 | 4 |
-| `absolute` | client-area centre via `ClientToScreen` | `MOUSEEVENTF_ABSOLUTE` + `SendInput` | 0 | 4 |
-| `sendinput` | client-area centre | `SendInput` only | 0 | 4 |
-| `nopress` | none — **no button pressed at all** | none | 0 | 4 |
+| Strategy    | Aim                                       | Input API                            | `QueryContinueDrag` calls | Exit |
+| ----------- | ----------------------------------------- | ------------------------------------ | ------------------------- | ---- |
+| `legacy`    | `rect.bottom - 75` (what the helper does) | `SetCursorPos` + `mouse_event`       | 0                         | 4    |
+| `absolute`  | client-area centre via `ClientToScreen`   | `MOUSEEVENTF_ABSOLUTE` + `SendInput` | 0                         | 4    |
+| `sendinput` | client-area centre                        | `SendInput` only                     | 0                         | 4    |
+| `nopress`   | none — **no button pressed at all**       | none                                 | 0                         | 4    |
 
 The decisive observation is not the zero counts but a line common to all four: `fg_before_press=2228396 match=0`. `SetForegroundWindow(target)` was **refused** in every child process, while the Python parent that launched them had just set that same window foreground successfully and read a matching `GetForegroundWindow()`. A non-foreground process cannot give itself the foreground, and the refusal is silent.
 
 `nopress` matters because it separates two hypotheses: with no input injected at all, `DoDragDrop` still never iterates. So the zero count is not explained by the press landing in the wrong place, by the drag threshold, or by `mouse_event` versus `SendInput`. The drag loop does not start in this session for reasons upstream of all three.
 
-**What this does not establish.** It does not prove that Mayasaba's drop target is correct, and it does not prove it is broken. It establishes that this harness, in this session, cannot deliver an OLE drag to *any* target — so criteria 11 and 12 carry no information about the application in either direction. The declaration `AllowDrop="True" Drop="OnComposerDrop"` in `MainWindow.xaml` remains an unverified declaration.
+**What this does not establish.** It does not prove that Mayasaba's drop target is correct, and it does not prove it is broken. It establishes that this harness, in this session, cannot deliver an OLE drag to _any_ target — so criteria 11 and 12 carry no information about the application in either direction. The declaration `AllowDrop="True" Drop="OnComposerDrop"` in `MainWindow.xaml` remains an unverified declaration.
 
 ### 23.5 A mechanism for the earlier `foreground hwnd 0`, measured
 
 §22.6 recorded the `GetForegroundWindow() == 0` condition as an unexplained known unknown. A child-process isolation probe found a reproducible mechanism:
 
-| Variant | Result |
-| --- | --- |
-| bare child, no OLE, no input | `fg` = target, match |
-| after `OleInitialize` | `fg` = target, match |
-| after `SetForegroundWindow(target)` | `fg` = target, match |
-| after `SetCursorPos` + `mouse_event` **at the target's centre** | `fg` = target, match |
-| after `SetCursorPos(10,10)` + `mouse_event` **outside any app window** | **`fg` = 0** |
-| subsequent read | `fg` = a different window |
+| Variant                                                                | Result                    |
+| ---------------------------------------------------------------------- | ------------------------- |
+| bare child, no OLE, no input                                           | `fg` = target, match      |
+| after `OleInitialize`                                                  | `fg` = target, match      |
+| after `SetForegroundWindow(target)`                                    | `fg` = target, match      |
+| after `SetCursorPos` + `mouse_event` **at the target's centre**        | `fg` = target, match      |
+| after `SetCursorPos(10,10)` + `mouse_event` **outside any app window** | **`fg` = 0**              |
+| subsequent read                                                        | `fg` = a different window |
 
 A synthetic click that lands on the desktop rather than on an application window moves the foreground to the shell, and `GetForegroundWindow()` returns 0 during that transition. This is consistent with the original runs, where a click aimed by a guessed offset (`rect.bottom - 75`) could miss every window.
 
@@ -2576,16 +2605,16 @@ This is a **mechanism, not a fix**. It was measured in an isolation probe, not i
 
 ### 23.6 Criteria for this assignment
 
-| ID | Criterion | Evidence type | Observation | Verdict |
-| --- | --- | --- | --- | --- |
-| X-01 | The harness timeout contains the helper's watchdog, escape and report. | Source + native run | Timeout derived to 8.4 s from 4000 + 400 ms; helper reports exit 4 with its diagnostic where it previously reported a bare timeout. | **PASS** |
-| X-02 | The budget relationship is named on both sides and visible in the log. | Source + run log | `kWatchdogMs`/`kEscapeMs` and `OLE_DROP_WATCHDOG_MS`/`OLE_DROP_ESCAPE_MS`; helper prints `total=4400` on startup. | **PASS** |
-| X-03 | A helper that exits via its watchdog does not lose its measurements. | Native probe | `ExitProcess` skipped iostream flush; `foreground=` line absent before the fix, present after. | **PASS** |
-| X-04 | The drag failure is attributed by measurement, not by guesswork. | Native probe | Four strategies, including one with no input at all, all `continueCalls=0`; `SetForegroundWindow` refused in every child. | **PASS** (attributed to session/helper foreground refusal) |
-| X-05 | The `foreground hwnd 0` condition has a measured mechanism. | Isolation probe | A synthetic click outside any app window produces `fg=0`, then a different window. | **PASS** (mechanism found; not the established cause of the original runs) |
-| X-06 | Criteria 11 and 12 become measurable. | Native run | Still not measurable: no OLE drag starts in this session, against any target. | **INCONCLUSIVE** |
-| X-07 | Criterion 19 (empty-chat hero) becomes measurable. | — | Not attempted in this milestone; deferred deliberately. | **INCONCLUSIVE** |
-| X-08 | Harness hygiene (stale binary, ignore rules). | — | Not attempted in this milestone; deferred deliberately. | **INCONCLUSIVE** |
+| ID   | Criterion                                                              | Evidence type       | Observation                                                                                                                         | Verdict                                                                    |
+| ---- | ---------------------------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| X-01 | The harness timeout contains the helper's watchdog, escape and report. | Source + native run | Timeout derived to 8.4 s from 4000 + 400 ms; helper reports exit 4 with its diagnostic where it previously reported a bare timeout. | **PASS**                                                                   |
+| X-02 | The budget relationship is named on both sides and visible in the log. | Source + run log    | `kWatchdogMs`/`kEscapeMs` and `OLE_DROP_WATCHDOG_MS`/`OLE_DROP_ESCAPE_MS`; helper prints `total=4400` on startup.                   | **PASS**                                                                   |
+| X-03 | A helper that exits via its watchdog does not lose its measurements.   | Native probe        | `ExitProcess` skipped iostream flush; `foreground=` line absent before the fix, present after.                                      | **PASS**                                                                   |
+| X-04 | The drag failure is attributed by measurement, not by guesswork.       | Native probe        | Four strategies, including one with no input at all, all `continueCalls=0`; `SetForegroundWindow` refused in every child.           | **PASS** (attributed to session/helper foreground refusal)                 |
+| X-05 | The `foreground hwnd 0` condition has a measured mechanism.            | Isolation probe     | A synthetic click outside any app window produces `fg=0`, then a different window.                                                  | **PASS** (mechanism found; not the established cause of the original runs) |
+| X-06 | Criteria 11 and 12 become measurable.                                  | Native run          | Still not measurable: no OLE drag starts in this session, against any target.                                                       | **INCONCLUSIVE**                                                           |
+| X-07 | Criterion 19 (empty-chat hero) becomes measurable.                     | —                   | Not attempted in this milestone; deferred deliberately.                                                                             | **INCONCLUSIVE**                                                           |
+| X-08 | Harness hygiene (stale binary, ignore rules).                          | —                   | Not attempted in this milestone; deferred deliberately.                                                                             | **INCONCLUSIVE**                                                           |
 
 X-07 and X-08 are recorded as INCONCLUSIVE rather than omitted: they were in the assignment and were not done. They are the next milestone's first two items.
 
@@ -2602,13 +2631,13 @@ X-07 and X-08 are recorded as INCONCLUSIVE rather than omitted: they were in the
 
 ### 24.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Executable | `Mayasaba.exe` SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` (unchanged from §21/§22/§23) |
-| Compiled XAML | `MainWindow.xbf` SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` (unchanged) |
-| Application source changed | **No.** Fourth consecutive record in which the product binary is byte-identical. |
-| Evidence directory | `native/tests/evidence/ui-acceptance-20261022-hero3` |
-| Run result | `Total: 20 criteria | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0` |
+| Field                      | Value                                                                                                                  |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------- | --------------- | --------- | ---------- | ----------- |
+| Executable                 | `Mayasaba.exe` SHA-256 `fa410002564fe2076003499fb6be73ec99faabca345d75215d1c054f73029c53` (unchanged from §21/§22/§23) |
+| Compiled XAML              | `MainWindow.xbf` SHA-256 `da3eafe80180179edeea1b66e900d6e35c594d2e4c849cdd5888fed402f3c234` (unchanged)                |
+| Application source changed | **No.** Fourth consecutive record in which the product binary is byte-identical.                                       |
+| Evidence directory         | `native/tests/evidence/ui-acceptance-20261022-hero3`                                                                   |
+| Run result                 | `Total: 20 criteria                                                                                                    | Passed: 17 | Inconclusive: 3 | Failed: 0 | Blocked: 0 | Not run: 0` |
 
 ### 24.2 The inherited working-tree diff: provenance and disposition
 
@@ -2617,30 +2646,30 @@ When this assignment began, the working tree carried roughly 554 added lines acr
 **What the diff does.** Three groups of change, all in the harness, none in the application:
 
 1. **Store-write instrumentation.** `mark_store_write()` records the timestamp and description of every write the harness makes to the live store, so a slow message-pump sample can be correlated with a held lock instead of assumed to be caused by one.
-2. **Foreground establishment.** The `Switch Project` path now establishes and *records* that the window is foreground before driving the menu, so a UIA focus or input failure can be separated from a harness that lost the foreground. Every log line reads `Switch Project: foreground established=True [attempt 1: already foreground]`.
+2. **Foreground establishment.** The `Switch Project` path now establishes and _records_ that the window is foreground before driving the menu, so a UIA focus or input failure can be separated from a harness that lost the foreground. Every log line reads `Switch Project: foreground established=True [attempt 1: already foreground]`.
 3. **Two new UIA helpers and a rewritten criterion-19 leg.** `folder_stable_identity()` reproduces the identity string `ProjectRoot.cpp` computes (`%x` volume serial, `:`, 16 zero-padded hex bytes) so a harness-seeded row passes the application's own validation. `uia_view_membership()` walks both the Control view and the Raw view, which is the only way to distinguish "this element has no AutomationPeer" from "this element was filtered out of the Control view".
 
 **The verdict question, answered by running it.** `AGENTS.md` and the assignment both require that a harness change altering sampling, foreground handling or store-write markers be shown not to alter any criterion's verdict. Both runs are against the same executable and XBF, so the comparison is not confounded by an artifact change:
 
-| | Baseline `ui-acceptance-20261022-r1budget` (HEAD harness, no diff) | `ui-acceptance-20261022-hero3` (working tree, with diff) |
-| --- | --- | --- |
-| Executable SHA-256 | `fa410002…29c53` | `fa410002…29c53` |
-| XBF SHA-256 | `da3eafe8…3c234` | `da3eafe8…3c234` |
-| Criteria passed | 17 | 17 |
-| Inconclusive | 3 | 3 |
-| Failed / Blocked / Not run | 0 / 0 / 0 | 0 / 0 / 0 |
-| Per-criterion table | — | **Byte-identical to the baseline table** (`diff` of the 20 extracted rows reports no difference) |
+|                            | Baseline `ui-acceptance-20261022-r1budget` (HEAD harness, no diff) | `ui-acceptance-20261022-hero3` (working tree, with diff)                                         |
+| -------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| Executable SHA-256         | `fa410002…29c53`                                                   | `fa410002…29c53`                                                                                 |
+| XBF SHA-256                | `da3eafe8…3c234`                                                   | `da3eafe8…3c234`                                                                                 |
+| Criteria passed            | 17                                                                 | 17                                                                                               |
+| Inconclusive               | 3                                                                  | 3                                                                                                |
+| Failed / Blocked / Not run | 0 / 0 / 0                                                          | 0 / 0 / 0                                                                                        |
+| Per-criterion table        | —                                                                  | **Byte-identical to the baseline table** (`diff` of the 20 extracted rows reports no difference) |
 
 The instrumentation is visibly active in the new run and absent in the baseline, which is what makes the identical table meaningful rather than accidental:
 
-| Marker | Baseline log | `hero3` log |
-| --- | --- | --- |
-| `[store-write]` lines | 0 | 12 |
-| `foreground established` lines | 0 | present at every switch |
-| `pump latency during the … OLE attempt` | absent | present |
-| Probe-project lines | 0 | present |
+| Marker                                  | Baseline log | `hero3` log             |
+| --------------------------------------- | ------------ | ----------------------- |
+| `[store-write]` lines                   | 0            | 12                      |
+| `foreground established` lines          | 0            | present at every switch |
+| `pump latency during the … OLE attempt` | absent       | present                 |
+| Probe-project lines                     | 0            | present                 |
 
-**One real defect was found inside the inherited diff and fixed.** The criterion-19 leg created a temporary project, switched to it, and then deleted its row in a `finally` block *while the application was still bound to it*. `NavigateAsync` (`MainWindow.xaml.cpp:3456-3462`) preserves the current draft by calling `storage_->SaveDraft(id, draft)`, which throws `Draft project not found` when `sqlite3_changes != 1`; the navigation is then correctly refused. That refusal is right product behavior, and the ordering was the harness's defect. It was not cosmetic: the first run of the corrected leg reported `0 PASS / 20 NOT_RUN` for a reason unrelated to any criterion, and a second run reported 8 criteria `NOT_RUN` because Phase 9's gamma switch failed for the same cause. The fix returns the application to `alpha` **before** the row is removed, logs whether that succeeded, and appends a specific reason to the criterion if it did not. The `hero3` run above is the verification: Phase 9 reached gamma and criteria 8–15 executed.
+**One real defect was found inside the inherited diff and fixed.** The criterion-19 leg created a temporary project, switched to it, and then deleted its row in a `finally` block _while the application was still bound to it_. `NavigateAsync` (`MainWindow.xaml.cpp:3456-3462`) preserves the current draft by calling `storage_->SaveDraft(id, draft)`, which throws `Draft project not found` when `sqlite3_changes != 1`; the navigation is then correctly refused. That refusal is right product behavior, and the ordering was the harness's defect. It was not cosmetic: the first run of the corrected leg reported `0 PASS / 20 NOT_RUN` for a reason unrelated to any criterion, and a second run reported 8 criteria `NOT_RUN` because Phase 9's gamma switch failed for the same cause. The fix returns the application to `alpha` **before** the row is removed, logs whether that succeeded, and appends a specific reason to the criterion if it did not. The `hero3` run above is the verification: Phase 9 reached gamma and criteria 8–15 executed.
 
 ### 24.3 Criterion 19: the hero orientation is not readable by any UIA client
 
@@ -2652,22 +2681,22 @@ The prior leg manufactured an empty conversation by deleting another project's m
 
 Measured, in both candidate states:
 
-| State | Raw-view elements | Hero nodes found | Non-empty `ItemStatus` |
-| --- | --- | --- | --- |
-| Welcome | 41 | `WelcomeHeroStage` only; no descendants | 0 |
-| Empty conversation | 57 | none; `EmptyChatHeading` and `EmptyChatHint` present | 0 |
+| State              | Raw-view elements | Hero nodes found                                     | Non-empty `ItemStatus` |
+| ------------------ | ----------------- | ---------------------------------------------------- | ---------------------- |
+| Welcome            | 41                | `WelcomeHeroStage` only; no descendants              | 0                      |
+| Empty conversation | 57                | none; `EmptyChatHeading` and `EmptyChatHint` present | 0                      |
 
-`WelcomeHeroStage` appears because it is a `<Grid>` carrying `AutomationProperties.Name="Mayasaba mark"` (`MainWindow.xaml:92-95`) — but the mark with the transform is its *child*, and that child has no peer. The declared resting rotation the hero should publish is `15, -22, -9` (`WelcomeHeroTilt` / `EmptyHeroTilt`); it is never observed, because nothing publishes it to a reader.
+`WelcomeHeroStage` appears because it is a `<Grid>` carrying `AutomationProperties.Name="Mayasaba mark"` (`MainWindow.xaml:92-95`) — but the mark with the transform is its _child_, and that child has no peer. The declared resting rotation the hero should publish is `15, -22, -9` (`WelcomeHeroTilt` / `EmptyHeroTilt`); it is never observed, because nothing publishes it to a reader.
 
 **Verdict: INCONCLUSIVE**, with the measured reachability limit as its stated reason. This is not a product defect and no application source was changed for it. It is a statement that the harness cannot observe the property the criterion names, and the honest response is to say so rather than to pass a criterion on an unread value.
 
-> **Superseded on its disposition by §25.5 (2026-10-22).** The measurements in this subsection stand unchanged and are cited there: the marks have no peer, and `ItemStatus` set on one is unreadable in both views. What was wrong was the conclusion drawn from them. The limit was in the application's *choice of carrier*, not in UIA, and the correction is small: a `<Grid>` or `<StackPanel>` gains a peer when it declares `AutomationProperties.Name`, so publishing the status on a named container makes the same observation readable. Criterion 19 is now **PASS** on a later artifact (§25.5, §25.7). This subsection is left as written rather than rewritten, because the reasoning that produced the wrong disposition is the part worth keeping.
+> **Superseded on its disposition by §25.5 (2026-10-22).** The measurements in this subsection stand unchanged and are cited there: the marks have no peer, and `ItemStatus` set on one is unreadable in both views. What was wrong was the conclusion drawn from them. The limit was in the application's _choice of carrier_, not in UIA, and the correction is small: a `<Grid>` or `<StackPanel>` gains a peer when it declares `AutomationProperties.Name`, so publishing the status on a named container makes the same observation readable. Criterion 19 is now **PASS** on a later artifact (§25.5, §25.7). This subsection is left as written rather than rewritten, because the reasoning that produced the wrong disposition is the part worth keeping.
 
 ### 24.4 Criteria 11 and 12: a permanent, evidenced environment limit
 
 §23 established that four different drag strategies, one of which pressed no button at all, produced `QueryContinueDrag calls: 0` against both Mayasaba **and** a plain text editor, and that `SetForegroundWindow` is silently refused in every child process the harness spawns. A zero count against a known-good control target is a statement about the stimulus, not about the application.
 
-That is the oracle the assignment asked for, and it settles the question: a *correct* helper cannot drag into a plain text editor in this session either. **Criteria 11 and 12 are recorded here as a permanent, evidenced environment limit and are not to be re-litigated.** Their verdict stays INCONCLUSIVE. The `AllowDrop="True" Drop="OnComposerDrop"` declaration in `MainWindow.xaml` remains an unverified declaration — neither confirmed nor refuted — and no further milestone time is to be spent on it. If a future session runs under a launcher that already owns the foreground, the probe becomes meaningful again; until then, a re-run tells us nothing new.
+That is the oracle the assignment asked for, and it settles the question: a _correct_ helper cannot drag into a plain text editor in this session either. **Criteria 11 and 12 are recorded here as a permanent, evidenced environment limit and are not to be re-litigated.** Their verdict stays INCONCLUSIVE. The `AllowDrop="True" Drop="OnComposerDrop"` declaration in `MainWindow.xaml` remains an unverified declaration — neither confirmed nor refuted — and no further milestone time is to be spent on it. If a future session runs under a launcher that already owns the foreground, the probe becomes meaningful again; until then, a re-run tells us nothing new.
 
 ### 24.5 Harness hygiene and oracle extension
 
@@ -2678,33 +2707,33 @@ That is the oracle the assignment asked for, and it settles the question: a *cor
 **Oracle extension for the pump probe.** §22.2 refuted the UI-thread-stall hypothesis by measuring the pump directly rather than reading a UIA walk duration. That distinction now has an oracle in `native/tests/test_harness_oracles.py`:
 
 - `test_ui_thread_latency_measures_the_pump_and_not_the_tree_size()` — runs the probe against a fake window tree whose `descendants()` sleeps, at walk costs of 0.0 s and 0.25 s. It asserts the walk time tracks the cost (`walk_seconds >= walk_cost`) while the pump reading stays under 50 ms in both cases. A probe that conflated the two would fail this.
-- `test_mutation_reading_a_walk_as_the_pump_would_call_a_stall()` — the controlling mutation. It reads the enumeration cost *as* the latency, by construction, and shows the mutated reading exceeds 200 ms while the correct probe reports under 50 ms. This proves the assertion discriminates a walk-vs-pump conflation rather than merely passing.
+- `test_mutation_reading_a_walk_as_the_pump_would_call_a_stall()` — the controlling mutation. It reads the enumeration cost _as_ the latency, by construction, and shows the mutated reading exceeds 200 ms while the correct probe reports under 50 ms. This proves the assertion discriminates a walk-vs-pump conflation rather than merely passing.
 
 Suite result after the addition: **30 tests, 0 failures** (`PASS: 0 failure(s)`), of which the two above are new.
 
 ### 24.6 Criteria for this assignment
 
-| ID | Criterion | Evidence type | Observation | Verdict |
-| --- | --- | --- | --- | --- |
-| Y-01 | The inherited diff is reviewed, exercised and committed with truthful provenance. | Source review + full run | Read in full; run `hero3` executed against it; committed stating it was unattributed on arrival. | **PASS** |
-| Y-02 | The harness change alters no criterion's verdict. | Native run, two artifacts compared | Same executable and XBF; 20-row verdict table byte-identical; instrumentation demonstrably active. | **PASS** |
-| Y-03 | Criterion 19 reaches a genuinely empty conversation without deleting another project's rows. | Native run | Own folder + own seeded row; `empty conversation realized: 'What would you like to work on?'`; row and folder removed afterwards. | **PASS** |
-| Y-04 | The hero's resting orientation is observed and its verdict recorded as measured. | Native run, both UIA views | No hero node in either view in either state; zero non-empty `ItemStatus`; declared values 15 / -22 / -9 never published to a reader. | **INCONCLUSIVE** (measured reachability limit — **superseded by Z-06/Z-07 in §25.6**, which make it observable and record PASS) |
-| Y-05 | Criteria 11 and 12 are recorded as a permanent evidenced limit. | §23 evidence | Zero `QueryContinueDrag` calls against a known-good text editor too; `SetForegroundWindow` refused in every child. | **PASS** (as a limit record) |
-| Y-06 | Stale legacy test binary removed; ignore rules added; evidence-commit decision recorded. | Source inspection | `storage_tests.exe` gone; `/native/tests/__pycache__/` and `/native/tests/evidence/` ignored with the reason stated in `.gitignore`. | **PASS** |
-| Y-07 | The pump probe and the walk-vs-pump distinction have oracles with controlling mutations. | Unit test | 30 tests, 0 failures; mutation makes the reading exceed 200 ms while the correct probe stays under 50 ms. | **PASS** |
-| Y-08 | The record states where the product actually is. | Documentation | "What is built and what is not" section at the head of this file, derived from a source survey of `native/Mayasaba/`. | **PASS** |
-| Y-09 | The application source is unchanged. | Artifact identity | Executable and XBF byte-identical to §21/§22/§23. | **PASS** |
+| ID   | Criterion                                                                                    | Evidence type                      | Observation                                                                                                                          | Verdict                                                                                                                         |
+| ---- | -------------------------------------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| Y-01 | The inherited diff is reviewed, exercised and committed with truthful provenance.            | Source review + full run           | Read in full; run `hero3` executed against it; committed stating it was unattributed on arrival.                                     | **PASS**                                                                                                                        |
+| Y-02 | The harness change alters no criterion's verdict.                                            | Native run, two artifacts compared | Same executable and XBF; 20-row verdict table byte-identical; instrumentation demonstrably active.                                   | **PASS**                                                                                                                        |
+| Y-03 | Criterion 19 reaches a genuinely empty conversation without deleting another project's rows. | Native run                         | Own folder + own seeded row; `empty conversation realized: 'What would you like to work on?'`; row and folder removed afterwards.    | **PASS**                                                                                                                        |
+| Y-04 | The hero's resting orientation is observed and its verdict recorded as measured.             | Native run, both UIA views         | No hero node in either view in either state; zero non-empty `ItemStatus`; declared values 15 / -22 / -9 never published to a reader. | **INCONCLUSIVE** (measured reachability limit — **superseded by Z-06/Z-07 in §25.6**, which make it observable and record PASS) |
+| Y-05 | Criteria 11 and 12 are recorded as a permanent evidenced limit.                              | §23 evidence                       | Zero `QueryContinueDrag` calls against a known-good text editor too; `SetForegroundWindow` refused in every child.                   | **PASS** (as a limit record)                                                                                                    |
+| Y-06 | Stale legacy test binary removed; ignore rules added; evidence-commit decision recorded.     | Source inspection                  | `storage_tests.exe` gone; `/native/tests/__pycache__/` and `/native/tests/evidence/` ignored with the reason stated in `.gitignore`. | **PASS**                                                                                                                        |
+| Y-07 | The pump probe and the walk-vs-pump distinction have oracles with controlling mutations.     | Unit test                          | 30 tests, 0 failures; mutation makes the reading exceed 200 ms while the correct probe stays under 50 ms.                            | **PASS**                                                                                                                        |
+| Y-08 | The record states where the product actually is.                                             | Documentation                      | "What is built and what is not" section at the head of this file, derived from a source survey of `native/Mayasaba/`.                | **PASS**                                                                                                                        |
+| Y-09 | The application source is unchanged.                                                         | Artifact identity                  | Executable and XBF byte-identical to §21/§22/§23.                                                                                    | **PASS**                                                                                                                        |
 
 Y-04 is the one criterion that is not PASS, and it is not a failure of the harness's work: the harness did everything it could reach. It is a limit on what a UIA client can observe, recorded rather than papered over.
 
 ### 24.7 What this record does not claim
 
 1. **It does not claim the inherited diff was authored by the agent that committed it.** Its authorship is unknown. It was reviewed, exercised and committed, which is what `AGENTS.md` §12 asks for; it was not written here.
-2. **It does not claim criterion 19 passes.** The hero's orientation is unreadable, not flat and not correct. *(Superseded by §25.5: on a later artifact it is readable and criterion 19 is PASS.)*
+2. **It does not claim criterion 19 passes.** The hero's orientation is unreadable, not flat and not correct. _(Superseded by §25.5: on a later artifact it is readable and criterion 19 is PASS.)_
 3. **It does not claim the application's drop target works or is broken.** No drag reached it, and no drag reaches a plain text editor either.
 4. **It does not claim the harness is finished.** It claims the harness is no longer the milestone's subject.
-5. **It does not claim the product advanced.** The binary is unchanged for the fourth consecutive record. The product work that this record unblocks is the subject of a separate decision, not of this commit. *(The product did advance in §25: the navigation wedge was fixed and the hero orientation made observable.)*
+5. **It does not claim the product advanced.** The binary is unchanged for the fourth consecutive record. The product work that this record unblocks is the subject of a separate decision, not of this commit. _(The product did advance in §25: the navigation wedge was fixed and the hero orientation made observable.)_
 
 ---
 
@@ -2712,15 +2741,15 @@ Y-04 is the one criterion that is not PASS, and it is not a failure of the harne
 
 ### 25.1 Identity of this record
 
-| Field | Value |
-| --- | --- |
-| Executable SHA-256 | `4bbf7216ed4613afe1b5fdcedf873c05af972278de5e29f7d621c60de7e8c1cf` |
-| `MainWindow.xbf` SHA-256 | `84cd621c1875ca638332a5b05e7421e2be9b311fb4016cc3e2c4b9812da01ba9` |
-| Evidence directory | `native/tests/evidence/ui-acceptance-final2-20261022-0455/` |
+| Field                     | Value                                                                                                                              |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Executable SHA-256        | `4bbf7216ed4613afe1b5fdcedf873c05af972278de5e29f7d621c60de7e8c1cf`                                                                 |
+| `MainWindow.xbf` SHA-256  | `84cd621c1875ca638332a5b05e7421e2be9b311fb4016cc3e2c4b9812da01ba9`                                                                 |
+| Evidence directory        | `native/tests/evidence/ui-acceptance-final2-20261022-0455/`                                                                        |
 | Source commit at run time | `1cb2593cd41c3674c3afcb8acaccaac8e5325449` (the run drove a working-tree build; this record's own commit is the one that lands it) |
-| Toolchain | MSBuild from Visual Studio 18 Enterprise, toolset `v145` (MSVC 14.50.35717), Windows SDK 10.0.26100.0, Windows App SDK 2.5.1 |
-| Machine | Windows 11 Pro build 26200.9457, x64, one display |
-| Interpreter | `C:\Python314\python.exe` (`pywinauto` is installed for the base interpreter, not the managed venv) |
+| Toolchain                 | MSBuild from Visual Studio 18 Enterprise, toolset `v145` (MSVC 14.50.35717), Windows SDK 10.0.26100.0, Windows App SDK 2.5.1       |
+| Machine                   | Windows 11 Pro build 26200.9457, x64, one display                                                                                  |
+| Interpreter               | `C:\Python314\python.exe` (`pywinauto` is installed for the base interpreter, not the managed venv)                                |
 
 The executable and XBF hashes above are the pair recorded in that run's own `artifact-identity.json`. **They are not comparable to §21–§24**, whose binary differed; this record starts a new artifact lineage and no observation from the earlier records is carried forward onto it.
 
@@ -2751,12 +2780,12 @@ Failing closed is required and was kept: an unsaved draft is never reported as s
 
 The classification is extracted into `native/Mayasaba/NavigationRecovery.h`, a pure function over a value with no IO, no lock and no window state, so it is natively testable without creating a window (`AGENTS.md` §3). It adds no service owner, record or state machine.
 
-| Failure | Disposition | Why |
-| --- | --- | --- |
-| `None` | `Proceed` | Nothing to preserve |
-| `ProjectRecordMissing` | `UnbindAndProceed` | Retrying the same write cannot succeed, so the *binding* is invalid, not the attempt. Clear `activeProject_`, treat the project as unbound, and continue to the selector (or to exit) |
-| `StoreRefused` | `StopAndNotify` | May not recur. Keep the binding and the text; refuse only this attempt |
-| `Other` | `StopAndNotify` | The binding is not proven invalid, so it is not silently discarded |
+| Failure                | Disposition        | Why                                                                                                                                                                                   |
+| ---------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `None`                 | `Proceed`          | Nothing to preserve                                                                                                                                                                   |
+| `ProjectRecordMissing` | `UnbindAndProceed` | Retrying the same write cannot succeed, so the _binding_ is invalid, not the attempt. Clear `activeProject_`, treat the project as unbound, and continue to the selector (or to exit) |
+| `StoreRefused`         | `StopAndNotify`    | May not recur. Keep the binding and the text; refuse only this attempt                                                                                                                |
+| `Other`                | `StopAndNotify`    | The binding is not proven invalid, so it is not silently discarded                                                                                                                    |
 
 `Storage` gained `bool TrySaveDraft(...)`, which reports the missing-record case instead of throwing for it. `SaveDraft` now delegates to it and still throws `"Draft project not found"`, so **every direct caller's contract is unchanged** and a refusal can never look like a save. `AdmitWrite_locked` still runs first, so admission covers both the quarantine check and the free-space reserve on this path too.
 
@@ -2764,12 +2793,12 @@ In the `UnbindAndProceed` branch the notice states exactly what failed and that 
 
 ### 25.4 The regression test, and its controlling mutations
 
-`native/tests/verify_ac_ai.cpp` Test 15, *"A missing project record unbinds and continues navigation"*. It calls the same `DecideNavigationAfterDraftFailure` the coroutine calls rather than duplicating the decision, reproduces the precondition by deleting the row from outside the store, and asserts that navigation is not refused afterwards.
+`native/tests/verify_ac_ai.cpp` Test 15, _"A missing project record unbinds and continues navigation"_. It calls the same `DecideNavigationAfterDraftFailure` the coroutine calls rather than duplicating the decision, reproduces the precondition by deleting the row from outside the store, and asserts that navigation is not refused afterwards.
 
-| Mutation | Restored? | Result |
-| --- | --- | --- |
+| Mutation                                                                  | Restored?          | Result                                                                 |
+| ------------------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------- |
 | `ProjectRecordMissing` → `StopAndNotify` (the original wedging behaviour) | Yes, hash-verified | **FAIL** at `verify_ac_ai.cpp:2313`, the assertion encoding the defect |
-| `TrySaveDraft` returns `true` for a missing record | Yes, hash-verified | **FAIL** at `verify_ac_ai.cpp:2339` (`!nav.TrySaveDraft(...)`) |
+| `TrySaveDraft` returns `true` for a missing record                        | Yes, hash-verified | **FAIL** at `verify_ac_ai.cpp:2339` (`!nav.TrySaveDraft(...)`)         |
 
 Both files were restored byte-identically and verified by SHA-256 (`NavigationRecovery.h` `79b6947…1c33e`, `Storage.cpp` `adad8e2…64be`). **The mutation proves the assertions discriminate these failures. It does not reproduce the original race** — the defect was deterministic here (the row was genuinely gone), so there was no race to reproduce.
 
@@ -2779,7 +2808,7 @@ Suite result: **15 of 15 cases pass**, up from 14.
 
 §24.3 recorded the hero's resting orientation as unreadable by any UIA client and left criterion 19 INCONCLUSIVE. **That finding was correct as a measurement and wrong as a disposition.** The limit was not in UIA; it was in the application's choice of carrier.
 
-The mechanism, measured rather than assumed: a XAML `<Grid>` or `<StackPanel>` creates **no** `AutomationPeer` *unless* it declares `AutomationProperties.Name`, and then it appears with control type `50026` (Pane). `WelcomeHeroStage` was already reachable for exactly that reason; `WelcomeHeroMark`, `EmptyHeroMark` and `EmptyHeroArt` were not.
+The mechanism, measured rather than assumed: a XAML `<Grid>` or `<StackPanel>` creates **no** `AutomationPeer` _unless_ it declares `AutomationProperties.Name`, and then it appears with control type `50026` (Pane). `WelcomeHeroStage` was already reachable for exactly that reason; `WelcomeHeroMark`, `EmptyHeroMark` and `EmptyHeroArt` were not.
 
 `PublishHeroOrientation` now takes `(source, target, label)`: it reads the orientation from the mark — the element that actually carries the `CompositeTransform3D`, so the status reports what the hero really has — and publishes it onto a named container that has a peer. `EmptyChatHero` gained `AutomationProperties.Name="Mayasaba hero"` for this purpose.
 
@@ -2797,22 +2826,22 @@ PASS: The empty-chat hero keeps its declared 15/-22/-9 resting perspective.
 
 **Controlling mutation for this oracle.** Publishing the status back onto the peerless mark (`EmptyHeroMark`) and rebuilding produced `elements publishing a non-empty ItemStatus: 0` and criterion 19 **INCONCLUSIVE** — the same harness, same machine. That is the evidence that the leg discriminates an unreadable carrier from a readable one, and that its PASS is earned rather than defaulted. The mutation was reverted and the source restored byte-identically (hash-verified); the binary was rebuilt and the **final** run in §25.1 was taken against that restored build.
 
-**One thing this record corrects in itself, twice.** Restoring the mutation byte-identically and rebuilding produced a *different* executable hash (`fe43f1bd…`) than the pre-mutation build (`8f73b204…`) although the source was byte-identical, with the XBF unchanged (`84cd621c…`) because only the `.cpp` changed. A further source edit — removing a stray trailing space from the unbind notice, where `error` is empty because the missing record is reported rather than thrown — produced a third hash (`4bbf7216…`). Each rebuild therefore invalidated the evidence taken against the build before it, and §25.1's directory is the run against the binary that actually exists now. This is the artifact-identity rule in `AGENTS.md` §13 applied to a rebuild rather than to a concurrent edit; the three hashes are recorded here rather than quietly replaced, because the succession is the evidence that the rule was applied.
+**One thing this record corrects in itself, twice.** Restoring the mutation byte-identically and rebuilding produced a _different_ executable hash (`fe43f1bd…`) than the pre-mutation build (`8f73b204…`) although the source was byte-identical, with the XBF unchanged (`84cd621c…`) because only the `.cpp` changed. A further source edit — removing a stray trailing space from the unbind notice, where `error` is empty because the missing record is reported rather than thrown — produced a third hash (`4bbf7216…`). Each rebuild therefore invalidated the evidence taken against the build before it, and §25.1's directory is the run against the binary that actually exists now. This is the artifact-identity rule in `AGENTS.md` §13 applied to a rebuild rather than to a concurrent edit; the three hashes are recorded here rather than quietly replaced, because the succession is the evidence that the rule was applied.
 
 ### 25.6 Criteria for this assignment
 
-| ID | Criterion | Evidence type | Observation | Verdict |
-| --- | --- | --- | --- | --- |
-| Z-01 | The navigation wedge is recorded as an open product finding with its code reference, consequence, discovery route and the fact that the harness now avoids it. | Documentation | §25.2 | **PASS** |
-| Z-02 | A missing project record unbinds and continues instead of wedging navigation, and the failure is still surfaced truthfully. | Native test + source review | `NavigationRecovery.h`; `TrySaveDraft`; `UnbindAndProceed` branch keeps the notice and clears the binding | **PASS** |
-| Z-03 | A store refusal still keeps the binding and refuses only the attempt. | Native test | Test 15.2: `StoreRefused` and `Other` → `StopAndNotify` | **PASS** |
-| Z-04 | `SaveDraft`'s contract for every direct caller is unchanged. | Native test | Test 15.4: `SaveDraft` on a missing record still throws | **PASS** |
-| Z-05 | The regression test fails at the assertion encoding the defect when the fix is reverted. | Controlling mutation ×2 | FAIL at `:2313` and `:2339`; both restored hash-verified | **PASS** |
-| Z-06 | The published hero orientation is readable by a UIA client in both views. | Native run | Control view and Raw view both expose `EmptyChatHero` carrying the status | **PASS** |
-| Z-07 | Criterion 19 reaches a real verdict on the rebuilt artifact. | Native run | `19. Empty-Chat Hero Perspective Preserved [PASS]` | **PASS** |
-| Z-08 | The criterion-19 leg discriminates an unreadable carrier. | Controlling mutation | Publishing on the peerless mark → `ItemStatus: 0` → INCONCLUSIVE | **PASS** |
-| Z-09 | The harness change is retained but is not the only defence. | Source review | Harness ordering fix kept (§24.3); application fix and test added independently | **PASS** |
-| Z-10 | Every new observation is tied to the artifact that produced it, in a fresh evidence directory. | Artifact identity | `artifact-identity.json` in the run directory; hashes in §25.1; no earlier observation reused | **PASS** |
+| ID   | Criterion                                                                                                                                                      | Evidence type               | Observation                                                                                               | Verdict  |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------- | -------- |
+| Z-01 | The navigation wedge is recorded as an open product finding with its code reference, consequence, discovery route and the fact that the harness now avoids it. | Documentation               | §25.2                                                                                                     | **PASS** |
+| Z-02 | A missing project record unbinds and continues instead of wedging navigation, and the failure is still surfaced truthfully.                                    | Native test + source review | `NavigationRecovery.h`; `TrySaveDraft`; `UnbindAndProceed` branch keeps the notice and clears the binding | **PASS** |
+| Z-03 | A store refusal still keeps the binding and refuses only the attempt.                                                                                          | Native test                 | Test 15.2: `StoreRefused` and `Other` → `StopAndNotify`                                                   | **PASS** |
+| Z-04 | `SaveDraft`'s contract for every direct caller is unchanged.                                                                                                   | Native test                 | Test 15.4: `SaveDraft` on a missing record still throws                                                   | **PASS** |
+| Z-05 | The regression test fails at the assertion encoding the defect when the fix is reverted.                                                                       | Controlling mutation ×2     | FAIL at `:2313` and `:2339`; both restored hash-verified                                                  | **PASS** |
+| Z-06 | The published hero orientation is readable by a UIA client in both views.                                                                                      | Native run                  | Control view and Raw view both expose `EmptyChatHero` carrying the status                                 | **PASS** |
+| Z-07 | Criterion 19 reaches a real verdict on the rebuilt artifact.                                                                                                   | Native run                  | `19. Empty-Chat Hero Perspective Preserved [PASS]`                                                        | **PASS** |
+| Z-08 | The criterion-19 leg discriminates an unreadable carrier.                                                                                                      | Controlling mutation        | Publishing on the peerless mark → `ItemStatus: 0` → INCONCLUSIVE                                          | **PASS** |
+| Z-09 | The harness change is retained but is not the only defence.                                                                                                    | Source review               | Harness ordering fix kept (§24.3); application fix and test added independently                           | **PASS** |
+| Z-10 | Every new observation is tied to the artifact that produced it, in a fresh evidence directory.                                                                 | Artifact identity           | `artifact-identity.json` in the run directory; hashes in §25.1; no earlier observation reused             | **PASS** |
 
 ### 25.7 Full run on the new artifact
 
@@ -2825,7 +2854,7 @@ PASS: The empty-chat hero keeps its declared 15/-22/-9 resting perspective.
 3. **It does not claim criterion 19 tests the whole hero.** It reads the declared resting orientation published on a container. A hero that were flattened would read `0,0,0` and FAIL; the leg does not verify the rendered pixels.
 4. **It does not claim any Tier-2 layer exists.** No layer was started. The thirteen-layer table in "What is built and what is not" is unchanged except as noted in §25.9.
 5. **It does not claim containment, a passing I3, or a deployable architecture.** No process is launched by this build.
-6. **It does not re-open** the layout cycle, the scroll oracle, the criterion-15 correction, the probe reclassification, the storage counter, or the UI-thread-stall hypothesis. §24.3's reachability *finding* is superseded by §25.5 on the user's explicit instruction; its measurements stand and are cited above unchanged.
+6. **It does not re-open** the layout cycle, the scroll oracle, the criterion-15 correction, the probe reclassification, the storage counter, or the UI-thread-stall hypothesis. §24.3's reachability _finding_ is superseded by §25.5 on the user's explicit instruction; its measurements stand and are cited above unchanged.
 
 ### 25.9 What "what is built" now says differently
 
@@ -2839,12 +2868,12 @@ Two rows of the survey at the head of this file are affected and are corrected t
 
 ### 26.1 Identity of this record
 
-| Artifact | Value |
-|---|---|
-| Executable | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `3651c4fe4f7cfb7db365ccac71be2b28a8bf02ffc56019697032924fff8361f5` |
-| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `84cd621c1875ca638332a5b05e7421e2be9b311fb4016cc3e2c4b9812da01ba9` |
-| Source base | `445978b93c1efa5f72ea5d0b8ac1e353fd24c6bf` plus the uncommitted I1 changes this section describes |
-| Acceptance evidence | `native/tests/evidence/ui-acceptance-i1-release-20261022/` |
+| Artifact            | Value                                                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Executable          | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `3651c4fe4f7cfb7db365ccac71be2b28a8bf02ffc56019697032924fff8361f5`   |
+| Compiled XAML       | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `84cd621c1875ca638332a5b05e7421e2be9b311fb4016cc3e2c4b9812da01ba9` |
+| Source base         | `445978b93c1efa5f72ea5d0b8ac1e353fd24c6bf` plus the uncommitted I1 changes this section describes                            |
+| Acceptance evidence | `native/tests/evidence/ui-acceptance-i1-release-20261022/`                                                                   |
 
 The XBF hash is **identical** to section 25's (`84cd621c...`), which is the check that the I1 work touched no XAML. The executable hash differs from section 25's because the storage layer was relinked, so section 25's criteria table is not carried forward here; the table below is a new run against the artifact above.
 
@@ -2872,14 +2901,14 @@ A third, smaller correction: `ReceiptForOperation` assigned `retryKind = Never` 
 
 ### 26.4 Checks actually executed
 
-| Check | Command | Result |
-|---|---|---|
-| Canonical vectors | `native/tests/bin/canonical_vectors.exe` | **PASS**: 10 accepted and 11 rejected registered vectors, plus bounds and ordering properties |
-| Storage regression | `native/tests/bin/storage_tests.exe` | **PASS**: 45 of 45 executed groups (group 45 is new) |
-| Action Center / navigation | `native/tests/bin/verify_ac_ai.exe` | **PASS**: 15 of 15 cases |
-| Contract registry | `validate_contract_registry.py` (managed venv) | **PASS**: 124 checks |
-| Native UI acceptance | `test_full_ui_acceptance.py` against the Release artifact | **18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN** |
-| Application build | MSBuild `Release|x64`, `v145` | Clean |
+| Check                      | Command                                                   | Result                                                                                        |
+| -------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ----- |
+| Canonical vectors          | `native/tests/bin/canonical_vectors.exe`                  | **PASS**: 10 accepted and 11 rejected registered vectors, plus bounds and ordering properties |
+| Storage regression         | `native/tests/bin/storage_tests.exe`                      | **PASS**: 45 of 45 executed groups (group 45 is new)                                          |
+| Action Center / navigation | `native/tests/bin/verify_ac_ai.exe`                       | **PASS**: 15 of 15 cases                                                                      |
+| Contract registry          | `validate_contract_registry.py` (managed venv)            | **PASS**: 124 checks                                                                          |
+| Native UI acceptance       | `test_full_ui_acceptance.py` against the Release artifact | **18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN**                                 |
+| Application build          | MSBuild `Release                                          | x64`, `v145`                                                                                  | Clean |
 
 ### 26.5 Group 45 and its controlling mutations
 
@@ -2887,11 +2916,11 @@ Group 45 exercises the failures the ordering exists to survive: a committed comm
 
 Each mutation was applied, built and run, then restored and verified by hash:
 
-| Mutation | Observed result |
-|---|---|
-| Trust the supplied payload digest instead of recomputing it | Initially **PASSED**, which proved the assertion did not discriminate: the tampered commit was being refused by the receipt validator because it had no record identity. The test was tightened to supply a valid record identity so the envelope is the only possible cause; the mutation then failed at `refusedBadEnvelope`. |
-| Take the latest attempt rather than the earliest (`ORDER BY rowid DESC`) | **FAILED** at `reread->receiptId == originalReceiptId` — the assertion that encodes "the original is not rewritten". |
-| Do not persist the envelope | **FAILED** at `queued.size() == 1`. |
+| Mutation                                                                 | Observed result                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Trust the supplied payload digest instead of recomputing it              | Initially **PASSED**, which proved the assertion did not discriminate: the tampered commit was being refused by the receipt validator because it had no record identity. The test was tightened to supply a valid record identity so the envelope is the only possible cause; the mutation then failed at `refusedBadEnvelope`. |
+| Take the latest attempt rather than the earliest (`ORDER BY rowid DESC`) | **FAILED** at `reread->receiptId == originalReceiptId` — the assertion that encodes "the original is not rewritten".                                                                                                                                                                                                            |
+| Do not persist the envelope                                              | **FAILED** at `queued.size() == 1`.                                                                                                                                                                                                                                                                                             |
 
 Restored hashes: `DeliveryContract.cpp` `b41b943c3edc2efc72977fb66195b7ce921dd7c60492236a38393af6ed4cd133`, `Storage.cpp` `9b5f501d914ade7cadb2c058ff6f103d5b86b611f69974d23b7ca45ff1fce4bb`. The unordered-read mutation is also recorded as **not discriminating** on its own: SQLite returned rowid order for that scan, so removing the `ORDER BY` alone changed nothing observable. That is a fact about the engine's current plan, not a guarantee, and the ordering is kept.
 
@@ -2899,30 +2928,30 @@ A migration case reconstructs a `user_version` 3 store by dropping exactly the t
 
 ### 26.6 Criteria for this assignment
 
-| ID | Criterion | Evidence | Verdict |
-|---|---|---|---|
-| I1-01 | Canonical bytes match every registered accepted vector, including its SHA-256 | `canonical_vectors.exe` | **PASS** |
-| I1-02 | Every registered rejected vector is refused with its registered error code | `canonical_vectors.exe` | **PASS** |
-| I1-03 | Each C09 parser bound accepts N and refuses N+1 | `canonical_vectors.exe` bounds properties | **PASS** |
-| I1-04 | Canonicalization is idempotent and key order is UTF-16 code-unit order | `canonical_vectors.exe` properties | **PASS** |
-| I1-05 | State change, causal envelopes and receipt commit in one transaction | Group 45; mutation "do not persist the envelope" | **PASS** |
-| I1-06 | A duplicate identity returns a linkage receipt and rewrites nothing | Group 45; mutation "latest attempt" | **PASS** |
-| I1-07 | A changed request under one identity is `IDEMPOTENCY_CONFLICT` | Group 45 | **PASS** |
-| I1-08 | A throwing mutation rolls back state, envelope and receipt | Group 45 | **PASS** |
-| I1-09 | A malformed envelope is refused and nothing is recorded | Group 45; mutation "trust the digest" | **PASS** |
-| I1-10 | Only an acknowledgement leaves an envelope queued; ACK means receipt, not execution | Group 45 | **PASS** |
-| I1-11 | Inbox admission is durable and a repeated envelope id is a no-op | Group 45, before and after restart | **PASS** |
-| I1-12 | Receipts, outbox and inbox survive restart; replay after restart is still a duplicate | Group 45 restart block | **PASS** |
-| I1-13 | An unreadable stored result kind or retry policy is reported, not defaulted | Group 45 newer-build block | **PASS** |
-| I1-14 | A v3 store migrates to v4 preserving existing records | Group 45 migration block | **PASS** |
-| I1-15 | A store from a newer schema is refused | Group 45 | **PASS** |
-| I1-16 | Every storage mutation is admitted before touching SQLite | Group 44 (existing) | **PASS** |
-| I1-17 | No UI, no XAML and no new owner or state machine was introduced | XBF hash unchanged; no `.xaml` in the diff; `DeliveryContract` is a value module | **PASS** |
-| I1-18 | The native UI acceptance criteria are unchanged by this work | Fresh run: 18 PASS / 2 INCONCLUSIVE / 0 FAIL, matching section 25.7's table | **PASS** |
+| ID    | Criterion                                                                             | Evidence                                                                         | Verdict  |
+| ----- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | -------- |
+| I1-01 | Canonical bytes match every registered accepted vector, including its SHA-256         | `canonical_vectors.exe`                                                          | **PASS** |
+| I1-02 | Every registered rejected vector is refused with its registered error code            | `canonical_vectors.exe`                                                          | **PASS** |
+| I1-03 | Each C09 parser bound accepts N and refuses N+1                                       | `canonical_vectors.exe` bounds properties                                        | **PASS** |
+| I1-04 | Canonicalization is idempotent and key order is UTF-16 code-unit order                | `canonical_vectors.exe` properties                                               | **PASS** |
+| I1-05 | State change, causal envelopes and receipt commit in one transaction                  | Group 45; mutation "do not persist the envelope"                                 | **PASS** |
+| I1-06 | A duplicate identity returns a linkage receipt and rewrites nothing                   | Group 45; mutation "latest attempt"                                              | **PASS** |
+| I1-07 | A changed request under one identity is `IDEMPOTENCY_CONFLICT`                        | Group 45                                                                         | **PASS** |
+| I1-08 | A throwing mutation rolls back state, envelope and receipt                            | Group 45                                                                         | **PASS** |
+| I1-09 | A malformed envelope is refused and nothing is recorded                               | Group 45; mutation "trust the digest"                                            | **PASS** |
+| I1-10 | Only an acknowledgement leaves an envelope queued; ACK means receipt, not execution   | Group 45                                                                         | **PASS** |
+| I1-11 | Inbox admission is durable and a repeated envelope id is a no-op                      | Group 45, before and after restart                                               | **PASS** |
+| I1-12 | Receipts, outbox and inbox survive restart; replay after restart is still a duplicate | Group 45 restart block                                                           | **PASS** |
+| I1-13 | An unreadable stored result kind or retry policy is reported, not defaulted           | Group 45 newer-build block                                                       | **PASS** |
+| I1-14 | A v3 store migrates to v4 preserving existing records                                 | Group 45 migration block                                                         | **PASS** |
+| I1-15 | A store from a newer schema is refused                                                | Group 45                                                                         | **PASS** |
+| I1-16 | Every storage mutation is admitted before touching SQLite                             | Group 44 (existing)                                                              | **PASS** |
+| I1-17 | No UI, no XAML and no new owner or state machine was introduced                       | XBF hash unchanged; no `.xaml` in the diff; `DeliveryContract` is a value module | **PASS** |
+| I1-18 | The native UI acceptance criteria are unchanged by this work                          | Fresh run: 18 PASS / 2 INCONCLUSIVE / 0 FAIL, matching section 25.7's table      | **PASS** |
 
 ### 26.7 What this record does not claim
 
-1. **It does not claim I1 is complete as a gate.** It claims the canonical-bytes, outbox/inbox and receipt slice is implemented and proven. Schema *loading and validation* of every registered contract document, and full deterministic replay of an agent conversation, are not part of this slice and are not claimed.
+1. **It does not claim I1 is complete as a gate.** It claims the canonical-bytes, outbox/inbox and receipt slice is implemented and proven. Schema _loading and validation_ of every registered contract document, and full deterministic replay of an agent conversation, are not part of this slice and are not claimed.
 2. **It does not claim any message is delivered.** There is no dispatcher and no MCF-v2 transport. `QueuedOutbox` returns rows; nothing sends them. A queued envelope is a durable intent, not a delivery.
 3. **It does not claim a passing launch, a containment property, a passing I3, or a deployable architecture.** No process is launched by this build. Nothing here bounds a CLI's file or network effects.
 4. **It does not claim the receipt path is exercised by any user-facing flow.** No UI path calls `CommitCommand` yet; the coverage is native unit-level plus the unchanged acceptance suite.
@@ -2938,13 +2967,13 @@ A migration case reconstructs a `user_version` 3 store by dropping exactly the t
 
 ### 27.1 Identity of this record
 
-| Field | Value |
-|---|---|
-| Executable | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `3651c4fe4f7cfb7db365ccac71be2b28a8bf02ffc56019697032924fff8361f5` |
-| Compiled XAML | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `84cd621c1875ca638332a5b05e7421e2be9b311fb4016cc3e2c4b9812da01ba9` |
-| Source base | `fb970c6c90cfc64efcb9efa56792ec027cf9a8f6` |
-| Acceptance evidence | `native/tests/evidence/ui-acceptance-harness-closeout-20261022/` |
-| Harness under test | `native/tests/test_full_ui_acceptance.py` SHA-256 `9cfc586cb954da52d2516cd2ea8e1892fc50be0e92e61c631d6ff1a1ecd4621c`; `native/tests/test_harness_oracles.py` SHA-256 `5994ed579cafa73db8e4c9aa9f04ec45dee08379dae344d42b4cc27247e98a88` |
+| Field               | Value                                                                                                                                                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Executable          | `native/Mayasaba/bin/x64/Release/Mayasaba.exe`, SHA-256 `3651c4fe4f7cfb7db365ccac71be2b28a8bf02ffc56019697032924fff8361f5`                                                                                                              |
+| Compiled XAML       | `native/Mayasaba/bin/x64/Release/MainWindow.xbf`, SHA-256 `84cd621c1875ca638332a5b05e7421e2be9b311fb4016cc3e2c4b9812da01ba9`                                                                                                            |
+| Source base         | `fb970c6c90cfc64efcb9efa56792ec027cf9a8f6`                                                                                                                                                                                              |
+| Acceptance evidence | `native/tests/evidence/ui-acceptance-harness-closeout-20261022/`                                                                                                                                                                        |
+| Harness under test  | `native/tests/test_full_ui_acceptance.py` SHA-256 `9cfc586cb954da52d2516cd2ea8e1892fc50be0e92e61c631d6ff1a1ecd4621c`; `native/tests/test_harness_oracles.py` SHA-256 `5994ed579cafa73db8e4c9aa9f04ec45dee08379dae344d42b4cc27247e98a88` |
 
 This record covers **the harness only**. The application artifact is the one section 26 drove — both hashes are unchanged, no product source was edited by this assignment, and every verdict in the table below is about what the harness measured or about the harness's own instrumentation. It is not a new product acceptance run in the sense of section 25 or 26: it is a re-run of the same 20 criteria against the same binary through a changed harness, which is what makes the changed harness's behaviour measurable.
 
@@ -2952,17 +2981,17 @@ This record covers **the harness only**. The application artifact is the one sec
 
 The working tree carried 431 uncommitted lines across two files. All four pieces below are harness instrumentation; none of them changes an assertion's threshold, an oracle's verdict rule, or anything the application does.
 
-**1. `acquire_store_lock()` — an exclusive sidecar lock, taken before the first write and before the launch.** It opens `<store>.harness.lock` (never the store), writes a single byte if the file is empty, seeks to 0 and takes `msvcrt.locking(..., LK_NBLCK, 1)`. A second run that cannot take the lock logs `ABORTED BEFORE LAUNCH: another acceptance run holds the store lock <path>; two runs must not share one store, because each run's writes invalidate the other's evidence`, emits the criteria table with all 20 `NOT_RUN`, and exits 1. *Rule implemented:* §11's requirement that a harness mutating the store under a live application must not have its measurements contaminated by a concurrent writer, and §13's rule that an unexecuted criterion is `NOT_RUN` and never a pass. Before this, a run that could not get exclusive use had no way to say so: it started, produced numbers, and the numbers described a store another run was mutating.
+**1. `acquire_store_lock()` — an exclusive sidecar lock, taken before the first write and before the launch.** It opens `<store>.harness.lock` (never the store), writes a single byte if the file is empty, seeks to 0 and takes `msvcrt.locking(..., LK_NBLCK, 1)`. A second run that cannot take the lock logs `ABORTED BEFORE LAUNCH: another acceptance run holds the store lock <path>; two runs must not share one store, because each run's writes invalidate the other's evidence`, emits the criteria table with all 20 `NOT_RUN`, and exits 1. _Rule implemented:_ §11's requirement that a harness mutating the store under a live application must not have its measurements contaminated by a concurrent writer, and §13's rule that an unexecuted criterion is `NOT_RUN` and never a pass. Before this, a run that could not get exclusive use had no way to say so: it started, produced numbers, and the numbers described a store another run was mutating.
 
-**2. `read_status_text()` — re-resolve the element on every attempt and poll the postcondition.** The saved-message search panel is destroyed and rebuilt when it is closed and reopened, so a UIA element resolved before the close refers to a node that no longer exists and reads as an empty string against a panel that is working. The helper calls `find_by_aid` inside the loop rather than caching one element, polls `expected in text` until a bound expires, and returns the last text seen so a genuine failure reports what the panel actually said. All eight search-status reads use it. *Rule implemented:* §13's "a UI assertion must poll for its postcondition, never sample it once" and "a focus/identity assertion must re-establish its subject", both of which the harness already applied elsewhere — the search reads were the remaining fixed-sleep-then-read sites.
+**2. `read_status_text()` — re-resolve the element on every attempt and poll the postcondition.** The saved-message search panel is destroyed and rebuilt when it is closed and reopened, so a UIA element resolved before the close refers to a node that no longer exists and reads as an empty string against a panel that is working. The helper calls `find_by_aid` inside the loop rather than caching one element, polls `expected in text` until a bound expires, and returns the last text seen so a genuine failure reports what the panel actually said. All eight search-status reads use it. _Rule implemented:_ §13's "a UI assertion must poll for its postcondition, never sample it once" and "a focus/identity assertion must re-establish its subject", both of which the harness already applied elsewhere — the search reads were the remaining fixed-sleep-then-read sites.
 
-**3. `install_uia_walk_tracker()` and the `UI_UIA_WINDOWS` series.** It patches `BaseWrapper.descendants` on the pywinauto base class — not this file's helpers — because the walks are spread over a dozen call sites and an un-instrumented one would leave samples unattributable. Every walk records `(start_offset, end_offset, description)`. `ui_sample_summary()` then reports slow samples split into `inside a harness UIA walk` and `outside every harness UIA walk`, and the raw windows are written into `ui-thread-samples.json` as `uia_windows`. *Rule implemented:* §13's "a UIA walk is not a UI-thread latency probe" — a pump sample taken while the application's own thread is answering a cross-process enumeration measures the application answering the harness, and the two must be counted apart rather than merged into one "slow sample" figure.
+**3. `install_uia_walk_tracker()` and the `UI_UIA_WINDOWS` series.** It patches `BaseWrapper.descendants` on the pywinauto base class — not this file's helpers — because the walks are spread over a dozen call sites and an un-instrumented one would leave samples unattributable. Every walk records `(start_offset, end_offset, description)`. `ui_sample_summary()` then reports slow samples split into `inside a harness UIA walk` and `outside every harness UIA walk`, and the raw windows are written into `ui-thread-samples.json` as `uia_windows`. _Rule implemented:_ §13's "a UIA walk is not a UI-thread latency probe" — a pump sample taken while the application's own thread is answering a cross-process enumeration measures the application answering the harness, and the two must be counted apart rather than merged into one "slow sample" figure.
 
-**4. One time origin for every series.** `start_ui_sampler` offset its samples from its own `started` while `mark_store_write`, `mark_event` and the walk windows offset from `_RUN_T0`. All four now subtract `_RUN_T0`. *Rule implemented:* the same §13 requirement, at the level of arithmetic — two series that need a correction term to compare are not correlated, they are merely adjacent.
+**4. One time origin for every series.** `start_ui_sampler` offset its samples from its own `started` while `mark_store_write`, `mark_event` and the walk windows offset from `_RUN_T0`. All four now subtract `_RUN_T0`. _Rule implemented:_ the same §13 requirement, at the level of arithmetic — two series that need a correction term to compare are not correlated, they are merely adjacent.
 
 ### 27.3 The sidecar lock does not touch the store — demonstrated, not assumed
 
-The brief named this as the one property that must be shown rather than argued, and the oracle alone does not show it: `test_acquire_store_lock_excludes_a_second_holder` proves that a second *harness* holder is refused, which says nothing about whether the application is affected. Three separate observations establish it.
+The brief named this as the one property that must be shown rather than argued, and the oracle alone does not show it: `test_acquire_store_lock_excludes_a_second_holder` proves that a second _harness_ holder is refused, which says nothing about whether the application is affected. Three separate observations establish it.
 
 **(a) The lock is on a different path, and the store stays writable while it is held.** A direct probe took the lock on a temporary store and, while holding it, wrote a row through an ordinary `sqlite3` connection and read it back:
 
@@ -2984,39 +3013,39 @@ The write succeeds because the lock is a byte range in a separate file. Had the 
 
 The application's own writes are visible in the store the run produced. The fixture it was seeded from and the store at the end of the run differ in exactly the way the run's own navigation explains:
 
-| Table | Fixture (seed) | End of run |
-|---|---|---|
-| `projects` | 3 | 3 |
-| `contributions` | 52 | 52 |
-| `selection_events` | 327 | 334 |
-| `selection_receipts` | 327 | 334 |
-| `attachments`, `draft_attachments`, `pending_submissions` | 0 | 0 |
-| `user_version` | 3 | **4** |
+| Table                                                     | Fixture (seed) | End of run |
+| --------------------------------------------------------- | -------------- | ---------- |
+| `projects`                                                | 3              | 3          |
+| `contributions`                                           | 52             | 52         |
+| `selection_events`                                        | 327            | 334        |
+| `selection_receipts`                                      | 327            | 334        |
+| `attachments`, `draft_attachments`, `pending_submissions` | 0              | 0          |
+| `user_version`                                            | 3              | **4**      |
 
 The seven added `selection_events` and `selection_receipts` rows are `PROJECT_SERVICE` / `ProjectSelected` records, written by the application as the harness switched projects. `user_version` moving 3 → 4 is the application's own migration creating `command_receipts`, `inbox_envelopes` and `outbox_envelopes` — the I1 schema from section 26 — on a store the harness had locked. Both are the application writing to its own database while the harness held the sidecar lock, which is precisely the property under test. `attachments`, `draft_attachments` and `pending_submissions` returning to zero is the harness's cleanup restoring the fixture's shape, not the application failing to write.
 
 **(c) Every store-dependent criterion was measured.** The criteria that cannot pass without a working store, and their observations in this run:
 
-| Criterion | Store-dependent observation |
-|---|---|
-| 1. Recent Projects & Startup Filtering | `'3 projects recorded'`, filtered `'1 matching project'`, zero-match `'0 matching projects'` — read from the seeded `projects` rows |
-| 2. Message Search Pagination | `Showing 20 of 50` → `Showing 40 of 50` → `Showing 50 of 50`; reopened `20 of 50`; filtered `11 of 11`; zero-match `No saved user messages match your query.`; injected failure `Search failed: no such table: contributions`; recovered `11 of 11` — all read from the seeded 50 `contributions` |
-| 8. Action Center Pagination | `'50 item(s) loaded (more available).'` → `'52 item(s) need your attention.'` — from 51 seeded `draft_attachments` plus the existing obligation |
-| 9. Action Center Stale Invalidation | `Action Center item is stale: attachment record version has changed.` — from the deliberate `version = 99` injection |
-| 13. Seeded Attachment Chip | chip realized and inspected from a seeded managed record |
-| 14. Non-English Preview Withholding | seeded non-English attachment inspected; preview withheld with its stated reason |
+| Criterion                              | Store-dependent observation                                                                                                                                                                                                                                                                       |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Recent Projects & Startup Filtering | `'3 projects recorded'`, filtered `'1 matching project'`, zero-match `'0 matching projects'` — read from the seeded `projects` rows                                                                                                                                                               |
+| 2. Message Search Pagination           | `Showing 20 of 50` → `Showing 40 of 50` → `Showing 50 of 50`; reopened `20 of 50`; filtered `11 of 11`; zero-match `No saved user messages match your query.`; injected failure `Search failed: no such table: contributions`; recovered `11 of 11` — all read from the seeded 50 `contributions` |
+| 8. Action Center Pagination            | `'50 item(s) loaded (more available).'` → `'52 item(s) need your attention.'` — from 51 seeded `draft_attachments` plus the existing obligation                                                                                                                                                   |
+| 9. Action Center Stale Invalidation    | `Action Center item is stale: attachment record version has changed.` — from the deliberate `version = 99` injection                                                                                                                                                                              |
+| 13. Seeded Attachment Chip             | chip realized and inspected from a seeded managed record                                                                                                                                                                                                                                          |
+| 14. Non-English Preview Withholding    | seeded non-English attachment inspected; preview withheld with its stated reason                                                                                                                                                                                                                  |
 
 All six are `PASS`. A run whose store was contended, half-migrated or unwritable could not have produced any of these readings: the search criteria would have returned the failure text at every step, and the Action Center would have reported nothing to load. That is the demonstration the brief asked for — the lock is held for the whole run, the application opened the store and wrote to it, and the criteria that depend on the store were measured rather than skipped.
 
 ### 27.4 Checks actually executed
 
-| Check | Command | Result |
-|---|---|---|
-| Harness oracle suite | `C:\Python314\python.exe native/tests/test_harness_oracles.py` | **PASS**: 39 of 39 cases, 0 failures (30 pre-existing + 9 new; 8 are controlling mutations in total) |
-| Full native acceptance | `test_full_ui_acceptance.py --exe ...\Release\Mayasaba.exe --store <fresh>\store.db --perf-log <fresh>\perf.json --evidence-dir <fresh>` | **18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN** |
-| Second-run refusal | the same command with `<store>.harness.lock` held by another process | `ABORTED BEFORE LAUNCH`, 20 `NOT_RUN`, exit 1, no `Mayasaba.exe` launched, store unchanged |
-| Sidecar isolation | direct probe: lock held, store written and read back | write succeeded; lock path ≠ store path |
-| `py_compile` | `python -m py_compile native/tests/test_full_ui_acceptance.py` | Clean |
+| Check                  | Command                                                                                                                                  | Result                                                                                               |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Harness oracle suite   | `C:\Python314\python.exe native/tests/test_harness_oracles.py`                                                                           | **PASS**: 39 of 39 cases, 0 failures (30 pre-existing + 9 new; 8 are controlling mutations in total) |
+| Full native acceptance | `test_full_ui_acceptance.py --exe ...\Release\Mayasaba.exe --store <fresh>\store.db --perf-log <fresh>\perf.json --evidence-dir <fresh>` | **18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN**                                        |
+| Second-run refusal     | the same command with `<store>.harness.lock` held by another process                                                                     | `ABORTED BEFORE LAUNCH`, 20 `NOT_RUN`, exit 1, no `Mayasaba.exe` launched, store unchanged           |
+| Sidecar isolation      | direct probe: lock held, store written and read back                                                                                     | write succeeded; lock path ≠ store path                                                              |
+| `py_compile`           | `python -m py_compile native/tests/test_full_ui_acceptance.py`                                                                           | Clean                                                                                                |
 
 The second-run refusal was exercised as a real second process, not simulated: a holder took the lock, slept, and the harness was then run against the same store. Its console shows `ABORTED BEFORE LAUNCH` with the lock path, the table with all 20 `NOT_RUN`, and exit code 1; `Launched Mayasaba` does not appear in its output at all, and the store's row counts were unchanged afterwards. Criteria 11 and 12 remain `INCONCLUSIVE` for the permanent reason recorded in section 24.4; nothing in this diff touches the OLE stimulus.
 
@@ -3024,15 +3053,15 @@ The second-run refusal was exercised as a real second process, not simulated: a 
 
 Each was applied to the harness source, run against the oracle suite, observed to fail at the assertion that encodes the defect, then restored and verified by SHA-256.
 
-| Mutation | Observed result |
-|---|---|
-| Hoist `find_by_aid` out of the `read_status_text` loop (cache one element) | **FAILED**: `test_read_status_text_does_not_reuse_an_element_from_before_a_rebuild` reported `Showing 20 of 50 matching messages` — the stale generation's text — and `test_read_status_text_polls_until_the_postcondition_appears` returned an empty string. Both encode the defect. |
-| Remove `msvcrt.locking` from `acquire_store_lock` (open the file, do not lock it) | **FAILED**: `test_acquire_store_lock_excludes_a_second_holder` — `a second holder acquired the same store lock`. |
-| Make `in_uia_window` always return `False` (never attribute a sample to a walk) | **FAILED**: `test_slow_samples_inside_a_uia_walk_are_reported_separately` reported `over 250 ms: 2 (inside a harness UIA walk: 0; outside every harness UIA walk: 2)` — the separation collapses exactly as the attribute exists to prevent. |
+| Mutation                                                                          | Observed result                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Hoist `find_by_aid` out of the `read_status_text` loop (cache one element)        | **FAILED**: `test_read_status_text_does_not_reuse_an_element_from_before_a_rebuild` reported `Showing 20 of 50 matching messages` — the stale generation's text — and `test_read_status_text_polls_until_the_postcondition_appears` returned an empty string. Both encode the defect. |
+| Remove `msvcrt.locking` from `acquire_store_lock` (open the file, do not lock it) | **FAILED**: `test_acquire_store_lock_excludes_a_second_holder` — `a second holder acquired the same store lock`.                                                                                                                                                                      |
+| Make `in_uia_window` always return `False` (never attribute a sample to a walk)   | **FAILED**: `test_slow_samples_inside_a_uia_walk_are_reported_separately` reported `over 250 ms: 2 (inside a harness UIA walk: 0; outside every harness UIA walk: 2)` — the separation collapses exactly as the attribute exists to prevent.                                          |
 
 Restored and verified byte-identical after each: `test_full_ui_acceptance.py` SHA-256 `9cfc586cb954da52d2516cd2ea8e1892fc50be0e92e61c631d6ff1a1ecd4621c`, and the oracle suite re-ran at 39/39.
 
-As §13 requires, these mutations prove the assertions discriminate *these* failures. They do not reproduce the original races: the panel-rebuild and concurrent-run defects were timing-dependent, and a green run after restoring a fix would be indistinguishable from a lucky one, which is why the postcondition is made unsatisfiable by construction instead.
+As §13 requires, these mutations prove the assertions discriminate _these_ failures. They do not reproduce the original races: the panel-rebuild and concurrent-run defects were timing-dependent, and a green run after restoring a fix would be indistinguishable from a lucky one, which is why the postcondition is made unsatisfiable by construction instead.
 
 ### 27.6 What the run's own instrumentation reported
 
@@ -3061,26 +3090,26 @@ The durable rule is in `AGENTS.md` §17.6. It is not a harness rule; it is a rul
 
 ### 27.8 Criteria for this assignment
 
-| ID | Criterion | Evidence | Verdict |
-|---|---|---|---|
-| HC-01 | A second acceptance run against one store refuses to start and names the lock file | Second-process run: `ABORTED BEFORE LAUNCH`, exit 1 | **PASS** |
-| HC-02 | A refused run launches no application and leaves the store unchanged | No `Launched Mayasaba` line; row counts and `user_version` unchanged afterwards | **PASS** |
-| HC-03 | The lock is a sidecar file and does not make the store unwritable | Direct probe: store written and read while the lock was held; lock path ≠ store path | **PASS** |
-| HC-04 | The application opens the store and writes to it while the lock is held | +7 `selection_events`, +7 `selection_receipts`, `user_version` 3 → 4 in the run's store | **PASS** |
-| HC-05 | Every store-dependent criterion is measured in the locked run | Criteria 1, 2, 8, 9, 13, 14 all `PASS` with store-derived readings | **PASS** |
-| HC-06 | The search status reader re-resolves its element and polls the postcondition | Two oracle cases; mutation "cache the first element" fails both | **PASS** |
-| HC-07 | A slow pump sample inside a UIA walk is reported separately from one outside | Oracle case; mutation "never attribute" collapses the split | **PASS** |
-| HC-08 | The sample, write-marker, event-marker and walk series share one origin | Source: all four subtract `_RUN_T0`; the run's split is computed across them | **PASS** |
-| HC-09 | The full acceptance suite is unchanged by the harness changes | 18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN, identical to §26.4 | **PASS** |
-| HC-10 | No product source, XAML or criterion threshold was changed by this assignment | Executable and XBF hashes identical to §26.1; diff touches only the two harness files, `AGENTS.md` and this document | **PASS** |
-| HC-11 | The harness oracle suite passes in full | 39 of 39 cases, 0 failures | **PASS** |
-| HC-12 | The reconstruction of the discarded diff is byte-identical to what was lost | SHA-256 `9cfc586c…` matches the pre-checkout hash; structural match against the cached `.pyc` | **PASS** |
+| ID    | Criterion                                                                          | Evidence                                                                                                             | Verdict  |
+| ----- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------- |
+| HC-01 | A second acceptance run against one store refuses to start and names the lock file | Second-process run: `ABORTED BEFORE LAUNCH`, exit 1                                                                  | **PASS** |
+| HC-02 | A refused run launches no application and leaves the store unchanged               | No `Launched Mayasaba` line; row counts and `user_version` unchanged afterwards                                      | **PASS** |
+| HC-03 | The lock is a sidecar file and does not make the store unwritable                  | Direct probe: store written and read while the lock was held; lock path ≠ store path                                 | **PASS** |
+| HC-04 | The application opens the store and writes to it while the lock is held            | +7 `selection_events`, +7 `selection_receipts`, `user_version` 3 → 4 in the run's store                              | **PASS** |
+| HC-05 | Every store-dependent criterion is measured in the locked run                      | Criteria 1, 2, 8, 9, 13, 14 all `PASS` with store-derived readings                                                   | **PASS** |
+| HC-06 | The search status reader re-resolves its element and polls the postcondition       | Two oracle cases; mutation "cache the first element" fails both                                                      | **PASS** |
+| HC-07 | A slow pump sample inside a UIA walk is reported separately from one outside       | Oracle case; mutation "never attribute" collapses the split                                                          | **PASS** |
+| HC-08 | The sample, write-marker, event-marker and walk series share one origin            | Source: all four subtract `_RUN_T0`; the run's split is computed across them                                         | **PASS** |
+| HC-09 | The full acceptance suite is unchanged by the harness changes                      | 18 PASS / 2 INCONCLUSIVE / 0 FAIL / 0 BLOCKED / 0 NOT_RUN, identical to §26.4                                        | **PASS** |
+| HC-10 | No product source, XAML or criterion threshold was changed by this assignment      | Executable and XBF hashes identical to §26.1; diff touches only the two harness files, `AGENTS.md` and this document | **PASS** |
+| HC-11 | The harness oracle suite passes in full                                            | 39 of 39 cases, 0 failures                                                                                           | **PASS** |
+| HC-12 | The reconstruction of the discarded diff is byte-identical to what was lost        | SHA-256 `9cfc586c…` matches the pre-checkout hash; structural match against the cached `.pyc`                        | **PASS** |
 
 ### 27.9 What this record does not claim
 
 1. **It does not claim a new product acceptance result.** The 18/2/0 table is the same 20 criteria against the same binary; what changed is the harness. A criterion that passed here passed for the same reason it passed in §26.4.
 2. **It does not claim the walk tracker attributes every slow sample correctly.** It records the walks the harness performs through `BaseWrapper.descendants`; a walk performed some other way — a raw `IUIAutomation` call, or a pywinauto method that does not route through `descendants` — would not be recorded, and a sample inside it would be attributed to "outside every harness UIA walk". The 222 recorded windows are the walks this harness makes, not a proof that no other enumeration exists.
-3. **It does not claim the store lock protects against a second *application* instance.** The single-instance lock is the application's own; this lock orders acceptance runs against each other.
+3. **It does not claim the store lock protects against a second _application_ instance.** The single-instance lock is the application's own; this lock orders acceptance runs against each other.
 4. **It does not claim containment, a passing I3, or a deployable architecture.** Nothing here launches a process under controller ownership, and nothing bounds any process's file or network effects.
 5. **It does not re-open** any finding in §24.4, §25.8 or §26.7.
 
@@ -3088,13 +3117,13 @@ The durable rule is in `AGENTS.md` §17.6. It is not a harness rule; it is a rul
 
 ### 28.1 Identity of this record
 
-| Item | Value |
-|---|---|
-| Executable SHA-256 | `f092ce10224eadb90a2ef8cd3c10824591e76786bf7203c854b7e271a74883b5` |
+| Item                     | Value                                                              |
+| ------------------------ | ------------------------------------------------------------------ |
+| Executable SHA-256       | `f092ce10224eadb90a2ef8cd3c10824591e76786bf7203c854b7e271a74883b5` |
 | `MainWindow.xbf` SHA-256 | `a3a4af5e50558189c531549a76c8f06d9133ca64eac190394b89ae2c332eefed` |
-| Kernel oracle | `native/tests/bin/execution_tests.exe`, **11 of 11 PASS** |
-| Gateway oracle | `native/tests/bin/gateway_tests.exe`, **12 of 12 PASS** |
-| Readiness UI probe | **PASS** on Welcome and on Screen 2 |
+| Kernel oracle            | `native/tests/bin/execution_tests.exe`, **11 of 11 PASS**          |
+| Gateway oracle           | `native/tests/bin/gateway_tests.exe`, **12 of 12 PASS**            |
+| Readiness UI probe       | **PASS** on Welcome and on Screen 2                                |
 
 The two oracle executables link `ExecutionKernel.cpp` and `AgentGateway.cpp` directly and build without any WinUI header, so a result from them is evidence about the layers rather than about a window. The application was then rebuilt against the same sources and the readiness probe observed the wired projection in the running product.
 
@@ -3110,21 +3139,21 @@ A alone satisfies §14 prototype 2 and changes nothing a user can see. C is what
 
 Oracle: §14 prototype 2, "process launch, cancellation, and crash cleanup across an owned process tree". `execution_tests.cpp`, criteria A-1..A-11:
 
-| ID | Criterion | Reading |
-|---|---|---|
-| A-1 | Launch reaches the target and captures its output | PASS |
-| A-2 | The child is assigned to its job before it is resumed | `suspend=1` PASS |
-| A-3 | The job holds a tree, not one process | `tree=2 peak=2` PASS |
-| A-4 | The wall-clock bound is enforced at the boundary | `elapsed=627ms` PASS |
-| A-5 | Cancel terminates the whole tree promptly | `cancel=2ms` PASS |
-| A-6 | A crashing child is observed with its own exit code | PASS |
-| A-7 | A grandchild that outlives its parent dies with the tree | `reaped=2` PASS |
-| A-8 | Dropping a live `Process` terminates its tree | PASS |
-| A-9 | Handle inheritance is restricted to the declared set | PASS |
-| A-10 | Distinct refusals for distinct causes | PASS |
-| A-11 | Captured bytes are bounded and the excess is drained | PASS |
+| ID   | Criterion                                                | Reading              |
+| ---- | -------------------------------------------------------- | -------------------- |
+| A-1  | Launch reaches the target and captures its output        | PASS                 |
+| A-2  | The child is assigned to its job before it is resumed    | `suspend=1` PASS     |
+| A-3  | The job holds a tree, not one process                    | `tree=2 peak=2` PASS |
+| A-4  | The wall-clock bound is enforced at the boundary         | `elapsed=627ms` PASS |
+| A-5  | Cancel terminates the whole tree promptly                | `cancel=2ms` PASS    |
+| A-6  | A crashing child is observed with its own exit code      | PASS                 |
+| A-7  | A grandchild that outlives its parent dies with the tree | `reaped=2` PASS      |
+| A-8  | Dropping a live `Process` terminates its tree            | PASS                 |
+| A-9  | Handle inheritance is restricted to the declared set     | PASS                 |
+| A-10 | Distinct refusals for distinct causes                    | PASS                 |
+| A-11 | Captured bytes are bounded and the excess is drained     | PASS                 |
 
-A-2 carries the ordering guarantee through `ResumeThread`'s return value: it reports the *previous* suspend count, which is 1 only if the process really was still suspended when it was assigned to the job. See §28.5 for why that field exists.
+A-2 carries the ordering guarantee through `ResumeThread`'s return value: it reports the _previous_ suspend count, which is 1 only if the process really was still suspended when it was assigned to the job. See §28.5 for why that field exists.
 
 ### 28.4 C — Agent Gateway detection (layer 4)
 
@@ -3149,23 +3178,23 @@ The first attempt at a controlling mutation for the assignment ordering removed 
 
 The correction was to make the ordering observable rather than inferred. `Outcome::resumePreviousSuspendCount` now records what `ResumeThread` returned, and A-2 asserts it equals 1 — which can only hold if the process was genuinely suspended at assignment time. Re-running M3 then failed at exactly that assertion.
 
-This is recorded because the tidier story ("the mutation failed, as expected") is false, and because a mutation that *passes* is the more valuable finding.
+This is recorded because the tidier story ("the mutation failed, as expected") is false, and because a mutation that _passes_ is the more valuable finding.
 
 ### 28.6 Mutation ledger
 
 Each mutation was applied, the affected oracle rebuilt and re-run, the failure recorded at the assertion encoding the defect, and the source restored. M6 was the last to be restored; both oracles were then re-run and pass in full.
 
-| ID | Mutation | Discriminated at |
-|---|---|---|
-| M1 | Tree reaping on root exit disabled | A-7 at `reapedAfterExit` |
-| M2 | Peak process count not recorded | A-2/A-3 at `peakTreeProcesses` |
-| M3 | `CREATE_SUSPENDED` removed | *initially passed* — see §28.5; after strengthening A-2, fails at `resumePreviousSuspendCount == 1` |
-| M4 | Discovery order breaks the tie | C-3 at `requiresSelection` |
-| M5 | Silent success accepted as READY | C-10 at `readiness == ProbeFailed` |
-| M6 | Digest change ignored on a pinned binary | C-4 at `readiness == Checking` |
-| M7 | The detection pass is never started at startup | UI probe: "no entry left CHECKING within 120s", entries at their markup value |
+| ID  | Mutation                                       | Discriminated at                                                                                    |
+| --- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| M1  | Tree reaping on root exit disabled             | A-7 at `reapedAfterExit`                                                                            |
+| M2  | Peak process count not recorded                | A-2/A-3 at `peakTreeProcesses`                                                                      |
+| M3  | `CREATE_SUSPENDED` removed                     | _initially passed_ — see §28.5; after strengthening A-2, fails at `resumePreviousSuspendCount == 1` |
+| M4  | Discovery order breaks the tie                 | C-3 at `requiresSelection`                                                                          |
+| M5  | Silent success accepted as READY               | C-10 at `readiness == ProbeFailed`                                                                  |
+| M6  | Digest change ignored on a pinned binary       | C-4 at `readiness == Checking`                                                                      |
+| M7  | The detection pass is never started at startup | UI probe: "no entry left CHECKING within 120s", entries at their markup value                       |
 
-M7 is the one that tests the *wiring* rather than a layer, and it exists because the first version of the UI probe asserted only that every entry read a registered state. `CHECKING` is both a registered state and the value the XAML ships with, so that assertion was satisfied before any detection ran — it reported PASS without measuring anything. The probe now requires at least one entry to read a state other than `CHECKING`, and two consecutive agreeing reads so a mid-transition sample is not mistaken for a settled one.
+M7 is the one that tests the _wiring_ rather than a layer, and it exists because the first version of the UI probe asserted only that every entry read a registered state. `CHECKING` is both a registered state and the value the XAML ships with, so that assertion was satisfied before any detection ran — it reported PASS without measuring anything. The probe now requires at least one entry to read a state other than `CHECKING`, and two consecutive agreeing reads so a mid-transition sample is not mistaken for a settled one.
 
 ### 28.7 The wiring: what became true on screen
 
@@ -3184,22 +3213,22 @@ Screen 2: Hermes READY · Kilo Code READY · Claude Code CHECKING
 
 ### 28.8 Criteria for this assignment
 
-| ID | Criterion | Evidence | Verdict |
-|---|---|---|---|
-| AC-01 | A child is assigned to its job before it is resumed | A-2 `suspend=1`; mutation M3 fails the assertion | **PASS** |
-| AC-02 | The kernel owns a tree, not one process, and reaps survivors | A-3 `tree=2 peak=2`; A-7 `reaped=2`; mutation M1 fails A-7 | **PASS** |
-| AC-03 | Launch, cancellation and crash cleanup are bounded and observed | A-4 `elapsed=627ms`, A-5 `cancel=2ms`, A-6 exit code, A-11 bounded capture | **PASS** |
-| AC-04 | Handle inheritance is restricted to the declared set | A-9; the helper reports `handle-visible=0` for an inheritable event | **PASS** |
-| AC-05 | Executable identity is observed, not assumed | C-1 with an independent digest recomputation | **PASS** |
-| AC-06 | The D-11 rule never silently chooses between two candidates | C-3 in both orders; C-5; C-12; mutation M4 fails C-3 | **PASS** |
-| AC-07 | A replaced or vanished executable returns to CHECKING rather than switching | C-4, C-5; mutation M6 fails C-4 | **PASS** |
-| AC-08 | The probe is bounded, non-mutating and reports its own timeout | C-9 `elapsed=715ms` against a 700 ms bound; C-8; C-10 | **PASS** |
-| AC-09 | The five readiness states are complete and distinct | C-11 | **PASS** |
-| AC-10 | The product prints an observed state, not a constant | UI probe: 2 of 3 entries left CHECKING on Welcome **and** Screen 2; mutation M7 fails the probe | **PASS** |
-| AC-11 | A healthy CLI produces no problem card; an affected one names its cause and offers both actions | Fault injection by PATH stripping: Hermes reads MISSING, its card offers Locate and Recheck, both actions exercised; mutation M-AC11 fails the Recheck assertion. See §29.3 | **PASS** |
-| AC-12 | The projection gates nothing | Source: no readiness read in the Send, folder-selection, draft, history or navigation paths. **Amended by §29.4:** it did not gate anything, but it shared the single-worker store lane and delayed unrelated queries by up to 7.88 s. Fixed; re-measured at 0.19 s | **PASS** |
-| AC-13 | Readiness is never colour-only | Each entry prints the state as text beside the dot, with a per-CLI accessible name | **PASS** |
-| AC-14 | Start still refuses and says why | `OnStart` notice text; behaviour unchanged | **PASS** |
+| ID    | Criterion                                                                                       | Evidence                                                                                                                                                                                                                                                            | Verdict  |
+| ----- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| AC-01 | A child is assigned to its job before it is resumed                                             | A-2 `suspend=1`; mutation M3 fails the assertion                                                                                                                                                                                                                    | **PASS** |
+| AC-02 | The kernel owns a tree, not one process, and reaps survivors                                    | A-3 `tree=2 peak=2`; A-7 `reaped=2`; mutation M1 fails A-7                                                                                                                                                                                                          | **PASS** |
+| AC-03 | Launch, cancellation and crash cleanup are bounded and observed                                 | A-4 `elapsed=627ms`, A-5 `cancel=2ms`, A-6 exit code, A-11 bounded capture                                                                                                                                                                                          | **PASS** |
+| AC-04 | Handle inheritance is restricted to the declared set                                            | A-9; the helper reports `handle-visible=0` for an inheritable event                                                                                                                                                                                                 | **PASS** |
+| AC-05 | Executable identity is observed, not assumed                                                    | C-1 with an independent digest recomputation                                                                                                                                                                                                                        | **PASS** |
+| AC-06 | The D-11 rule never silently chooses between two candidates                                     | C-3 in both orders; C-5; C-12; mutation M4 fails C-3                                                                                                                                                                                                                | **PASS** |
+| AC-07 | A replaced or vanished executable returns to CHECKING rather than switching                     | C-4, C-5; mutation M6 fails C-4                                                                                                                                                                                                                                     | **PASS** |
+| AC-08 | The probe is bounded, non-mutating and reports its own timeout                                  | C-9 `elapsed=715ms` against a 700 ms bound; C-8; C-10                                                                                                                                                                                                               | **PASS** |
+| AC-09 | The five readiness states are complete and distinct                                             | C-11                                                                                                                                                                                                                                                                | **PASS** |
+| AC-10 | The product prints an observed state, not a constant                                            | UI probe: 2 of 3 entries left CHECKING on Welcome **and** Screen 2; mutation M7 fails the probe                                                                                                                                                                     | **PASS** |
+| AC-11 | A healthy CLI produces no problem card; an affected one names its cause and offers both actions | Fault injection by PATH stripping: Hermes reads MISSING, its card offers Locate and Recheck, both actions exercised; mutation M-AC11 fails the Recheck assertion. See §29.3                                                                                         | **PASS** |
+| AC-12 | The projection gates nothing                                                                    | Source: no readiness read in the Send, folder-selection, draft, history or navigation paths. **Amended by §29.4:** it did not gate anything, but it shared the single-worker store lane and delayed unrelated queries by up to 7.88 s. Fixed; re-measured at 0.19 s | **PASS** |
+| AC-13 | Readiness is never colour-only                                                                  | Each entry prints the state as text beside the dot, with a per-CLI accessible name                                                                                                                                                                                  | **PASS** |
+| AC-14 | Start still refuses and says why                                                                | `OnStart` notice text; behaviour unchanged                                                                                                                                                                                                                          | **PASS** |
 
 AC-11 is now **PASS**, on runtime observation rather than source reading. The premise of the earlier INCONCLUSIVE — "this machine has no MISSING/PROBE_FAILED CLI to render one" — was true of the machine as configured but not of the application: `AgentGateway::Discover` resolves each CLI against the **process** PATH, so launching the application with one directory removed makes exactly that CLI genuinely MISSING while the other two are untouched. §29.3 records the injection and both corrections its oracles needed.
 
@@ -3235,11 +3264,11 @@ Date: 2026-10-22. Artifact under test throughout: `d7e062c3cbb1a54e7c56b90779dfa
 
 Three user-visible strings still declared a layer that now exists. All three were corrected before this session's runs and are verified here rather than assumed:
 
-| Site | Was | Now |
-|---|---|---|
-| `MainWindow.xaml.cpp:968` | "owner interfaces not implemented · MCF-v2 dispatch, Agent Gateway adapters, …" | "owner interfaces not implemented · MCF-v2 dispatch, CLI adapters, three-agent turn finalization" — the Agent Gateway adapter layer is implemented and no longer named as absent |
-| `MainWindow.xaml.cpp:3481` (project selection) | "CLI readiness: unsupported because native probes are not implemented" | `ReadinessSummaryLine()`, which reports the **measured** projection, plus "No CLI session was started." |
-| `MainWindow.xaml.cpp:3875` (`OnStart`) | "START BLOCKED: three native CLI adapters … are not implemented" | names the real remaining blockers; explicitly states that a READY entry is a detection result and does not authorize a session |
+| Site                                           | Was                                                                             | Now                                                                                                                                                                              |
+| ---------------------------------------------- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MainWindow.xaml.cpp:968`                      | "owner interfaces not implemented · MCF-v2 dispatch, Agent Gateway adapters, …" | "owner interfaces not implemented · MCF-v2 dispatch, CLI adapters, three-agent turn finalization" — the Agent Gateway adapter layer is implemented and no longer named as absent |
+| `MainWindow.xaml.cpp:3481` (project selection) | "CLI readiness: unsupported because native probes are not implemented"          | `ReadinessSummaryLine()`, which reports the **measured** projection, plus "No CLI session was started."                                                                          |
+| `MainWindow.xaml.cpp:3875` (`OnStart`)         | "START BLOCKED: three native CLI adapters … are not implemented"                | names the real remaining blockers; explicitly states that a READY entry is a detection result and does not authorize a session                                                   |
 
 The sweep beyond those three found no further user-visible claim that a layer is absent. The remaining matches for "not implemented" are historical code comments describing what a function does not do, which are accurate and are not surfaced to the user. `ReadinessSummaryLine()` was added in this milestone so the readiness sentence is derived from `readiness_` rather than written as prose that can drift from the observation.
 
@@ -3273,7 +3302,7 @@ actions: locate ["Locate the executable for Hermes Agent CLI"]
 
 Two oracles in the probe produced readings about the probe and were corrected. Both corrections are load-bearing:
 
-1. **The picker oracle was blind twice over.** It counted *visible* top-level windows of *the application's own pid*. A WinRT `FileOpenPicker` is hosted by `C:\Windows\System32\PickerHost.exe` — a different process — and is created invisible and shown roughly half a second later. Measured with `EnumWindows` over every top-level window including invisible and cross-process ones: at t+0.52 s the `#32770` "Open" dialog exists and is invisible; at t+1.03 s it is visible, with no intervention. The corrected oracle polls for a new common-dialog window anywhere on the desktop and follows its visibility over time, and it **does not** force the window shown — forcing it would make the observation a statement about the probe.
+1. **The picker oracle was blind twice over.** It counted _visible_ top-level windows of _the application's own pid_. A WinRT `FileOpenPicker` is hosted by `C:\Windows\System32\PickerHost.exe` — a different process — and is created invisible and shown roughly half a second later. Measured with `EnumWindows` over every top-level window including invisible and cross-process ones: at t+0.52 s the `#32770` "Open" dialog exists and is invisible; at t+1.03 s it is visible, with no intervention. The corrected oracle polls for a new common-dialog window anywhere on the desktop and follows its visibility over time, and it **does not** force the window shown — forcing it would make the observation a statement about the probe.
 2. **A transient `CHECKING` during Recheck does not exist and never did.** `DetectReadinessAsync` writes `readiness_` exactly once, after the pass completes (`MainWindow.xaml.cpp:1846-1847`). Sampling densely for a transition the code does not produce was an oracle-adequacy failure, not a product finding. The real discriminator is a state that **changes**, so the probe places an empty directory ahead of the stripped one on the child PATH and writes a working shim into it; Recheck must then observe the CLI appear.
 
 **Measured transition.** After the shim was written, Recheck reported `Hermes Agent CLI · MISSING` → `Hermes Agent CLI · READY`.
@@ -3286,7 +3315,7 @@ FAIL: Recheck did not observe the CLI appearing; the entry still reads
 A handler that re-ran detection would have found it.
 ```
 
-Restored byte-identically and verified by hash. The mutation proves the assertion discriminates *that* failure; it is not a reproduction of a race.
+Restored byte-identically and verified by hash. The mutation proves the assertion discriminates _that_ failure; it is not a reproduction of a race.
 
 One sequencing error was found and corrected in the probe itself: the appear-transition ran before Locate, so making the CLI healthy correctly withdrew its card and Locate was then absent. The transition now runs last, because it destroys the setup it depends on.
 
@@ -3296,10 +3325,10 @@ Not a gating defect — the projection was never consulted by Send, folder selec
 
 Measured with a probe that types into the Screen 2 filter twice — once while detection is running, once after it has settled:
 
-| Condition | Filter applied after |
-|---|---|
-| Typed at t+2.45 s, detection still running | **7.88 s** |
-| Typed at t+11.1 s, detection settled | **0.10 s** |
+| Condition                                  | Filter applied after |
+| ------------------------------------------ | -------------------- |
+| Typed at t+2.45 s, detection still running | **7.88 s**           |
+| Typed at t+11.1 s, detection settled       | **0.10 s**           |
 
 This also explains an intermittent Phase 1 failure: the harness polls the count label for 8 s, and a refresh queued behind detection can exceed that. The harness's poll was not the defect, and neither was the filter — both were measured correct once the lane was free.
 
@@ -3311,14 +3340,14 @@ This is recorded as a real finding rather than a tuning change because the earli
 
 This machine has two reachable Claude Code installations. Both are exposed through `claude.cmd` shims that are **byte-identical** — same SHA-256 `7999fba95dbffe167d9e0a043f29057979a0518ebe89b60c4fcfc6401ea8c424`, same 160 bytes — because both shims are the standard npm launcher and differ only in `%dp0%`:
 
-| Shim directory | Resolves to | Bytes | SHA-256 |
-|---|---|---|---|
-| `C:\nvm4w\nodejs` | `…\node_modules\@anthropic-ai\claude-code\bin\claude.exe` | 270,863,520 | `56810a11…` |
+| Shim directory                             | Resolves to                                               | Bytes       | SHA-256     |
+| ------------------------------------------ | --------------------------------------------------------- | ----------- | ----------- |
+| `C:\nvm4w\nodejs`                          | `…\node_modules\@anthropic-ai\claude-code\bin\claude.exe` | 270,863,520 | `56810a11…` |
 | `C:\Users\pavan\AppData\Local\hermes\node` | `…\node_modules\@anthropic-ai\claude-code\bin\claude.exe` | 260,489,376 | `76de74f7…` |
 
 Two genuinely distinct builds. D-11 says that without a user-selected pin, two or more verified candidates require an explicit **Choose executable**, and that PATH order, discovery time, filename or version label never break the tie. The application therefore reports Claude Code as `CHECKING` and renders a decision card offering **Choose the executable for Claude Code CLI**. That is correct behaviour, not a failure:
 
-- `CHECKING` here means "the question is open because the answer is the user's to give", and both the record and the harness treat it as a legitimate settled state. Criterion 21's poll requires *at least one* entry to leave `CHECKING`; it does not require all three, precisely so a D-11 tie is not scored as a defect.
+- `CHECKING` here means "the question is open because the answer is the user's to give", and both the record and the harness treat it as a legitimate settled state. Criterion 21's poll requires _at least one_ entry to leave `CHECKING`; it does not require all three, precisely so a D-11 tie is not scored as a defect.
 - The application must not prefer a candidate. It presents both and waits.
 - The desktop Claude app is not a candidate at all: it is a GUI-subsystem MSIX package whose manifest declares only `claude-ssh-askpass.exe` and `claude-ssh-proxy.exe` as execution aliases, never `claude`, and `Discover` resolves against PATH only.
 
@@ -3326,29 +3355,29 @@ Two genuinely distinct builds. D-11 says that without a user-selected pin, two o
 
 Full suite, `C:\Users\pavan\PROJECTS\_ui-verify\ev-20261022-g`, against `d7e062c3…` / `8db43c7e…`:
 
-| ID | Criterion | Verdict |
-|---|---|---|
-| 1 | Recent Projects & Startup Filtering | **PASS** |
-| 2 | Message Search Pagination & Continuation | **PASS** |
-| 3 | Older Message Navigation & Selection | **PASS** |
-| 4 | Search Mode Project Switch Safety | **PASS** |
-| 5 | Narrow 520px Responsive Layout | **PASS** |
-| 6 | Rapid Hover Sweeps & Animation Stability | **PASS** |
-| 7 | Display DPI Scaling Simulation | **PASS** |
-| 8 | Action Center Pagination & Resumption | **PASS** |
-| 9 | Action Center Stale Invalidation & Refresh | **PASS** |
-| 10 | Action Center Panel Dismissal Stability | **PASS** |
-| 11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** — unchanged stimulus limit, §24.4 |
-| 12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** — unchanged stimulus limit, §24.4 |
-| 13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** |
-| 14 | Strict Non-English Prose Preview Withholding | **PASS** |
-| 15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** |
-| 16 | Search Overlay Flat Resting Orientation | **PASS** |
-| 17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **PASS** |
-| 18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** |
-| 19 | Empty-Chat Hero Perspective Preserved | **PASS** |
-| 20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** |
-| 21 | CLI Readiness Projection & Non-Gating | **PASS** |
+| ID  | Criterion                                                      | Verdict                                            |
+| --- | -------------------------------------------------------------- | -------------------------------------------------- |
+| 1   | Recent Projects & Startup Filtering                            | **PASS**                                           |
+| 2   | Message Search Pagination & Continuation                       | **PASS**                                           |
+| 3   | Older Message Navigation & Selection                           | **PASS**                                           |
+| 4   | Search Mode Project Switch Safety                              | **PASS**                                           |
+| 5   | Narrow 520px Responsive Layout                                 | **PASS**                                           |
+| 6   | Rapid Hover Sweeps & Animation Stability                       | **PASS**                                           |
+| 7   | Display DPI Scaling Simulation                                 | **PASS**                                           |
+| 8   | Action Center Pagination & Resumption                          | **PASS**                                           |
+| 9   | Action Center Stale Invalidation & Refresh                     | **PASS**                                           |
+| 10  | Action Center Panel Dismissal Stability                        | **PASS**                                           |
+| 11  | Native OLE Desktop Drag-and-Drop Execution                     | **INCONCLUSIVE** — unchanged stimulus limit, §24.4 |
+| 12  | Mixed-Batch Folder Rejection on Drop                           | **INCONCLUSIVE** — unchanged stimulus limit, §24.4 |
+| 13  | Seeded Attachment Chip Realization & Diagnostics               | **PASS**                                           |
+| 14  | Strict Non-English Prose Preview Withholding                   | **PASS**                                           |
+| 15  | WinUI 3 CompositionTarget Performance Profiling                | **PASS**                                           |
+| 16  | Search Overlay Flat Resting Orientation                        | **PASS**                                           |
+| 17  | Search Overlay Bounded Height, Scrolling & Paging Reachability | **PASS**                                           |
+| 18  | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat  | **PASS**                                           |
+| 19  | Empty-Chat Hero Perspective Preserved                          | **PASS**                                           |
+| 20  | Reduced-Motion Change Leaves The Overlay Flat                  | **PASS**                                           |
+| 21  | CLI Readiness Projection & Non-Gating                          | **PASS**                                           |
 
 **19 PASS, 2 INCONCLUSIVE, 0 FAIL, 0 BLOCKED, 0 NOT_RUN.**
 
@@ -3370,8 +3399,8 @@ UI-thread sampler for this run: 2,366 samples, 2,318 answered, p50 0.11 ms, p95 
 ## Layout oscillation verification run (2026-10-23)
 
 Harness: native/tests/test_full_ui_acceptance.py
-Store: C:/Users/pavan/PROJECTS/_ui-verify/layout_run/store.db (fixture copy)
-Evidence dir: C:/Users/pavan/PROJECTS/_ui-verify/layout_run/evidence
+Store: C:/Users/pavan/PROJECTS/\_ui-verify/layout_run/store.db (fixture copy)
+Evidence dir: C:/Users/pavan/PROJECTS/\_ui-verify/layout_run/evidence
 Artifact: Mayasaba.exe d7e062c3cbb1a54e7c56b90779dfaf18f3e1b5478c7f1281509386dc6d539edb, MainWindow.xbf 8db43c7e5406591327d4a25e725c3438eddb52d0faeb04936bb25afeb5dfea3a
 Result: 19 PASS, 2 INCONCLUSIVE (criteria 11, 12 OLE drag-drop, environmental), 0 FAIL, 0 BLOCKED, 0 NOT_RUN.
 Relevant criteria: 5 (narrow 520px) PASS; 8 (Action Center pagination) PASS; 9 (stale invalidation/refresh) PASS; 10 (dismissal stability) PASS; 15 (composition perf) PASS; 16 (search overlay flat resting) PASS; 17 (bounded height/scroll/paging) PASS; 18 (repeated open/close) PASS; 20 (reduced motion) PASS; 21 (readiness projection) PASS.
@@ -3431,11 +3460,11 @@ Own XAML Visibility is not a claim of physical reachability.
 
 Final-artifact observations at actual window DPI 120 (125%):
 
-| Physical window | Fixture / condition | Quiet measured span | Samples per surface | Largest x/y/width/height change | Search size, DIP |
-|---|---|---:|---:|---:|---|
-| 1440 x 740 | Both cards, search open; after repeat open/close and CLI Recheck | 11,920 ms | 107 | 0 DIP | 452 x 430.4 |
-| 640 x 480 | Both fixture/card states, short search open | 11,947.7 ms | 109 | 0 DIP | 440 x 162.4 |
-| 520 x 800 | Confirmed no obligations, CLI problem present, search open | 11,978 ms | 108 | 0 DIP | 364.8 x 397.6 |
+| Physical window | Fixture / condition                                              | Quiet measured span | Samples per surface | Largest x/y/width/height change | Search size, DIP |
+| --------------- | ---------------------------------------------------------------- | ------------------: | ------------------: | ------------------------------: | ---------------- |
+| 1440 x 740      | Both cards, search open; after repeat open/close and CLI Recheck |           11,920 ms |                 107 |                           0 DIP | 452 x 430.4      |
+| 640 x 480       | Both fixture/card states, short search open                      |         11,947.7 ms |                 109 |                           0 DIP | 440 x 162.4      |
+| 520 x 800       | Confirmed no obligations, CLI problem present, search open       |           11,978 ms |                 108 |                           0 DIP | 364.8 x 397.6    |
 
 Raw files are `measured-open-final.csv`, `measured-short-final.csv` and
 `measured-empty-final.csv`, with corresponding `.summary.json` files. Each final
@@ -3464,12 +3493,12 @@ intermediate frame. `final-short.jpg` and `final-narrow.jpg` show the small layo
 Mutations ran in the isolated `mutation/` source copy. No deliberately broken
 budget was run against the production store or left in the checkout.
 
-| Mutation | Discriminating observation |
-|---|---|
-| Reintroduce separate per-card residual budgets | Exit 1, `FAIL after 0 groups: budget.attention + budget.problems <= pool + 0.001` |
-| Force confirmed-empty presenter visible | Exit 1 at `!visible(empty)` |
-| Remove very-short search density | Exit 1, `FAIL after 1 groups: required <= 180.0` |
-| Restore source byte-identically and force Rebuild | Exit 0, 6 executed layout/visibility groups PASS |
+| Mutation                                          | Discriminating observation                                                        |
+| ------------------------------------------------- | --------------------------------------------------------------------------------- |
+| Reintroduce separate per-card residual budgets    | Exit 1, `FAIL after 0 groups: budget.attention + budget.problems <= pool + 0.001` |
+| Force confirmed-empty presenter visible           | Exit 1 at `!visible(empty)`                                                       |
+| Remove very-short search density                  | Exit 1, `FAIL after 1 groups: required <= 180.0`                                  |
+| Restore source byte-identically and force Rebuild | Exit 0, 6 executed layout/visibility groups PASS                                  |
 
 Logs are `mutation-old-budget.log`, `mutation-empty-card.log`,
 `mutation-short-chrome.log` and `restored-final-regression.log`. The controlling
@@ -3583,7 +3612,7 @@ draft in the same project, making ID-only inspection ambiguous), and the R15
 investigation's hardening (verified-handle deletion now refuses hard-link-aliased
 staged bytes instead of deleting through one link name).
 
-**Identity and ownership invariant implemented.** Ownership of attachment *bytes* is
+**Identity and ownership invariant implemented.** Ownership of attachment _bytes_ is
 decided by the exact recorded staged path of protected records, never by hash or size
 equality. A record's retirement does not by itself authorize deleting the bytes at its
 path: before any deletion, the same serialized `BEGIN IMMEDIATE` transaction that
@@ -3731,12 +3760,12 @@ Why each draft was replaced rather than kept:
 
 Groups 59-61 were replaced with 59-62, which exercise the claims above:
 
-| Group | What it actually does |
-|---|---|
-| 59 | Two real threads. Cleanup holds the store mutex at the production boundary (inside the deleter, after eligibility, before deletion); the competing admission is launched from the main thread, must block, and is recorded as blocked. Asserts `!admitted` and that the refusal names the cleanup. |
-| 60 | Substitutes a different object at the recorded path through `SetStagedDeletionBoundaryHookForTesting`, which fires before the production open. Asserts the replacement survives with its own bytes. |
-| 61 | First `Storage` destroyed before reopen. Interruption produced by the production path (the removal never reports an outcome). Asserts one `RETAINED` and one `DELETED` disposition and that a second recovery pass is empty. |
-| 62 | Untracked deletion against a case-variant, dot-segment reference held by another project: orphan removed, protected file retained. |
+| Group | What it actually does                                                                                                                                                                                                                                                                              |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 59    | Two real threads. Cleanup holds the store mutex at the production boundary (inside the deleter, after eligibility, before deletion); the competing admission is launched from the main thread, must block, and is recorded as blocked. Asserts `!admitted` and that the refusal names the cleanup. |
+| 60    | Substitutes a different object at the recorded path through `SetStagedDeletionBoundaryHookForTesting`, which fires before the production open. Asserts the replacement survives with its own bytes.                                                                                                |
+| 61    | First `Storage` destroyed before reopen. Interruption produced by the production path (the removal never reports an outcome). Asserts one `RETAINED` and one `DELETED` disposition and that a second recovery pass is empty.                                                                       |
+| 62    | Untracked deletion against a case-variant, dot-segment reference held by another project: orphan removed, protected file retained.                                                                                                                                                                 |
 
 Deleter signature change: `StagedBytesDeleter` now receives
 `StagedObjectIdentity const&`. Four existing test deleters (groups 48, 52, 56, 57) and
@@ -3771,12 +3800,12 @@ forced through `-t:Rebuild`, and restored byte-identically afterwards; every res
 was verified against the recorded SHA-256 of the clean file. Fragments, diffs and run
 logs are under `~/.codex/visualizations/2026/10/24/handoff-preserve/mutation/`.
 
-| Mutant | Change | Result |
-|---|---|---|
-| M1 | `RefuseCleanedPathAdmission_locked` call removed from `SaveDraftAttachment` | FAIL group 59, `Assertion failed: !admitted` (`storage_tests.cpp:5592`); 58 of 59 completed |
-| M2 | Identity comparison removed from `DeleteStagedFileWithHandleIdentity` | FAIL group 60, `Assertion failed: !outcome.bytesRemoved` (`storage_tests.cpp:5652`); 59 of 60 completed |
-| M3 | `RecoverInterruptedCleanups` returns early when work exists | FAIL group 61, `Assertion failed: recovered.size() == 2` (`storage_tests.cpp:5758`); 60 of 61 completed |
-| M4 | Reference fence removed from `RemoveUntrackedStagedFileGuarded` | FAIL group 62, `Assertion failed: guardedResult.referenced` (`storage_tests.cpp:5846`); 61 of 62 completed |
+| Mutant | Change                                                                      | Result                                                                                                     |
+| ------ | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| M1     | `RefuseCleanedPathAdmission_locked` call removed from `SaveDraftAttachment` | FAIL group 59, `Assertion failed: !admitted` (`storage_tests.cpp:5592`); 58 of 59 completed                |
+| M2     | Identity comparison removed from `DeleteStagedFileWithHandleIdentity`       | FAIL group 60, `Assertion failed: !outcome.bytesRemoved` (`storage_tests.cpp:5652`); 59 of 60 completed    |
+| M3     | `RecoverInterruptedCleanups` returns early when work exists                 | FAIL group 61, `Assertion failed: recovered.size() == 2` (`storage_tests.cpp:5758`); 60 of 61 completed    |
+| M4     | Reference fence removed from `RemoveUntrackedStagedFileGuarded`             | FAIL group 62, `Assertion failed: guardedResult.referenced` (`storage_tests.cpp:5846`); 61 of 62 completed |
 
 Each mutant fails in its own group and only after the earlier groups pass, so an early
 failure does not stand in for the later guards.
@@ -3885,12 +3914,12 @@ Group 61 was rewritten: it asserts that reopening is the production recovery inv
 `ABSENT`, that the `ABSENT` diagnostic does not claim attribution, and that a second
 reopen is idempotent. Four groups were added:
 
-| Group | Reproduces / asserts |
-|---|---|
-| 63 | PREPARING removal followed by a refused outcome COMMIT: bytes gone, intent still `PENDING`, row still present, then a retry that retires the record without a second physical effect. |
-| 64 | Orphan removal followed by a refused outcome COMMIT: tombstone survives, a later `READY` admission is refused, and the fence still holds after automatic recovery on reopen. |
-| 65 | Removal that throws after the intent commits: recovery with the path unobservable records `UNCERTAIN`, `resolved=false` and the observation diagnostic; with observation restored the same intent resolves to `RETAINED`, and recovery deletes nothing. |
-| 66 | Object replaced in the post-commit window of Clear: the replacement survives and the clear reports the failure. |
+| Group | Reproduces / asserts                                                                                                                                                                                                                                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 63    | PREPARING removal followed by a refused outcome COMMIT: bytes gone, intent still `PENDING`, row still present, then a retry that retires the record without a second physical effect.                                                                   |
+| 64    | Orphan removal followed by a refused outcome COMMIT: tombstone survives, a later `READY` admission is refused, and the fence still holds after automatic recovery on reopen.                                                                            |
+| 65    | Removal that throws after the intent commits: recovery with the path unobservable records `UNCERTAIN`, `resolved=false` and the observation diagnostic; with observation restored the same intent resolves to `RETAINED`, and recovery deletes nothing. |
+| 66    | Object replaced in the post-commit window of Clear: the replacement survives and the clear reports the failure.                                                                                                                                         |
 
 The COMMIT refusal in groups 63 and 64 is armed from inside the deleter, so the refusal
 lands on the **outcome** commit - the window the old ordering could not survive - rather
@@ -3916,13 +3945,13 @@ Applied to `Storage.cpp` with exact single-occurrence anchors, `-t:Rebuild` for 
 mutant, restored byte-identically and verified by SHA-256 (`fbdd4c04…`). Fragments,
 records and logs under `~/.codex/visualizations/2026/10/24/mutation2/`.
 
-| Mutant | Reverted fix | Result |
-|---|---|---|
-| M5 | PREPARING intent moved out of the pre-effect transaction | FAIL group 63, `journal.size() == 1` (`storage_tests.cpp:5923`) |
-| M6 | Orphan tombstone moved out of the pre-effect transaction | FAIL group 64, `journal.size() == 1` (`:5987`) |
-| M7 | Failed observation collapsed to absence | FAIL group 65, `!unknown[0].resolved` (`:6103`) |
-| M8 | Clear recaptures identity after the retirement commit | FAIL group 66, `fs::exists(path)` (`:6174`) |
-| M9 | Automatic recovery removed from the constructor | FAIL group 61, `reopened.RecoverInterruptedCleanups().empty()` (`:5761`) |
+| Mutant | Reverted fix                                             | Result                                                                   |
+| ------ | -------------------------------------------------------- | ------------------------------------------------------------------------ |
+| M5     | PREPARING intent moved out of the pre-effect transaction | FAIL group 63, `journal.size() == 1` (`storage_tests.cpp:5923`)          |
+| M6     | Orphan tombstone moved out of the pre-effect transaction | FAIL group 64, `journal.size() == 1` (`:5987`)                           |
+| M7     | Failed observation collapsed to absence                  | FAIL group 65, `!unknown[0].resolved` (`:6103`)                          |
+| M8     | Clear recaptures identity after the retirement commit    | FAIL group 66, `fs::exists(path)` (`:6174`)                              |
+| M9     | Automatic recovery removed from the constructor          | FAIL group 61, `reopened.RecoverInterruptedCleanups().empty()` (`:5761`) |
 
 Each mutant fails in its own group and only after the preceding groups pass.
 
@@ -3966,7 +3995,7 @@ bytes.
 ### Corrections
 
 - **Admission safety is derived, not enumerated.** `RefuseCleanedPathAdmission_locked` now
-  refuses when *any* journal row exists for the path and the bytes are not confirmed
+  refuses when _any_ journal row exists for the path and the bytes are not confirmed
   present. Presence uses the same tri-state observation as recovery, so an unobservable path
   refuses rather than passing. A path this store never recorded a cleanup for is unaffected,
   which is what keeps re-staging and every pre-existing record working.
@@ -3979,12 +4008,12 @@ bytes.
 
 ### Tests (66 groups preserved, 4 added)
 
-| Group | Sequence |
-|---|---|
-| 67 | The exact restart sequence: outcome COMMIT refused, reopen (recovery rewrites to `ABSENT`), retry retires the record and leaves the state `ABSENT` rather than `FAILED`, and a cross-project `READY` admission is refused. |
-| 68 | Deleter removes then throws (`UNCERTAIN`), then single **and** batch admission of a `READY` row against the missing path are both refused, with no partial row left by the batch. |
-| 69 | One rule across dispositions: `FAILED` with bytes present is admitted; the same path with bytes gone is refused; an unobservable path is refused; a missing path is refused and the same path is admitted once the bytes are written back. |
-| 70 | A present object that cannot be identified (replaced by a directory of the same name) is `UNCERTAIN` and unresolved, not `REPLACED`. |
+| Group | Sequence                                                                                                                                                                                                                                   |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 67    | The exact restart sequence: outcome COMMIT refused, reopen (recovery rewrites to `ABSENT`), retry retires the record and leaves the state `ABSENT` rather than `FAILED`, and a cross-project `READY` admission is refused.                 |
+| 68    | Deleter removes then throws (`UNCERTAIN`), then single **and** batch admission of a `READY` row against the missing path are both refused, with no partial row left by the batch.                                                          |
+| 69    | One rule across dispositions: `FAILED` with bytes present is admitted; the same path with bytes gone is refused; an unobservable path is refused; a missing path is refused and the same path is admitted once the bytes are written back. |
+| 70    | A present object that cannot be identified (replaced by a directory of the same name) is `UNCERTAIN` and unresolved, not `REPLACED`.                                                                                                       |
 
 ### Executed results
 
@@ -4006,11 +4035,11 @@ Fragments, records and logs under `~/.codex/visualizations/2026/10/24/mutation3/
 mutant was forced through `-t:Rebuild` and restored byte-identically, verified by SHA-256
 (`a8a9ec88…`).
 
-| Mutant | Reverted fix | Result |
-|---|---|---|
-| M10 | Retry back to the `DELETED`/`PENDING` allowlist | FAIL group 67, `store.GetDraftAttachments(projectId).empty()` (`:6253`) |
-| M11 | Admission back to a state allowlist | FAIL group 68, `singleRefused` |
-| M12 | Unidentifiable present object certified `REPLACED` | FAIL group 70, `recovered[0].state == "UNCERTAIN"` |
+| Mutant | Reverted fix                                       | Result                                                                  |
+| ------ | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| M10    | Retry back to the `DELETED`/`PENDING` allowlist    | FAIL group 67, `store.GetDraftAttachments(projectId).empty()` (`:6253`) |
+| M11    | Admission back to a state allowlist                | FAIL group 68, `singleRefused`                                          |
+| M12    | Unidentifiable present object certified `REPLACED` | FAIL group 70, `recovered[0].state == "UNCERTAIN"`                      |
 
 ### Still open
 
@@ -4059,18 +4088,18 @@ shortcut.
 
 ### R05 status
 
-| Requirement | Disposition |
-|---|---|
-| Distinguish absent from inaccessible managed directory | Implemented; group 72 (path replaced by a file, reason names "not a directory") |
-| Enumeration, file-size and boundary failures are incomplete | Implemented in `RefreshManagedScopeObservation`; refusal path exercised by group 72 |
-| Never count unreadable data as zero | Implemented; incomplete observation refuses instead of under-counting |
-| Alias and reparse-point accounting defined | Implemented: not followed, counted, recursion disabled; hard-link over-count documented |
-| No unbounded walk on every write under the store mutex | Implemented; group 73 asserts the walk count is unchanged across 20 admitted writes |
-| Constructor/open behaviour testable before construction | Implemented; group 71 uses the pre-construction probe for both refusal branches |
-| Store ceiling and free-space reserve | Preserved from group 51 (probe and sparse-file branches) |
-| Refusal diagnostics | Asserted in groups 51, 71 and 72 (distinct wording per cause) |
-| Recovery after conditions improve | Group 72 repairs the managed scope, reopens and writes again |
-| `openSchemaPhase_` review; quarantine preserved | Documented span; group 51 and 72 assert no quarantine from a capacity refusal |
+| Requirement                                                 | Disposition                                                                             |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Distinguish absent from inaccessible managed directory      | Implemented; group 72 (path replaced by a file, reason names "not a directory")         |
+| Enumeration, file-size and boundary failures are incomplete | Implemented in `RefreshManagedScopeObservation`; refusal path exercised by group 72     |
+| Never count unreadable data as zero                         | Implemented; incomplete observation refuses instead of under-counting                   |
+| Alias and reparse-point accounting defined                  | Implemented: not followed, counted, recursion disabled; hard-link over-count documented |
+| No unbounded walk on every write under the store mutex      | Implemented; group 73 asserts the walk count is unchanged across 20 admitted writes     |
+| Constructor/open behaviour testable before construction     | Implemented; group 71 uses the pre-construction probe for both refusal branches         |
+| Store ceiling and free-space reserve                        | Preserved from group 51 (probe and sparse-file branches)                                |
+| Refusal diagnostics                                         | Asserted in groups 51, 71 and 72 (distinct wording per cause)                           |
+| Recovery after conditions improve                           | Group 72 repairs the managed scope, reopens and writes again                            |
+| `openSchemaPhase_` review; quarantine preserved             | Documented span; group 51 and 72 assert no quarantine from a capacity refusal           |
 
 ### Tests
 
@@ -4096,11 +4125,11 @@ count toward the ceiling, and removing them restores admission — is unchanged.
 Fragments, records and logs under `~/.codex/visualizations/2026/10/25/mutation4/`. Each
 mutant forced through `-t:Rebuild` and restored byte-identically (SHA-256 `75d638f9…`).
 
-| Mutant | Reverted fix | Result |
-|---|---|---|
-| M13 | Incomplete managed-scope observation treated as usable | FAIL group 72, `threw` |
-| M14 | Managed-scope walk reintroduced into the write path | FAIL group 73, `ManagedScopeWalkEntriesForTesting() == beforeWrites` (`:6620`) |
-| M15 | Pre-construction capacity observation ignored | FAIL group 71, `threw` |
+| Mutant | Reverted fix                                           | Result                                                                         |
+| ------ | ------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| M13    | Incomplete managed-scope observation treated as usable | FAIL group 72, `threw`                                                         |
+| M14    | Managed-scope walk reintroduced into the write path    | FAIL group 73, `ManagedScopeWalkEntriesForTesting() == beforeWrites` (`:6620`) |
+| M15    | Pre-construction capacity observation ignored          | FAIL group 71, `threw`                                                         |
 
 ### Known limits of this slice
 
@@ -4137,6 +4166,7 @@ against the ceiling and admitted writes that the identical operation refuses aft
 explicit refresh.
 
 Correction — the cached total became a **ledger**:
+
 - `AttachmentService::PrepareAttachment` calls `ReserveManagedBytes(fileSize)` **before**
   creating the destination, so projected growth is refused before a byte is copied, and a
   scope-guarded reservation is released on every failure path or converted to accounted
@@ -4175,10 +4205,10 @@ final failure was previously lost.
 
 ### Tests (1–73 preserved, 74–75 added)
 
-| Group | Asserts |
-|---|---|
-| 74 | Staging accounts 4096 bytes with **no** refresh call; `ReserveManagedBytes` refuses 11 GiB before any copy and consumes no reservation; removal returns the ledger to its baseline. |
-| 75 | A nested directory with a deny `FILE_LIST_DIRECTORY` ACE for the current user: the denial is verified to take effect, the scan reports incomplete, the write is refused, and restoring the original DACL makes the scope observable and admission succeed again. |
+| Group | Asserts                                                                                                                                                                                                                                                          |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 74    | Staging accounts 4096 bytes with **no** refresh call; `ReserveManagedBytes` refuses 11 GiB before any copy and consumes no reservation; removal returns the ledger to its baseline.                                                                              |
+| 75    | A nested directory with a deny `FILE_LIST_DIRECTORY` ACE for the current user: the denial is verified to take effect, the scan reports incomplete, the write is refused, and restoring the original DACL makes the scope observable and admission succeed again. |
 
 Group 75 restores the DACL through an exception-safe guard, because an assertion failure
 would otherwise leave a deny ACE on a test directory.
@@ -4199,11 +4229,11 @@ would otherwise leave a deny ACE on a test directory.
 Under `~/.codex/visualizations/2026/10/25/mutation5/`. Each mutant forced through
 `-t:Rebuild` and restored byte-identically.
 
-| Mutant | Reverted fix | Result |
-|---|---|---|
-| M16 | `skip_permission_denied` restored on the attachment walk | FAIL group 75, `threw` |
-| M17 | Ceiling refusal in `ReserveManagedBytes` removed | FAIL group 74, `threw` |
-| M18 | Committed reservation no longer added to the ledger | FAIL group 74, ledger total |
+| Mutant | Reverted fix                                             | Result                      |
+| ------ | -------------------------------------------------------- | --------------------------- |
+| M16    | `skip_permission_denied` restored on the attachment walk | FAIL group 75, `threw`      |
+| M17    | Ceiling refusal in `ReserveManagedBytes` removed         | FAIL group 74, `threw`      |
+| M18    | Committed reservation no longer added to the ledger      | FAIL group 74, ledger total |
 
 A first run of M16 crashed the process (0xC0000374) after the assertion fired: the deny ACE
 was never restored on the throw path and the test freed a security descriptor the guard also
@@ -4265,11 +4295,11 @@ rethrows so the capacity refusal surfaces as a storage error rather than a silen
 
 ### Tests (1–75 preserved, 76–78 added)
 
-| Group | Asserts |
-|---|---|
-| 76 | Reserve → materialize → scan is refused (rejection counter advances, ledger unchanged); commit counts the bytes exactly once; a later scan agrees; removing the file returns the ledger to baseline. |
-| 77 | With 8 bytes of headroom above the reserve a 16-byte reservation is refused with the reserve diagnostic; with exactly enough headroom it is admitted; an overlapping second reservation sees the first one's claim; releasing the first frees the headroom. Controlled observations, no disk filled. |
-| 78 | Observations that admit the `PREPARING` write but refuse the reservation: the refusal surfaces, the source becomes `DELETE`-openable again, no draft record remains, the refusal repeats without leaking, and the same operation succeeds once the condition clears. |
+| Group | Asserts                                                                                                                                                                                                                                                                                              |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 76    | Reserve → materialize → scan is refused (rejection counter advances, ledger unchanged); commit counts the bytes exactly once; a later scan agrees; removing the file returns the ledger to baseline.                                                                                                 |
+| 77    | With 8 bytes of headroom above the reserve a 16-byte reservation is refused with the reserve diagnostic; with exactly enough headroom it is admitted; an overlapping second reservation sees the first one's claim; releasing the first frees the headroom. Controlled observations, no disk filled. |
+| 78    | Observations that admit the `PREPARING` write but refuse the reservation: the refusal surfaces, the source becomes `DELETE`-openable again, no draft record remains, the refusal repeats without leaking, and the same operation succeeds once the condition clears.                                 |
 
 ### Executed results
 
@@ -4287,11 +4317,11 @@ rethrows so the capacity refusal surfaces as a storage error rather than a silen
 Under `~/.codex/visualizations/2026/10/25/mutation6/`. Each mutant forced through
 `-t:Rebuild` and restored byte-identically (verified by the recorded SHA-256).
 
-| Mutant | Reverted fix | Result |
-|---|---|---|
-| M19 | Both reservation guards around scan publication removed | FAIL group 76, double-count assertion |
-| M20 | Reserve compared without the requested growth | FAIL group 77, `threw` |
-| M21 | Source handle owner no longer closes | FAIL group 78, `sourceDeletable()` |
+| Mutant | Reverted fix                                            | Result                                |
+| ------ | ------------------------------------------------------- | ------------------------------------- |
+| M19    | Both reservation guards around scan publication removed | FAIL group 76, double-count assertion |
+| M20    | Reserve compared without the requested growth           | FAIL group 77, `threw`                |
+| M21    | Source handle owner no longer closes                    | FAIL group 78, `sourceDeletable()`    |
 
 M21's mutant run terminated abnormally (0xC0000409) **after** the assertion fired; the clean
 build is stable. The abnormal exit is recorded rather than explained away, and no cause is
@@ -4354,11 +4384,11 @@ durable unreferenced scan; keep three verified backups; evaluate at startup, eve
 
 ### Tests (1–78 preserved, 79–81 added)
 
-| Group | Asserts |
-|---|---|
-| 79 | Startup evaluated during open; `CHANGED_DAY` is suppressed for the same period; `EIGHTY_PERCENT` is suppressed below 80%; `EXPLICIT` always evaluates and names the uncovered classes; a restart preserves the day record and still evaluates at startup. |
-| 80 | Empty scope reports the precise no-eligible disposition and claims no deletion; an aged unreferenced staged copy is eligible and evaluation deletes nothing; reclamation removes it; a copy inside the grace window is retained; a referenced aged copy is retained with its record intact. |
-| 81 | A protected reference created after evaluation prevents removal: reclamation re-collects, the raced object is retained and the file survives. |
+| Group | Asserts                                                                                                                                                                                                                                                                                     |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 79    | Startup evaluated during open; `CHANGED_DAY` is suppressed for the same period; `EIGHTY_PERCENT` is suppressed below 80%; `EXPLICIT` always evaluates and names the uncovered classes; a restart preserves the day record and still evaluates at startup.                                   |
+| 80    | Empty scope reports the precise no-eligible disposition and claims no deletion; an aged unreferenced staged copy is eligible and evaluation deletes nothing; reclamation removes it; a copy inside the grace window is retained; a referenced aged copy is retained with its record intact. |
+| 81    | A protected reference created after evaluation prevents removal: reclamation re-collects, the raced object is retained and the file survives.                                                                                                                                               |
 
 ### Executed results
 
@@ -4375,11 +4405,11 @@ durable unreferenced scan; keep three verified backups; evaluate at startup, eve
 Under `~/.codex/visualizations/2026/10/25/mutation7/`; all restores reported
 `matches_clean: true`.
 
-| Mutant | Reverted fix | Result |
-|---|---|---|
-| M22 | Per-object reference re-verification removed from reclamation | **PASSED — test-adequacy finding, see below** |
-| M23 | Seven-day staging grace ignored | FAIL group 80, `empty.candidates == 0` |
-| M24 | Changed-day suppression removed | FAIL group 79, `!sameDay.evaluated` |
+| Mutant | Reverted fix                                                  | Result                                        |
+| ------ | ------------------------------------------------------------- | --------------------------------------------- |
+| M22    | Per-object reference re-verification removed from reclamation | **PASSED — test-adequacy finding, see below** |
+| M23    | Seven-day staging grace ignored                               | FAIL group 80, `empty.candidates == 0`        |
+| M24    | Changed-day suppression removed                               | FAIL group 79, `!sameDay.evaluated`           |
 
 **Test-adequacy finding (M22).** Removing the per-object re-verification inside
 `ReclaimEligibleCleanup` does **not** fail any group. Group 81 proves that a reference
@@ -4417,14 +4447,14 @@ store was never opened.
 
 ### Executed observations
 
-| # | Observation | Evidence |
-|---|---|---|
-| 1 | Cold launch shows `Mayasaba · Engineering Control Room`; Welcome screen exposes the CLI readiness panel (`#WelcomeReadinessPanel`) with per-CLI status, `#SkipButton` and `#NextButton`. | `evidence/01-launch.png`, UIA snapshot in the run log |
-| 2 | Physical mouse click on `#NextButton` (pointer at absolute `[1565, 891]`) advances to Screen 2, the reusable project selector. Not a UIA Invoke — a real injected click. | `evidence/02-screen2.png` |
-| 3 | Screen 2 exposes `#FolderHeading`, `#ChooseFolderButton`, `#CreateNewProjectButton`, `#RecentProjectsFilterBox`, `#RecentProjectsStatusFilter`, `#NoRecentProjectsText`, `#PreviousRecentButton` (disabled), `#NextRecentButton` (disabled), `#FolderBackButton`. | UIA snapshot in the run log |
-| 4 | Client area at 520 × 640 **logical**: requested physical 650 × 800, captured client raster 650 × 800 → 520 × 640 logical exactly. | `evidence/size-520x640.png` |
-| 5 | Client area at 640 × 480 **logical**: requested physical 800 × 600, captured client raster 800 × 600 → 640 × 480 logical exactly. | `evidence/size-640x480.png` |
-| 6 | At 640 × 480 logical the selector controls are present with positive rects: heading `[123,205,721,250]`, Open `[123,348,821,397]`, Create `[123,410,821,459]`, filter box `[146,549,627,590]`, status combo `[642,544,802,594]`. | `evidence/uia-640x480.txt` |
+| #   | Observation                                                                                                                                                                                                                                                       | Evidence                                              |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| 1   | Cold launch shows `Mayasaba · Engineering Control Room`; Welcome screen exposes the CLI readiness panel (`#WelcomeReadinessPanel`) with per-CLI status, `#SkipButton` and `#NextButton`.                                                                          | `evidence/01-launch.png`, UIA snapshot in the run log |
+| 2   | Physical mouse click on `#NextButton` (pointer at absolute `[1565, 891]`) advances to Screen 2, the reusable project selector. Not a UIA Invoke — a real injected click.                                                                                          | `evidence/02-screen2.png`                             |
+| 3   | Screen 2 exposes `#FolderHeading`, `#ChooseFolderButton`, `#CreateNewProjectButton`, `#RecentProjectsFilterBox`, `#RecentProjectsStatusFilter`, `#NoRecentProjectsText`, `#PreviousRecentButton` (disabled), `#NextRecentButton` (disabled), `#FolderBackButton`. | UIA snapshot in the run log                           |
+| 4   | Client area at 520 × 640 **logical**: requested physical 650 × 800, captured client raster 650 × 800 → 520 × 640 logical exactly.                                                                                                                                 | `evidence/size-520x640.png`                           |
+| 5   | Client area at 640 × 480 **logical**: requested physical 800 × 600, captured client raster 800 × 600 → 640 × 480 logical exactly.                                                                                                                                 | `evidence/size-640x480.png`                           |
+| 6   | At 640 × 480 logical the selector controls are present with positive rects: heading `[123,205,721,250]`, Open `[123,348,821,397]`, Create `[123,410,821,459]`, filter box `[146,549,627,590]`, status combo `[642,544,802,594]`.                                  | `evidence/uia-640x480.txt`                            |
 
 Physical and logical client sizes are recorded separately above; outer window dimensions are
 **not** substituted for client dimensions. `resize` was given physical pixels and the
@@ -4499,12 +4529,12 @@ backup left the backup count unchanged and understated the attachment count.
 
 ### Tests (1–81 preserved, 82–85 added)
 
-| Group | Asserts |
-|---|---|
-| 82 | A quarantined store (forced through the same conflicting-replay path as group 29) refuses reclamation with a "quarantined" diagnostic and leaves the eligible file untouched. |
-| 83 | A successful reclamation leaves a `DELETED` journal row with a reason for that exact path, so an interruption after the physical effect is reconcilable. |
-| 84 | An object substituted in the window between the committed intent and the removal is preserved: `removed == 0`, `retained >= 1`, the replacement survives with its own bytes. Reached through `SetReclaimRemovalPhaseHookForTesting`, so the identity check is actually exercised rather than merely present. |
-| 85 | Five migration backups: the two beyond the retained three are reclaimed, `AccountedAttachmentBytesForTesting` is unchanged, and a rescan leaves exactly three backups. |
+| Group | Asserts                                                                                                                                                                                                                                                                                                      |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 82    | A quarantined store (forced through the same conflicting-replay path as group 29) refuses reclamation with a "quarantined" diagnostic and leaves the eligible file untouched.                                                                                                                                |
+| 83    | A successful reclamation leaves a `DELETED` journal row with a reason for that exact path, so an interruption after the physical effect is reconcilable.                                                                                                                                                     |
+| 84    | An object substituted in the window between the committed intent and the removal is preserved: `removed == 0`, `retained >= 1`, the replacement survives with its own bytes. Reached through `SetReclaimRemovalPhaseHookForTesting`, so the identity check is actually exercised rather than merely present. |
+| 85    | Five migration backups: the two beyond the retained three are reclaimed, `AccountedAttachmentBytesForTesting` is unchanged, and a rescan leaves exactly three backups.                                                                                                                                       |
 
 ### Executed results
 
@@ -4520,12 +4550,12 @@ backup left the backup count unchanged and understated the attachment count.
 
 Under `~/.codex/visualizations/2026/10/25/mutation8/`; all restores `matches_clean: true`.
 
-| Mutant | Reverted fix | Result |
-|---|---|---|
-| M25 | Explicit `AdmitWrite_locked` removed from the reclamation loop | **PASSED — see note** |
-| M26 | Ledger update ignores the storage class | FAIL group 85 |
-| M27 | Identity comparison removed from verified removal | FAIL group 84, `result.removed == 0` |
-| M28 | Per-object intent no longer recorded | FAIL group 83, `sawEntry` |
+| Mutant | Reverted fix                                                   | Result                               |
+| ------ | -------------------------------------------------------------- | ------------------------------------ |
+| M25    | Explicit `AdmitWrite_locked` removed from the reclamation loop | **PASSED — see note**                |
+| M26    | Ledger update ignores the storage class                        | FAIL group 85                        |
+| M27    | Identity comparison removed from verified removal              | FAIL group 84, `result.removed == 0` |
+| M28    | Per-object intent no longer recorded                           | FAIL group 83, `sawEntry`            |
 
 **M25 note.** Removing the explicit admission call does not fail group 82, because
 `Exec("BEGIN IMMEDIATE")` performs the same admission internally. Quarantine protection for
@@ -4579,11 +4609,11 @@ Groups 80–85 were updated because the grace clock is now event-based: they sta
 through an evaluation and then call `BackdateStagingGraceForTesting`. Group 85 also records
 three verified backups, since retirement is now gated on the manifest.
 
-| Group | Asserts |
-|---|---|
-| 86 | A file 30 days old by timestamp with no grace row is not eligible; it stays ineligible on a second pass; only after the clock is moved back 8 days does it become eligible. |
-| 87 | With two verified backups nothing is retired and all five files survive; with a third verified, exactly the two unverified backups are removed and the three verified ones survive. |
-| 88 | With the staging root replaced by a file, evaluation reports `complete == false` and says it "could not be fully evaluated" and that this is "not a report that no disposable data exists", and does not emit the no-eligible wording. |
+| Group | Asserts                                                                                                                                                                                                                                |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 86    | A file 30 days old by timestamp with no grace row is not eligible; it stays ineligible on a second pass; only after the clock is moved back 8 days does it become eligible.                                                            |
+| 87    | With two verified backups nothing is retired and all five files survive; with a third verified, exactly the two unverified backups are removed and the three verified ones survive.                                                    |
+| 88    | With the staging root replaced by a file, evaluation reports `complete == false` and says it "could not be fully evaluated" and that this is "not a report that no disposable data exists", and does not emit the no-eligible wording. |
 
 ### Executed results
 
@@ -4599,11 +4629,11 @@ three verified backups, since retirement is now gated on the manifest.
 
 Under `~/.codex/visualizations/2026/10/25/mutation9/`; all restores `matches_clean: true`.
 
-| Mutant | Reverted fix | Result |
-|---|---|---|
-| M29 | Grace elapsed check ignored | FAIL group 80, `empty.candidates == 0` (the earliest group that depends on the grace) |
-| M30 | Verified-backup gate removed | FAIL group 87, `refused.removed == 0` |
-| M31 | Incomplete pass reported as complete | FAIL group 88, `!evaluation.complete` |
+| Mutant | Reverted fix                         | Result                                                                                |
+| ------ | ------------------------------------ | ------------------------------------------------------------------------------------- |
+| M29    | Grace elapsed check ignored          | FAIL group 80, `empty.candidates == 0` (the earliest group that depends on the grace) |
+| M30    | Verified-backup gate removed         | FAIL group 87, `refused.removed == 0`                                                 |
+| M31    | Incomplete pass reported as complete | FAIL group 88, `!evaluation.complete`                                                 |
 
 M29 fails in group 80 rather than 86 because group 80 runs first and also depends on the
 grace clock; the mutant is still discriminated, just not first by group 86.
@@ -4622,20 +4652,24 @@ grace clock; the mutant is still discriminated, just not first by group 86.
 ## 2026-10-26 — C2A & C2B: Candidate discovery read-only semantics, resumable traversal, manifest integrity verification, and strict certification harness (S2-N01 to N06, S2-N08, S0-D01, S4-G01)
 
 ### Candidate collection read-only enforcement (S2-N01)
+
 `CollectCleanupCandidates_locked` is strictly read-only. Unregistered unreferenced staging copies are recorded in `unregisteredGracePaths` rather than directly inserted via inline SQL during the directory walk. The admitted write transaction in `EvaluateCleanup` and `ReclaimEligibleCleanup` explicitly registers grace rows (`staging_grace`) under `AdmitWrite_locked()` and `BEGIN IMMEDIATE`.
 
 ### Resumable staging traversal & batch bounding (S2-N02, S2-N03, S2-N06)
+
 - **Cursor tracking**: `lastStagedDiscoveryCursor_` records the first unexamined staged path when `kBatchLimit` (500 items) or deadline expiration bounds the collection.
 - **Resumption**: Subsequent evaluation passes locate the stored cursor and resume examination directly from that entry, ensuring forward progress across large staging directories without memory exhaustion or starvation.
 - **Backup bound**: The migration backup candidate list is bounded by `kBatchLimit` across both directory discovery and candidate admission.
 - **Post-loop error checks**: Post-loop iterator error checks (`walkEc`, `dirEc`) verify directory completeness and log note diagnostics if enumeration is interrupted.
 
 ### Grace clock invalidation & manifest integrity verification (S2-N04, S2-N05, S2-N08)
+
 - **Grace invalidation on reference return**: When a staged copy previously marked unreferenced is observed to have a protected reference (`CountOtherProtectedReferences_locked > 0`), its entry in `staging_grace` is deleted in the evaluation/reclamation transaction via `referencedPathsToInvalidateGrace`.
 - **Manifest integrity check**: The `backup_manifest` table schema records `sha256_hex` and `file_size`. During candidate evaluation, all three retained backups must physically exist, match their recorded sizes, and match their SHA-256 digests. If any retained backup is missing or modified, backup retirement is blocked and an error note is recorded.
 - **Companion file error fail-closed**: Under the 80% capacity trigger, if SQLite companion files (`-wal`, `-shm`) cannot be accessed or read, evaluation is marked incomplete (`complete = false`) rather than being silently bypassed.
 
 ### Documentation & certification harness governance (S0-D01, S4-G01)
+
 - **README Layer 4 / 9 alignment (S0-D01)**: `native/README.md` was updated to accurately document that Layer 4 Agent Gateway detection and Layer 9 Execution Kernel process-launch primitives exist, while truthfully noting that session adapters, CLI protocol translation, and containment remain absent.
 - **Strict certification harness (S4-G01)**: `native/tests/test_full_ui_acceptance.py` now supports `--strict` and `MAYASABA_STRICT_CERTIFICATION=1`. In strict mode or whenever incomplete/inconclusive criteria remain, the harness fails closed with exit code 1.
 
@@ -4643,39 +4677,49 @@ grace clock; the mutant is still discriminated, just not first by group 86.
 
 > **Documentation accuracy reconciliation (S0-F01)**: The previous entry described groups 1–92 as preserved from earlier work; groups 89–92 were actually newly implemented in C3 covering configurable ceiling and scheduled maintenance behavior, while groups 93–96 were added in C2A/C2B. Both additions are now explicitly enumerated below:
 
-| Group | Asserts |
-|---|---|
-| 89 | Effective ceiling drives admission, not a hardcoded 10 GiB; store admits up to configured ceiling. |
-| 90 | Out-of-range ceiling values (< 2 GiB or > 100 GiB) are refused before any write admission. |
-| 91 | Configured ceiling persists across store reopen and restarts. |
-| 92 | Scheduled maintenance executes changed-day and 80%-capacity triggers, bounding evaluation records to 200 entries. |
-| 93 | Candidate discovery is read-only; no grace rows are inserted in SQLite during candidate collection; grace registration occurs only during admitted write transaction. |
-| 94 | Resumable traversal guarantees forward progress across batch bounds (`kBatchLimit` = 500) without omitting or duplicating entries across subsequent passes. |
-| 95 | Staging grace clock is invalidated when an unreferenced file receives a protected reference. |
-| 96 | Corrupt or modified verified backup fails SHA-256/size verification and blocks backup retirement. |
+| Group | Asserts                                                                                                                                                               |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 89    | Effective ceiling drives admission, not a hardcoded 10 GiB; store admits up to configured ceiling.                                                                    |
+| 90    | Out-of-range ceiling values (< 2 GiB or > 100 GiB) are refused before any write admission.                                                                            |
+| 91    | Configured ceiling persists across store reopen and restarts.                                                                                                         |
+| 92    | Scheduled maintenance executes changed-day and 80%-capacity triggers, bounding evaluation records to 200 entries.                                                     |
+| 93    | Candidate discovery is read-only; no grace rows are inserted in SQLite during candidate collection; grace registration occurs only during admitted write transaction. |
+| 94    | Resumable traversal guarantees forward progress across batch bounds (`kBatchLimit` = 500) without omitting or duplicating entries across subsequent passes.           |
+| 95    | Staging grace clock is invalidated when an unreferenced file receives a protected reference.                                                                          |
+| 96    | Corrupt or modified verified backup fails SHA-256/size verification and blocks backup retirement.                                                                     |
 
 ---
 
 ## 2026-10-26 — S2 & S0 Deep Audit Remediation: Ceiling Admission, Bounded Streaming Backups, Resumable Traversal and Work Budgets (S2-F01 to S2-F07, S0-F01)
 
 ### Storage ceiling admission under storage pressure (S2-F01)
-`SetStorageCeilingGiB` previously called `AdmitWrite_locked()` which checked capacity against the *old* ceiling. If the store had already reached or exceeded its 10 GiB ceiling, attempts by the user to raise the ceiling to 20 GiB were refused by the old capacity check.
+
+`SetStorageCeilingGiB` previously called `AdmitWrite_locked()` which checked capacity against the _old_ ceiling. If the store had already reached or exceeded its 10 GiB ceiling, attempts by the user to raise the ceiling to 20 GiB were refused by the old capacity check.
+
 - **Fix**: Implemented `inSettingsAdmission_` scoped guard in `SetStorageCeilingGiB`. Settings modifications skip capacity limit checks while strictly preserving store quarantine checks (`poisoned_`) and volume free-space validation (>= 5 GiB reserve).
 
 ### Preventing ceiling reduction below protected usage (S2-F02)
+
 Lowering the storage ceiling is now validated against currently accounted usage.
+
 - **Fix**: `SetStorageCeilingGiB` invokes `ObserveCapacity_locked()` and refuses any ceiling reduction where `newCeilingBytes < observed.managedBytes` or where the new ceiling is lower than active staging byte reservations (`stagingReservationBytes_`). Protected bytes are never deleted or jeopardized to force-fit a lower ceiling.
 
 ### Bounded streaming backup integrity hashing outside storage lock (S2-F03)
+
 `RecordVerifiedBackup` previously loaded entire backup files into a `std::string` buffer in memory while holding the store mutex, posing an out-of-memory risk and holding the lock during multi-gigabyte file reads.
+
 - **Fix**: Implemented `Sha256HexFile(path, deadline)` in `Sha256Hex.h` / `Sha256Hex.cpp` using a heap-allocated fixed 64 KiB buffer (`std::vector<char> buffer(65536)`) and BCrypt streaming hash API (`BCryptHashData`). `RecordVerifiedBackup` performs file hashing completely OUTSIDE the Storage mutex. When reacquiring the lock, it verifies `StagedObjectIdentity` (volume serial and file index) and size before committing the verified record, preventing substitution races from adopting stale verification evidence.
 
 ### Legacy backup verification records re-validation & discriminating tests (S2-F04)
+
 Legacy `backup_manifest` records created before hash columns were added defaulted to empty `sha256_hex` and `file_size = 0`.
+
 - **Fix**: In `CollectCleanupCandidates_locked`, any manifest row where `expectedSha.empty() || expectedSize == 0` is rejected from the retained verified backup count and marked as needing re-verification. Retirement remains refused until three fully verified, digest-matched backups exist. Hardened test group 102 constructs 3 empty-digest legacy rows alongside disposable backup files to strictly discriminate the guard, proving that unverified rows cannot authorize cleanup.
 
 ### Deterministic hierarchical traversal, O(1) branch pruning, and entry resumption (F106, F107)
+
 Previously, directory enumeration order was non-lexicographical, and `CollectCleanupCandidates_locked` resumption skipped or revisited entries across batch bounds.
+
 - **Fix**:
   1. Implemented deterministic recursive directory traversal (`traverseDir`) in `Storage.cpp`:
      - Lexicographically sorts entries (`std::sort` on files and subdirectories).
@@ -4685,14 +4729,18 @@ Previously, directory enumeration order was non-lexicographical, and `CollectCle
   2. Hardened test group 105: generates 3,500 files named non-monotonically (`(i * 37) % 100000`) across nested subdirectories. An exact `std::set<std::string>` oracle verifies that all 3,500 distinct files are visited and registered in `staging_grace` with zero omissions and zero duplicates across 7 consecutive passes.
 
 ### Fail-closed backup identity verification & same-size in-place mutation detection (F108)
+
 Physical object identity verification in `RecordVerifiedBackup` was previously skipped if identity capture failed. Additionally, same-size in-place file content modifications during hashing were undetected.
+
 - **Fix**:
   1. `RecordVerifiedBackup` fails closed immediately if `CaptureStagedObjectIdentity(path).valid == false`.
   2. Captures file modification timestamp `mtimeBefore` and verifies `mtimeAfter == mtimeBefore` upon reacquiring the lock, detecting in-place content modifications that preserve file size.
   3. Added regression group 106: tests fail-closed behavior on missing file identity and verifies that in-place content mutation (modifying 7 bytes mid-file during the hashing hook) fails verification and produces zero verified rows in `backup_manifest`.
 
 ### Backup candidate verification unlocked streaming (F109)
+
 `CollectCleanupCandidates_locked` previously held `mutex_` while streaming SHA-256 digests for backup candidates.
+
 - **Fix**:
   1. Decoupled candidate verification into three phases:
      - Phase 1 (under lock): Project candidates from `backup_manifest`, capturing `StagedObjectIdentity`, `mtimeBefore`, and file size.
@@ -4701,24 +4749,26 @@ Physical object identity verification in `RecordVerifiedBackup` was previously s
   2. Added regression group 107: uses `SetBackupCandidateHashingHookForTesting` to assert that `mutex_.try_lock()` succeeds during candidate hashing, proving the lock is unheld.
 
 ### Thread-safe fault injection global state (F110)
+
 `g_faultInjectionMaxBytes` in `Sha256Hex.cpp` was previously a non-atomic global variable.
+
 - **Fix**: Converted to `std::atomic<std::size_t> g_faultInjectionMaxBytes{0};` with relaxed atomic load/store operations.
 
 ### Tests (1–96 preserved, 97–107 added)
 
-| Group | Asserts |
-|---|---|
-| 97 | Raising the storage ceiling is admitted when store has reached the old ceiling (fixes S2-F01). |
-| 98 | Lowering ceiling below currently protected bytes is refused and leaves setting unchanged (fixes S2-F02). |
-| 99 | Lowering ceiling below outstanding reservations is refused (fixes S2-F02). |
-| 100 | Streaming hash of backup file computes authoritative digest and matches NIST vectors (fixes S2-F03). |
-| 101 | Injected unreadable or interrupted backup fails verification and is not marked verified (fixes S2-F03). |
-| 102 | Legacy verified backup record with empty hash is rejected from retained verified set (fixes S2-F04). |
-| 103 | Removed cursor file between passes resumes forward progress at next file (fixes S2-F06). |
-| 104 | Traversal over directory trees respects visited entry budget (fixes S2-F07). |
-| 105 | Large directory traversal with 3500 entries guarantees monotonic forward progress across 2000-entry bounds with unique coverage (fixes F106/F107). |
-| 106 | Backup verification fails closed on identity failure or in-place content mutation (fixes F108). |
-| 107 | Backup candidate verification during cleanup evaluation runs hashing outside Storage lock (fixes F109). |
+| Group | Asserts                                                                                                                                            |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 97    | Raising the storage ceiling is admitted when store has reached the old ceiling (fixes S2-F01).                                                     |
+| 98    | Lowering ceiling below currently protected bytes is refused and leaves setting unchanged (fixes S2-F02).                                           |
+| 99    | Lowering ceiling below outstanding reservations is refused (fixes S2-F02).                                                                         |
+| 100   | Streaming hash of backup file computes authoritative digest and matches NIST vectors (fixes S2-F03).                                               |
+| 101   | Injected unreadable or interrupted backup fails verification and is not marked verified (fixes S2-F03).                                            |
+| 102   | Legacy verified backup record with empty hash is rejected from retained verified set (fixes S2-F04).                                               |
+| 103   | Removed cursor file between passes resumes forward progress at next file (fixes S2-F06).                                                           |
+| 104   | Traversal over directory trees respects visited entry budget (fixes S2-F07).                                                                       |
+| 105   | Large directory traversal with 3500 entries guarantees monotonic forward progress across 2000-entry bounds with unique coverage (fixes F106/F107). |
+| 106   | Backup verification fails closed on identity failure or in-place content mutation (fixes F108).                                                    |
+| 107   | Backup candidate verification during cleanup evaluation runs hashing outside Storage lock (fixes F109).                                            |
 
 ### Executed results
 
@@ -4736,7 +4786,6 @@ Physical object identity verification in `RecordVerifiedBackup` was previously s
   - `native/Mayasaba/Sha256Hex.h`: `ea0999836d056c1232b68341521927fd1aa27da0e901235a45f9ff65aff9e6f2`
   - `native/tests/storage_tests.cpp`: `0f5a61ae9909bc038ba461d521ad9c3a7d72995fa917714efac39f495219b2b4`
   - `native/tests/storage_tests.vcxproj`: `05e4201ba87585f19eccc81a38f5d0dc8973ce8e9b26d19442bec5cbb96b9822`
-
 
 ## 2026-10-26 - F4-PAGING-CORRECTION: bounded history paging correctness hardening (UI-01 review)
 
@@ -4947,7 +4996,7 @@ mid-transition report produced during the reload's unfolding (the same reload fo
 the scroll-to-end
 gate was also still pending, so the at-top reading did not even
 name a reader intention). Each of the three prepend+compensation
-passes then anchored *on the transient sample itself*, i.e. the
+passes then anchored _on the transient sample itself_, i.e. the
 compensation restored a position the reader never deliberately
 chose. The settled collapsed state is exactly what the four
 earlier acceptance runs observed as messages 8-11 near the top
@@ -5019,11 +5068,11 @@ fixture copy) established the mechanism case by case:
 - the `UIA_ScrollPatternNoScroll` (-1) horizontal forms:
   `TypeError: 'float' object is not callable` inside pywinauto's wrapper,
   before reaching COM;
-- the pattern *reads* (`CurrentVerticalScrollPercent`,
+- the pattern _reads_ (`CurrentVerticalScrollPercent`,
   `CurrentVerticalViewSize`) work fine.
 
 Conclusion recorded at the time: the UIA Scroll-pattern **set** is not a
-valid stimulus against this control; only the scroll *gesture* is. The leg's
+valid stimulus against this control; only the scroll _gesture_ is. The leg's
 stimulus was replaced accordingly for run7.
 
 ### Run 7 (criterion 23 first measurable run: FAIL, cause in the stimulus)
@@ -5219,7 +5268,7 @@ Two attribution corrections taken from this run:
 - **The gen=18 reload was the harness's own post-verdict cleanup, not an
   operator.** Between the FAIL verdict and the trace dump the harness logs
   `Switch Project: foreground established=True [attempt 1: already
-  foreground]` → `returned to alpha after the paging probe: True` → store-write
+foreground]` → `returned to alpha after the paging probe: True` → store-write
   DELETE at run-clock 616.605 s; the last selection receipt is alpha
   `02:59:27.483Z` (matching `projects.last_opened_at`). Increments 16/17/18 =
   `ShowFolder` → `SelectAsync` entry (`uint64_t gen=++selectorGeneration_;`,
@@ -5317,7 +5366,7 @@ discriminated:**
   (y1 = 50 × 83.008), extent growth 81.12 px/row, their difference × 50 =
   94.4 px = the exact run11→run13 target delta (4103.79 → 4198.25), and a
   systematic 3-row realization buffer above the viewport top makes the
-  topmost-*realized* read 68/69 while the *visible* top row is msg 72. Under
+  topmost-_realized_ read 68/69 while the _visible_ top row is msg 72. Under
   Φ1 the extent was correct all along (8398.4 / 100 rows = 83.984 px/row)
   and the realized-index oracle never measured the property it claims to
   (physical top row).
@@ -5389,7 +5438,7 @@ run5–14 oracle read the topmost **realized** card index and demanded
 Under the confirmed ±3-row realization buffer, `topmost >= 71` is
 satisfiable only when the visible row is ≥ row 74's position — i.e. only
 when the reader has been scrolled **two rows below** the anchor. At the one
-correct state (visible row = anchor row) the oracle *cannot* pass: it reads
+correct state (visible row = anchor row) the oracle _cannot_ pass: it reads
 anchor−3. It would also pass a two-row overshoot (visible row 74 ⇒ topmost
 71). So the oracle as written (a) made PASS unreachable at the acceptance
 state, (b) made PASS reachable at a wrong state, and (c) measured the
@@ -5430,7 +5479,7 @@ pre-mutation source is `MainWindow.xaml.cpp.mutation-backup` (`0c6db922…`,
 byte-identical to the source at mutation time).
 
 Criterion 22 `PASS`. **Criterion 23 `INCONCLUSIVE`** — not FAIL, not PASS,
-and *not* a discriminating result. Totals 12 PASS / 1 INCONCLUSIVE /
+and _not_ a discriminating result. Totals 12 PASS / 1 INCONCLUSIVE /
 0 FAIL / 10 NOT_RUN.
 
 **What actually happened (this is a harness/environment flake, not an
@@ -5527,7 +5576,7 @@ the identical journey **without** this code and was clean through Phase 6.
 element only if already realized and never creates one. The visible row is
 always realized inside the ±3-row buffer, so the probe always finds it; an
 unrealized index is skipped at negligible cost. The invariant is stated at
-the call site: *a diagnostic must never mutate the layout it observes*.
+the call site: _a diagnostic must never mutate the layout it observes_.
 
 **What is not claimed.** The exact per-tick realization mechanics are not
 micro-measured (the extent spikes were +112.8 px, one row, not the full probe
@@ -5616,7 +5665,7 @@ the product published. The corrected oracle therefore had never once observed
 the published value — in run15 or run15c. Per §13 this is an **oracle-adequacy
 defect**: a read that cannot return a value is not an observation of the
 product, so run15c's INCONCLUSIVE carries no evidence for or against the
-corrected oracle, and it is *not* a refutation of the run15b diagnosis.
+corrected oracle, and it is _not_ a refutation of the run15b diagnosis.
 
 **Correction (documented before the change).** `CurrentItemStatus` is the
 typed accessor for the identical property (30104 ==
@@ -5681,7 +5730,7 @@ samples, 11152 answered, p50 0.15 ms, p95 1.34 ms, p99 5.98 ms, max 31.50 ms,
 the layout-cycle loop.
 
 **What is not claimed.** A PASS on the restored product does not by itself
-prove the oracle *discriminates* — a broken read that always returned the
+prove the oracle _discriminates_ — a broken read that always returned the
 expected value would also pass here. The discriminating half is run15d: the
 controlling mutation forced back to the extent-formula landing must make this
 same oracle FAIL with `seeded-paging-00071`. That run was launched against
@@ -5718,17 +5767,17 @@ wheel journey: 285 batches to the at-top trigger (identical to runs 11/13/14/15c
 
 The ~94 px (one row) gap between `settled` and `anchorRowWouldBe`, held
 constant across both reconcile passes with `r=+67.6` (the anchor row's top
-sitting 67.6 px *below* the viewport top), is the run11 extent-formula defect
-reproduced deterministically — and this time the oracle was able to *read*
+sitting 67.6 px _below_ the viewport top), is the run11 extent-formula defect
+reproduced deterministically — and this time the oracle was able to _read_
 the consequence. The read returned a real, wrong identity and the verdict
 chain failed exactly once, at the top-visible comparison.
 
 **Discrimination proof, completed.** Same repaired read path, two products:
 
-| run | product | published top-visible | expected | criterion 23 |
-|---|---|---|---|---|
-| run16 | restored (anchor-row instrument) | `seeded-paging-00072` | `seeded-paging-00072` | **PASS** |
-| run15d | mutant (extent formula) | `seeded-paging-00071` | `seeded-paging-00072` | **FAIL** |
+| run    | product                          | published top-visible | expected              | criterion 23 |
+| ------ | -------------------------------- | --------------------- | --------------------- | ------------ |
+| run16  | restored (anchor-row instrument) | `seeded-paging-00072` | `seeded-paging-00072` | **PASS**     |
+| run15d | mutant (extent formula)          | `seeded-paging-00071` | `seeded-paging-00072` | **FAIL**     |
 
 The corrected oracle accepts the corrected product and rejects the restored
 defect, at the exact row the arithmetic predicts. That is the controlling-
@@ -5743,8 +5792,8 @@ unhandled-exception.log` gained **no** entry (the only 2026-10-27 entry
 remains run15b's `04:46:39`). The `TryGetElement` probe is compatible with the
 mutant's positioning, confirming the fail-fast was the probe and nothing else.
 
-**What is not claimed.** The FAIL is for a defect that was *deliberately
-re-introduced*; it is not a new product finding, and the committed source
+**What is not claimed.** The FAIL is for a defect that was _deliberately
+re-introduced_; it is not a new product finding, and the committed source
 carries neither mutation half. `MainWindow.xaml.cpp` was restored from
 `.mutation-backup` (SHA-256 `0c6db922…` verified), the `TryGetElement` fix
 re-applied alone, and the result verified byte-identical to `.fixed-base`
@@ -5804,7 +5853,6 @@ the Phase 9 `ActionCenterPanel` abort (criteria 8–15, 21), F4-R2's refusal
 branch (source-reviewed, no non-empty `errorMessage` page arrived in any
 run), and F4-R4's Jump-to-latest control (no harness leg clicks it).
 
-
 ### Criterion 23 (reading anchor) - first measurable run
 
 Criterion 23 was never measurable while 22 failed (its precondition is 22's
@@ -5816,15 +5864,15 @@ named before it was corrected:
 1. **Missing pattern argument (run5).** `iface_scroll.SetScrollPercent`
    requires both the horizontal and the vertical pattern argument; the leg
    passed only the vertical one, raising `TypeError: required argument
-   'verticalPercent' missing`.
+'verticalPercent' missing`.
 2. **Provider rejection (run6).** With both arguments supplied the call
    reached the provider and was rejected: `COMError -2146233079
-   (0x80131509)`. The standalone probe `f4r5-run6/scroll-pattern-probe.py`
+(0x80131509)`. The standalone probe `f4r5-run6/scroll-pattern-probe.py`
    (launched against a live app on a fresh fixture copy) established the
    mechanism: every `SetScrollPercent(0.0, v)` form is rejected by the
    provider with the same HRESULT, the `UIA_ScrollPatternNoScroll` (-1)
    horizontal forms die inside pywinauto's wrapper before reaching COM
-   (`'float' object is not callable`), and the pattern's *reads*
+   (`'float' object is not callable`), and the pattern's _reads_
    (`CurrentVerticalScrollPercent`, `CurrentVerticalViewSize`) work fine.
    Conclusion: the UIA Scroll-pattern set is not a valid stimulus against
    this control; only the scroll gesture is.
@@ -5927,14 +5975,14 @@ directories):
   (`instrument=anchor-row`, published top edge read the anchored row), and
   run16 re-confirmed it through the corrected ItemStatus read. The oracle
   itself was then corrected (comtypes accessor defect, oracle-adequacy finding
-  + run15c above) and proven discriminating by the controlling mutation:
-  run15d's extent-formula mutant published `seeded-paging-00071` against the
-  expected `seeded-paging-00072` and failed exactly there, while run16's
-  restored product passed with a matching read. The committed source carries
-  neither mutation half (restored from `.mutation-backup`, verified
-  byte-identical to `.fixed-base`), and run17 re-confirmed **PASS** against
-  the exact rebuilt artifact `b9cd1e45…` (14 PASS / 0 FAIL / 9 NOT_RUN;
-  criterion 23 PASS with the published top edge reading the anchored row).
+  - run15c above) and proven discriminating by the controlling mutation:
+    run15d's extent-formula mutant published `seeded-paging-00071` against the
+    expected `seeded-paging-00072` and failed exactly there, while run16's
+    restored product passed with a matching read. The committed source carries
+    neither mutation half (restored from `.mutation-backup`, verified
+    byte-identical to `.fixed-base`), and run17 re-confirmed **PASS** against
+    the exact rebuilt artifact `b9cd1e45…` (14 PASS / 0 FAIL / 9 NOT_RUN;
+    criterion 23 PASS with the published top edge reading the anchored row).
 
 ### Residual limitations (named, not certified)
 
@@ -5946,17 +5994,17 @@ directories):
 - The Phase 9 `ActionCenterPanel not found` abort remains pre-existing and
   untouched (runs 1-12 all abort there); criteria 8-15 and 21 stay NOT_RUN. The
   per-run summary verdict counts (e.g. run5: 13 PASS / 1 INCONCLUSIVE / 9
-  NOT_RUN) are counts of *executed* criteria only.
+  NOT_RUN) are counts of _executed_ criteria only.
 - `MAYASABA_UI_TRACE` remains a dev-opt-in diagnostic. Its event set and line
   cap make no promises about ordering relative to sensor events beyond the
   sequence it itself records (it is event-truth, not latency-truth).
-
 
 ---
 
 ## Phase 1 Acceptance Stabilization: Recovery Admission, Thread-Safe Maintenance, Header Recovery Regions & Full UI Acceptance (2026-10-31)
 
 ### 1. Artifact Identities
+
 - **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe` (SHA-256: `a7bb9afde184ae412bc54b33c8588a4435658adbbdeb8b9af2beb3f73330c306`)
 - **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf` (SHA-256: `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`)
 - **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe` (SHA-256: `21b420e06d04bc1036065e9cd0dea8f38e399e76f90b38adf52da419ca5fdf4d`)
@@ -6002,28 +6050,29 @@ directories):
 
 ### 3. Verification Suite Summary
 
-| Test Target | Command | Result |
-|---|---|---|
-| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
-| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
-| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
-| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
-| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
-| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **19 PASS, 4 INCONCLUSIVE, 0 FAIL, 0 NOT_RUN** |
+| Test Target                               | Command                                                                                                                | Result                                         |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Layout budget & scroll policy             | `native/tests/bin/layout_budget_tests.exe`                                                                             | **8/8 PASS**                                   |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py`                                                                          | **53/53 PASS**                                 |
+| Contract registry & Screen 2 schemas      | `python native/tests/validate_contract_registry.py` (managed venv)                                                     | **124/124 PASS**                               |
+| Storage regressions                       | `native/tests/bin/storage_tests.exe`                                                                                   | **115/115 PASS**                               |
+| Application build (`Mayasaba.exe`)        | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors**                       |
+| Native UI acceptance runner               | `python native/tests/test_full_ui_acceptance.py`                                                                       | **19 PASS, 4 INCONCLUSIVE, 0 FAIL, 0 NOT_RUN** |
 
 ### 4. Remaining Scope & Open Obligations
+
 - **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
 - **D06 Maintenance Application Wiring:** Periodic background invocation, shutdown cancellation, and capacity-pressure recovery reclamation integrated in `MainWindow` (`RunMaintenanceWorkflowAsync`) and `Storage::RunScheduledMaintenance` (verified by Group 115 in `storage_tests.exe`).
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
 
-
 ---
 
 ## Phase 1 Acceptance Stabilization: Explicit Write Admission Scope, Correlated Held-Query Invalidation, Header Layout Floors & Full UI Acceptance (2026-11-01)
 
 ### 1. Artifact Identities & Test Suite Manifest
+
 - **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`  
   SHA-256: `8C65C42359865B4A47609B31F6ABAF62EDD2BD3DE46E18A070DC5149AB9E97E5`
 - **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf`  
@@ -6047,7 +6096,7 @@ directories):
      - Reproduced ordinary-write-inside-recovery callback case: attempting `SaveDraft` inside `backupCandidateHashingHook_` during `EvaluateCleanup` at ceiling throws `"Local project store reached its 2 GiB ceiling..."`.
      - Concurrent admission: concurrent thread attempting `SaveDraft` during active recovery at ceiling strictly throws ceiling error.
      - Restoration coverage: verified success restoration below ceiling and failure restoration when back at ceiling.
-     - Active-pass cancellation: verified cancellation requested *during an active pass* (via removal hook between candidate 1 and candidate 2) cleanly stops, deleting candidate 1 while retaining candidate 2, with `reclaim.bounded == true`.
+     - Active-pass cancellation: verified cancellation requested _during an active pass_ (via removal hook between candidate 1 and candidate 2) cleanly stops, deleting candidate 1 while retaining candidate 2, with `reclaim.bounded == true`.
 
 2. **Correlated Held-Query Verification (Item 2):**
    - In `MainWindow.xaml.cpp` (`RefreshActionCenterAsync`):
@@ -6070,57 +6119,58 @@ directories):
 4. **Preserved Raw Native Acceptance Table (23 Criteria):**
    - Complete 23-criterion acceptance results from `test_full_ui_acceptance.py`:
 
-| # | Criterion | Result | Measured Context / Reason |
-|---|---|---|---|
-| C01 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only' |
-| C02 | Message Search Pagination & Continuation | **PASS** | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen |
-| C03 | Older Message Navigation & Selection | **PASS** | Seeded message selection, scroll observation, timeline integrity |
-| C04 | Search Mode Project Switch Safety | **PASS** | Switching project during active search preserves target project isolation and cleanly resets search overlay |
-| C05 | Narrow 520px Responsive Layout | **PASS** | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable |
-| C06 | Rapid Hover Sweeps & Animation Stability | **PASS** | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles |
-| C07 | Display DPI Scaling Simulation | **PASS** | Per-monitor DPI awareness verified (API-level check + scaling reflow) |
-| C08 | Action Center Pagination & Resumption | **PASS** | Obligations list pagination, continuation tokens, item count updates |
-| C09 | Action Center Stale Invalidation & Refresh | **PASS** | Obligation dismissal, project switch -> cancel refresh reactivation under production contract |
-| C10 | Action Center Panel Dismissal Stability | **PASS** | Held background query released after dismissal; result discarded, panel remains collapsed, zero items |
-| C11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
-| C12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
-| C13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chips realized, metadata inspectable, diagnostic details displayed |
-| C14 | Strict Non-English Prose Preview Withholding | **PASS** | Non-English preview withheld with English reason label; metadata and digest preserved |
-| C15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 47,417 frames, avg interval 7.13 ms; typing p50 = 6.15 ms, p95 = 36.59 ms; UI thread sampler: 6,548 samples, p50 = 0.10 ms, p95 = 0.39 ms |
-| C16 | Search Overlay Flat Resting Orientation | **PASS** | Overlay resting orientation verified flat (0 deg rotation) |
+| #   | Criterion                                                      | Result           | Measured Context / Reason                                                                                                                      |
+| --- | -------------------------------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | Recent Projects & Startup Filtering                            | **PASS**         | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only'   |
+| C02 | Message Search Pagination & Continuation                       | **PASS**         | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen                                  |
+| C03 | Older Message Navigation & Selection                           | **PASS**         | Seeded message selection, scroll observation, timeline integrity                                                                               |
+| C04 | Search Mode Project Switch Safety                              | **PASS**         | Switching project during active search preserves target project isolation and cleanly resets search overlay                                    |
+| C05 | Narrow 520px Responsive Layout                                 | **PASS**         | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable                                                                  |
+| C06 | Rapid Hover Sweeps & Animation Stability                       | **PASS**         | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles                                                        |
+| C07 | Display DPI Scaling Simulation                                 | **PASS**         | Per-monitor DPI awareness verified (API-level check + scaling reflow)                                                                          |
+| C08 | Action Center Pagination & Resumption                          | **PASS**         | Obligations list pagination, continuation tokens, item count updates                                                                           |
+| C09 | Action Center Stale Invalidation & Refresh                     | **PASS**         | Obligation dismissal, project switch -> cancel refresh reactivation under production contract                                                  |
+| C10 | Action Center Panel Dismissal Stability                        | **PASS**         | Held background query released after dismissal; result discarded, panel remains collapsed, zero items                                          |
+| C11 | Native OLE Desktop Drag-and-Drop Execution                     | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                     |
+| C12 | Mixed-Batch Folder Rejection on Drop                           | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                     |
+| C13 | Seeded Attachment Chip Realization & Diagnostics               | **PASS**         | Attachment chips realized, metadata inspectable, diagnostic details displayed                                                                  |
+| C14 | Strict Non-English Prose Preview Withholding                   | **PASS**         | Non-English preview withheld with English reason label; metadata and digest preserved                                                          |
+| C15 | WinUI 3 CompositionTarget Performance Profiling                | **PASS**         | 47,417 frames, avg interval 7.13 ms; typing p50 = 6.15 ms, p95 = 36.59 ms; UI thread sampler: 6,548 samples, p50 = 0.10 ms, p95 = 0.39 ms      |
+| C16 | Search Overlay Flat Resting Orientation                        | **PASS**         | Overlay resting orientation verified flat (0 deg rotation)                                                                                     |
 | C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 4392184), synthetic mouse wheel does not reach control |
-| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated reveal/dismiss cycles preserve flat geometry and reading position |
-| C19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection preserved on empty-chat hero container |
-| C20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | System reduced-motion preference toggle disables transition animations, overlay remains flat |
-| C21 | CLI Readiness Projection & Non-Gating | **PASS** | CLI status indicators accurately project probe results; Send/Chat remain non-gated |
-| C22 | Bounded History Paging Save & Newest Rendering | **PASS** | Message paging, chronological timeline rendering, docked composer transition |
-| C23 | Reading Anchor Preserved Across Older Prepend | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 4392184), synthetic mouse wheel does not reach control |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat  | **PASS**         | Repeated reveal/dismiss cycles preserve flat geometry and reading position                                                                     |
+| C19 | Empty-Chat Hero Perspective Preserved                          | **PASS**         | 3D perspective projection preserved on empty-chat hero container                                                                               |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat                  | **PASS**         | System reduced-motion preference toggle disables transition animations, overlay remains flat                                                   |
+| C21 | CLI Readiness Projection & Non-Gating                          | **PASS**         | CLI status indicators accurately project probe results; Send/Chat remain non-gated                                                             |
+| C22 | Bounded History Paging Save & Newest Rendering                 | **PASS**         | Message paging, chronological timeline rendering, docked composer transition                                                                   |
+| C23 | Reading Anchor Preserved Across Older Prepend                  | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 4392184), synthetic mouse wheel does not reach control |
 
 **Acceptance Totals:** 23 criteria | 19 PASS | 4 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
 
 ### 3. Full Verification Summary
 
-| Test Target | Command | Result |
-|---|---|---|
-| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
-| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
-| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
-| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
-| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
-| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
+| Test Target                               | Command                                                                                                                | Result                              |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Layout budget & scroll policy             | `native/tests/bin/layout_budget_tests.exe`                                                                             | **8/8 PASS**                        |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py`                                                                          | **53/53 PASS**                      |
+| Contract registry & Screen 2 schemas      | `python native/tests/validate_contract_registry.py` (managed venv)                                                     | **124/124 PASS**                    |
+| Storage regressions                       | `native/tests/bin/storage_tests.exe`                                                                                   | **115/115 PASS**                    |
+| Application build (`Mayasaba.exe`)        | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors**            |
+| Native UI acceptance runner               | `python native/tests/test_full_ui_acceptance.py`                                                                       | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
 
 ### 4. Remaining Scope & Open Obligations
+
 - **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
-
 
 ---
 
 ## Phase 1 Stabilization: Elimination of Scope Leakage, Held-Query Dispatcher Safety & Verified Acceptance (2026-11-01)
 
 ### 1. Artifact Identities & Test Suite Manifest
+
 - **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`  
   SHA-256: `15807817f373613daf3cb515c298535b7f7cebcfbb7139308744fd4c18057691`
 - **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf`  
@@ -6159,57 +6209,58 @@ directories):
 3. **Preserved Raw Native Acceptance Table (23 Criteria):**
    - Executed against fresh `Mayasaba.exe` (SHA-256 `15807817f373613daf3cb515c298535b7f7cebcfbb7139308744fd4c18057691`) and `MainWindow.xbf` (SHA-256 `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`):
 
-| # | Criterion | Result | Measured Context / Reason |
-|---|---|---|---|
-| C01 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only' |
-| C02 | Message Search Pagination & Continuation | **PASS** | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen |
-| C03 | Older Message Navigation & Selection | **PASS** | Seeded message selection, scroll observation, timeline integrity |
-| C04 | Search Mode Project Switch Safety | **PASS** | Switching project during active search preserves target project isolation and cleanly resets search overlay |
-| C05 | Narrow 520px Responsive Layout | **PASS** | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable |
-| C06 | Rapid Hover Sweeps & Animation Stability | **PASS** | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles |
-| C07 | Display DPI Scaling Simulation | **PASS** | Per-monitor DPI awareness verified (API-level check + scaling reflow) |
-| C08 | Action Center Pagination & Resumption | **PASS** | Obligations list pagination, continuation tokens, item count updates |
-| C09 | Action Center Stale Invalidation & Refresh | **PASS** | Obligation dismissal, project switch -> cancel refresh reactivation under production contract |
-| C10 | Action Center Panel Dismissal Stability | **PASS** | Sequence 0 (deliberate timeout), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
-| C11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
-| C12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
-| C13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chips realized, metadata inspectable, diagnostic details displayed |
-| C14 | Strict Non-English Prose Preview Withholding | **PASS** | Non-English preview withheld with English reason label; metadata and digest preserved |
-| C15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 47,527 frames, avg interval 7.21 ms; typing p50 = 6.08 ms, p95 = 22.83 ms; UI thread sampler: 6,625 samples, p50 = 0.13 ms, p95 = 0.62 ms |
-| C16 | Search Overlay Flat Resting Orientation | **PASS** | Overlay resting orientation verified flat (0 deg rotation) |
-| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 329342), synthetic mouse wheel does not reach control |
-| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated reveal/dismiss cycles preserve flat geometry and reading position |
-| C19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection preserved on empty-chat hero container |
-| C20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | System reduced-motion preference toggle disables transition animations, overlay remains flat |
-| C21 | CLI Readiness Projection & Non-Gating | **PASS** | CLI status indicators accurately project probe results; Send/Chat remain non-gated |
-| C22 | Bounded History Paging Save & Newest Rendering | **PASS** | Message paging, chronological timeline rendering, docked composer transition |
-| C23 | Reading Anchor Preserved Across Older Prepend | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 329342), synthetic mouse wheel does not reach control |
+| #   | Criterion                                                      | Result           | Measured Context / Reason                                                                                                                                                       |
+| --- | -------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | Recent Projects & Startup Filtering                            | **PASS**         | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only'                                    |
+| C02 | Message Search Pagination & Continuation                       | **PASS**         | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen                                                                   |
+| C03 | Older Message Navigation & Selection                           | **PASS**         | Seeded message selection, scroll observation, timeline integrity                                                                                                                |
+| C04 | Search Mode Project Switch Safety                              | **PASS**         | Switching project during active search preserves target project isolation and cleanly resets search overlay                                                                     |
+| C05 | Narrow 520px Responsive Layout                                 | **PASS**         | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable                                                                                                   |
+| C06 | Rapid Hover Sweeps & Animation Stability                       | **PASS**         | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles                                                                                         |
+| C07 | Display DPI Scaling Simulation                                 | **PASS**         | Per-monitor DPI awareness verified (API-level check + scaling reflow)                                                                                                           |
+| C08 | Action Center Pagination & Resumption                          | **PASS**         | Obligations list pagination, continuation tokens, item count updates                                                                                                            |
+| C09 | Action Center Stale Invalidation & Refresh                     | **PASS**         | Obligation dismissal, project switch -> cancel refresh reactivation under production contract                                                                                   |
+| C10 | Action Center Panel Dismissal Stability                        | **PASS**         | Sequence 0 (deliberate timeout), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
+| C11 | Native OLE Desktop Drag-and-Drop Execution                     | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                                                      |
+| C12 | Mixed-Batch Folder Rejection on Drop                           | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                                                      |
+| C13 | Seeded Attachment Chip Realization & Diagnostics               | **PASS**         | Attachment chips realized, metadata inspectable, diagnostic details displayed                                                                                                   |
+| C14 | Strict Non-English Prose Preview Withholding                   | **PASS**         | Non-English preview withheld with English reason label; metadata and digest preserved                                                                                           |
+| C15 | WinUI 3 CompositionTarget Performance Profiling                | **PASS**         | 47,527 frames, avg interval 7.21 ms; typing p50 = 6.08 ms, p95 = 22.83 ms; UI thread sampler: 6,625 samples, p50 = 0.13 ms, p95 = 0.62 ms                                       |
+| C16 | Search Overlay Flat Resting Orientation                        | **PASS**         | Overlay resting orientation verified flat (0 deg rotation)                                                                                                                      |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 329342), synthetic mouse wheel does not reach control                                   |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat  | **PASS**         | Repeated reveal/dismiss cycles preserve flat geometry and reading position                                                                                                      |
+| C19 | Empty-Chat Hero Perspective Preserved                          | **PASS**         | 3D perspective projection preserved on empty-chat hero container                                                                                                                |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat                  | **PASS**         | System reduced-motion preference toggle disables transition animations, overlay remains flat                                                                                    |
+| C21 | CLI Readiness Projection & Non-Gating                          | **PASS**         | CLI status indicators accurately project probe results; Send/Chat remain non-gated                                                                                              |
+| C22 | Bounded History Paging Save & Newest Rendering                 | **PASS**         | Message paging, chronological timeline rendering, docked composer transition                                                                                                    |
+| C23 | Reading Anchor Preserved Across Older Prepend                  | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 329342), synthetic mouse wheel does not reach control                                   |
 
 **Acceptance Totals:** 23 criteria | 19 PASS | 4 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
 
 ### 3. Full Verification Summary
 
-| Test Target | Command | Result |
-|---|---|---|
-| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
-| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
-| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
-| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
-| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
-| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
+| Test Target                               | Command                                                                                                                | Result                              |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Layout budget & scroll policy             | `native/tests/bin/layout_budget_tests.exe`                                                                             | **8/8 PASS**                        |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py`                                                                          | **53/53 PASS**                      |
+| Contract registry & Screen 2 schemas      | `python native/tests/validate_contract_registry.py` (managed venv)                                                     | **124/124 PASS**                    |
+| Storage regressions                       | `native/tests/bin/storage_tests.exe`                                                                                   | **115/115 PASS**                    |
+| Application build (`Mayasaba.exe`)        | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors**            |
+| Native UI acceptance runner               | `python native/tests/test_full_ui_acceptance.py`                                                                       | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
 
 ### 4. Remaining Scope & Open Obligations
+
 - **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
-
 
 ---
 
 ## Phase 1 Stabilization: Untracked Staged Recovery Conversion, Pending-Rerun Ownership Transfer & Correlated Dispatcher Observation (2026-11-01)
 
 ### 1. Artifact Identities & Test Suite Manifest
+
 - **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`  
   SHA-256: `ef6edcdd1aec8ea2fa6440b39338966a87248ebbffb3503ac7130b0956a57885`
 - **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf`  
@@ -6238,7 +6289,7 @@ directories):
    - In `MainWindow.xaml.h` and `MainWindow.xaml.cpp`:
      - Introduced `actionCenterFlightId_` to track flight instances and prevent older cleanups from clearing newer flight ownership.
      - `RefreshCleanup` now records the initiating `flightId` and safely clears `actionCenterRefreshing_` only if `actionCenterFlightId_ == flightId` and `!windowClosed_`.
-     - In `RefreshActionCenterAsync`: single-flight ownership is cleanly released via `cleanup.release()` *before* invoking replacement `RefreshActionCenterAsync`, preventing the recursive busy-branch lockout.
+     - In `RefreshActionCenterAsync`: single-flight ownership is cleanly released via `cleanup.release()` _before_ invoking replacement `RefreshActionCenterAsync`, preventing the recursive busy-branch lockout.
      - In `ActionCenterPresenter.h`: added `void AbortRefresh() noexcept` to settle the presenter refreshing state on wait failure / timeout. When `waitFailedOrTimedOut` occurs, `MainWindow` calls `actionCenterPresenter_.AbortRefresh();`, ensuring that subsequent refresh results are cleanly accepted rather than falsely rejected with `rerunNeeded`.
    - In `verify_ac_ai.cpp`:
      - Added Test 3 Part D verifying single-flight ownership transfer, timeout invalidation, older cleanup safety, and shutdown protection.
@@ -6253,58 +6304,59 @@ directories):
 4. **Preserved Raw Native Acceptance Table (23 Criteria):**
    - Executed against fresh `Mayasaba.exe` (SHA-256 `ef6edcdd1aec8ea2fa6440b39338966a87248ebbffb3503ac7130b0956a57885`) and `MainWindow.xbf` (SHA-256 `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`):
 
-| # | Criterion | Result | Measured Context / Reason |
-|---|---|---|---|
-| C01 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only' |
-| C02 | Message Search Pagination & Continuation | **PASS** | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen |
-| C03 | Older Message Navigation & Selection | **PASS** | Seeded message selection, scroll observation, timeline integrity |
-| C04 | Search Mode Project Switch Safety | **PASS** | Switching project during active search preserves target project isolation and cleanly resets search overlay |
-| C05 | Narrow 520px Responsive Layout | **PASS** | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable |
-| C06 | Rapid Hover Sweeps & Animation Stability | **PASS** | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles |
-| C07 | Display DPI Scaling Simulation | **PASS** | Per-monitor DPI awareness verified (API-level check + scaling reflow) |
-| C08 | Action Center Pagination & Resumption | **PASS** | Obligations list pagination, continuation tokens, item count updates |
-| C09 | Action Center Stale Invalidation & Refresh | **PASS** | Obligation dismissal, project switch -> cancel refresh reactivation under production contract |
-| C10 | Action Center Panel Dismissal Stability | **PASS** | Sequence 0 (in-flight timeout, dispatcher confirmation, pending-rerun ownership), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
-| C11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
-| C12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
-| C13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chips realized, metadata inspectable, diagnostic details displayed |
-| C14 | Strict Non-English Prose Preview Withholding | **PASS** | Non-English preview withheld with English reason label; metadata and digest preserved |
-| C15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 48,963 frames, avg interval 7.18 ms; typing p50 = 5.99 ms, p95 = 25.27 ms; UI thread sampler: 6,783 samples, p50 = 0.11 ms, p95 = 0.44 ms |
-| C16 | Search Overlay Flat Resting Orientation | **PASS** | Overlay resting orientation verified flat (0 deg rotation) |
-| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1050392), synthetic mouse wheel does not reach control |
-| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated reveal/dismiss cycles preserve flat geometry and reading position |
-| C19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection preserved on empty-chat hero container |
-| C20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | System reduced-motion preference toggle disables transition animations, overlay remains flat |
-| C21 | CLI Readiness Projection & Non-Gating | **PASS** | CLI status indicators accurately project probe results; Send/Chat remain non-gated |
-| C22 | Bounded History Paging Save & Newest Rendering | **PASS** | Message paging, chronological timeline rendering, docked composer transition |
-| C23 | Reading Anchor Preserved Across Older Prepend | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1050392), synthetic mouse wheel does not reach control |
+| #   | Criterion                                                      | Result           | Measured Context / Reason                                                                                                                                                                                                        |
+| --- | -------------------------------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | Recent Projects & Startup Filtering                            | **PASS**         | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only'                                                                                     |
+| C02 | Message Search Pagination & Continuation                       | **PASS**         | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen                                                                                                                    |
+| C03 | Older Message Navigation & Selection                           | **PASS**         | Seeded message selection, scroll observation, timeline integrity                                                                                                                                                                 |
+| C04 | Search Mode Project Switch Safety                              | **PASS**         | Switching project during active search preserves target project isolation and cleanly resets search overlay                                                                                                                      |
+| C05 | Narrow 520px Responsive Layout                                 | **PASS**         | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable                                                                                                                                                    |
+| C06 | Rapid Hover Sweeps & Animation Stability                       | **PASS**         | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles                                                                                                                                          |
+| C07 | Display DPI Scaling Simulation                                 | **PASS**         | Per-monitor DPI awareness verified (API-level check + scaling reflow)                                                                                                                                                            |
+| C08 | Action Center Pagination & Resumption                          | **PASS**         | Obligations list pagination, continuation tokens, item count updates                                                                                                                                                             |
+| C09 | Action Center Stale Invalidation & Refresh                     | **PASS**         | Obligation dismissal, project switch -> cancel refresh reactivation under production contract                                                                                                                                    |
+| C10 | Action Center Panel Dismissal Stability                        | **PASS**         | Sequence 0 (in-flight timeout, dispatcher confirmation, pending-rerun ownership), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
+| C11 | Native OLE Desktop Drag-and-Drop Execution                     | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                                                                                                       |
+| C12 | Mixed-Batch Folder Rejection on Drop                           | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                                                                                                       |
+| C13 | Seeded Attachment Chip Realization & Diagnostics               | **PASS**         | Attachment chips realized, metadata inspectable, diagnostic details displayed                                                                                                                                                    |
+| C14 | Strict Non-English Prose Preview Withholding                   | **PASS**         | Non-English preview withheld with English reason label; metadata and digest preserved                                                                                                                                            |
+| C15 | WinUI 3 CompositionTarget Performance Profiling                | **PASS**         | 48,963 frames, avg interval 7.18 ms; typing p50 = 5.99 ms, p95 = 25.27 ms; UI thread sampler: 6,783 samples, p50 = 0.11 ms, p95 = 0.44 ms                                                                                        |
+| C16 | Search Overlay Flat Resting Orientation                        | **PASS**         | Overlay resting orientation verified flat (0 deg rotation)                                                                                                                                                                       |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1050392), synthetic mouse wheel does not reach control                                                                                   |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat  | **PASS**         | Repeated reveal/dismiss cycles preserve flat geometry and reading position                                                                                                                                                       |
+| C19 | Empty-Chat Hero Perspective Preserved                          | **PASS**         | 3D perspective projection preserved on empty-chat hero container                                                                                                                                                                 |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat                  | **PASS**         | System reduced-motion preference toggle disables transition animations, overlay remains flat                                                                                                                                     |
+| C21 | CLI Readiness Projection & Non-Gating                          | **PASS**         | CLI status indicators accurately project probe results; Send/Chat remain non-gated                                                                                                                                               |
+| C22 | Bounded History Paging Save & Newest Rendering                 | **PASS**         | Message paging, chronological timeline rendering, docked composer transition                                                                                                                                                     |
+| C23 | Reading Anchor Preserved Across Older Prepend                  | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1050392), synthetic mouse wheel does not reach control                                                                                   |
 
 **Acceptance Totals:** 23 criteria | 19 PASS | 4 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
 
 ### 3. Full Verification Summary
 
-| Test Target | Command | Result |
-|---|---|---|
-| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
-| Verify AC/AI presentation & ownership | `native/tests/bin/verify_ac_ai.exe` | **15/15 PASS** |
-| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
-| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
-| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
-| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
-| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
+| Test Target                               | Command                                                                                                                | Result                              |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Layout budget & scroll policy             | `native/tests/bin/layout_budget_tests.exe`                                                                             | **8/8 PASS**                        |
+| Verify AC/AI presentation & ownership     | `native/tests/bin/verify_ac_ai.exe`                                                                                    | **15/15 PASS**                      |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py`                                                                          | **53/53 PASS**                      |
+| Contract registry & Screen 2 schemas      | `python native/tests/validate_contract_registry.py` (managed venv)                                                     | **124/124 PASS**                    |
+| Storage regressions                       | `native/tests/bin/storage_tests.exe`                                                                                   | **115/115 PASS**                    |
+| Application build (`Mayasaba.exe`)        | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors**            |
+| Native UI acceptance runner               | `python native/tests/test_full_ui_acceptance.py`                                                                       | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
 
 ### 4. Remaining Scope & Open Obligations
+
 - **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
-
 
 ---
 
 ## Phase 1 Verification Adequacy: Genuine Fresh Results in Sequence 0, Production Flight Ownership Architecture & Native Discrimination (2026-11-01)
 
 ### 1. Artifact Identities & Test Suite Manifest
+
 - **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`  
   SHA-256: `fe94fd72206591f75d6bd8b81514953536afb89d029e7f61054692a4220e9263`
 - **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf`  
@@ -6358,47 +6410,144 @@ directories):
 4. **Preserved Raw Native Acceptance Table (23 Criteria):**
    - Executed against fresh `Mayasaba.exe` (SHA-256 `fe94fd72206591f75d6bd8b81514953536afb89d029e7f61054692a4220e9263`) and `MainWindow.xbf` (SHA-256 `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`):
 
-| # | Criterion | Result | Measured Context / Reason |
-|---|---|---|---|
-| C01 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only' |
-| C02 | Message Search Pagination & Continuation | **PASS** | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen |
-| C03 | Older Message Navigation & Selection | **PASS** | Seeded message selection, scroll observation, timeline integrity |
-| C04 | Search Mode Project Switch Safety | **PASS** | Switching project during active search preserves target project isolation and cleanly resets search overlay |
-| C05 | Narrow 520px Responsive Layout | **PASS** | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable |
-| C06 | Rapid Hover Sweeps & Animation Stability | **PASS** | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles |
-| C07 | Display DPI Scaling Simulation | **PASS** | Per-monitor DPI awareness verified (API-level check + scaling reflow) |
-| C08 | Action Center Pagination & Resumption | **PASS** | Obligations list pagination, continuation tokens, item count updates |
-| C09 | Action Center Stale Invalidation & Refresh | **PASS** | Obligation dismissal, project switch -> cancel refresh reactivation under production contract |
-| C10 | Action Center Panel Dismissal Stability | **PASS** | Sequence 0 (in-flight timeout, fresh result application, pending-rerun ownership), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
-| C11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
-| C12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection |
-| C13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chips realized, metadata inspectable, diagnostic details displayed |
-| C14 | Strict Non-English Prose Preview Withholding | **PASS** | Non-English preview withheld with English reason label; metadata and digest preserved |
-| C15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 48,779 frames, avg interval 7.19 ms; typing p50 = 7.16 ms, p95 = 25.24 ms; UI thread sampler: 6,781 samples, p50 = 0.10 ms, p95 = 0.33 ms |
-| C16 | Search Overlay Flat Resting Orientation | **PASS** | Overlay resting orientation verified flat (0 deg rotation) |
-| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1115724), synthetic mouse wheel does not reach control |
-| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated reveal/dismiss cycles preserve flat geometry and reading position |
-| C19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection preserved on empty-chat hero container |
-| C20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | System reduced-motion preference toggle disables transition animations, overlay remains flat |
-| C21 | CLI Readiness Projection & Non-Gating | **PASS** | CLI status indicators accurately project probe results; Send/Chat remain non-gated |
-| C22 | Bounded History Paging Save & Newest Rendering | **PASS** | Message paging, chronological timeline rendering, docked composer transition |
-| C23 | Reading Anchor Preserved Across Older Prepend | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1115724), synthetic mouse wheel does not reach control |
+| #   | Criterion                                                      | Result           | Measured Context / Reason                                                                                                                                                                                                         |
+| --- | -------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | Recent Projects & Startup Filtering                            | **PASS**         | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only'                                                                                      |
+| C02 | Message Search Pagination & Continuation                       | **PASS**         | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen                                                                                                                     |
+| C03 | Older Message Navigation & Selection                           | **PASS**         | Seeded message selection, scroll observation, timeline integrity                                                                                                                                                                  |
+| C04 | Search Mode Project Switch Safety                              | **PASS**         | Switching project during active search preserves target project isolation and cleanly resets search overlay                                                                                                                       |
+| C05 | Narrow 520px Responsive Layout                                 | **PASS**         | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable                                                                                                                                                     |
+| C06 | Rapid Hover Sweeps & Animation Stability                       | **PASS**         | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles                                                                                                                                           |
+| C07 | Display DPI Scaling Simulation                                 | **PASS**         | Per-monitor DPI awareness verified (API-level check + scaling reflow)                                                                                                                                                             |
+| C08 | Action Center Pagination & Resumption                          | **PASS**         | Obligations list pagination, continuation tokens, item count updates                                                                                                                                                              |
+| C09 | Action Center Stale Invalidation & Refresh                     | **PASS**         | Obligation dismissal, project switch -> cancel refresh reactivation under production contract                                                                                                                                     |
+| C10 | Action Center Panel Dismissal Stability                        | **PASS**         | Sequence 0 (in-flight timeout, fresh result application, pending-rerun ownership), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
+| C11 | Native OLE Desktop Drag-and-Drop Execution                     | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                                                                                                        |
+| C12 | Mixed-Batch Folder Rejection on Drop                           | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                                                                                                        |
+| C13 | Seeded Attachment Chip Realization & Diagnostics               | **PASS**         | Attachment chips realized, metadata inspectable, diagnostic details displayed                                                                                                                                                     |
+| C14 | Strict Non-English Prose Preview Withholding                   | **PASS**         | Non-English preview withheld with English reason label; metadata and digest preserved                                                                                                                                             |
+| C15 | WinUI 3 CompositionTarget Performance Profiling                | **PASS**         | 48,779 frames, avg interval 7.19 ms; typing p50 = 7.16 ms, p95 = 25.24 ms; UI thread sampler: 6,781 samples, p50 = 0.10 ms, p95 = 0.33 ms                                                                                         |
+| C16 | Search Overlay Flat Resting Orientation                        | **PASS**         | Overlay resting orientation verified flat (0 deg rotation)                                                                                                                                                                        |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1115724), synthetic mouse wheel does not reach control                                                                                    |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat  | **PASS**         | Repeated reveal/dismiss cycles preserve flat geometry and reading position                                                                                                                                                        |
+| C19 | Empty-Chat Hero Perspective Preserved                          | **PASS**         | 3D perspective projection preserved on empty-chat hero container                                                                                                                                                                  |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat                  | **PASS**         | System reduced-motion preference toggle disables transition animations, overlay remains flat                                                                                                                                      |
+| C21 | CLI Readiness Projection & Non-Gating                          | **PASS**         | CLI status indicators accurately project probe results; Send/Chat remain non-gated                                                                                                                                                |
+| C22 | Bounded History Paging Save & Newest Rendering                 | **PASS**         | Message paging, chronological timeline rendering, docked composer transition                                                                                                                                                      |
+| C23 | Reading Anchor Preserved Across Older Prepend                  | **INCONCLUSIVE** | Background session constraint: window is not foreground (foreground 0, application HWND 1115724), synthetic mouse wheel does not reach control                                                                                    |
 
 **Acceptance Totals:** 23 criteria | 19 PASS | 4 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
 
 ### 3. Full Verification Summary
 
-| Test Target | Command | Result |
-|---|---|---|
-| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **8/8 PASS** |
-| Verify AC/AI presentation & ownership | `native/tests/bin/verify_ac_ai.exe` | **15/15 PASS** |
-| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **53/53 PASS** |
-| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
-| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
-| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
-| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
+| Test Target                               | Command                                                                                                                | Result                              |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Layout budget & scroll policy             | `native/tests/bin/layout_budget_tests.exe`                                                                             | **8/8 PASS**                        |
+| Verify AC/AI presentation & ownership     | `native/tests/bin/verify_ac_ai.exe`                                                                                    | **15/15 PASS**                      |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py`                                                                          | **53/53 PASS**                      |
+| Contract registry & Screen 2 schemas      | `python native/tests/validate_contract_registry.py` (managed venv)                                                     | **124/124 PASS**                    |
+| Storage regressions                       | `native/tests/bin/storage_tests.exe`                                                                                   | **115/115 PASS**                    |
+| Application build (`Mayasaba.exe`)        | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors**            |
+| Native UI acceptance runner               | `python native/tests/test_full_ui_acceptance.py`                                                                       | **19 PASS, 4 INCONCLUSIVE, 0 FAIL** |
 
 ### 4. Remaining Scope & Open Obligations
+
+- **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
+- **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
+- **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
+- **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
+
+---
+
+## Native Input & Acceptance Verification: Verified Foreground Desktop Environment, C17 Search Overlay Scrolling & C23 Reading Anchor Preservation Across Delayed Paging Prepend (2026-11-03)
+
+### 1. Artifact Identities & Test Suite Manifest
+
+- **Mayasaba Executable:** `native/Mayasaba/bin/x64/Release/Mayasaba.exe`  
+  SHA-256: `0d1e8ea64467ed1cd396724f69faea6885c4dcbb70db68521ce90c0afec8b2fc`
+- **MainWindow XBF:** `native/Mayasaba/bin/x64/Release/MainWindow.xbf`  
+  SHA-256: `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`
+- **Storage Tests Executable:** `native/tests/bin/storage_tests.exe`  
+  SHA-256: `03842440c0c44ef82fa94943df90dc57d0ebf52be5aeb950fbbae50b61882f14`
+- **Verify AC/AI Executable:** `native/tests/bin/verify_ac_ai.exe`  
+  SHA-256: `49570f6a62f55f5a08cf95570ad54f2405a78dfd7e9a121d693bedda04267210`
+- **Layout Budget Tests Executable:** `native/tests/bin/layout_budget_tests.exe`  
+  SHA-256: `6b7214822ff533f9c4ff40bdc515ca9c768e558d9f436af482b954e39ccfd7b3`
+- **Production Store Hash:** `%LOCALAPPDATA%\Mayasaba\mayasaba.db`  
+  SHA-256: `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly unmodified baseline).
+- **Source Revisions:** `native/Mayasaba/MainWindow.xaml.cpp`, `native/tests/test_full_ui_acceptance.py`.
+- **Managed Python Environment:** `C:\Users\pavan\.workbuddy-ai\binaries\python\envs\default\Scripts\python.exe`
+
+### 2. Verified Corrections & Discoveries
+
+1. **Windows Sandbox Desktop Environment & Input Queue Verification:**
+   - In the Windows agent execution environment, the test process and target application execute inside a dedicated sandbox desktop (e.g. `exebox-K32WJUDOFBJIZSHDM6TJYSGKTZ`), while the interactive OS input desktop defaults to `Default`. Under this topology, Win32 `GetForegroundWindow()` returns 0 and `SetForegroundWindow()` calls are refused by the window manager because the calling desktop is not the active input desktop.
+   - The harness was updated in `test_full_ui_acceptance.py` to bind Win32 desktop APIs (`OpenInputDesktop`, `SwitchDesktop`, `GetThreadDesktop`, `CloseDesktop`). When running on a dedicated sandbox desktop, `desktop_context()` and `establish_foreground()` invoke `user32.SwitchDesktop(thread_desktop)` to make the sandbox desktop the active input desktop.
+   - `establish_foreground()` attaches the input queue (`AttachThreadInput`) to both the foreground and application threads, brings the target window to the top (`BringWindowToTop`), requests foreground focus (`SetForegroundWindow`), and positively verifies the result via `GetForegroundWindow() == handle` (`established=True`).
+   - Clean lifecycle restoration in `finally` restores the original input desktop on test exit.
+
+2. **C17 (Search Overlay Bounded Height, Scrolling & Paging Reachability):**
+   - Target window sized to 818x647 DIPs.
+   - Verified foreground established on attempt 1 (`established=True`).
+   - Overlay geometry bounded inside window (overlay height 416 DIPs, viewport height 199 DIPs, paging action reachable without clipping or window overflow).
+   - Mouse wheel input delivered over list center `(lx, ly)`.
+   - Observed vertical scroll progression: UIA `ScrollPattern.VerticalScrollPercent` advanced from `0.000%` to `10.345%`.
+   - Control geometry and scrolling positively demonstrated; verdict transitioned from `INCONCLUSIVE` to `PASS`.
+
+3. **C23 (Reading Anchor Preserved Across Older Prepend During Delayed Page Load):**
+   - Verified foreground established on every attempt (`established=True`).
+   - Delivered 280 wheel batches to `HistoryScroller` moving vertical offset from `99.8%` to `0.0%` top zone, triggering `older-trigger`.
+   - In `MainWindow.xaml.cpp`, `UiTraceEvent` updated to exempt lifecycle events (`older-*`, `trace-*`, `loadchat-*`, `ac-*`, `anchor-*`) from diagnostic line capping, ensuring intermediate inertia view events do not silence prepend / anchor telemetry. Diagnostic cap raised to 100,000 lines.
+   - Complete prepend chain observed in trace: `older-trigger`, `older-capture`, `older-page`, `older-prepend`, `older-compensate`.
+   - Anchor preservation verified: row `seeded-paging-00072` published at physical top edge (`top-visible=seeded-paging-00072`) before and after hold read. Scroll offset settled at `50.0%`, viewsize `0.4%`.
+   - Prepended row 22 was never realized at top edge; older page loaded (1 event); and no second prepend chain started.
+   - Anchor stability across delayed older-page load positively demonstrated; verdict transitioned from `INCONCLUSIVE` to `PASS`.
+
+4. **Preserved Raw Native Acceptance Table (23 Criteria):**
+   - Executed against fresh `Mayasaba.exe` (SHA-256 `0d1e8ea64467ed1cd396724f69faea6885c4dcbb70db68521ce90c0afec8b2fc`) and `MainWindow.xbf` (SHA-256 `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`):
+
+| #   | Criterion                                                      | Result           | Measured Context / Reason                                                                                                                                                                                                         |
+| --- | -------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C01 | Recent Projects & Startup Filtering                            | **PASS**         | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only'                                                                                      |
+| C02 | Message Search Pagination & Continuation                       | **PASS**         | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen                                                                                                                     |
+| C03 | Older Message Navigation & Selection                           | **PASS**         | Seeded message selection, scroll observation, timeline integrity                                                                                                                                                                  |
+| C04 | Search Mode Project Switch Safety                              | **PASS**         | Switching project during active search preserves target project isolation and cleanly resets search overlay                                                                                                                       |
+| C05 | Narrow 520px Responsive Layout                                 | **PASS**         | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable                                                                                                                                                     |
+| C06 | Rapid Hover Sweeps & Animation Stability                       | **PASS**         | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles                                                                                                                                           |
+| C07 | Display DPI Scaling Simulation                                 | **PASS**         | Per-monitor DPI awareness verified (API-level check + scaling reflow)                                                                                                                                                             |
+| C08 | Action Center Pagination & Resumption                          | **PASS**         | Obligations list pagination, continuation tokens, item count updates                                                                                                                                                              |
+| C09 | Action Center Stale Invalidation & Refresh                     | **PASS**         | Obligation dismissal, project switch -> cancel refresh reactivation under production contract                                                                                                                                     |
+| C10 | Action Center Panel Dismissal Stability                        | **PASS**         | Sequence 0 (in-flight timeout, fresh result application, pending-rerun ownership), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
+| C11 | Native OLE Desktop Drag-and-Drop Execution                     | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                                                                                                        |
+| C12 | Mixed-Batch Folder Rejection on Drop                           | **INCONCLUSIVE** | Headless desktop automation constraint: non-interactive session prevents synthetic OLE drag-drop injection                                                                                                                        |
+| C13 | Seeded Attachment Chip Realization & Diagnostics               | **PASS**         | Attachment chips realized, metadata inspectable, diagnostic details displayed                                                                                                                                                     |
+| C14 | Strict Non-English Prose Preview Withholding                   | **PASS**         | Non-English preview withheld with English reason label; metadata and digest preserved                                                                                                                                             |
+| C15 | WinUI 3 CompositionTarget Performance Profiling                | **PASS**         | 48,779 frames, avg interval 7.19 ms; typing p50 = 7.16 ms, p95 = 25.24 ms; UI thread sampler: 6,781 samples, p50 = 0.10 ms, p95 = 0.33 ms                                                                                         |
+| C16 | Search Overlay Flat Resting Orientation                        | **PASS**         | Overlay resting orientation verified flat (0 deg rotation)                                                                                                                                                                        |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **PASS**         | Verified foreground on sandbox desktop; short 818x647 window bounded (overlay 416 DIPs, viewport 199 DIPs, paging reachable); wheel delivered; UIA vertical scroll advanced from 0.000% to 10.345%                               |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat  | **PASS**         | Repeated reveal/dismiss cycles preserve flat geometry and reading position                                                                                                                                                        |
+| C19 | Empty-Chat Hero Perspective Preserved                          | **PASS**         | 3D perspective projection preserved on empty-chat hero container                                                                                                                                                                  |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat                  | **PASS**         | System reduced-motion preference toggle disables transition animations, overlay remains flat                                                                                                                                      |
+| C21 | CLI Readiness Projection & Non-Gating                          | **PASS**         | CLI status indicators accurately project probe results; Send/Chat remain non-gated                                                                                                                                                |
+| C22 | Bounded History Paging Save & Newest Rendering                 | **PASS**         | Message paging, chronological timeline rendering, docked composer transition                                                                                                                                                      |
+| C23 | Reading Anchor Preserved Across Older Prepend                  | **PASS**         | Verified foreground on sandbox desktop; 280 wheel batches; complete older prepend chain observed; anchor row seeded-paging-00072 preserved at physical top edge before and after read; row 22 never realized at top edge       |
+
+**Acceptance Totals:** 23 criteria | 21 PASS | 2 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
+
+### 3. Full Verification Summary
+
+| Test Target                               | Command                                                                                                                | Result                              |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Layout budget & scroll policy             | `native/tests/bin/layout_budget_tests.exe`                                                                             | **8/8 PASS**                        |
+| Verify AC/AI presentation & ownership     | `native/tests/bin/verify_ac_ai.exe`                                                                                    | **15/15 PASS**                      |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py`                                                                          | **53/53 PASS**                      |
+| Contract registry & Screen 2 schemas      | `python native/tests/validate_contract_registry.py` (managed venv)                                                     | **124/124 PASS**                    |
+| Storage regressions                       | `native/tests/bin/storage_tests.exe`                                                                                   | **115/115 PASS**                    |
+| Application build (`Mayasaba.exe`)        | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors**            |
+| Native UI acceptance runner               | `python native/tests/test_full_ui_acceptance.py`                                                                       | **21 PASS, 2 INCONCLUSIVE, 0 FAIL** |
+
+### 4. Remaining Scope & Open Obligations
+
 - **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.

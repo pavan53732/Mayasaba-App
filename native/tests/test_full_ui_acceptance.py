@@ -147,6 +147,22 @@ if hasattr(user32, "GetDpiForWindow"):
     user32.GetDpiForWindow.argtypes = [wintypes.HWND]
     user32.GetDpiForWindow.restype = wintypes.UINT
 
+if hasattr(user32, "OpenInputDesktop"):
+    user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    user32.OpenInputDesktop.restype = wintypes.HANDLE
+
+if hasattr(user32, "SwitchDesktop"):
+    user32.SwitchDesktop.argtypes = [wintypes.HANDLE]
+    user32.SwitchDesktop.restype = wintypes.BOOL
+
+if hasattr(user32, "GetThreadDesktop"):
+    user32.GetThreadDesktop.argtypes = [wintypes.DWORD]
+    user32.GetThreadDesktop.restype = wintypes.HANDLE
+
+if hasattr(user32, "CloseDesktop"):
+    user32.CloseDesktop.argtypes = [wintypes.HANDLE]
+    user32.CloseDesktop.restype = wintypes.BOOL
+
 def establish_dpi_awareness():
     """Establish and explicitly verify effective DPI awareness using supported Win32 APIs.
 
@@ -866,10 +882,10 @@ def desktop_context():
         thread_desktop_error = f"{type(exc).__name__}: {exc}"
     else:
         thread_desktop_error = None
+    input_desktop = None
     try:
-        input_desktop = user32.GetInputDesktop()
+        input_desktop = user32.OpenInputDesktop(0, False, 0x01FF)
     except Exception as exc:
-        input_desktop = None
         input_desktop_error = f"{type(exc).__name__}: {exc}"
     else:
         input_desktop_error = None
@@ -880,11 +896,18 @@ def desktop_context():
         foreground_error = f"{type(exc).__name__}: {exc}"
     else:
         foreground_error = None
+    th_name = _object_name(thread_desktop)
+    in_name = _object_name(input_desktop)
+    if input_desktop:
+        try:
+            user32.CloseDesktop(input_desktop)
+        except Exception:
+            pass
     return {
-        "thread_desktop": _object_name(thread_desktop),
-        "input_desktop": _object_name(input_desktop),
-        "on_input_desktop": bool(thread_desktop) and bool(input_desktop)
-                            and thread_desktop == input_desktop,
+        "thread_desktop": th_name,
+        "input_desktop": in_name,
+        "on_input_desktop": bool(th_name) and bool(in_name)
+                            and th_name == in_name,
         "foreground_hwnd": foreground,
         "errors": [e for e in (thread_desktop_error, input_desktop_error,
                                foreground_error) if e],
@@ -901,11 +924,12 @@ def establish_foreground(win, attempts=3, settle=0.7):
     never delivered.
 
     The documented way to take the foreground from a background process is to
-    attach this thread's input queue to the current foreground thread's input
-    queue, which lifts the restriction, and then to VERIFY the result by
-    reading GetForegroundWindow() back. A foreground that was never verified
-    is not a foreground, so the return value is the verified reading and not
-    the return code of the API call.
+    switch the input desktop to the thread's desktop (if running on a dedicated
+    sandbox desktop), attach this thread's input queue to the current foreground
+    and target thread's input queues, which lifts the restriction, and then to
+    VERIFY the result by reading GetForegroundWindow() back. A foreground that
+    was never verified is not a foreground, so the return value is the verified
+    reading and not the return code of the API call.
 
     Returns (established, detail). `detail` names the method used and every
     reading taken, so a failure states which attempt failed and what the
@@ -915,9 +939,14 @@ def establish_foreground(win, attempts=3, settle=0.7):
     observations = []
     try:
         current_thread = kernel32.GetCurrentThreadId()
+        if hasattr(user32, "GetThreadDesktop") and hasattr(user32, "SwitchDesktop"):
+            thread_desktop = user32.GetThreadDesktop(current_thread)
+            switched = user32.SwitchDesktop(thread_desktop)
+        if not switched:
+            observations.append(f"SwitchDesktop returned {switched} err={ctypes.get_last_error()}")
     except Exception as exc:
         current_thread = 0
-        observations.append(f"GetCurrentThreadId failed: {type(exc).__name__}: {exc}")
+        observations.append(f"GetCurrentThreadId/SwitchDesktop failed: {type(exc).__name__}: {exc}")
     for attempt in range(1, attempts + 1):
         try:
             foreground = user32.GetForegroundWindow()
@@ -927,26 +956,37 @@ def establish_foreground(win, attempts=3, settle=0.7):
             foreground = 0
         if foreground == handle:
             return True, "; ".join(observations + [f"attempt {attempt}: already foreground"])
-        attached = False
+        attached_fg = False
+        attached_app = False
         foreground_thread = 0
+        app_thread = 0
         try:
             if foreground:
                 foreground_thread = user32.GetWindowThreadProcessId(foreground, None)
             if foreground_thread and foreground_thread != current_thread:
-                attached = bool(user32.AttachThreadInput(current_thread,
-                                                          foreground_thread, True))
+                attached_fg = bool(user32.AttachThreadInput(current_thread,
+                                                             foreground_thread, True))
+            app_thread = user32.GetWindowThreadProcessId(handle, None)
+            if app_thread and app_thread != current_thread and app_thread != foreground_thread:
+                attached_app = bool(user32.AttachThreadInput(current_thread,
+                                                              app_thread, True))
+            user32.BringWindowToTop(handle)
             user32.SetForegroundWindow(handle)
-            if attached:
-                user32.BringWindowToTop(handle)
         except Exception as exc:
             observations.append(f"attempt {attempt}: SetForegroundWindow raised "
                                 f"{type(exc).__name__}: {exc}")
         finally:
-            if attached:
+            if attached_app:
+                try:
+                    user32.AttachThreadInput(current_thread, app_thread, False)
+                except Exception as exc:
+                    observations.append(f"attempt {attempt}: AttachThreadInput(detach app) raised "
+                                        f"{type(exc).__name__}: {exc}")
+            if attached_fg:
                 try:
                     user32.AttachThreadInput(current_thread, foreground_thread, False)
                 except Exception as exc:
-                    observations.append(f"attempt {attempt}: AttachThreadInput(detach) raised "
+                    observations.append(f"attempt {attempt}: AttachThreadInput(detach fg) raised "
                                         f"{type(exc).__name__}: {exc}")
         deadline = time.time() + settle
         verified = False
@@ -962,7 +1002,7 @@ def establish_foreground(win, attempts=3, settle=0.7):
             now = user32.GetForegroundWindow()
         except Exception:
             now = 0
-        observations.append(f"attempt {attempt}: attached={attached} foreground_after={now}")
+        observations.append(f"attempt {attempt}: attached={attached_fg} attached_app={attached_app} foreground_after={now}")
         if verified:
             return True, "; ".join(observations)
     return False, "; ".join(observations)
@@ -1952,6 +1992,13 @@ def main():
     log(f"Store:      {STORE_PATH}")
     log(f"Perf log:   {PERF_LOG_PATH}")
     record_artifact_identity()
+    orig_input_desk = None
+    try:
+        orig_input_desk = user32.OpenInputDesktop(0, False, 0x01FF)
+        cur_th_desk = user32.GetThreadDesktop(kernel32.GetCurrentThreadId())
+        user32.SwitchDesktop(cur_th_desk)
+    except Exception:
+        pass
     # The session's desktop context is recorded once, at the start, so that every
     # later foreground reading in this run can be interpreted against the desktop
     # it was taken on. A foreground of 0 means "no foreground window" only on the
@@ -2145,7 +2192,9 @@ def main():
             if cur.fetchone():
                 mark_store_write("DDL: ALTER TABLE contributions_test_broken -> contributions (restore of a schema left broken by an earlier run)")
                 conn.execute("ALTER TABLE contributions_test_broken RENAME TO contributions;")
-                conn.commit()
+            conn.execute("DELETE FROM projects WHERE id IN ('00000000-0000-4000-8000-00000000c11a', '00000000-0000-4000-8000-00000000e401');")
+            conn.execute("DELETE FROM contributions WHERE project_id IN ('00000000-0000-4000-8000-00000000c11a', '00000000-0000-4000-8000-00000000e401');")
+            conn.commit()
             conn.close()
         except Exception as e:
             log(f"Notice during store schema check: {e}")
@@ -6659,6 +6708,13 @@ def main():
                 log("Store lock released.")
             except Exception as exc:
                 log(f"Notice while releasing the store lock: {exc}")
+
+        if orig_input_desk:
+            try:
+                user32.SwitchDesktop(orig_input_desk)
+                user32.CloseDesktop(orig_input_desk)
+            except Exception:
+                pass
 
         # A phase that returned early never reached the normal report call, and a
         # run whose only output was a FAIL line left no table saying which criteria
