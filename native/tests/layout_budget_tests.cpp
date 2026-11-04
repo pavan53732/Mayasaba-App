@@ -341,6 +341,33 @@ int main()
                 budgetC.Admit(true);
             }
             REQUIRE(budgetC.totalLines <= mayasaba::ui::UiTraceBudget::kMaxTotalLines);
+
+            // Case D: Mixed flood (120,000 ordinary followed by 50,000 lifecycle)
+            mayasaba::ui::UiTraceBudget budgetD;
+            uint64_t ordMarkersD = 0;
+            uint64_t lifeMarkersD = 0;
+            uint64_t lifeEmittedD = 0;
+            uint64_t lifeSuppressedD = 0;
+
+            for (int i = 0; i < 120000; ++i)
+            {
+                auto const adm = budgetD.Admit(false);
+                if (adm == mayasaba::ui::UiTraceBudget::Admission::EmitTruncatedOrdinary)
+                    ++ordMarkersD;
+            }
+            for (int i = 0; i < 50000; ++i)
+            {
+                auto const adm = budgetD.Admit(true);
+                if (adm == mayasaba::ui::UiTraceBudget::Admission::Emit) ++lifeEmittedD;
+                else if (adm == mayasaba::ui::UiTraceBudget::Admission::EmitTruncatedLifecycle) ++lifeMarkersD;
+                else if (adm == mayasaba::ui::UiTraceBudget::Admission::Suppress) ++lifeSuppressedD;
+            }
+
+            REQUIRE(budgetD.totalLines == mayasaba::ui::UiTraceBudget::kMaxTotalLines);
+            REQUIRE(ordMarkersD == 1);
+            REQUIRE(lifeEmittedD == 19998);
+            REQUIRE(lifeSuppressedD == 30001);
+            REQUIRE(lifeMarkersD == 1); // Dropped lifecycle evidence MUST produce an observable loss indication
         }
         ++passed;
 

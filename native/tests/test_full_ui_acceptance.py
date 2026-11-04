@@ -895,18 +895,38 @@ def ui_sample_summary():
     return "; ".join(parts)
 
 
-def _object_name(handle):
-    """The name of a window-station or desktop object, for the foreground diagnostic."""
+def _get_desktop_name(handle):
+    """Returns (desktop_name, error_detail).
+
+    If the name is successfully retrieved as a non-empty string, returns (name, None).
+    If handle is null or invalid, or if GetUserObjectInformationW returns FALSE, returns empty name,
+    or raises an exception, returns (None, error_str).
+    Never returns error prose as the desktop name.
+    """
     if not handle:
-        return None
+        return (None, "Invalid or NULL desktop handle")
+    if not hasattr(user32, "GetUserObjectInformationW"):
+        return (None, "GetUserObjectInformationW not available")
     try:
         buf = ctypes.create_unicode_buffer(256)
         needed = wintypes.DWORD()
         ok = user32.GetUserObjectInformationW(
             handle, UOI_NAME, buf, ctypes.sizeof(buf), ctypes.byref(needed))
-        return buf.value if ok else None
+        if not ok:
+            err = ctypes.get_last_error()
+            return (None, f"GetUserObjectInformationW returned FALSE (error {err})")
+        val = buf.value.strip() if buf.value else ""
+        if not val:
+            return (None, "GetUserObjectInformationW returned empty name")
+        return (val, None)
     except Exception as exc:
-        return f"<{type(exc).__name__}: {exc}>"
+        return (None, f"GetUserObjectInformationW exception: {type(exc).__name__}: {exc}")
+
+
+def _object_name(handle):
+    """The name of a window-station or desktop object, for foreground diagnostic reporting."""
+    name, err = _get_desktop_name(handle)
+    return name if name is not None else f"<{err}>"
 
 
 def desktop_context():
@@ -940,21 +960,22 @@ def desktop_context():
         foreground_error = f"{type(exc).__name__}: {exc}"
     else:
         foreground_error = None
-    th_name = _object_name(thread_desktop)
-    in_name = _object_name(input_desktop)
+    th_name, th_name_err = _get_desktop_name(thread_desktop)
+    in_name, in_name_err = _get_desktop_name(input_desktop)
     if input_desktop:
         try:
             user32.CloseDesktop(input_desktop)
         except Exception:
             pass
+    errs = [e for e in (thread_desktop_error, input_desktop_error,
+                        foreground_error, th_name_err, in_name_err) if e]
     return {
-        "thread_desktop": th_name,
-        "input_desktop": in_name,
+        "thread_desktop": th_name or f"<{th_name_err}>",
+        "input_desktop": in_name or f"<{in_name_err}>",
         "on_input_desktop": bool(th_name) and bool(in_name)
                             and th_name == in_name,
         "foreground_hwnd": foreground,
-        "errors": [e for e in (thread_desktop_error, input_desktop_error,
-                               foreground_error) if e],
+        "errors": errs,
     }
 
 
@@ -989,13 +1010,35 @@ class CheckedDesktopScope:
                 self.capture_error = f"OpenInputDesktop returned NULL (error {err})"
                 return False
             self.orig_desktop_handle = h_orig
-            self.orig_desktop_name = _object_name(h_orig)
+            orig_name, orig_err = _get_desktop_name(h_orig)
+            if not orig_name:
+                self.capture_error = f"Original desktop name query failed: {orig_err}"
+                if self.orig_desktop_handle:
+                    try:
+                        user32.CloseDesktop(self.orig_desktop_handle)
+                    except Exception:
+                        pass
+                    self.orig_desktop_handle = None
+                return False
+            self.orig_desktop_name = orig_name
         except Exception as exc:
             self.capture_error = f"OpenInputDesktop exception: {type(exc).__name__}: {exc}"
+            if self.orig_desktop_handle:
+                try:
+                    user32.CloseDesktop(self.orig_desktop_handle)
+                except Exception:
+                    pass
+                self.orig_desktop_handle = None
             return False
 
         if not hasattr(user32, "GetThreadDesktop"):
             self.capture_error = "GetThreadDesktop not available"
+            if self.orig_desktop_handle:
+                try:
+                    user32.CloseDesktop(self.orig_desktop_handle)
+                except Exception:
+                    pass
+                self.orig_desktop_handle = None
             return False
         try:
             th_id = kernel32.GetCurrentThreadId()
@@ -1003,28 +1046,59 @@ class CheckedDesktopScope:
             if not h_th:
                 err = ctypes.get_last_error()
                 self.capture_error = f"GetThreadDesktop returned NULL (error {err})"
+                if self.orig_desktop_handle:
+                    try:
+                        user32.CloseDesktop(self.orig_desktop_handle)
+                    except Exception:
+                        pass
+                    self.orig_desktop_handle = None
                 return False
             self.thread_desktop_handle = h_th
-            self.thread_desktop_name = _object_name(h_th)
+            th_name, th_err = _get_desktop_name(h_th)
+            if not th_name:
+                self.capture_error = f"Thread desktop name query failed: {th_err}"
+                if self.orig_desktop_handle:
+                    try:
+                        user32.CloseDesktop(self.orig_desktop_handle)
+                    except Exception:
+                        pass
+                    self.orig_desktop_handle = None
+                return False
+            self.thread_desktop_name = th_name
         except Exception as exc:
             self.capture_error = f"GetThreadDesktop exception: {type(exc).__name__}: {exc}"
+            if self.orig_desktop_handle:
+                try:
+                    user32.CloseDesktop(self.orig_desktop_handle)
+                except Exception:
+                    pass
+                self.orig_desktop_handle = None
             return False
 
         # Switch only when validated desktops differ
-        if not self.orig_desktop_name or not self.thread_desktop_name:
-            if self.orig_desktop_handle == self.thread_desktop_handle:
-                return True
-        elif self.orig_desktop_name == self.thread_desktop_name:
+        if self.orig_desktop_name == self.thread_desktop_name:
             return True
 
         if not hasattr(user32, "SwitchDesktop"):
             self.switch_error = "SwitchDesktop not available"
+            if self.orig_desktop_handle:
+                try:
+                    user32.CloseDesktop(self.orig_desktop_handle)
+                except Exception:
+                    pass
+                self.orig_desktop_handle = None
             return False
         try:
             ok = user32.SwitchDesktop(self.thread_desktop_handle)
             if not ok:
                 err = ctypes.get_last_error()
                 self.switch_error = f"SwitchDesktop returned FALSE (error {err})"
+                if self.orig_desktop_handle:
+                    try:
+                        user32.CloseDesktop(self.orig_desktop_handle)
+                    except Exception:
+                        pass
+                    self.orig_desktop_handle = None
                 return False
             self.switched = True
             # Verify active desktop after switch
@@ -1037,13 +1111,13 @@ class CheckedDesktopScope:
                 self.switch_error = f"Post-switch OpenInputDesktop returned NULL (error {err})"
                 return False
             try:
-                v_name = _object_name(h_v)
+                v_name, v_err = _get_desktop_name(h_v)
             finally:
                 user32.CloseDesktop(h_v)
             if not v_name:
-                self.switch_error = "Post-switch desktop name could not be read"
+                self.switch_error = f"Post-switch desktop name query failed: {v_err}"
                 return False
-            if self.thread_desktop_name and v_name != self.thread_desktop_name:
+            if v_name != self.thread_desktop_name:
                 self.switch_error = f"Post-switch verification mismatch: expected '{self.thread_desktop_name}', got '{v_name}'"
                 return False
             return True
@@ -1076,11 +1150,11 @@ class CheckedDesktopScope:
                             restore_ok = False
                         else:
                             try:
-                                v_name = _object_name(h_v)
+                                v_name, v_err = _get_desktop_name(h_v)
                             finally:
                                 user32.CloseDesktop(h_v)
                             if not v_name:
-                                self.restore_error = "Post-restore desktop name could not be read"
+                                self.restore_error = f"Post-restore desktop name query failed: {v_err}"
                                 restore_ok = False
                             elif self.orig_desktop_name and v_name != self.orig_desktop_name:
                                 self.restore_error = f"Post-restore verification mismatch: expected '{self.orig_desktop_name}', got '{v_name}'"
@@ -1129,9 +1203,9 @@ def establish_foreground(win, attempts=3, settle=0.7):
             current_thread = kernel32.GetCurrentThreadId()
         if hasattr(user32, "GetThreadDesktop") and current_thread:
             thread_desktop = user32.GetThreadDesktop(current_thread)
-            th_name = _object_name(thread_desktop)
+            th_name, th_err = _get_desktop_name(thread_desktop)
             in_desk = user32.OpenInputDesktop(0, False, 0x01FF) if hasattr(user32, "OpenInputDesktop") else None
-            in_name = _object_name(in_desk) if in_desk else None
+            in_name, in_err = _get_desktop_name(in_desk) if in_desk else (None, "no input desktop")
             if in_desk:
                 try:
                     user32.CloseDesktop(in_desk)

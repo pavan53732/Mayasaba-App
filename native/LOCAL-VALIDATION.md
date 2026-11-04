@@ -6821,3 +6821,42 @@ directories):
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
+
+
+---
+
+## Review fea62a3 Follow-Up: Desktop Identity Rejection & Observable Lifecycle Trace Loss (2026-11-04)
+
+### 1. Root Cause Analysis & Corrections
+
+1. **Finding 1: Desktop Identity Rejection & Handle Lifetime (`test_full_ui_acceptance.py`)**:
+   - *Problem:* `_object_name(handle)` caught Win32 exceptions and formatted them into display strings like `'<OSError: ...>'`. `CheckedDesktopScope.acquire_and_switch()` treated those strings as desktop names; if both queries raised the same exception, string equality evaluated to True, admitting the scope on an invalid identity. When queries returned `None`, different handles fell through into `SwitchDesktop` without validating identity.
+   - *Resolution:* Separated identity success from diagnostic text by implementing `_get_desktop_name(handle) -> (name: str | None, error: str | None)`. A desktop identity is admitted only if a non-empty name string is successfully retrieved. If either query fails (exception, FALSE return, or empty name), acquisition fails closed immediately without switching, records the specific capture error, and immediately closes captured owned handles.
+   - *Oracles & Main Enforcement:* Added 10 new test functions to `native/tests/test_harness_oracles.py` exercising production scope and actual `main()` enforcement across name query exceptions, FALSE returns, empty strings, matching same-desktop, and differing desktops. All 81 harness oracle tests pass (0 failures).
+
+2. **Finding 2: Observable Lifecycle Trace Loss Under Total Saturation (`UiTraceBudget.h`)**:
+   - *Problem:* While the 100,000-line total cap was enforced, `UiTraceBudget::Admit` previously returned `Admission::Suppress` as soon as `totalLines >= kMaxTotalLines`. Under an ordinary flood (80,000 payload + 1 marker), only 19,999 lifecycle lines fit before the 100,000 line total cap was reached, starving `lifecycleLines` before reaching `kMaxLifecycleLines` (20,000) and dropping lifecycle records without emitting `EmitTruncatedLifecycle`.
+   - *Resolution:* In `native/Mayasaba/UiTraceBudget.h`, reserved 1 slot for lifecycle truncation when admitting ordinary traffic and ensured `EmitTruncatedLifecycle` is emitted when `totalCapReached` (`totalLines + 1 >= kMaxTotalLines`) occurs before `lifecycleLines >= kMaxLifecycleLines`. Dropped lifecycle records under mixed floods now reliably produce the observable `trace-lifecycle-truncated` loss marker.
+   - *Native Saturation Regression & Mutation Proof:*
+     - Added Case D to `native/tests/layout_budget_tests.cpp` Group 7: floods 120,000 ordinary lines followed by 50,000 lifecycle lines. Asserted `totalLines == 100000`, `ordinaryMarkers == 1`, `emittedLifecycle == 19998`, `suppressedLifecycle == 30001`, and `lifecycleMarkers == 1`.
+     - Executed targeted mutation experiment: mutated `totalCapReached = false` in `UiTraceBudget.h`. Built and ran `layout_budget_tests.exe`: **FAILED** as expected (`FAIL after 8 groups: budgetC.totalLines <= mayasaba::ui::UiTraceBudget::kMaxTotalLines`, exit code 1).
+     - Restored byte-identically and forced rebuild: **PASSED (9/9 groups)**, exit code 0.
+     - Updated `_SimulatedUiTraceLogger` in `test_harness_oracles.py` to mirror this invariant.
+
+### 2. Full Verification Suite Summary
+
+| Test Target | Command | Result |
+|---|---|---|
+| Layout budget & trace saturation | `native/tests/bin/layout_budget_tests.exe` | **9/9 PASS** |
+| Verify AC/AI presentation & ownership | `native/tests/bin/verify_ac_ai.exe` | **15/15 PASS** |
+| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
+| Harness oracles & desktop lifetime | `python native/tests/test_harness_oracles.py` | **81/81 PASS** |
+| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
+| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
+
+### 3. Preserved Artifacts & Cryptographic Proof
+
+- Fresh Application Binary (`Mayasaba.exe`): SHA-256 `E632BE60A5B1623335F68BC46897A2F4E2B6C7FF6D6571DB991AE60C2F778134`
+- XAML Binary Format (`MainWindow.xbf`): SHA-256 `12235E06178F658FD39ED843B6CEDC80A9542D3AD0734527BE3F14C33D92DD31`
+- Preserved Backups: `MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup` remain untracked and untouched.
+- "Phase 1 Complete" remains retracted; C11/C12 desktop COM drag-drop constraints and physical criteria P01–P06 remain open.

@@ -1033,7 +1033,10 @@ class _FakeDesktopUser32:
     def __init__(self, capture_refuse=False, switch_refuse=False, restore_refuse=False,
                  post_switch_verify_refuse=False, post_switch_mismatch=False,
                  post_restore_verify_refuse=False, post_restore_mismatch=False,
-                 orig_name="Default", thread_name="exebox-sandbox"):
+                 orig_name="Default", thread_name="exebox-sandbox",
+                 orig_name_raises=False, thread_name_raises=False,
+                 orig_name_false=False, thread_name_false=False,
+                 orig_name_empty=False, thread_name_empty=False):
         self.capture_refuse = capture_refuse
         self.switch_refuse = switch_refuse
         self.restore_refuse = restore_refuse
@@ -1043,6 +1046,12 @@ class _FakeDesktopUser32:
         self.post_restore_mismatch = post_restore_mismatch
         self.orig_name = orig_name
         self.thread_name = thread_name
+        self.orig_name_raises = orig_name_raises
+        self.thread_name_raises = thread_name_raises
+        self.orig_name_false = orig_name_false
+        self.thread_name_false = thread_name_false
+        self.orig_name_empty = orig_name_empty
+        self.thread_name_empty = thread_name_empty
         self.active_desktop_name = orig_name
         self.closed_handles = []
         self.switches = []
@@ -1097,15 +1106,37 @@ class _FakeDesktopUser32:
         return True
 
     def GetUserObjectInformationW(self, handle, index, buf, length, needed):
-        if handle == 303:
+        if handle == 101:
+            if self.orig_name_raises:
+                raise OSError("Simulated Win32 error querying original desktop name")
+            if self.orig_name_false:
+                ctypes.set_last_error(6)
+                return False
+            if self.orig_name_empty:
+                buf.value = "   "
+                return True
+            buf.value = self.orig_name
+            return True
+        elif handle == 202:
+            if self.thread_name_raises:
+                raise OSError("Simulated Win32 error querying thread desktop name")
+            if self.thread_name_false:
+                ctypes.set_last_error(6)
+                return False
+            if self.thread_name_empty:
+                buf.value = ""
+                return True
+            buf.value = self.thread_name
+            return True
+        elif handle == 303:
             name = "MismatchedDesktop" if self.post_switch_mismatch else self.thread_name
+            buf.value = name
+            return True
         elif handle == 404:
             name = "MismatchedDesktop" if self.post_restore_mismatch else self.orig_name
-        elif handle == 101:
-            name = self.orig_name
-        else:
-            name = self.thread_name
-        buf.value = name
+            buf.value = name
+            return True
+        buf.value = self.thread_name
         return True
 
 
@@ -1384,23 +1415,40 @@ class _SimulatedUiTraceLogger:
         self.ordinary_count = 0
         self.lifecycle_count = 0
         self.total_count = 0
+        self.ordinary_truncated_emitted = False
+        self.lifecycle_truncated_emitted = False
         self.lines = []
 
     def event(self, label, fields=""):
         is_lifecycle = any(label.startswith(p) for p in ("older-", "trace-", "loadchat-", "ac-", "anchor-"))
         if is_lifecycle:
-            if self.lifecycle_count >= self.max_lifecycle or self.total_count >= self.max_total:
-                if self.lifecycle_count == self.max_lifecycle:
+            if self.lifecycle_truncated_emitted:
+                return
+            lifecycle_cap_reached = (self.lifecycle_count >= self.max_lifecycle)
+            total_cap_reached = (len(self.lines) + 1 >= self.max_total)
+            if lifecycle_cap_reached or total_cap_reached:
+                if len(self.lines) < self.max_total:
+                    self.lifecycle_truncated_emitted = True
                     self.lifecycle_count += 1
                     self.lines.append(f"trace-lifecycle-truncated count={self.max_lifecycle}")
+                    return
+                self.lifecycle_truncated_emitted = True
                 return
             self.lifecycle_count += 1
             self.total_count += 1
         else:
-            if self.ordinary_count >= self.max_ordinary or self.total_count >= self.max_total:
-                if self.ordinary_count == self.max_ordinary:
+            if self.ordinary_truncated_emitted:
+                return
+            reserved_for_lifecycle = 0 if self.lifecycle_truncated_emitted else 1
+            ordinary_cap_reached = (self.ordinary_count >= self.max_ordinary)
+            total_cap_reached = (len(self.lines) + 1 + reserved_for_lifecycle > self.max_total)
+            if ordinary_cap_reached or total_cap_reached:
+                if len(self.lines) + reserved_for_lifecycle < self.max_total:
+                    self.ordinary_truncated_emitted = True
                     self.ordinary_count += 1
                     self.lines.append(f"trace-ordinary-truncated count={self.max_ordinary}")
+                    return
+                self.ordinary_truncated_emitted = True
                 return
             self.ordinary_count += 1
             self.total_count += 1
@@ -1492,6 +1540,210 @@ def test_mutation_older_abort_reader_bypass_fails_reader_intent():
     assert mutant.offset == 0.0, "mutant overwrites reader position"
     oracle_passed = ("older-abort-reader" in mutant.events and mutant.offset == 0.90)
     assert oracle_passed is False, "mutant must fail the reader-intent assertion"
+
+
+
+def test_checked_desktop_scope_orig_name_query_exception():
+    fake = _FakeDesktopUser32(orig_name_raises=True)
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False, "acquire_and_switch must return False when orig name query raises"
+        assert "Original desktop name query failed" in scope.capture_error, scope.capture_error
+        assert "Simulated Win32 error" in scope.capture_error, scope.capture_error
+        assert scope.switched is False, "must not switch when name query raises"
+        assert 101 in fake.closed_handles, "captured handle must be closed on name query failure"
+        assert scope.orig_desktop_handle is None, "owned handle must be cleared"
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is True, "restore_and_close must succeed cleanly"
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_thread_name_query_exception():
+    fake = _FakeDesktopUser32(thread_name_raises=True)
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False, "acquire_and_switch must return False when thread name query raises"
+        assert "Thread desktop name query failed" in scope.capture_error, scope.capture_error
+        assert "Simulated Win32 error" in scope.capture_error, scope.capture_error
+        assert scope.switched is False, "must not switch when thread name query raises"
+        assert 101 in fake.closed_handles, "captured handle must be closed on thread name query failure"
+        assert scope.orig_desktop_handle is None, "owned handle must be cleared"
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is True
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_orig_name_query_false_or_empty():
+    fake_false = _FakeDesktopUser32(orig_name_false=True)
+    def _run_false():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False
+        assert "GetUserObjectInformationW returned FALSE" in scope.capture_error
+        assert 101 in fake_false.closed_handles
+        assert scope.orig_desktop_handle is None
+    _with_fakes(fake_false, _run_false)
+
+    fake_empty = _FakeDesktopUser32(orig_name_empty=True)
+    def _run_empty():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False
+        assert "returned empty name" in scope.capture_error
+        assert 101 in fake_empty.closed_handles
+        assert scope.orig_desktop_handle is None
+    _with_fakes(fake_empty, _run_empty)
+
+
+def test_checked_desktop_scope_thread_name_query_false_or_empty():
+    fake_false = _FakeDesktopUser32(thread_name_false=True)
+    def _run_false():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False
+        assert "GetUserObjectInformationW returned FALSE" in scope.capture_error
+        assert 101 in fake_false.closed_handles
+        assert scope.orig_desktop_handle is None
+    _with_fakes(fake_false, _run_false)
+
+    fake_empty = _FakeDesktopUser32(thread_name_empty=True)
+    def _run_empty():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False
+        assert "returned empty name" in scope.capture_error
+        assert 101 in fake_empty.closed_handles
+        assert scope.orig_desktop_handle is None
+    _with_fakes(fake_empty, _run_empty)
+
+
+def test_checked_desktop_scope_valid_same_desktop():
+    fake = _FakeDesktopUser32(orig_name="Default", thread_name="Default")
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is True, "acquire_and_switch must succeed when desktops match"
+        assert scope.switched is False, "must not switch when desktops match"
+        assert len(fake.switches) == 0, "no switch API calls when desktops match"
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is True
+        assert 101 in fake.closed_handles, "orig handle must be closed in restore_and_close"
+        assert scope.orig_desktop_handle is None
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_valid_different_desktop():
+    fake = _FakeDesktopUser32(orig_name="Default", thread_name="exebox-sandbox")
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is True, "acquire_and_switch must succeed when desktops differ and switch succeeds"
+        assert scope.switched is True
+        assert fake.switches == [202]
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is True
+        assert scope.restored is True
+        assert fake.switches == [202, 101]
+        assert 101 in fake.closed_handles
+        assert scope.orig_desktop_handle is None
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_name_query_failure_skips_runner_in_main():
+    cases = [
+        ("orig_name_raises", {"orig_name_raises": True}),
+        ("orig_name_false", {"orig_name_false": True}),
+        ("orig_name_empty", {"orig_name_empty": True}),
+        ("thread_name_raises", {"thread_name_raises": True}),
+        ("thread_name_false", {"thread_name_false": True}),
+        ("thread_name_empty", {"thread_name_empty": True}),
+    ]
+    orig_acquire = H.acquire_store_lock
+    orig_runner = getattr(H, "harness_runner", None)
+    class _FakeLock:
+        def close(self): pass
+    fake_lock = _FakeLock()
+    try:
+        H.acquire_store_lock = lambda p: fake_lock
+        for label, kw in cases:
+            fake = _FakeDesktopUser32(**kw)
+            runner_called = [False]
+            def _spy_runner():
+                runner_called[0] = True
+                return 0
+            H.harness_runner = _spy_runner
+            def _run():
+                res = H.main()
+                assert res != 0, f"main() must return nonzero on name failure ({label}), got {res}"
+                assert runner_called[0] is False, f"runner must not be called on name failure ({label})"
+                assert 101 in fake.closed_handles, f"captured handle must be closed on name failure ({label})"
+            _with_fakes(fake, _run)
+    finally:
+        H.acquire_store_lock = orig_acquire
+        H.harness_runner = orig_runner
+
+
+def test_checked_desktop_scope_valid_same_desktop_in_main():
+    fake = _FakeDesktopUser32(orig_name="Default", thread_name="Default")
+    orig_acquire = H.acquire_store_lock
+    orig_runner = getattr(H, "harness_runner", None)
+    class _FakeLock:
+        def close(self): pass
+    fake_lock = _FakeLock()
+    runner_called = [False]
+    def _spy_runner():
+        runner_called[0] = True
+        return 0
+    try:
+        H.acquire_store_lock = lambda p: fake_lock
+        H.harness_runner = _spy_runner
+        def _run():
+            res = H.main()
+            assert runner_called[0] is True, "runner must be called for valid same-desktop"
+            assert len(fake.switches) == 0, "no desktop switch for same-desktop"
+            assert 101 in fake.closed_handles, "captured handle must be closed in restore_and_close"
+        _with_fakes(fake, _run)
+    finally:
+        H.acquire_store_lock = orig_acquire
+        H.harness_runner = orig_runner
+
+
+def test_checked_desktop_scope_valid_different_desktop_in_main():
+    fake = _FakeDesktopUser32(orig_name="Default", thread_name="exebox-sandbox")
+    orig_acquire = H.acquire_store_lock
+    orig_runner = getattr(H, "harness_runner", None)
+    class _FakeLock:
+        def close(self): pass
+    fake_lock = _FakeLock()
+    runner_called = [False]
+    def _spy_runner():
+        runner_called[0] = True
+        return 0
+    try:
+        H.acquire_store_lock = lambda p: fake_lock
+        H.harness_runner = _spy_runner
+        def _run():
+            res = H.main()
+            assert runner_called[0] is True, "runner must be called for valid different-desktop"
+            assert fake.switches == [202, 101], f"must switch to thread and restore to orig, got {fake.switches}"
+            assert 101 in fake.closed_handles, "captured handle must be closed in restore_and_close"
+        _with_fakes(fake, _run)
+    finally:
+        H.acquire_store_lock = orig_acquire
+        H.harness_runner = orig_runner
+
+
+def test_ui_trace_mixed_flood_emits_lifecycle_truncation_marker():
+    logger = _SimulatedUiTraceLogger(max_ordinary=80000, max_lifecycle=20000)
+    for _ in range(120000):
+        logger.event("view", "off=10.0")
+    assert "trace-ordinary-truncated count=80000" in logger.lines
+    for i in range(50000):
+        logger.event(f"older-trigger-{i}")
+    assert "trace-lifecycle-truncated count=20000" in logger.lines, "mixed flood must emit lifecycle loss indicator"
+    assert len(logger.lines) <= 100000, f"lines must not exceed 100000, got {len(logger.lines)}"
 
 
 if __name__ == "__main__":

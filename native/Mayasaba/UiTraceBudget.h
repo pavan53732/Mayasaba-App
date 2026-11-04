@@ -12,6 +12,8 @@ namespace mayasaba::ui
         uint64_t ordinaryLines{0};
         uint64_t lifecycleLines{0};
         uint64_t totalLines{0};
+        bool ordinaryTruncatedEmitted{false};
+        bool lifecycleTruncatedEmitted{false};
 
         enum class Admission
         {
@@ -21,41 +23,66 @@ namespace mayasaba::ui
             Suppress
         };
 
+        void Reset() noexcept
+        {
+            ordinaryLines = 0;
+            lifecycleLines = 0;
+            totalLines = 0;
+            ordinaryTruncatedEmitted = false;
+            lifecycleTruncatedEmitted = false;
+        }
+
         Admission Admit(bool isLifecycle) noexcept
         {
-            if (totalLines >= kMaxTotalLines)
-            {
-                return Admission::Suppress;
-            }
-
             if (isLifecycle)
             {
-                if (lifecycleLines >= kMaxLifecycleLines)
+                if (lifecycleTruncatedEmitted)
                 {
-                    if (lifecycleLines == kMaxLifecycleLines && (totalLines + 1) <= kMaxTotalLines)
+                    return Admission::Suppress;
+                }
+
+                bool const lifecycleCapReached = (lifecycleLines >= kMaxLifecycleLines);
+                bool const totalCapReached = (totalLines + 1 >= kMaxTotalLines);
+
+                if (lifecycleCapReached || totalCapReached)
+                {
+                    if (totalLines < kMaxTotalLines)
                     {
-                        ++lifecycleLines;
+                        lifecycleTruncatedEmitted = true;
                         ++totalLines;
                         return Admission::EmitTruncatedLifecycle;
                     }
+                    lifecycleTruncatedEmitted = true;
                     return Admission::Suppress;
                 }
+
                 ++lifecycleLines;
                 ++totalLines;
                 return Admission::Emit;
             }
             else
             {
-                if (ordinaryLines >= kMaxOrdinaryLines)
+                if (ordinaryTruncatedEmitted)
                 {
-                    if (ordinaryLines == kMaxOrdinaryLines && (totalLines + 1) <= kMaxTotalLines)
+                    return Admission::Suppress;
+                }
+
+                uint64_t const reservedForLifecycle = lifecycleTruncatedEmitted ? 0 : 1;
+                bool const ordinaryCapReached = (ordinaryLines >= kMaxOrdinaryLines);
+                bool const totalCapReached = (totalLines + 1 + reservedForLifecycle > kMaxTotalLines);
+
+                if (ordinaryCapReached || totalCapReached)
+                {
+                    if (totalLines + reservedForLifecycle < kMaxTotalLines)
                     {
-                        ++ordinaryLines;
+                        ordinaryTruncatedEmitted = true;
                         ++totalLines;
                         return Admission::EmitTruncatedOrdinary;
                     }
+                    ordinaryTruncatedEmitted = true;
                     return Admission::Suppress;
                 }
+
                 ++ordinaryLines;
                 ++totalLines;
                 return Admission::Emit;
@@ -63,4 +90,3 @@ namespace mayasaba::ui
         }
     };
 }
-
