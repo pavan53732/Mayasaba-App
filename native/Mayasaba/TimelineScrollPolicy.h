@@ -51,6 +51,7 @@ namespace mayasaba::ui
         uint32_t PendingProgrammaticCount() const noexcept { return pendingProgrammatic_; }
         char const* LastReason() const noexcept { return lastReason_; }
         double LastProgrammaticTarget() const noexcept { return lastProgrammaticTarget_; }
+        bool IsPrepending() const noexcept { return prepending_ > 0; }
 
         // Actual reader hardware input (mouse wheel, pointer drag/touch, keyboard navigation)
         // recorded independently of ViewChanged notifications. Genuine input immediately takes
@@ -60,6 +61,7 @@ namespace mayasaba::ui
             ++gen_;
             lastReason_ = reason ? reason : "user-input";
             pendingProgrammatic_ = 0;
+            prepending_ = 0;
         }
 
         // Explicit user navigation or project change (Jump to latest, search navigation, project switch)
@@ -69,6 +71,23 @@ namespace mayasaba::ui
             ++gen_;
             lastReason_ = reason ? reason : "navigation";
             pendingProgrammatic_ = 0;
+            prepending_ = 0;
+        }
+
+        // Begins an older-page prepend. Internal layout extent shifts during collection mutation
+        // and UpdateLayout must not be classified as user-scroll gestures.
+        void BeginPrepend() noexcept
+        {
+            ++prepending_;
+        }
+
+        // Ends an older-page prepend once programmatic compensation is queued.
+        void EndPrepend() noexcept
+        {
+            if (prepending_ > 0)
+            {
+                --prepending_;
+            }
         }
 
         // Called when a programmatic ChangeView was successfully accepted/queued by WinUI.
@@ -97,7 +116,13 @@ namespace mayasaba::ui
                 return false;
             }
 
-            // 2. Programmatic scroll in flight: decrement pending count on final completion
+            // 2. Prepend in progress: timeline insertion and layout shift must not be classified as user scroll
+            if (prepending_ > 0)
+            {
+                return false;
+            }
+
+            // 3. Programmatic scroll in flight: decrement pending count on final completion
             if (pendingProgrammatic_ > 0)
             {
                 if (!isIntermediate)
@@ -107,7 +132,7 @@ namespace mayasaba::ui
                 return false;
             }
 
-            // 3. User initiated movement (scroll gesture that fired ViewChanged without prior pointer event)
+            // 4. User initiated movement (scroll gesture that fired ViewChanged without prior pointer event)
             RecordUserInput("user-scroll");
             return true;
         }
@@ -129,6 +154,7 @@ namespace mayasaba::ui
         {
             ++gen_;
             pendingProgrammatic_ = 0;
+            prepending_ = 0;
             lastReason_ = "project-reset";
             lastProgrammaticTarget_ = -1.0;
         }
@@ -136,6 +162,7 @@ namespace mayasaba::ui
     private:
         uint64_t gen_{0};
         uint32_t pendingProgrammatic_{0};
+        uint32_t prepending_{0};
         char const* lastReason_{"init"};
         double lastProgrammaticTarget_{-1.0};
     };

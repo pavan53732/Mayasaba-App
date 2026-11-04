@@ -1141,11 +1141,22 @@ namespace winrt::Mayasaba::implementation
                     if (hRelease)
                     {
                         DWORD waitTimeoutMs = 15000;
-                        WaitForSingleObject(hRelease.get(), waitTimeoutMs);
+                        DWORD const waitRes = WaitForSingleObject(hRelease.get(), waitTimeoutMs);
+                        if (waitRes == WAIT_OBJECT_0)
+                        {
+                            std::wstring const releasedName = GetOlderPageTestEventName(L"Released");
+                            ScopedHandle hReleased(OpenEventW(EVENT_MODIFY_STATE, FALSE, releasedName.c_str()));
+                            if (hReleased) SetEvent(hReleased.get());
+                        }
+                        else
+                        {
+                            UiTraceEvent("older-hold-wait-failed", "waitRes=" + std::to_string(waitRes));
+                        }
                     }
-                    std::wstring const releasedName = GetOlderPageTestEventName(L"Released");
-                    ScopedHandle hReleased(OpenEventW(EVENT_MODIFY_STATE, FALSE, releasedName.c_str()));
-                    if (hReleased) SetEvent(hReleased.get());
+                    else
+                    {
+                        UiTraceEvent("older-hold-missing-release");
+                    }
                 }
             }
         }
@@ -1209,6 +1220,15 @@ namespace winrt::Mayasaba::implementation
         // (measured topmost 68 instead of 72; criterion 23 FAIL, run11).
         if (!olderEntries.empty())
         {
+            struct PrependScope
+            {
+                mayasaba::ui::ReaderScrollPolicy& policy;
+                bool active{ true };
+                explicit PrependScope(mayasaba::ui::ReaderScrollPolicy& p) : policy(p) { policy.BeginPrepend(); }
+                ~PrependScope() { if (active) policy.EndPrepend(); }
+                void Release() { if (active) { active = false; policy.EndPrepend(); } }
+            } prependScope(readerScrollPolicy_);
+
             UiTraceEvent("older-prepend", "items=" + std::to_string(olderEntries.size()));
             int32_t const anchorIndex = static_cast<int32_t>(olderEntries.size());
             timeline_->PrependOlder(std::move(olderEntries));
@@ -1309,6 +1329,7 @@ namespace winrt::Mayasaba::implementation
                         {
                             readerScrollPolicy_.RecordProgrammaticQueued(target);
                         }
+                        prependScope.Release();
                         // The immediate ChangeView is the first positioning
                         // act, not the final one: the panel refines the
                         // inserted rows' slot heights as layout settles, so
@@ -5777,35 +5798,24 @@ namespace winrt::Mayasaba::implementation
         QueryPerformanceCounter(&now);
         auto const ms = (now.QuadPart - uiTraceStart_.QuadPart) * 1000.0 / uiTraceFrequency_.QuadPart;
 
-        if (isLifecycle)
+        auto const adm = uiTraceBudget_.Admit(isLifecycle);
+        if (adm == mayasaba::ui::UiTraceBudget::Admission::Suppress)
         {
-            if (uiTraceLifecycleLines_ >= kMaxLifecycleTraceLines || uiTraceTotalLines_ >= kMaxTotalTraceLines)
-            {
-                if (uiTraceLifecycleLines_ == kMaxLifecycleTraceLines)
-                {
-                    ++uiTraceLifecycleLines_;
-                    uiTraceFile_ << "t+" << ms << "ms trace-lifecycle-truncated count=" << kMaxLifecycleTraceLines << "\n";
-                    uiTraceFile_.flush();
-                }
-                return;
-            }
-            ++uiTraceLifecycleLines_;
-            ++uiTraceTotalLines_;
+            return;
         }
-        else
+        if (adm == mayasaba::ui::UiTraceBudget::Admission::EmitTruncatedOrdinary)
         {
-            if (uiTraceOrdinaryLines_ >= kMaxOrdinaryTraceLines || uiTraceTotalLines_ >= kMaxTotalTraceLines)
-            {
-                if (uiTraceOrdinaryLines_ == kMaxOrdinaryTraceLines)
-                {
-                    ++uiTraceOrdinaryLines_;
-                    uiTraceFile_ << "t+" << ms << "ms trace-ordinary-truncated count=" << kMaxOrdinaryTraceLines << "\n";
-                    uiTraceFile_.flush();
-                }
-                return;
-            }
-            ++uiTraceOrdinaryLines_;
-            ++uiTraceTotalLines_;
+            uiTraceFile_ << "t+" << ms << "ms trace-ordinary-truncated count="
+                         << mayasaba::ui::UiTraceBudget::kMaxOrdinaryLines << "\n";
+            uiTraceFile_.flush();
+            return;
+        }
+        if (adm == mayasaba::ui::UiTraceBudget::Admission::EmitTruncatedLifecycle)
+        {
+            uiTraceFile_ << "t+" << ms << "ms trace-lifecycle-truncated count="
+                         << mayasaba::ui::UiTraceBudget::kMaxLifecycleLines << "\n";
+            uiTraceFile_.flush();
+            return;
         }
 
         uiTraceFile_ << "t+" << ms << "ms " << label;

@@ -1031,24 +1031,44 @@ def test_full_certification_matrix_requires_physical_criteria():
 
 class _FakeDesktopUser32:
     def __init__(self, capture_refuse=False, switch_refuse=False, restore_refuse=False,
+                 post_switch_verify_refuse=False, post_switch_mismatch=False,
+                 post_restore_verify_refuse=False, post_restore_mismatch=False,
                  orig_name="Default", thread_name="exebox-sandbox"):
         self.capture_refuse = capture_refuse
         self.switch_refuse = switch_refuse
         self.restore_refuse = restore_refuse
+        self.post_switch_verify_refuse = post_switch_verify_refuse
+        self.post_switch_mismatch = post_switch_mismatch
+        self.post_restore_verify_refuse = post_restore_verify_refuse
+        self.post_restore_mismatch = post_restore_mismatch
         self.orig_name = orig_name
         self.thread_name = thread_name
         self.active_desktop_name = orig_name
         self.closed_handles = []
         self.switches = []
         self.foreground = 0
+        self.open_input_call_count = 0
 
     def GetForegroundWindow(self):
         return self.foreground
 
     def OpenInputDesktop(self, flags, inherit, access):
-        if self.capture_refuse:
-            ctypes.set_last_error(5)
-            return 0
+        self.open_input_call_count += 1
+        if self.open_input_call_count == 1:
+            if self.capture_refuse:
+                ctypes.set_last_error(5)
+                return 0
+            return 101
+        if self.open_input_call_count == 2 and self.switches and self.switches[-1] == 202:
+            if self.post_switch_verify_refuse:
+                ctypes.set_last_error(5)
+                return 0
+            return 303
+        if self.switches and self.switches[-1] == 101:
+            if self.post_restore_verify_refuse:
+                ctypes.set_last_error(5)
+                return 0
+            return 404
         h = 101 if self.active_desktop_name == self.orig_name else 202
         return h
 
@@ -1077,7 +1097,14 @@ class _FakeDesktopUser32:
         return True
 
     def GetUserObjectInformationW(self, handle, index, buf, length, needed):
-        name = self.orig_name if handle == 101 else self.thread_name
+        if handle == 303:
+            name = "MismatchedDesktop" if self.post_switch_mismatch else self.thread_name
+        elif handle == 404:
+            name = "MismatchedDesktop" if self.post_restore_mismatch else self.orig_name
+        elif handle == 101:
+            name = self.orig_name
+        else:
+            name = self.thread_name
         buf.value = name
         return True
 
@@ -1223,9 +1250,133 @@ def test_checked_desktop_scope_restoration_refusal():
     _with_fakes(fake, _run)
 
 
+def test_checked_desktop_scope_post_switch_verify_refusal():
+    fake = _FakeDesktopUser32(post_switch_verify_refuse=True)
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False, "acquire_and_switch must return False when post-switch verification OpenInputDesktop fails"
+        assert "Post-switch OpenInputDesktop returned NULL" in scope.switch_error, scope.switch_error
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is True
+        assert 101 in fake.closed_handles
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_post_switch_mismatch():
+    fake = _FakeDesktopUser32(post_switch_mismatch=True)
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is False, "acquire_and_switch must return False when post-switch desktop name mismatches"
+        assert "Post-switch verification mismatch" in scope.switch_error, scope.switch_error
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is True
+        assert 101 in fake.closed_handles
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_post_restore_verify_refusal():
+    fake = _FakeDesktopUser32(post_restore_verify_refuse=True)
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is True
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is False, "restore_and_close must return False when post-restore verification OpenInputDesktop fails"
+        assert "Post-restore OpenInputDesktop returned NULL" in scope.restore_error, scope.restore_error
+        assert scope.restored is False
+        assert 101 in fake.closed_handles
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_post_restore_mismatch():
+    fake = _FakeDesktopUser32(post_restore_mismatch=True)
+    def _run():
+        scope = H.CheckedDesktopScope()
+        ok = scope.acquire_and_switch()
+        assert ok is True
+        restore_ok = scope.restore_and_close()
+        assert restore_ok is False, "restore_and_close must return False when post-restore desktop name mismatches"
+        assert "Post-restore verification mismatch" in scope.restore_error, scope.restore_error
+        assert scope.restored is False
+        assert 101 in fake.closed_handles
+    _with_fakes(fake, _run)
+
+
+def test_checked_desktop_scope_caller_enforcement_in_main():
+    fake = _FakeDesktopUser32(capture_refuse=True)
+    orig_acquire = H.acquire_store_lock
+    orig_runner = getattr(H, "harness_runner", None)
+    runner_called = [False]
+    def _spy_runner():
+        runner_called[0] = True
+        return 0
+    class _FakeLock:
+        def close(self): pass
+    fake_lock = _FakeLock()
+    try:
+        H.acquire_store_lock = lambda p: fake_lock
+        H.harness_runner = _spy_runner
+        def _run():
+            res = H.main()
+            assert res != 0, f"main() must return non-zero when acquisition fails, got {res}"
+            assert runner_called[0] is False, "test runner must not be called when desktop acquisition fails"
+        _with_fakes(fake, _run)
+    finally:
+        H.acquire_store_lock = orig_acquire
+        H.harness_runner = orig_runner
+
+
+def test_checked_desktop_scope_restoration_failure_overrides_success_in_main():
+    fake = _FakeDesktopUser32(restore_refuse=True)
+    orig_acquire = H.acquire_store_lock
+    orig_runner = getattr(H, "harness_runner", None)
+    orig_override = getattr(H, "custom_verdicts_override", None)
+    class _FakeLock:
+        def close(self): pass
+    fake_lock = _FakeLock()
+    try:
+        H.acquire_store_lock = lambda p: fake_lock
+        H.harness_runner = lambda: 0
+        H.custom_verdicts_override = {c: "PASS" for c in H.REQUIRED_CRITERIA_AUTOMATED}
+        def _run():
+            res = H.main()
+            assert res != 0, f"main() must return non-zero when desktop restoration fails, got {res}"
+        _with_fakes(fake, _run)
+    finally:
+        H.acquire_store_lock = orig_acquire
+        H.harness_runner = orig_runner
+        H.custom_verdicts_override = orig_override
+
+
+def test_production_reader_oracle_discrimination():
+    """Verify that the production reader oracle strictly rejects stale zero resets, missing samples, and wrong offsets."""
+    fn = H.evaluate_reading_anchor_preservation
+    # 1. Stale reset to 0.0000% must fail
+    assert fn((0.3715, 0.0), (0.3715, 0.9042)) == "FAIL"
+    # 2. Missing sample (None) must fail
+    assert fn(None, (0.3715, 0.9042)) == "FAIL"
+    # 3. Wrong nonzero offset (e.g. 30.0%) must fail
+    assert fn((0.3715, 30.0), (0.3715, 0.9042)) == "FAIL"
+    # 4. Small offset below 0.2 floor must fail
+    assert fn((0.3715, 0.15), (0.3715, 0.15)) == "FAIL"
+    # 5. Exact match must pass
+    assert fn((0.3715, 0.9042), (0.3715, 0.9042)) == "PASS"
+    # 6. Shift within tolerance (0.0542 <= 0.2) must pass
+    assert fn((0.3715, 0.85), (0.3715, 0.9042)) == "PASS"
+    # 7. Shift outside tolerance (0.2542 > 0.2) must fail
+    assert fn((0.3715, 0.65), (0.3715, 0.9042)) == "FAIL" 
+
+
 # --- Bounded Diagnostics & Trace Evaluation ---
 
 class _SimulatedUiTraceLogger:
+    """Model of UI trace logging behavior for testing harness trace parsing invariants.
+
+    Note: Native production UiTraceBudget is implemented in native/Mayasaba/UiTraceBudget.h
+    and tested natively in native/tests/layout_budget_tests.cpp.
+    """
     def __init__(self, max_ordinary=80000, max_lifecycle=20000):
         self.max_ordinary = max_ordinary
         self.max_lifecycle = max_lifecycle
@@ -1301,6 +1452,11 @@ def test_ui_trace_mutant_bypass_fails_boundedness():
 def test_mutation_older_abort_reader_bypass_fails_reader_intent():
     """Mutation: bypassing readerScrollPolicy_.IsSuperseded allows stale compensation to overwrite reader intent."""
     class _MockScroller:
+        """Model of scroller behavior for reader-intent harness oracle validation.
+
+        Note: Production reader guard readerScrollPolicy_.IsSuperseded is implemented in
+        native/Mayasaba/MainWindow.xaml.cpp and tested via native binary mutation.
+        """
         def __init__(self):
             self.offset = 0.46
             self.reader_gen = 1

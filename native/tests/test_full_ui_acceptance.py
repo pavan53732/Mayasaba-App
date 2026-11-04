@@ -340,6 +340,22 @@ def validate_verdict_record(name, raw_value):
             return (v, j, f"Criterion {name!r} marked NOT_APPLICABLE without valid scope justification matching approved exemption: {j!r}")
     return (v, j, None)
 
+def evaluate_reading_anchor_preservation(state_final, state_after_gesture):
+    """Evaluates whether the reader's position was preserved after a held older-page load.
+
+    Rejects missing samples, stale zero resets (< 0.2%), and shifts exceeding tolerance (0.2%).
+    """
+    if (state_final is None
+            or state_final[1] < 0.2
+            or abs(state_final[1] - state_after_gesture[1]) > 0.2):
+        return "FAIL"
+    return "PASS"
+
+
+harness_runner = None
+custom_verdicts_override = None
+
+
 def evaluate_verdicts(verdicts, required_registry=REQUIRED_CRITERIA_AUTOMATED, is_strict=False):
     if not isinstance(verdicts, dict):
         return {
@@ -1012,13 +1028,24 @@ class CheckedDesktopScope:
                 return False
             self.switched = True
             # Verify active desktop after switch
+            if not hasattr(user32, "OpenInputDesktop"):
+                self.switch_error = "OpenInputDesktop not available for post-switch verification"
+                return False
             h_v = user32.OpenInputDesktop(0, False, 0x01FF)
-            if h_v:
+            if not h_v:
+                err = ctypes.get_last_error()
+                self.switch_error = f"Post-switch OpenInputDesktop returned NULL (error {err})"
+                return False
+            try:
                 v_name = _object_name(h_v)
+            finally:
                 user32.CloseDesktop(h_v)
-                if self.thread_desktop_name and v_name != self.thread_desktop_name:
-                    self.switch_error = f"Post-switch verification mismatch: expected '{self.thread_desktop_name}', got '{v_name}'"
-                    return False
+            if not v_name:
+                self.switch_error = "Post-switch desktop name could not be read"
+                return False
+            if self.thread_desktop_name and v_name != self.thread_desktop_name:
+                self.switch_error = f"Post-switch verification mismatch: expected '{self.thread_desktop_name}', got '{v_name}'"
+                return False
             return True
         except Exception as exc:
             self.switch_error = f"SwitchDesktop exception: {type(exc).__name__}: {exc}"
@@ -1038,17 +1065,28 @@ class CheckedDesktopScope:
                     self.restore_error = f"SwitchDesktop(restore) returned FALSE (error {err})"
                     restore_ok = False
                 else:
-                    h_v = user32.OpenInputDesktop(0, False, 0x01FF)
-                    if h_v:
-                        v_name = _object_name(h_v)
-                        user32.CloseDesktop(h_v)
-                        if self.orig_desktop_name and v_name != self.orig_desktop_name:
-                            self.restore_error = f"Post-restore verification mismatch: expected '{self.orig_desktop_name}', got '{v_name}'"
+                    if not hasattr(user32, "OpenInputDesktop"):
+                        self.restore_error = "OpenInputDesktop not available for post-restore verification"
+                        restore_ok = False
+                    else:
+                        h_v = user32.OpenInputDesktop(0, False, 0x01FF)
+                        if not h_v:
+                            err = ctypes.get_last_error()
+                            self.restore_error = f"Post-restore OpenInputDesktop returned NULL (error {err})"
                             restore_ok = False
                         else:
-                            self.restored = True
-                    else:
-                        self.restored = True
+                            try:
+                                v_name = _object_name(h_v)
+                            finally:
+                                user32.CloseDesktop(h_v)
+                            if not v_name:
+                                self.restore_error = "Post-restore desktop name could not be read"
+                                restore_ok = False
+                            elif self.orig_desktop_name and v_name != self.orig_desktop_name:
+                                self.restore_error = f"Post-restore verification mismatch: expected '{self.orig_desktop_name}', got '{v_name}'"
+                                restore_ok = False
+                            else:
+                                self.restored = True
             except Exception as exc:
                 self.restore_error = f"SwitchDesktop(restore) exception: {type(exc).__name__}: {exc}"
                 restore_ok = False
@@ -1089,7 +1127,7 @@ def establish_foreground(win, attempts=3, settle=0.7):
     try:
         if hasattr(kernel32, "GetCurrentThreadId"):
             current_thread = kernel32.GetCurrentThreadId()
-        if hasattr(user32, "GetThreadDesktop") and hasattr(user32, "SwitchDesktop") and current_thread:
+        if hasattr(user32, "GetThreadDesktop") and current_thread:
             thread_desktop = user32.GetThreadDesktop(current_thread)
             th_name = _object_name(thread_desktop)
             in_desk = user32.OpenInputDesktop(0, False, 0x01FF) if hasattr(user32, "OpenInputDesktop") else None
@@ -1100,9 +1138,7 @@ def establish_foreground(win, attempts=3, settle=0.7):
                 except Exception:
                     pass
             if th_name and in_name and th_name != in_name:
-                switched = user32.SwitchDesktop(thread_desktop)
-                if not switched:
-                    observations.append(f"SwitchDesktop returned {switched} err={ctypes.get_last_error()}")
+                observations.append(f"Notice: thread desktop '{th_name}' != input desktop '{in_name}'")
     except Exception as exc:
         observations.append(f"Desktop verification/switch failed: {type(exc).__name__}: {exc}")
     for attempt in range(1, attempts + 1):
@@ -2217,7 +2253,7 @@ def main():
             "23. Reading Anchor Preserved Across Older Prepend": criterion_reading_anchor,
         }
 
-    def emit_report(custom_verdicts=None, is_strict=None, required_registry=None):
+    def emit_report(custom_verdicts=None, is_strict=None, required_registry=None, desktop_restoration_failed=False):
         """Print the per-criterion table once, and return the run's exit code.
 
         Validates all criteria against the registered vocabulary and strict/diagnostic rules.
@@ -2283,6 +2319,10 @@ def main():
             log("      before the observation that would have earned it.")
             log("=" * 70 + "\n")
             return 1
+        if desktop_restoration_failed:
+            log("\nSTATUS: TEST SUITE FAILED (Desktop restoration failed)")
+            log("=" * 70 + "\n")
+            return 1
         if counts.get("INCONCLUSIVE", 0) > 0:
             if is_strict:
                 log("\nSTATUS: STRICT CERTIFICATION FAILED (INCONCLUSIVE CRITERIA DISALLOWED IN STRICT MODE)")
@@ -2321,11 +2361,20 @@ def main():
     desktop_scope = CheckedDesktopScope()
     proc = None
     report_done = False
-    exit_code = 0
-    try:
-        desktop_ok = desktop_scope.acquire_and_switch()
-        if not desktop_ok:
-            log(f"Notice during desktop scope initialization: capture_error={desktop_scope.capture_error} switch_error={desktop_scope.switch_error}")
+    test_exit_code = 0
+    desktop_restoration_failed = False
+
+    def _run_harness_phases():
+        nonlocal proc
+        nonlocal criterion_startup_filtering, criterion_search_pagination, criterion_older_navigation
+        nonlocal criterion_search_switch_safety, criterion_narrow_layout, criterion_hover_sweep
+        nonlocal criterion_dpi_scaling, criterion_action_center_paging, criterion_action_center_stale
+        nonlocal criterion_action_center_dismiss, criterion_drop_execution, criterion_mixed_batch
+        nonlocal criterion_attachment_chip, criterion_preview_withholding, criterion_perf_profiling
+        nonlocal criterion_overlay_flat, criterion_overlay_bounds, criterion_overlay_repeat
+        nonlocal criterion_hero_perspective, criterion_overlay_reduced_motion, criterion_cli_readiness
+        nonlocal criterion_paging_save, criterion_reading_anchor
+
         try:
             _context = desktop_context()
             log(f"Desktop context at start: thread_desktop={_context['thread_desktop']} "
@@ -3858,7 +3907,7 @@ def main():
                             else f"<read-error non-str {type(val).__name__}>"
                     except Exception as exc:
                         last = f"<read-error {type(exc).__name__}>"
-                    if last and last != "top-visible=pending":
+                    if last and last not in ("top-visible=pending", "top-visible=unknown"):
                         return last
                 time.sleep(0.25)
             return last if last else ""
@@ -4407,6 +4456,16 @@ def main():
                                         else win.rectangle().bottom - 240)
                     trace_path = os.path.join(os.path.dirname(STORE_PATH),
                                               "ui-trace.log")
+
+                    def ui_trace_has_lifecycle_truncation():
+                        try:
+                            with open(trace_path, "r", encoding="utf-8", errors="replace") as fh:
+                                for line in fh:
+                                    if "trace-lifecycle-truncated" in line:
+                                        return True
+                        except OSError:
+                            pass
+                        return False
 
                     def ui_trace_label_counts():
                         counts = {}
@@ -4969,61 +5028,82 @@ def main():
                                     log(f"  subcase B stimulus: delivered {b_batches} batches upward, awaiting InFlight...")
                                     wait_res = kernel32.WaitForSingleObject(h_older_inflight, 10000)
                                     if wait_res != 0:
-                                        log(f"  subcase B: InFlight was not signaled within 10s (wait result: {wait_res})")
+                                        log(f"  FAIL: Subcase B: InFlight was not signaled within 10s (wait result: {wait_res})")
                                         criterion_reading_anchor = "FAIL"
                                     else:
                                         log("  subcase B: InFlight signaled! Older-page query is held before UI adoption.")
                                         state_before_gesture = paging_scroll_state()
                                         log(f"  subcase B: scroll state before gesture: {state_before_gesture}")
-
-                                        # Deliver verified reader input while the load is held:
-                                        # 8 wheel notches down to move reader away from top
-                                        target = paging_wheel_target()
-                                        if target:
-                                            send_wheel_at_point(win, target[0], target[1], -120, steps=8, pause=0.08)
-                                        time.sleep(0.5)
-
-                                        state_after_gesture = paging_scroll_state()
-                                        log(f"  subcase B: verified reader gesture delivered. New intended scroll state: {state_after_gesture}")
-
-                                        # Release the held load
-                                        kernel32.SetEvent(h_older_release)
-                                        rel_res = kernel32.WaitForSingleObject(h_older_released, 5000)
-                                        log(f"  subcase B: load released, Released event wait result: {rel_res}")
-
-                                        # Await UI thread post-condition:
-                                        # readerScrollPolicy_.IsSuperseded(readerGenAtStart) == true
-                                        # emits 'older-abort-reader' and co_returns without prepending or compensating
-                                        abort_deadline = time.time() + 8.0
-                                        sub_b_aborted = False
-                                        while time.time() < abort_deadline:
-                                            counts_now = ui_trace_label_counts()
-                                            if counts_now.get("older-abort-reader", 0) > sub_b_abort_count:
-                                                sub_b_aborted = True
-                                                break
-                                            time.sleep(0.2)
-
-                                        counts_final = ui_trace_label_counts()
-                                        prepends_now = counts_final.get("older-prepend", 0)
-                                        aborts_now = counts_final.get("older-abort-reader", 0)
-                                        log(f"  subcase B post-condition: older-abort-reader={aborts_now} (was {sub_b_abort_count}), older-prepend={prepends_now} (was {sub_b_prepend_count})")
-
-                                        if not sub_b_aborted:
+                                        if state_before_gesture is None:
+                                            log("  FAIL: Subcase B: baseline scroll state could not be read")
                                             criterion_reading_anchor = "FAIL"
-                                            log("  FAIL: Subcase B: older-abort-reader was not emitted after reader interaction during held load!")
-                                        elif prepends_now > sub_b_prepend_count:
-                                            criterion_reading_anchor = "FAIL"
-                                            log("  FAIL: Subcase B: older-prepend occurred despite reader interaction during held load!")
                                         else:
-                                            time.sleep(1.2)
-                                            state_final = paging_scroll_state()
-                                            log(f"  subcase B: settled scroll state: {state_final} (intended: {state_after_gesture})")
-                                            if state_final and state_after_gesture and abs(state_final[1] - state_after_gesture[1]) > 5.0 and state_final[1] < 1.0:
+                                            target = paging_wheel_target()
+                                            if target is None:
+                                                log("  FAIL: Subcase B: wheel target element not found")
                                                 criterion_reading_anchor = "FAIL"
-                                                log(f"  FAIL: Subcase B: stale compensation overwrote reader position (settled at {state_final[1]}% vs intended {state_after_gesture[1]}%)")
                                             else:
-                                                log("PASS: Subcase B: reader intent preserved: reader gesture during held older-page load aborted stale adoption ('older-abort-reader') and preserved the reader's intended position.")
-                                                criterion_reading_anchor = "PASS"
+                                                # Deliver verified reader input while the load is held:
+                                                # 8 wheel notches down to move reader away from top
+                                                delivered = send_wheel_at_point(win, target[0], target[1], -120, steps=8, pause=0.08)
+                                                time.sleep(0.5)
+                                                state_after_gesture = paging_scroll_state()
+                                                log(f"  subcase B: reader gesture delivery result: {delivered}, intended state: {state_after_gesture}")
+
+                                                if not delivered:
+                                                    log("  FAIL: Subcase B: mouse wheel gesture delivery failed")
+                                                    criterion_reading_anchor = "FAIL"
+                                                elif state_after_gesture is None:
+                                                    log("  FAIL: Subcase B: scroll state after gesture could not be read")
+                                                    criterion_reading_anchor = "FAIL"
+                                                elif state_after_gesture[1] <= state_before_gesture[1] + 0.1:
+                                                    log(f"  FAIL: Subcase B: gesture did not move scroller downward (before={state_before_gesture[1]}%, after={state_after_gesture[1]}%)")
+                                                    criterion_reading_anchor = "FAIL"
+                                                else:
+                                                    # Release the held load
+                                                    kernel32.SetEvent(h_older_release)
+                                                    rel_res = kernel32.WaitForSingleObject(h_older_released, 6000)
+                                                    log(f"  subcase B: load released, Released event wait result: {rel_res}")
+
+                                                    if rel_res != 0:
+                                                        log(f"  FAIL: Subcase B: production hold release wait failed or timed out (wait result: {rel_res})")
+                                                        criterion_reading_anchor = "FAIL"
+                                                    else:
+                                                        # Await UI thread post-condition:
+                                                        # readerScrollPolicy_.IsSuperseded(readerGenAtStart) == true
+                                                        # emits 'older-abort-reader' and co_returns without prepending or compensating
+                                                        abort_deadline = time.time() + 8.0
+                                                        sub_b_aborted = False
+                                                        while time.time() < abort_deadline:
+                                                            counts_now = ui_trace_label_counts()
+                                                            if counts_now.get("older-abort-reader", 0) > sub_b_abort_count:
+                                                                sub_b_aborted = True
+                                                                break
+                                                            time.sleep(0.2)
+
+                                                        counts_final = ui_trace_label_counts()
+                                                        prepends_now = counts_final.get("older-prepend", 0)
+                                                        aborts_now = counts_final.get("older-abort-reader", 0)
+                                                        log(f"  subcase B post-condition: older-abort-reader={aborts_now} (was {sub_b_abort_count}), older-prepend={prepends_now} (was {sub_b_prepend_count})")
+
+                                                        if ui_trace_has_lifecycle_truncation():
+                                                            log("  FAIL: Subcase B: required lifecycle evidence was lost due to trace truncation ('trace-lifecycle-truncated')")
+                                                            criterion_reading_anchor = "FAIL"
+                                                        elif not sub_b_aborted:
+                                                            criterion_reading_anchor = "FAIL"
+                                                            log("  FAIL: Subcase B: older-abort-reader was not emitted after reader interaction during held load!")
+                                                        elif prepends_now > sub_b_prepend_count:
+                                                            criterion_reading_anchor = "FAIL"
+                                                            log("  FAIL: Subcase B: older-prepend occurred despite reader interaction during held load!")
+                                                        else:
+                                                            time.sleep(1.2)
+                                                            state_final = paging_scroll_state()
+                                                            log(f"  subcase B: settled scroll state: {state_final} (intended: {state_after_gesture})")
+                                                            criterion_reading_anchor = evaluate_reading_anchor_preservation(state_final, state_after_gesture)
+                                                            if criterion_reading_anchor == "FAIL":
+                                                                log(f"  FAIL: Subcase B: reader position was not preserved (settled={state_final}, intended={state_after_gesture})")
+                                                            else:
+                                                                log(f"PASS: Subcase B: reader intent preserved: reader gesture during held older-page load aborted stale adoption ('older-abort-reader') and preserved the reader's intended position (settled at {state_final[1]:.4f}% vs intended {state_after_gesture[1]:.4f}%).")
                                 finally:
                                     for h in (h_older_hold, h_older_inflight, h_older_release, h_older_released):
                                         if h:
@@ -6522,7 +6602,7 @@ def main():
             except Exception as exc:
                 log(f"  window title unreadable: {type(exc).__name__}: {exc}")
             criterion_cli_readiness = "BLOCKED"
-            return emit_report()
+            return 1
 
         # The postcondition is polled and confirmed by two agreeing reads.
         # "All three read a registered state" is satisfied by the initial markup
@@ -6759,7 +6839,7 @@ def main():
             log("         No stimulus was applied and no measurement exists; criterion 15 is")
             log("         BLOCKED, not FAIL. See the phase that ran before this one for the cause.")
             criterion_perf_profiling = "BLOCKED"
-            return emit_report()
+            return 1
 
         log("Typing test keystrokes into ComposerBox to measure input presentation latency...")
         composer_box = find_by_aid(win, "ComposerBox")
@@ -6807,7 +6887,7 @@ def main():
                 log(f"BLOCKED: could not read the window rectangle either "
                     f"({type(exc).__name__}: {exc}); no window is left to point the wheel at.")
                 criterion_perf_profiling = "BLOCKED"
-                return emit_report()
+                return 1
             hx = (rect.left + rect.right) // 2
             hy = (rect.top + rect.bottom) // 2
         send_wheel_at_point(win, hx, hy, 120, steps=15, pause=0.04)
@@ -6827,7 +6907,7 @@ def main():
             log("      The profiling criterion is FAIL, not NOT_RUN: the stimulus was")
             log("      applied and the artifact it is supposed to produce is absent.")
             criterion_perf_profiling = "FAIL"
-            return emit_report()
+            return 1
 
         with open(PERF_LOG_PATH, "r", encoding="utf-8") as f:
             perf_data = json.load(f)
@@ -6865,30 +6945,30 @@ def main():
             for reason in perf_failures:
                 log(f"FAIL: {reason}")
             criterion_perf_profiling = "FAIL"
+            return 1
         else:
             criterion_perf_profiling = "PASS"
 
-        return emit_report()
+        return 0
 
+
+
+    runner = getattr(sys.modules[__name__], "harness_runner", None) or _run_harness_phases
+    try:
+        desktop_ok = desktop_scope.acquire_and_switch()
+        if not desktop_ok:
+            log(f"FATAL: Desktop scope acquisition failed: capture_error={desktop_scope.capture_error} switch_error={desktop_scope.switch_error}")
+            test_exit_code = 1
+        else:
+            test_exit_code = runner()
     except CriterionFailure:
-        # Already recorded as FAIL by the criterion that raised it; the report
-        # below is the only thing left to do.
-        raise
-
+        test_exit_code = 1
     except Exception:
-        # An unexpected exception used to leave the evidence directory silent:
-        # the table showed criteria as NOT_RUN and nothing anywhere said the run
-        # had stopped after Phase 7. The traceback went to the console, which is
-        # not part of the evidence, so a reader of the evidence could not tell an
-        # abort from an unfinished harness. It is written into the log here, and
-        # the criteria that were never reached keep NOT_RUN -- which the report
-        # turns into a non-zero exit code.
+        test_exit_code = 1
         log("\nUNHANDLED: the run aborted with an exception that no criterion caught.")
         log(traceback.format_exc())
         log("The criteria not reached above keep their NOT_RUN verdict: this abort is the")
         log("reason they were never exercised, and NOT_RUN is not a pass.")
-        return emit_report()
-
     finally:
         # Guarantee schema restoration if test aborted midway
         try:
@@ -6940,20 +7020,14 @@ def main():
 
         restore_ok = desktop_scope.restore_and_close()
         if not restore_ok:
+            desktop_restoration_failed = True
             log(f"FATAL: Desktop restoration failed: {desktop_scope.restore_error}")
-            exit_code = 1
 
-        # A phase that returned early never reached the normal report call, and a
-        # run whose only output was a FAIL line left no table saying which criteria
-        # were actually exercised. The table is therefore emitted here too. It does
-        # not change the exit code: an early return already decided that.
-        if not report_done:
-            report_done = True
-            rep_res = emit_report()
-            if exit_code == 0:
-                exit_code = rep_res
-
-    return exit_code
+    # Single finalization boundary
+    custom_override = getattr(sys.modules[__name__], "custom_verdicts_override", None)
+    rep_res = emit_report(custom_verdicts=custom_override, desktop_restoration_failed=desktop_restoration_failed)
+    final_code = rep_res if rep_res != 0 else (1 if (desktop_restoration_failed or test_exit_code != 0) else 0)
+    return final_code
 
 if __name__ == "__main__":
     sys.exit(main())

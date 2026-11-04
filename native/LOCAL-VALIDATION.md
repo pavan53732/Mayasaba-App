@@ -6698,3 +6698,126 @@ directories):
 - **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
 - **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
 - **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.
+
+---
+
+## Acceptance Harness Finalization, Desktop Scope Enforcement, Strengthened C23 & Native Trace Budget (Review-19002a7 Follow-up)
+
+### 1. Architectural & Test-Harness Corrections
+
+1. **Process Result Aggregation & Single Finalization Boundary:**
+   - Wrapped test phases in `_run_harness_phases()` / `harness_runner` inside `native/tests/test_full_ui_acceptance.py` and eliminated all premature `return emit_report()` calls inside individual phases.
+   - Combined test phase exit codes, unhandled exceptions, and desktop cleanup/restoration outcomes at a single finalization boundary in `main()`.
+   - Updated `emit_report(desktop_restoration_failed=...)`: when desktop restoration fails, `STATUS: TEST SUITE FAILED (Desktop restoration failed)` is emitted immediately and exit code `1` is returned, preventing any "ALL CRITERIA PASSED" or "ACCEPTANCE CHECKS COMPLETE" verdict.
+   - Enforced caller scope acquisition failure: if `desktop_scope.acquire_and_switch()` returns False, `main()` returns `1` immediately without launching `Mayasaba.exe` or executing any test phases.
+   - Validated via new production regressions in `native/tests/test_harness_oracles.py`:
+     - `test_checked_desktop_scope_caller_enforcement_in_main`: asserts that acquisition failure returns nonzero and `subprocess.Popen` is never called.
+     - `test_checked_desktop_scope_restoration_failure_overrides_success_in_main`: asserts that an otherwise-successful test run (exit code 0) plus restoration refusal returns nonzero and cannot emit a clean pass.
+
+2. **Checked Desktop Lifetime Management & Readback Verification:**
+   - Added active post-switch and post-restore readback verification in `CheckedDesktopScope`:
+     - `acquire_and_switch`: verifies `OpenInputDesktop` succeeds and `_object_name(h_v)` matches the target thread desktop name; unreadable or mismatched names record a switch error and return `False`.
+     - `restore_and_close`: verifies `OpenInputDesktop` succeeds and `_object_name(h_v)` matches the captured original desktop name; unreadable or mismatched names record a restore error and set `restored = False`.
+   - Consolidated desktop switching strictly under one checked lifetime owner (`CheckedDesktopScope`); removed independent `user32.SwitchDesktop` calls in `establish_foreground()`.
+   - Validated in `test_harness_oracles.py`:
+     - `test_checked_desktop_scope_post_switch_verify_refusal`
+     - `test_checked_desktop_scope_post_switch_mismatch`
+     - `test_checked_desktop_scope_post_restore_verify_refusal`
+     - `test_checked_desktop_scope_post_restore_mismatch`
+
+3. **Strengthened C23 Postconditions & Reader Intent Preservation:**
+   - Checked release synchronization: in `MainWindow::LoadOlderHistoryAsync`, checked `WaitForSingleObject(hRelease.get(), waitTimeoutMs) == WAIT_OBJECT_0` before signaling `Released`. On timeout or error, emits `older-hold-wait-failed` without signaling `Released`.
+   - Subcase B in `test_full_ui_acceptance.py`: asserts target scroller is valid, gesture delivery succeeded (`delivered is True`), release wait succeeded (`rel_res == 0`), and verifies lifecycle truncation marker (`trace-lifecycle-truncated`) is absent.
+   - Named production reader oracle `evaluate_reading_anchor_preservation(state_final, state_after_gesture)`:
+     - Rejects missing samples (`state_final is None`).
+     - Rejects stale zero resets (`state_final[1] < 0.2%`), strictly eliminating the previously reported `0.9042%` to `0.0000%` blind spot.
+     - Rejects shifts exceeding tight tolerance (`abs(state_final[1] - state_after_gesture[1]) > 0.2%`).
+     - Validated across all boundary cases in `test_harness_oracles.py` (`test_production_reader_oracle_discrimination`).
+   - Prepend Scope Protection in `TimelineScrollPolicy.h` and `MainWindow.xaml.cpp`:
+     - Internal collection mutations in `timeline_->PrependOlder` and subsequent `UpdateLayout()` cause an extent jump that WinUI reports via `ViewChanged`.
+     - Introduced `BeginPrepend()` / `EndPrepend()` and RAII `PrependScope` in `MainWindow.xaml.cpp`.
+     - In `ReaderScrollPolicy::OnViewChanged`, extent shifts occurring while `prepending_ > 0` are suppressed and not misclassified as reader gestures (`user-scroll`).
+     - Validated in `native/tests/layout_budget_tests.cpp` (Group 6, Case H).
+   - Corrected `paging_read_top_visible()` in `test_full_ui_acceptance.py`: polls while `last in ("top-visible=pending", "top-visible=unknown")` so transient pre-settle states do not prematurely terminate polling after a single sample.
+
+4. **Shared Production Trace Budget (`UiTraceBudget.h`):**
+   - Extracted shared trace budget into production header `native/Mayasaba/UiTraceBudget.h` (`mayasaba::ui::UiTraceBudget`).
+   - Strict mathematical ceiling: `kMaxOrdinaryLines = 80000`, `kMaxLifecycleLines = 20000`, `kMaxTotalLines = 100000`. Truncation markers are strictly counted toward the total line budget.
+   - Integrated into `MainWindow.xaml.h` and `MainWindow.xaml.cpp` (`uiTraceBudget_.Admit(isLifecycle)`).
+   - Validated natively in `native/tests/layout_budget_tests.cpp` (Group 7):
+     - Case A: Ordinary flood (120,000 events) caps at 80,001 lines and preserves late lifecycle events.
+     - Case B: Lifecycle flood (50,000 events) caps at 20,001 lines.
+     - Case C: Saturated flood guarantees `totalLines <= 100000`.
+
+5. **Production Reader Guard Mutation Experiment:**
+   - Mutated `native/Mayasaba/MainWindow.xaml.cpp` at line 1174: disabled `readerScrollPolicy_.IsSuperseded(readerGenAtStart)` (`if (false && ...)`).
+   - Built mutant binary via `mayasaba-build.cmd`:
+     - Mutant executable SHA-256: `8A27AF29711E51DFDD6967C20AF2315562A0DEC973508781566A1B6322AECA34`.
+   - Executed full native acceptance suite (`test_full_ui_acceptance.py`):
+     - Subcase B detected violation: `older-abort-reader` not emitted, `older-prepend` occurred.
+     - Criterion 23 evaluated to `FAIL`.
+     - Suite status: `STATUS: TEST SUITE FAILED (one or more assertions failed)`, exit code `1`.
+   - Restored `MainWindow.xaml.cpp` byte-identically and rebuilt production binary:
+     - Production executable SHA-256: `56377A762D974834947EA7C250C0CA0ED1E54F964FE71230BB5FC581D88B68B5`.
+     - `MainWindow.xbf` SHA-256: `12235E06178F658FD39ED843B6CEDC80A9542D3AD0734527BE3F14C33D92DD31`.
+   - Executed full native acceptance suite:
+     - Subcase A: `PASS` (published top-visible anchored row `seeded-paging-00072`).
+     - Subcase B: `PASS` (held older-page load aborted stale adoption, settled at intended `1.7096%`).
+     - Criterion 23 evaluated to `PASS`. Exit code `0`.
+
+---
+
+### 2. Preserved Raw Native Acceptance Table (23 Criteria)
+
+- Executed against fresh `Mayasaba.exe` (SHA-256 `56377a762d974834947ea7c250c0ca0ed1e54f964fe71230bb5fc581d88b68b5`) and `MainWindow.xbf` (SHA-256 `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`):
+
+| # | Criterion | Result | Measured Context / Reason |
+|---|-----------|--------|---------------------------|
+| C01 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded', text filter 'alpha', zero-match query, Escape clear, Clear button, status filter 'Closed projects only' |
+| C02 | Message Search Pagination & Continuation | **PASS** | 50 seeded messages: Page 1 (20/50), Page 2 (40/50), Page 3 (50/50, Load more collapsed), Escape close, reopen |
+| C03 | Older Message Navigation & Selection | **PASS** | Seeded message selection, scroll observation, timeline integrity |
+| C04 | Search Mode Project Switch Safety | **PASS** | Switching project during active search preserves target project isolation and cleanly resets search overlay |
+| C05 | Narrow 520px Responsive Layout | **PASS** | Window sized to 520 DIPs, controls reflow cleanly, composer remains reachable |
+| C06 | Rapid Hover Sweeps & Animation Stability | **PASS** | 20 rapid hover sweeps across interactive elements, no animation stalls or layout cycles |
+| C07 | Display DPI Scaling Simulation | **PASS** | Per-monitor DPI awareness verified (API-level check + scaling reflow at 150% and 200%) |
+| C08 | Action Center Pagination & Resumption | **PASS** | Obligations list pagination, continuation tokens, item count updates |
+| C09 | Action Center Stale Invalidation & Refresh | **PASS** | Obligation dismissal, project switch -> cancel refresh reactivation under production contract |
+| C10 | Action Center Panel Dismissal Stability | **PASS** | Sequence 0 (in-flight timeout, fresh result application, pending-rerun ownership), Sequence 1 (dismissal and rejection of in-flight query), Sequence 2 (reactivation on explicit refresh) all verified under dispatcher ownership |
+| C11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Automated test constraint: absence of an active File Explorer COM drag source (`IDataObject`) during headless desktop execution |
+| C12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Automated test constraint: absence of an active File Explorer COM drag source (`IDataObject`) during headless desktop execution |
+| C13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chips realized, metadata inspectable, diagnostic details displayed |
+| C14 | Strict Non-English Prose Preview Withholding | **PASS** | Non-English preview withheld with English reason label; metadata and digest preserved |
+| C15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 137,742 frames, avg interval 7.08 ms; typing p50 = 10.08 ms, p95 = 35.00 ms; UI thread sampler: 11,809 samples, p50 = 0.10 ms, p95 = 1.46 ms |
+| C16 | Search Overlay Flat Resting Orientation | **PASS** | Overlay resting orientation verified flat (0 deg rotation) |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **PASS** | Outer 818x647 px / client 640x480 DIPs at 120 DPI; overlay 312.0 DIPs, viewport 159.2 DIPs, paging reachable; wheel delivered; vertical scroll advanced from 0.000% to 10.345% |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated reveal/dismiss cycles preserve flat geometry and reading position |
+| C19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection preserved on empty-chat hero container |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | System reduced-motion preference toggle disables transition animations, overlay remains flat |
+| C21 | CLI Readiness Projection & Non-Gating | **PASS** | CLI status indicators accurately project probe results; Send/Chat remain non-gated |
+| C22 | Bounded History Paging Save & Newest Rendering | **PASS** | Message paging, chronological timeline rendering, docked composer transition |
+| C23 | Reading Anchor Preserved Across Older Prepend | **PASS** | Subcase A: anchor row preserved across stationary prepend (`seeded-paging-00072`); Subcase B: reader gesture during held older-page load aborts stale adoption ('older-abort-reader'), suppresses stale compensation, and settles at intended reading position (1.7096% vs intended 1.7096%) |
+
+**Acceptance Totals:** 23 criteria | 21 PASS | 2 INCONCLUSIVE | 0 FAIL | 0 NOT_RUN | 0 N/A
+
+---
+
+### 3. Full Verification Summary
+
+| Test Target | Command | Result |
+|---|---|---|
+| Layout budget & scroll policy | `native/tests/bin/layout_budget_tests.exe` | **9/9 PASS** |
+| Verify AC/AI presentation & ownership | `native/tests/bin/verify_ac_ai.exe` | **15/15 PASS** |
+| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
+| Harness oracles & mutation discrimination | `python native/tests/test_harness_oracles.py` | **71/71 PASS** |
+| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
+| Application build (`Mayasaba.exe`) | `mayasaba-build.cmd native/Mayasaba/Mayasaba.vcxproj /p:PlatformToolset=v145 /p:Configuration=Release /p:Platform=x64` | **0 Warnings, 0 Errors** |
+| Native UI acceptance runner | `python native/tests/test_full_ui_acceptance.py` | **21 PASS, 2 INCONCLUSIVE, 0 FAIL** |
+
+---
+
+### 4. Remaining Scope & Open Obligations
+
+- **Status Declaration:** "Phase 1 Complete" remains retracted; this milestone represents verified partial Phase 1 closure.
+- **Physical Acceptance Criteria:** Criteria P01–P06 (physical client sizing with actual OS borders, multi-monitor display scaling, live OS theme and high-contrast switching, Narrator speech/announcements, real Explorer OLE drag-drop, and long-session duration benchmarking) remain open.
+- **Live Three-Agent Product Work:** Agent Gateway CLI adapters, headless session lifecycle, rotating writer, peer review, and council orchestration remain open.
+- **Untracked Backups:** Both untracked backups (`MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup`) are preserved untouched.

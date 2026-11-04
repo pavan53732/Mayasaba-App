@@ -1,6 +1,7 @@
 #include "../Mayasaba/HeaderLayoutBudget.h"
 #include "../Mayasaba/ActionCenterPresenter.h"
 #include "../Mayasaba/TimelineScrollPolicy.h"
+#include "../Mayasaba/UiTraceBudget.h"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -265,6 +266,81 @@ int main()
             REQUIRE(policy.Generation() == 10);
             REQUIRE(policy.PendingProgrammaticCount() == 0);
             REQUIRE(std::string(policy.LastReason()) == "project-reset");
+
+            // H. Prepend scope protects against internal extent shift being classified as user-scroll:
+            uint64_t const prependGen = policy.Generation();
+            policy.BeginPrepend();
+            REQUIRE(policy.IsPrepending());
+            // Large offset jump caused by PrependOlder / UpdateLayout must not be classified as user scroll
+            REQUIRE(!policy.OnViewChanged(false, 47.0, 4197.0));
+            REQUIRE(policy.Generation() == prependGen);
+            policy.RecordProgrammaticQueued(4197.0);
+            policy.EndPrepend();
+            REQUIRE(!policy.IsPrepending());
+            REQUIRE(policy.PendingProgrammaticCount() == 1);
+            // Programmatic ChangeView completes from 47.0 to 4197.0
+            REQUIRE(!policy.OnViewChanged(false, 47.0, 4197.0));
+            REQUIRE(policy.PendingProgrammaticCount() == 0);
+            REQUIRE(policy.Generation() == prependGen);
+        }
+        ++passed;
+
+        // 7. Production UiTraceBudget Finite Budget & Lifecycle Reservation
+        {
+            // Case A: Ordinary flood preserves reserved lifecycle capacity
+            mayasaba::ui::UiTraceBudget budgetA;
+            uint64_t emitOrdinaryA = 0;
+            uint64_t truncOrdinaryA = 0;
+            uint64_t suppOrdinaryA = 0;
+            for (int i = 0; i < 120000; ++i)
+            {
+                auto const adm = budgetA.Admit(false);
+                if (adm == mayasaba::ui::UiTraceBudget::Admission::Emit) ++emitOrdinaryA;
+                else if (adm == mayasaba::ui::UiTraceBudget::Admission::EmitTruncatedOrdinary) ++truncOrdinaryA;
+                else if (adm == mayasaba::ui::UiTraceBudget::Admission::Suppress) ++suppOrdinaryA;
+            }
+            REQUIRE(emitOrdinaryA == mayasaba::ui::UiTraceBudget::kMaxOrdinaryLines);
+            REQUIRE(truncOrdinaryA == 1);
+            REQUIRE(suppOrdinaryA == (120000 - mayasaba::ui::UiTraceBudget::kMaxOrdinaryLines - 1));
+            REQUIRE(budgetA.totalLines == mayasaba::ui::UiTraceBudget::kMaxOrdinaryLines + 1);
+
+            // Late lifecycle events are admitted despite ordinary flood
+            uint64_t emitLifecycleLate = 0;
+            for (int i = 0; i < 500; ++i)
+            {
+                if (budgetA.Admit(true) == mayasaba::ui::UiTraceBudget::Admission::Emit) ++emitLifecycleLate;
+            }
+            REQUIRE(emitLifecycleLate == 500);
+            REQUIRE(budgetA.totalLines == mayasaba::ui::UiTraceBudget::kMaxOrdinaryLines + 1 + 500);
+
+            // Case B: Lifecycle flood is strictly bounded
+            mayasaba::ui::UiTraceBudget budgetB;
+            uint64_t emitLifecycleB = 0;
+            uint64_t truncLifecycleB = 0;
+            uint64_t suppLifecycleB = 0;
+            for (int i = 0; i < 50000; ++i)
+            {
+                auto const adm = budgetB.Admit(true);
+                if (adm == mayasaba::ui::UiTraceBudget::Admission::Emit) ++emitLifecycleB;
+                else if (adm == mayasaba::ui::UiTraceBudget::Admission::EmitTruncatedLifecycle) ++truncLifecycleB;
+                else if (adm == mayasaba::ui::UiTraceBudget::Admission::Suppress) ++suppLifecycleB;
+            }
+            REQUIRE(emitLifecycleB == mayasaba::ui::UiTraceBudget::kMaxLifecycleLines);
+            REQUIRE(truncLifecycleB == 1);
+            REQUIRE(suppLifecycleB == (50000 - mayasaba::ui::UiTraceBudget::kMaxLifecycleLines - 1));
+            REQUIRE(budgetB.totalLines == mayasaba::ui::UiTraceBudget::kMaxLifecycleLines + 1);
+
+            // Case C: Saturated flood across both categories never exceeds total limit
+            mayasaba::ui::UiTraceBudget budgetC;
+            for (int i = 0; i < 150000; ++i)
+            {
+                budgetC.Admit(false);
+            }
+            for (int i = 0; i < 50000; ++i)
+            {
+                budgetC.Admit(true);
+            }
+            REQUIRE(budgetC.totalLines <= mayasaba::ui::UiTraceBudget::kMaxTotalLines);
         }
         ++passed;
 
