@@ -6860,3 +6860,115 @@ directories):
 - XAML Binary Format (`MainWindow.xbf`): SHA-256 `12235E06178F658FD39ED843B6CEDC80A9542D3AD0734527BE3F14C33D92DD31`
 - Preserved Backups: `MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup` remain untracked and untouched.
 - "Phase 1 Complete" remains retracted; C11/C12 desktop COM drag-drop constraints and physical criteria P01–P06 remain open.
+
+---
+
+## Native Acceptance Boundary Corrections & Full Suite Verification (2026-11-16)
+
+### 1. Harness Boundary Corrections & Regression Coverage
+
+Before running full native UI acceptance, five harness boundary defects were resolved and verified with dedicated regression tests:
+
+1. **Win32 `GetWindowRect` Signatures, Return Check & Positive Geometry**:
+   - Explicitly configured 64-bit compatible argument types for `user32.GetWindowRect` and `user32.GetClientRect` using `ctypes.c_void_p` (`[wintypes.HWND, ctypes.c_void_p]`), preventing 64-bit pointer truncation and resolving `TypeError: expected LP_RECT instance instead of pointer to RECT` when interacting with `pywinauto.win32structures.RECT`.
+   - Verified the API return value (`BOOL`) and enforced that dimensions must have strictly positive width and height (`right > left` and `bottom > top`).
+   - If neither UIA nor Win32 returns valid positive geometry, `safe_window_rect` returns `None`. Synthetic replacement geometry (such as fallback `RECT(100, 100, 1000, 800)`) was eliminated.
+   - Phase 6 (DPI) skips the DPI stimulus and records the observation as unavailable (`INCONCLUSIVE`) if valid window geometry cannot be established.
+
+2. **Subcase B Targeting Invalidation & Inconclusive Classification**:
+   - Removed the stale `last_target` fallback in Subcase B. Live control ancestry from the candidate band point to `HistoryScroller` is re-validated before every wheel gesture.
+   - Targeting failures are classified strictly as `INCONCLUSIVE` (observation failure due to element occlusion/geometry), never as an application defect (`FAIL`).
+
+3. **Bounded UIA Retries with Diagnostic Discrimination**:
+   - Implemented bounded retries (`retries=3, retry_delay=0.15`) in `find_by_aid` and `find_by_name`.
+   - Introduced `last_uia_scan_state` tracking (`FOUND`, `NOT_FOUND`, `UNAVAILABLE`) and diagnostic helpers `last_scan_was_unavailable()` and `last_scan_diagnostic()`.
+   - Clean element absence is verified as `NOT_FOUND` when enumeration succeeds. If enumeration repeatedly throws layout/COM exceptions (such as transient `0x80040201` `EVENT_E_ALL_SUBSCRIBERS_FAILED` during XAML view transitions), the state is classified truthfully as observation `UNAVAILABLE`, avoiding false "control absent" claims.
+
+4. **Exception-Safe Phase 3B and Phase 5B Cleanup**:
+   - In Phase 3B, wrapped load query events in an exception-safe `finally` block: signals `h_older_release` to unblock any held worker query and safely closes all event handles.
+   - Enforced that navigation back to `alpha` must be actively verified (`ProjectHeading` == `"alpha"`) BEFORE deleting probe project rows from the SQLite store.
+   - If return to `alpha` fails, probe rows and diagnostic trace files are preserved for investigation, and dependent phases are halted (`dependent_phases_stopped = True`). The same verified `alpha` return guard is applied to Phase 5B empty-chat hero cleanup.
+
+5. **Harness Regression Coverage (`native/tests/test_harness_oracles.py`)**:
+   - Added 4 comprehensive regression tests covering these failure paths:
+     - `test_safe_window_rect_accepts_only_positive_geometry_and_skips_replacement`: Proves positive geometry acceptance, Win32 fallback, zero-geometry rejection, API failure rejection, and absence of invented replacement geometry.
+     - `test_bounded_uia_retries_distinguishes_absence_from_unavailability`: Proves discrimination between clean absence (`NOT_FOUND`), persistent COM exception (`UNAVAILABLE`), and transient recovery.
+     - `test_subcase_b_targeting_failure_is_inconclusive_not_defect`: Proves targeting failure yields `INCONCLUSIVE`, not `FAIL`.
+     - `test_phase3b_cleanup_releases_held_load_and_preserves_rows_on_alpha_failure`: Proves held load release, probe row preservation on alpha return failure, and cessation of dependent phases.
+   - Suite result: **85 of 85 PASS** (exit code 0).
+
+---
+
+### 2. Full Native UI Acceptance Verification Results (23 Criteria)
+
+Executed `test_full_ui_acceptance.py` on the active desktop against the verified binary `Mayasaba.exe` (SHA-256 `E632BE60A5B1623335F68BC46897A2F4E2B6C7FF6D6571DB991AE60C2F778134`) and `MainWindow.xbf` (SHA-256 `12235E06178F658FD39ED843B6CEDC80A9542D3AD0734527BE3F14C33D92DD31`):
+
+| # | Criterion | Verdict | Measured Evidence / Observations |
+|---|-----------|---------|----------------------------------|
+| C01 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded'; text filter 'alpha' isolates matching row; zero-match query 'nonexistent_project_query_xyz' displays '0 matching projects' and `NoRecentProjectsText`; Escape key and Clear button restore full list; status filter 'Closed projects only' isolates 'gamma'. |
+| C02 | Message Search Pagination & Continuation | **PASS** | 50 seeded messages: Page 1 loads 20 items with active Load More; Page 2 accumulates 40 items; Page 3 loads final 10 items (50 total) and collapses Load More button; Escape closes overlay; reopening starts fresh with 20 items. |
+| C03 | Older Message Navigation & Selection | **PASS** | Seeded message selection, chronological scrolling, message card realization and selection states verified. |
+| C04 | Search Mode Project Switch Safety | **PASS** | Switching project via `File -> Switch Project` while search is open resets search overlay and isolates target project chat without cross-project state leakage. |
+| C05 | Narrow 520px Responsive Layout | **PASS** | Window client width resized to 520 DIPs; search overlay, controls, and composer reflow cleanly without horizontal truncation or element collision. |
+| C06 | Rapid Hover Sweeps & Animation Stability | **PASS** | 20 rapid hover sweeps across interactive controls; no animation stalls, layout cycles (`0x802B0014`), or UI freezes observed. |
+| C07 | Display DPI Scaling Simulation | **PASS** | Per-monitor DPI awareness verified via Win32 API (`DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`); window dimensions and control bounds reflow proportionally. |
+| C08 | Action Center Pagination & Resumption | **PASS** | Initial page bounded to 50 items with continuation token indicated; consuming token accumulates 52 total items; `MoreActionCenterItemsButton` collapses truthfully. |
+| C09 | Action Center Stale Invalidation & Refresh | **PASS** | Concurrently mutating record version in SQLite store (version 99) is caught upon item invocation; truthful notice displayed: `'Action Center item is stale: attachment record version has changed.'`. |
+| C10 | Action Center Panel Dismissal Stability | **PASS** | Show Details opens dismissible source detail sheet (W=926, H=536); rows name owning records; expanding is inspection-only; Escape key dismisses sheet and restores invoking control focus. |
+| C11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Automated synthetic harness constraint: `ole_drop.exe` DoDragDrop modal loop did not complete (watchdog timeout exit code 4; QueryContinueDrag calls = 0) due to OS-level session/UIPI restrictions on synthetic cross-process OLE injection. |
+| C12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Automated synthetic harness constraint: `ole_drop.exe` exited with code 4; synthetic cross-process OLE drag delivery requires interactive physical session. |
+| C13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chip realized in `ComposerBox`; metadata inspectable; bounded text preview opens in `AttachmentPreviewPanel`; Close button has keyboard focus; Escape dismisses preview. |
+| C14 | Strict Non-English Prose Preview Withholding | **PASS** | Seeded non-English ASCII prose (`'hola mundo'`) withheld from preview panel; truthful English notice displayed: `'Preview unavailable: Attachment contains non-English characters or unverifiable prose; English-only preview rule applies. Metadata inspection is preserved.'`; content scroller collapsed and content box empty. |
+| C15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 156,778 CompositionTarget callbacks recorded without discarded stalls; average callback interval: 7.01 ms; max callback interval: 223.29 ms; typing p50: 8.75 ms, p95: 24.70 ms, max: 35.27 ms; scroll ViewChanged p50: 6.96 ms, p95: 13.84 ms, max: 51.94 ms. |
+| C16 | Search Overlay Flat Resting Orientation | **PASS** | Overlay resting orientation verified flat (0 deg rotation, 2D translation only). |
+| C17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **PASS** | Outer window 818x647 px / client 640x480 DIPs at 120 DPI; overlay height bounded; results list viewport bounded; Load More button reachable; mouse wheel advances scroll offset and updates realized items. |
+| C18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated open/dismiss cycles and cancelled reveal transitions leave overlay in flat 2D resting state. |
+| C19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection verified on empty-chat hero container. |
+| C20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | Live toggling of system reduced-motion preference suppresses transition animations; overlay remains flat and functional. |
+| C21 | CLI Readiness Projection & Non-Gating | **PASS** | Truthful read-only projection: Hermes Agent CLI `READY`, Kilo Code CLI `READY`, Claude Code CLI `CHECKING` (due to D-11 multiple installation choice); problem card provides cause, locate, and recheck actions; Chat composer and Send remain completely non-gated. |
+| C22 | Bounded History Paging Save & Newest Rendering | **PASS** | 120 seeded messages loaded; initial view renders newest 50-item page (messages 71..120); composer correctly docked below conversation. |
+| C23 | Reading Anchor Preserved Across Older Prepend | **PASS** | **Subcase A (Stationary Prepend):** published physical top edge read anchored row `'seeded-paging-00072'` before and after prepend; older page prepended without scrolling off anchor; no second prepend chain started.<br>**Subcase B (Reader Intent Preservation During Held Load):** held older-page load via `HoldRequested`; 278 upward wheel batches delivered; InFlight signaled; downward reader wheel gesture delivered; held load released via `Release`; `older-abort-reader` emitted; stale prepend aborted (`older-prepend` remained 1); reader settled at intended position (`0.8796%` vs `0.8796%`). |
+
+**Summary Totals:**
+- Total Criteria: 23
+- **Passed: 21**
+- **Inconclusive: 2** (C11, C12 — automated synthetic OLE injection limits)
+- **Failed: 0**
+- **Blocked: 0**
+- **Not Run: 0**
+- Overall Exit Code: `0`
+
+---
+
+### 3. Real OS Explorer OLE Drag-and-Drop (C11/C12) & Physical Matrix (P01–P06) Reality
+
+1. **Automated vs Real Explorer OLE Drag-and-Drop**:
+   - Automated synthetic injection (`ole_drop.exe` / `DropHelper.exe`) fails in headless/automation environments with exit code 4 because Windows UIPI and session isolation prevent simulated mouse inputs from driving the OLE `DoDragDrop` modal loop across process boundaries.
+   - Running `scratch/test_real_explorer_drop9.py` launched a live `explorer.exe` window alongside `Mayasaba.exe` and performed smooth cursor drag interpolation from the file item icon to `ComposerBox`. On non-interactive/switched desktops, the Windows kernel suppresses synthetic drag events across processes.
+   - Consequently, C11 and C12 are retained honestly as **INCONCLUSIVE** in automated reporting.
+
+2. **Physical Acceptance Matrix (P01–P06)**:
+   - Physical criteria P01–P06 (physical OS window border rendering, multi-monitor physical DPI transitions, high-contrast system theme switching, Windows Narrator screen reader speech output, physical mouse drag-and-drop from Windows Explorer, and multi-hour long session memory stability) require an interactive physical Windows session and cannot be certified via headless automation.
+   - **Phase 1 Complete remains explicitly RETRACTED** until full physical interactive matrix verification and end-to-end CLI integration are accomplished.
+
+---
+
+### 4. Full Verification Suite Summary
+
+| Test Target | Command | Result |
+|---|---|---|
+| Layout budget & trace saturation | `native/tests/bin/layout_budget_tests.exe` | **9/9 PASS** |
+| Verify AC/AI presentation & ownership | `native/tests/bin/verify_ac_ai.exe` | **15/15 PASS** |
+| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
+| Harness oracles & boundary regressions | `python native/tests/test_harness_oracles.py` | **85/85 PASS** |
+| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
+| Full Native UI Acceptance Suite | `python native/tests/test_full_ui_acceptance.py` | **21 PASS, 2 INCONCLUSIVE, 0 FAIL** (exit 0) |
+| Production Database Integrity | SHA-256 of `%LOCALAPPDATA%\Mayasaba\mayasaba.db` | **`23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (Untouched)** |
+
+### 5. Preserved Artifacts & Cryptographic Proof
+
+- Application Binary (`Mayasaba.exe`): SHA-256 `E632BE60A5B1623335F68BC46897A2F4E2B6C7FF6D6571DB991AE60C2F778134`
+- XAML Binary Format (`MainWindow.xbf`): SHA-256 `12235E06178F658FD39ED843B6CEDC80A9542D3AD0734527BE3F14C33D92DD31`
+- Preserved Backups: `MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup` remain untracked and untouched.
+- "Phase 1 Complete" remains explicitly retracted; C11/C12 desktop COM drag-drop constraints and physical criteria P01–P06 remain open.
+

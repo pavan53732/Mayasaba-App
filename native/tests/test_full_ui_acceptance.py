@@ -139,6 +139,14 @@ if hasattr(user32, "AreDpiAwarenessContextsEqual"):
     user32.AreDpiAwarenessContextsEqual.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
     user32.AreDpiAwarenessContextsEqual.restype = wintypes.BOOL
 
+if hasattr(user32, "GetWindowRect"):
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    user32.GetWindowRect.restype = wintypes.BOOL
+
+if hasattr(user32, "GetClientRect"):
+    user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    user32.GetClientRect.restype = wintypes.BOOL
+
 if hasattr(user32, "GetAwarenessFromDpiAwarenessContext"):
     user32.GetAwarenessFromDpiAwarenessContext.argtypes = [ctypes.c_void_p]
     user32.GetAwarenessFromDpiAwarenessContext.restype = ctypes.c_int
@@ -1337,6 +1345,37 @@ def send_wheel_at_point(win, x, y, delta, steps=1, pause=0.05):
     time.sleep(0.1)
     return foreground_established
 
+def safe_window_rect(win, retries=5, retry_interval=0.2):
+    """Safely obtain window bounding rectangle with retry and Win32 fallback.
+
+    Reading an element's rectangle is a live UIA round-trip and can fail transiently
+    with 0x80040201 ('An event was unable to invoke any of the subscribers') while
+    the application is dispatching.
+    
+    Accepts only live rectangles with positive width and height.
+    If neither UIA nor Win32 provides valid geometry, returns None.
+    Never invents replacement geometry.
+    """
+    from pywinauto.win32structures import RECT
+    for _ in range(retries):
+        try:
+            r = win.rectangle()
+            if r.width() > 0 and r.height() > 0:
+                return r
+        except Exception:
+            time.sleep(retry_interval)
+            
+    from ctypes import wintypes
+    r = wintypes.RECT()
+    try:
+        ok = user32.GetWindowRect(wintypes.HWND(int(win.handle)), ctypes.byref(r))
+        if ok and (r.right - r.left > 0) and (r.bottom - r.top > 0):
+            return RECT(r.left, r.top, r.right, r.bottom)
+    except Exception:
+        pass
+        
+    return None
+
 def broadcast_setting_change(section="VisualEffects"):
     """Tell every top-level window that a system setting changed.
 
@@ -1407,11 +1446,47 @@ def ui_thread_latency(hwnd, timeout_ms=2000):
     return bool(ok), elapsed, f"IsHungAppWindow={hung}"
 
 
-def find_by_aid(parent, aid):
-    for d in parent.descendants():
-        if d.element_info.automation_id == aid:
-            return d
+last_uia_scan_state = {
+    "status": "NOT_RUN",
+    "error": None,
+    "retries_used": 0
+}
+
+def find_by_aid(parent, aid, retries=3, retry_delay=0.15):
+    """Find descendant element by AutomationId with bounded UIA retries.
+    
+    Distinguishes clean absence (enumeration succeeded, element not found)
+    from observation failure (enumeration threw exceptions across all retries).
+    """
+    global last_uia_scan_state
+    last_err = None
+    for attempt in range(max(1, retries)):
+        try:
+            for d in parent.descendants():
+                try:
+                    if d.element_info.automation_id == aid:
+                        last_uia_scan_state = {"status": "FOUND", "error": None, "retries_used": attempt}
+                        return d
+                except Exception:
+                    continue
+            last_uia_scan_state = {"status": "NOT_FOUND", "error": None, "retries_used": attempt}
+            return None
+        except Exception as exc:
+            last_err = exc
+            if attempt < retries - 1:
+                time.sleep(retry_delay)
+    last_uia_scan_state = {
+        "status": "UNAVAILABLE",
+        "error": f"{type(last_err).__name__}: {last_err}",
+        "retries_used": retries
+    }
     return None
+
+def last_scan_was_unavailable():
+    return last_uia_scan_state.get("status") == "UNAVAILABLE"
+
+def last_scan_diagnostic():
+    return last_uia_scan_state.get("error") or ""
 
 
 def read_status_text(win, expected, timeout=5.0, interval=0.05):
@@ -1483,10 +1558,33 @@ def acquire_store_lock(store_path):
         )
     return handle
 
-def find_by_name(parent, name):
-    for d in parent.descendants():
-        if d.window_text() == name or d.element_info.name == name:
-            return d
+def find_by_name(parent, name, retries=3, retry_delay=0.15):
+    """Find descendant element by Name/window_text with bounded UIA retries.
+    
+    Distinguishes clean absence from observation failure.
+    """
+    global last_uia_scan_state
+    last_err = None
+    for attempt in range(max(1, retries)):
+        try:
+            for d in parent.descendants():
+                try:
+                    if d.window_text() == name or d.element_info.name == name:
+                        last_uia_scan_state = {"status": "FOUND", "error": None, "retries_used": attempt}
+                        return d
+                except Exception:
+                    continue
+            last_uia_scan_state = {"status": "NOT_FOUND", "error": None, "retries_used": attempt}
+            return None
+        except Exception as exc:
+            last_err = exc
+            if attempt < retries - 1:
+                time.sleep(retry_delay)
+    last_uia_scan_state = {
+        "status": "UNAVAILABLE",
+        "error": f"{type(last_err).__name__}: {last_err}",
+        "retries_used": retries
+    }
     return None
 
 def get_item_status(element):
@@ -2439,6 +2537,7 @@ def main():
     desktop_restoration_failed = False
 
     def _run_harness_phases():
+        dependent_phases_stopped = False
         nonlocal proc
         nonlocal criterion_startup_filtering, criterion_search_pagination, criterion_older_navigation
         nonlocal criterion_search_switch_safety, criterion_narrow_layout, criterion_hover_sweep
@@ -3808,38 +3907,48 @@ def main():
                 # alpha, and only then is the probe row removed.
                 returned = False
                 if open_switch_project(win):
-                    open_alpha = find_by_name(win, "Open project alpha")
+                    open_alpha = poll_until(lambda: find_by_name(win, "Open project alpha"), timeout=8.0, interval=0.2)
                     if open_alpha:
                         open_alpha.iface_invoke.Invoke()
                         restored = poll_until(lambda: find_by_aid(win, "ComposerBox"),
-                                              timeout=20.0, interval=0.2)
-                        returned = restored is not None
-                        log(f"  returned to alpha before removing the probe row: {returned}")
+                                              timeout=25.0, interval=0.2)
+                        if restored is not None:
+                            heading = find_by_aid(win, "ProjectHeading")
+                            heading_name = heading.element_info.name if heading else ""
+                            if heading_name == "alpha":
+                                returned = True
+                                log(f"  returned to alpha before removing the probe row: True (ProjectHeading='alpha')")
+                            else:
+                                log(f"  returned to alpha: ComposerBox restored, but ProjectHeading reads {heading_name!r}")
+                        else:
+                            log("  could not return to alpha: ComposerBox did not restore")
                     else:
                         log("  could not return to alpha: the recent list has no alpha entry")
                 else:
                     log("  could not return to alpha: Screen 2 did not appear")
-                try:
-                    conn = sqlite3.connect(STORE_PATH)
-                    mark_store_write("DELETE: the temporary empty hero-probe project")
-                    conn.execute("DELETE FROM contributions WHERE project_id = ?;", (probe_id,))
-                    conn.execute("DELETE FROM selection_events WHERE project_id = ?;", (probe_id,))
-                    conn.execute("DELETE FROM selection_receipts WHERE project_id = ?;", (probe_id,))
-                    conn.execute("DELETE FROM pending_submissions WHERE project_id = ?;", (probe_id,))
-                    conn.execute("DELETE FROM projects WHERE id = ?;", (probe_id,))
-                    conn.commit()
-                    conn.close()
-                except Exception as exc:
-                    log(f"  could not remove the probe project row: {exc}")
-                try:
-                    os.rmdir(probe_path)
-                except Exception:
-                    pass
-                if not returned:
+                if returned:
+                    try:
+                        conn = sqlite3.connect(STORE_PATH)
+                        mark_store_write("DELETE: the temporary empty hero-probe project")
+                        conn.execute("DELETE FROM contributions WHERE project_id = ?;", (probe_id,))
+                        conn.execute("DELETE FROM selection_events WHERE project_id = ?;", (probe_id,))
+                        conn.execute("DELETE FROM selection_receipts WHERE project_id = ?;", (probe_id,))
+                        conn.execute("DELETE FROM pending_submissions WHERE project_id = ?;", (probe_id,))
+                        conn.execute("DELETE FROM projects WHERE id = ?;", (probe_id,))
+                        conn.commit()
+                        conn.close()
+                    except Exception as exc:
+                        log(f"  could not remove the probe project row: {exc}")
+                    try:
+                        os.rmdir(probe_path)
+                    except Exception:
+                        pass
+                else:
+                    log("  CRITICAL: Return to alpha failed in Phase 5B! Preserving probe rows and stopping dependent phases.")
                     hero_verdict_reason = (
                         (hero_verdict_reason + "; " if hero_verdict_reason else "")
-                        + "the application could not be returned to alpha afterwards, which "
-                          "leaves every later phase without a bound project")
+                        + "the application could not be verified returned to alpha; probe rows preserved to prevent corrupting active binding")
+                    dependent_phases_stopped = True
 
         else:
             hero_verdict_reason = ("the probe project folder could not be prepared, so the "
@@ -3916,6 +4025,18 @@ def main():
         # still verified from new view events in the trace.
         # =========================================================================
         log("\n--- PHASE 3B: Bounded History Paging & Reading-Anchor Preservation ---")
+        h_older_hold = None
+        h_older_inflight = None
+        h_older_release = None
+        h_older_released = None
+        if dependent_phases_stopped:
+            log("SKIPPING PHASE 3B: Dependent phase stopped because application could not be verified returned to bound alpha project.")
+            criterion_paging_save = "NOT_RUN"
+            criterion_reading_anchor = "NOT_RUN"
+            paging_reason = "dependent phases stopped"
+            skip_phase_3b = True
+        else:
+            skip_phase_3b = False
         paging_reason = ""
         paging_anchor_reason = ""
         paging_probe_id = "00000000-0000-4000-8000-00000000c11a"
@@ -4323,7 +4444,7 @@ def main():
             paging_reason = f"the probe folder could not be prepared: {exc}"
             log(f"  {paging_reason}")
 
-        if paging_identity:
+        if not skip_phase_3b and paging_identity:
             try:
                 conn = sqlite3.connect(STORE_PATH)
                 mark_store_write("INSERT: the temporary paging-probe project and 120 seeded contributions")
@@ -5091,100 +5212,119 @@ def main():
 
                                     log(f"  subcase B setup: armed HoldRequested, trigger={sub_b_trigger_count}, abort={sub_b_abort_count}")
                                     b_batches = 0
+                                    target_fail_reason = ""
                                     while ui_trace_label_counts().get("older-trigger", 0) == sub_b_trigger_count and b_batches < 500:
                                         target = paging_wheel_target()
                                         if target is None:
+                                            target_fail_reason = ("; ".join(aim_reason[-2:]) if aim_reason
+                                                                  else "no candidate band point verified ancestry to HistoryScroller")
+                                            log(f"  wheel batching stopped at batch {b_batches}: {target_fail_reason}")
                                             break
                                         send_wheel_at_point(win, target[0], target[1], 120, steps=3, pause=0.25)
                                         b_batches += 1
                                         time.sleep(0.35)
 
                                     log(f"  subcase B stimulus: delivered {b_batches} batches upward, awaiting InFlight...")
-                                    wait_res = kernel32.WaitForSingleObject(h_older_inflight, 10000)
-                                    if wait_res != 0:
-                                        log(f"  FAIL: Subcase B: InFlight was not signaled within 10s (wait result: {wait_res})")
-                                        criterion_reading_anchor = "FAIL"
+                                    if ui_trace_label_counts().get("older-trigger", 0) == sub_b_trigger_count:
+                                        if target_fail_reason:
+                                            log(f"  INCONCLUSIVE: Subcase B: wheel targeting could not verify chat scroller contact ({target_fail_reason})")
+                                            criterion_reading_anchor = "INCONCLUSIVE"
+                                        else:
+                                            log(f"  INCONCLUSIVE: Subcase B: older-trigger was not emitted within batch budget ({b_batches} batches delivered)")
+                                            criterion_reading_anchor = "INCONCLUSIVE"
                                     else:
-                                        log("  subcase B: InFlight signaled! Older-page query is held before UI adoption.")
-                                        state_before_gesture = paging_scroll_state()
-                                        log(f"  subcase B: scroll state before gesture: {state_before_gesture}")
-                                        if state_before_gesture is None:
-                                            log("  FAIL: Subcase B: baseline scroll state could not be read")
+                                        wait_res = kernel32.WaitForSingleObject(h_older_inflight, 10000)
+                                        if wait_res != 0:
+                                            log(f"  FAIL: Subcase B: InFlight was not signaled within 10s (wait result: {wait_res})")
                                             criterion_reading_anchor = "FAIL"
                                         else:
-                                            target = paging_wheel_target()
-                                            if target is None:
-                                                log("  FAIL: Subcase B: wheel target element not found")
-                                                criterion_reading_anchor = "FAIL"
+                                            log("  subcase B: InFlight signaled! Older-page query is held before UI adoption.")
+                                            state_before_gesture = paging_scroll_state()
+                                            log(f"  subcase B: scroll state before gesture: {state_before_gesture}")
+                                            if state_before_gesture is None:
+                                                log("  INCONCLUSIVE: Subcase B: baseline scroll state could not be read")
+                                                criterion_reading_anchor = "INCONCLUSIVE"
                                             else:
-                                                # Deliver verified reader input while the load is held:
-                                                # 8 wheel notches down to move reader away from top
-                                                delivered = send_wheel_at_point(win, target[0], target[1], -120, steps=8, pause=0.08)
-                                                time.sleep(0.5)
-                                                state_after_gesture = paging_scroll_state()
-                                                log(f"  subcase B: reader gesture delivery result: {delivered}, intended state: {state_after_gesture}")
-
-                                                if not delivered:
-                                                    log("  FAIL: Subcase B: mouse wheel gesture delivery failed")
-                                                    criterion_reading_anchor = "FAIL"
-                                                elif state_after_gesture is None:
-                                                    log("  FAIL: Subcase B: scroll state after gesture could not be read")
-                                                    criterion_reading_anchor = "FAIL"
-                                                elif state_after_gesture[1] <= state_before_gesture[1] + 0.1:
-                                                    log(f"  FAIL: Subcase B: gesture did not move scroller downward (before={state_before_gesture[1]}%, after={state_after_gesture[1]}%)")
-                                                    criterion_reading_anchor = "FAIL"
+                                                target = paging_wheel_target()
+                                                if target is None:
+                                                    aim_err = "; ".join(aim_reason[-2:]) if aim_reason else "wheel target not verified"
+                                                    log(f"  INCONCLUSIVE: Subcase B: reader wheel target could not be verified ({aim_err})")
+                                                    criterion_reading_anchor = "INCONCLUSIVE"
                                                 else:
-                                                    # Release the held load
-                                                    kernel32.SetEvent(h_older_release)
-                                                    rel_res = kernel32.WaitForSingleObject(h_older_released, 6000)
-                                                    log(f"  subcase B: load released, Released event wait result: {rel_res}")
+                                                    # Deliver verified reader input while the load is held:
+                                                    # 8 wheel notches down to move reader away from top
+                                                    delivered = send_wheel_at_point(win, target[0], target[1], -120, steps=8, pause=0.08)
+                                                    time.sleep(0.5)
+                                                    state_after_gesture = paging_scroll_state()
+                                                    log(f"  subcase B: reader gesture delivery result: {delivered}, intended state: {state_after_gesture}")
 
-                                                    if rel_res != 0:
-                                                        log(f"  FAIL: Subcase B: production hold release wait failed or timed out (wait result: {rel_res})")
-                                                        criterion_reading_anchor = "FAIL"
+                                                    if not delivered:
+                                                        log("  INCONCLUSIVE: Subcase B: mouse wheel gesture delivery could not verify foreground")
+                                                        criterion_reading_anchor = "INCONCLUSIVE"
+                                                    elif state_after_gesture is None:
+                                                        log("  INCONCLUSIVE: Subcase B: scroll state after gesture could not be read")
+                                                        criterion_reading_anchor = "INCONCLUSIVE"
+                                                    elif state_after_gesture[1] <= state_before_gesture[1] + 0.1:
+                                                        log(f"  INCONCLUSIVE: Subcase B: gesture did not move scroller downward (before={state_before_gesture[1]}%, after={state_after_gesture[1]}%)")
+                                                        criterion_reading_anchor = "INCONCLUSIVE"
                                                     else:
-                                                        # Await UI thread post-condition:
-                                                        # readerScrollPolicy_.IsSuperseded(readerGenAtStart) == true
-                                                        # emits 'older-abort-reader' and co_returns without prepending or compensating
-                                                        abort_deadline = time.time() + 8.0
-                                                        sub_b_aborted = False
-                                                        while time.time() < abort_deadline:
-                                                            counts_now = ui_trace_label_counts()
-                                                            if counts_now.get("older-abort-reader", 0) > sub_b_abort_count:
-                                                                sub_b_aborted = True
-                                                                break
-                                                            time.sleep(0.2)
+                                                        # Release the held load
+                                                        kernel32.SetEvent(h_older_release)
+                                                        rel_res = kernel32.WaitForSingleObject(h_older_released, 6000)
+                                                        log(f"  subcase B: load released, Released event wait result: {rel_res}")
 
-                                                        counts_final = ui_trace_label_counts()
-                                                        prepends_now = counts_final.get("older-prepend", 0)
-                                                        aborts_now = counts_final.get("older-abort-reader", 0)
-                                                        log(f"  subcase B post-condition: older-abort-reader={aborts_now} (was {sub_b_abort_count}), older-prepend={prepends_now} (was {sub_b_prepend_count})")
-
-                                                        if ui_trace_has_lifecycle_truncation():
-                                                            log("  FAIL: Subcase B: required lifecycle evidence was lost due to trace truncation ('trace-lifecycle-truncated')")
+                                                        if rel_res != 0:
+                                                            log(f"  FAIL: Subcase B: production hold release wait failed or timed out (wait result: {rel_res})")
                                                             criterion_reading_anchor = "FAIL"
-                                                        elif not sub_b_aborted:
-                                                            criterion_reading_anchor = "FAIL"
-                                                            log("  FAIL: Subcase B: older-abort-reader was not emitted after reader interaction during held load!")
-                                                        elif prepends_now > sub_b_prepend_count:
-                                                            criterion_reading_anchor = "FAIL"
-                                                            log("  FAIL: Subcase B: older-prepend occurred despite reader interaction during held load!")
                                                         else:
-                                                            time.sleep(1.2)
-                                                            state_final = paging_scroll_state()
-                                                            log(f"  subcase B: settled scroll state: {state_final} (intended: {state_after_gesture})")
-                                                            criterion_reading_anchor = evaluate_reading_anchor_preservation(state_final, state_after_gesture)
-                                                            if criterion_reading_anchor == "FAIL":
-                                                                log(f"  FAIL: Subcase B: reader position was not preserved (settled={state_final}, intended={state_after_gesture})")
+                                                            # Await UI thread post-condition:
+                                                            # readerScrollPolicy_.IsSuperseded(readerGenAtStart) == true
+                                                            # emits 'older-abort-reader' and co_returns without prepending or compensating
+                                                            abort_deadline = time.time() + 8.0
+                                                            sub_b_aborted = False
+                                                            while time.time() < abort_deadline:
+                                                                counts_now = ui_trace_label_counts()
+                                                                if counts_now.get("older-abort-reader", 0) > sub_b_abort_count:
+                                                                    sub_b_aborted = True
+                                                                    break
+                                                                time.sleep(0.2)
+
+                                                            counts_final = ui_trace_label_counts()
+                                                            prepends_now = counts_final.get("older-prepend", 0)
+                                                            aborts_now = counts_final.get("older-abort-reader", 0)
+                                                            log(f"  subcase B post-condition: older-abort-reader={aborts_now} (was {sub_b_abort_count}), older-prepend={prepends_now} (was {sub_b_prepend_count})")
+
+                                                            if ui_trace_has_lifecycle_truncation():
+                                                                log("  FAIL: Subcase B: required lifecycle evidence was lost due to trace truncation ('trace-lifecycle-truncated')")
+                                                                criterion_reading_anchor = "FAIL"
+                                                            elif not sub_b_aborted:
+                                                                criterion_reading_anchor = "FAIL"
+                                                                log("  FAIL: Subcase B: older-abort-reader was not emitted after reader interaction during held load!")
+                                                            elif prepends_now > sub_b_prepend_count:
+                                                                criterion_reading_anchor = "FAIL"
+                                                                log("  FAIL: Subcase B: older-prepend occurred despite reader interaction during held load!")
                                                             else:
-                                                                log(f"PASS: Subcase B: reader intent preserved: reader gesture during held older-page load aborted stale adoption ('older-abort-reader') and preserved the reader's intended position (settled at {state_final[1]:.4f}% vs intended {state_after_gesture[1]:.4f}%).")
+                                                                time.sleep(1.2)
+                                                                state_final = paging_scroll_state()
+                                                                log(f"  subcase B: settled scroll state: {state_final} (intended: {state_after_gesture})")
+                                                                criterion_reading_anchor = evaluate_reading_anchor_preservation(state_final, state_after_gesture)
+                                                                if criterion_reading_anchor == "FAIL":
+                                                                    log(f"  FAIL: Subcase B: reader position was not preserved (settled={state_final}, intended={state_after_gesture})")
+                                                                else:
+                                                                    log(f"PASS: Subcase B: reader intent preserved: reader gesture during held older-page load aborted stale adoption ('older-abort-reader') and preserved the reader's intended position (settled at {state_final[1]:.4f}% vs intended {state_after_gesture[1]:.4f}%).")
                                 finally:
+                                    if h_older_release:
+                                        try:
+                                            kernel32.SetEvent(h_older_release)
+                                        except Exception:
+                                            pass
                                     for h in (h_older_hold, h_older_inflight, h_older_release, h_older_released):
                                         if h:
                                             try:
                                                 kernel32.CloseHandle(h)
                                             except Exception:
                                                 pass
+                                    h_older_hold = h_older_inflight = h_older_release = h_older_released = None
                             else:
                                 criterion_reading_anchor = "FAIL"
                                 log(f"  FAIL: anchor did not hold (top-visible "
@@ -5200,10 +5340,23 @@ def main():
         else:
             paging_reason = paging_reason or ("the probe project could not be prepared")
 
-        # Cleanup: move the application off the probe BEFORE removing its rows
-        # (the same ordering the 5B leg documents), because leaving a project
-        # saves a draft that must resolve to a live record.
+        # Cleanup: exception-safe move off the probe BEFORE removing its rows.
+        # Release any held queries first, verify return to alpha, then delete rows.
+        # If return to alpha fails, preserve rows and evidence and stop dependent phases.
         if paging_row_created:
+            if h_older_release:
+                try:
+                    kernel32.SetEvent(h_older_release)
+                except Exception:
+                    pass
+            for h in (h_older_hold, h_older_inflight, h_older_release, h_older_released):
+                if h:
+                    try:
+                        kernel32.CloseHandle(h)
+                    except Exception:
+                        pass
+            h_older_hold = h_older_inflight = h_older_release = h_older_released = None
+
             returned = False
             if paging_bound:
                 try:
@@ -5214,29 +5367,46 @@ def main():
                             open_alpha.iface_invoke.Invoke()
                             restored = poll_until(lambda: find_by_aid(win, "ComposerBox"),
                                                   timeout=25.0, interval=0.2)
-                            returned = restored is not None
-                            log(f"  returned to alpha after the paging probe: {returned}")
+                            if restored is not None:
+                                heading = find_by_aid(win, "ProjectHeading")
+                                heading_name = heading.element_info.name if heading else ""
+                                if heading_name == "alpha":
+                                    returned = True
+                                    log(f"  returned to alpha after the paging probe: True (ProjectHeading='alpha')")
+                                else:
+                                    log(f"  returned to alpha: ComposerBox restored, but ProjectHeading reads {heading_name!r}")
+                            else:
+                                log("  returned to alpha: ComposerBox did not restore")
+                        else:
+                            log("  returned to alpha: Open project alpha button not found on Screen 2")
+                    else:
+                        log("  returned to alpha: open_switch_project did not reach Screen 2")
                 except Exception as exc:
                     log(f"  could not return to alpha: {type(exc).__name__}: {exc}")
-                if not returned:
-                    paging_reason = (paging_reason + "; " if paging_reason else "") \
-                        + "the application could not be returned to alpha afterwards"
-            try:
-                conn = sqlite3.connect(STORE_PATH)
-                mark_store_write("DELETE: the temporary paging-probe project and seeded messages")
-                conn.execute("DELETE FROM contributions WHERE project_id = ?;", (paging_probe_id,))
-                conn.execute("DELETE FROM selection_events WHERE project_id = ?;", (paging_probe_id,))
-                conn.execute("DELETE FROM selection_receipts WHERE project_id = ?;", (paging_probe_id,))
-                conn.execute("DELETE FROM pending_submissions WHERE project_id = ?;", (paging_probe_id,))
-                conn.execute("DELETE FROM projects WHERE id = ?;", (paging_probe_id,))
-                conn.commit()
-                conn.close()
-            except Exception as exc:
-                log(f"  could not remove the paging-probe rows: {exc}")
-            try:
-                os.rmdir(paging_probe_path)
-            except Exception:
-                pass
+
+            if returned or not paging_bound:
+                try:
+                    conn = sqlite3.connect(STORE_PATH)
+                    mark_store_write("DELETE: the temporary paging-probe project and seeded messages")
+                    conn.execute("DELETE FROM contributions WHERE project_id = ?;", (paging_probe_id,))
+                    conn.execute("DELETE FROM selection_events WHERE project_id = ?;", (paging_probe_id,))
+                    conn.execute("DELETE FROM selection_receipts WHERE project_id = ?;", (paging_probe_id,))
+                    conn.execute("DELETE FROM pending_submissions WHERE project_id = ?;", (paging_probe_id,))
+                    conn.execute("DELETE FROM projects WHERE id = ?;", (paging_probe_id,))
+                    conn.commit()
+                    conn.close()
+                except Exception as exc:
+                    log(f"  could not remove the paging-probe rows: {exc}")
+                try:
+                    os.rmdir(paging_probe_path)
+                except Exception:
+                    pass
+                log("  cleaned up probe project rows and directory.")
+            else:
+                log("  CRITICAL: Return to alpha failed in Phase 3B! Preserving probe rows and evidence; stopping dependent phases.")
+                paging_reason = (paging_reason + "; " if paging_reason else "") \
+                    + "the application could not be verified returned to alpha; probe rows preserved to prevent corrupting active binding"
+                dependent_phases_stopped = True
         if criterion_paging_save == "NOT_RUN":
             criterion_paging_save = "INCONCLUSIVE"
         if criterion_reading_anchor == "NOT_RUN" and not (paging_bound and criterion_paging_save == "PASS"):
@@ -5277,6 +5447,12 @@ def main():
         # PHASE 6: WM_DPICHANGED MESSAGE HANDLING (150% & 200% SIMULATION)
         # =========================================================================
         log("\n--- PHASE 6: WM_DPICHANGED Message Handling Simulation (150% and 200%) ---")
+        if dependent_phases_stopped:
+            log("SKIPPING PHASE 6: Dependent phase stopped because application could not be verified returned to bound alpha project.")
+            criterion_dpi_scaling = "INCONCLUSIVE"
+            skip_phase_6 = True
+        else:
+            skip_phase_6 = False
 
         # THE WINDOW MUST BE RESTORED BEFORE THIS LEG, AND THE CHECK MUST KNOW
         # WHETHER IT IS.
@@ -5315,59 +5491,65 @@ def main():
                 "the window could not be restored from maximized before the DPI leg, and a "
                 "maximized window cannot expand to a suggested rect")
 
-        curr_rect = win.rectangle()
+        if not skip_phase_6:
+            curr_rect = safe_window_rect(win)
+            if curr_rect is None or curr_rect.width() <= 0 or curr_rect.height() <= 0:
+                log("FAIL->OBSERVATION: window geometry could not be observed from UIA or Win32 GetWindowRect; skipping DPI stimulus")
+                dpi_inconclusive.append("window geometry could not be observed from UIA or Win32 GetWindowRect (safe_window_rect returned None)")
+            else:
+                # 150% DPI (144 DPI)
+                dpi150 = 144
+                w150 = int(curr_rect.width() * 144 / 120)
+                h150 = int(curr_rect.height() * 144 / 120)
+                sug_rect_150 = RECT(curr_rect.left, curr_rect.top, curr_rect.left + w150, curr_rect.top + h150)
+                log("Sending WM_DPICHANGED 150% (144 DPI)...")
+                user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi150 << 16) | dpi150, ctypes.byref(sug_rect_150))
+                time.sleep(1.0)
+                r150 = safe_window_rect(win)
+                if r150 is None or r150.width() <= 0 or r150.height() <= 0:
+                    dpi_failures.append("the window bounds became unreadable or collapsed to non-positive geometry at 150% DPI")
+                else:
+                    log(f"Window bounds at 150% DPI: L{r150.left}, T{r150.top}, R{r150.right}, B{r150.bottom} (W={r150.width()}, H={r150.height()})")
+                    if not dpi_zoomed and r150.width() <= curr_rect.width():
+                        dpi_failures.append(
+                            f"the window did not expand under the 150% DPI suggested rect "
+                            f"({curr_rect.width()} -> {r150.width()})")
+                    elif dpi_zoomed:
+                        log("  NOTE: the suggested rect could not be applied because the window is "
+                            "maximized; no expansion is possible in that state")
+                    else:
+                        log("PASS: 150% DPI WM_DPICHANGED handled cleanly with window expansion.")
 
-        # 150% DPI (144 DPI)
-        dpi150 = 144
-        w150 = int(curr_rect.width() * 144 / 120)
-        h150 = int(curr_rect.height() * 144 / 120)
-        sug_rect_150 = RECT(curr_rect.left, curr_rect.top, curr_rect.left + w150, curr_rect.top + h150)
-        log("Sending WM_DPICHANGED 150% (144 DPI)...")
-        user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi150 << 16) | dpi150, ctypes.byref(sug_rect_150))
-        time.sleep(1.0)
-        r150 = win.rectangle()
-        log(f"Window bounds at 150% DPI: L{r150.left}, T{r150.top}, R{r150.right}, B{r150.bottom} (W={r150.width()}, H={r150.height()})")
-        if r150.height() <= 0:
-            dpi_failures.append("the window collapsed to zero height at 150% DPI")
-        elif not dpi_zoomed and r150.width() <= curr_rect.width():
-            dpi_failures.append(
-                f"the window did not expand under the 150% DPI suggested rect "
-                f"({curr_rect.width()} -> {r150.width()})")
-        elif dpi_zoomed:
-            log("  NOTE: the suggested rect could not be applied because the window is "
-                "maximized; no expansion is possible in that state")
-        else:
-            log("PASS: 150% DPI WM_DPICHANGED handled cleanly with window expansion.")
+                # 200% DPI (192 DPI)
+                dpi200 = 192
+                w200 = int(curr_rect.width() * 192 / 120)
+                h200 = int(curr_rect.height() * 192 / 120)
+                sug_rect_200 = RECT(curr_rect.left, curr_rect.top, curr_rect.left + w200, curr_rect.top + h200)
+                log("Sending WM_DPICHANGED 200% (192 DPI)...")
+                user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi200 << 16) | dpi200, ctypes.byref(sug_rect_200))
+                time.sleep(1.0)
+                r200 = safe_window_rect(win)
+                if r200 is None or r200.width() <= 0 or r200.height() <= 0:
+                    dpi_failures.append("the window bounds became unreadable or collapsed to non-positive geometry at 200% DPI")
+                else:
+                    log(f"Window bounds at 200% DPI: L{r200.left}, T{r200.top}, R{r200.right}, B{r200.bottom} (W={r200.width()}, H={r200.height()})")
+                    if not dpi_zoomed and r150 and r200.width() <= r150.width():
+                        dpi_failures.append(
+                            f"the window did not expand under the 200% DPI suggested rect "
+                            f"({r150.width()} -> {r200.width()})")
+                    elif dpi_zoomed:
+                        log("  NOTE: the suggested rect could not be applied because the window is "
+                            "maximized; no expansion is possible in that state")
+                    else:
+                        log("PASS: 200% DPI WM_DPICHANGED handled cleanly with window expansion.")
 
-        # 200% DPI (192 DPI)
-        dpi200 = 192
-        w200 = int(curr_rect.width() * 192 / 120)
-        h200 = int(curr_rect.height() * 192 / 120)
-        sug_rect_200 = RECT(curr_rect.left, curr_rect.top, curr_rect.left + w200, curr_rect.top + h200)
-        log("Sending WM_DPICHANGED 200% (192 DPI)...")
-        user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi200 << 16) | dpi200, ctypes.byref(sug_rect_200))
-        time.sleep(1.0)
-        r200 = win.rectangle()
-        log(f"Window bounds at 200% DPI: L{r200.left}, T{r200.top}, R{r200.right}, B{r200.bottom} (W={r200.width()}, H={r200.height()})")
-        if r200.height() <= 0:
-            dpi_failures.append("the window collapsed to zero height at 200% DPI")
-        elif not dpi_zoomed and r200.width() <= r150.width():
-            dpi_failures.append(
-                f"the window did not expand under the 200% DPI suggested rect "
-                f"({r150.width()} -> {r200.width()})")
-        elif dpi_zoomed:
-            log("  NOTE: the suggested rect could not be applied because the window is "
-                "maximized; no expansion is possible in that state")
-        else:
-            log("PASS: 200% DPI WM_DPICHANGED handled cleanly with window expansion.")
-
-        # Restore baseline 120 DPI (125%)
-        dpi120 = 120
-        sug_rect_120 = RECT(curr_rect.left, curr_rect.top, curr_rect.right, curr_rect.bottom)
-        user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi120 << 16) | dpi120, ctypes.byref(sug_rect_120))
-        time.sleep(1.0)
-        log("PASS: Display DPI restored to baseline.")
-        log("NOTE: Real OS-level display-scale validation (150%/200%) requires system display settings change / sign-out and remains INCONCLUSIVE.")
+                # Restore baseline 120 DPI (125%)
+                dpi120 = 120
+                sug_rect_120 = RECT(curr_rect.left, curr_rect.top, curr_rect.right, curr_rect.bottom)
+                user32.SendMessageW(win.handle, WM_DPICHANGED, (dpi120 << 16) | dpi120, ctypes.byref(sug_rect_120))
+                time.sleep(1.0)
+                log("PASS: Display DPI restored to baseline.")
+                log("NOTE: Real OS-level display-scale validation (150%/200%) requires system display settings change / sign-out and remains INCONCLUSIVE.")
 
         # The verdict is earned from what was measured, not assigned. A maximized
         # window makes the expansion oracle inapplicable rather than failed, so
@@ -5388,11 +5570,20 @@ def main():
         # PHASE 9: ACTION CENTER VISIBILITY, OBLIGATION ROUTING & STALE REVALIDATION
         # =========================================================================
         log("\n--- PHASE 9: Action Center Real Action Routing & Stale Item Revalidation ---")
+        if dependent_phases_stopped:
+            log("SKIPPING PHASE 9: Dependent phase stopped because application could not be verified returned to bound alpha project.")
+            criterion_action_center_paging = "NOT_RUN"
+            criterion_action_center_stale = "NOT_RUN"
+            criterion_action_center_dismiss = "NOT_RUN"
+            skip_phase_9 = True
+        else:
+            skip_phase_9 = False
 
         # 9.1 Initial Action Center status in clean alpha project
         # Contract & Presenter rule: when there are no unresolved obligations (clean project),
         # Action Center panel is correctly collapsed/withdrawn (confirmedEmpty).
-        action_center_panel = find_by_aid(win, "ActionCenterPanel")
+        if not skip_phase_9:
+            action_center_panel = find_by_aid(win, "ActionCenterPanel")
         is_ac_initially_withdrawn = (action_center_panel is None) or (not action_center_panel.is_visible())
         if not is_ac_initially_withdrawn:
             log("FAIL: ActionCenterPanel should be collapsed/withdrawn when clean alpha has no obligations")

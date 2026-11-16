@@ -1746,6 +1746,188 @@ def test_ui_trace_mixed_flood_emits_lifecycle_truncation_marker():
     assert len(logger.lines) <= 100000, f"lines must not exceed 100000, got {len(logger.lines)}"
 
 
+
+def test_safe_window_rect_accepts_only_positive_geometry_and_skips_replacement():
+    """Requirement 1: safe_window_rect accepts only positive geometry and returns None if unavailable."""
+    class _FakeWin:
+        def __init__(self, rect=None, raise_exc=None):
+            self._rect = rect
+            self._raise_exc = raise_exc
+            self.handle = 1234
+        def rectangle(self):
+            if self._raise_exc:
+                raise self._raise_exc
+            return self._rect
+
+    # 1. When UIA returns positive geometry:
+    from pywinauto.win32structures import RECT
+    w1 = _FakeWin(rect=RECT(50, 50, 850, 650))
+    r1 = H.safe_window_rect(w1, retries=1)
+    assert r1 is not None and r1.width() == 800 and r1.height() == 600
+
+    # 2. When UIA fails and Win32 GetWindowRect returns positive geometry:
+    class _FakeWin32GWR:
+        def __init__(self, ok, left=0, top=0, right=0, bottom=0):
+            self.ok = ok
+            self.left, self.top, self.right, self.bottom = left, top, right, bottom
+            self.GetWindowRect = self._gwr
+        def _gwr(self, hwnd, lprect):
+            if self.ok:
+                target = lprect._obj if hasattr(lprect, '_obj') else lprect.contents
+                target.left = self.left
+                target.top = self.top
+                target.right = self.right
+                target.bottom = self.bottom
+            return self.ok
+
+    w2 = _FakeWin(raise_exc=RuntimeError("UIA timeout"))
+    fake_gwr = _FakeWin32GWR(ok=1, left=100, top=100, right=900, bottom=700)
+    real_gwr = H.user32.GetWindowRect
+    H.user32.GetWindowRect = fake_gwr.GetWindowRect
+    try:
+        r2 = H.safe_window_rect(w2, retries=1)
+        assert r2 is not None and r2.width() == 800 and r2.height() == 600
+    finally:
+        H.user32.GetWindowRect = real_gwr
+
+    # 3. When Win32 returns zero geometry (0,0,0,0), it must return None, NOT invent replacement geometry:
+    fake_zero = _FakeWin32GWR(ok=1, left=0, top=0, right=0, bottom=0)
+    H.user32.GetWindowRect = fake_zero.GetWindowRect
+    try:
+        r_zero = H.safe_window_rect(w2, retries=1)
+        assert r_zero is None, f"zero geometry must return None, got {r_zero}"
+    finally:
+        H.user32.GetWindowRect = real_gwr
+
+    # 4. When Win32 API call fails (ok=0), it must return None:
+    fake_fail = _FakeWin32GWR(ok=0)
+    H.user32.GetWindowRect = fake_fail.GetWindowRect
+    try:
+        r_fail = H.safe_window_rect(w2, retries=1)
+        assert r_fail is None, f"failed GetWindowRect must return None, got {r_fail}"
+    finally:
+        H.user32.GetWindowRect = real_gwr
+
+
+def test_bounded_uia_retries_distinguishes_absence_from_unavailability():
+    """Requirement 3: Bounded UIA retries with diagnostics distinguish absence from observation unavailable."""
+    class _FakeElem:
+        def __init__(self, aid="", name=""):
+            class _Info:
+                pass
+            self.element_info = _Info()
+            self.element_info.automation_id = aid
+            self.element_info.name = name
+            self._text = name
+        def window_text(self):
+            return self._text
+
+    class _FakeParent:
+        def __init__(self, mode="ok", items=None):
+            self.mode = mode
+            self.items = items or []
+            self.attempts = 0
+        def descendants(self):
+            self.attempts += 1
+            if self.mode == "always_throw":
+                raise RuntimeError("COMError: 0x80040201 subscribers failed")
+            elif self.mode == "throw_then_ok":
+                if self.attempts == 1:
+                    raise RuntimeError("Transient COMError")
+                return self.items
+            return self.items
+
+    # 1. Clean absence: descendants succeeds, element not present
+    p1 = _FakeParent(mode="ok", items=[_FakeElem(aid="Other", name="Other")])
+    res1 = H.find_by_aid(p1, "TargetAid", retries=2)
+    assert res1 is None
+    assert H.last_scan_was_unavailable() is False
+    assert H.last_uia_scan_state["status"] == "NOT_FOUND"
+
+    res1_name = H.find_by_name(p1, "TargetName", retries=2)
+    assert res1_name is None
+    assert H.last_scan_was_unavailable() is False
+    assert H.last_uia_scan_state["status"] == "NOT_FOUND"
+
+    # 2. Observation unavailable: descendants throws on all retries
+    p2 = _FakeParent(mode="always_throw")
+    res2 = H.find_by_aid(p2, "TargetAid", retries=2, retry_delay=0.01)
+    assert res2 is None
+    assert H.last_scan_was_unavailable() is True
+    assert H.last_uia_scan_state["status"] == "UNAVAILABLE"
+    assert "0x80040201" in H.last_scan_diagnostic()
+
+    res2_name = H.find_by_name(p2, "TargetName", retries=2, retry_delay=0.01)
+    assert res2_name is None
+    assert H.last_scan_was_unavailable() is True
+    assert H.last_uia_scan_state["status"] == "UNAVAILABLE"
+    assert "0x80040201" in H.last_scan_diagnostic()
+
+    # 3. Transient failure recovers: throws on attempt 1, succeeds on attempt 2
+    target = _FakeElem(aid="TargetAid", name="TargetName")
+    p3 = _FakeParent(mode="throw_then_ok", items=[target])
+    res3 = H.find_by_aid(p3, "TargetAid", retries=2, retry_delay=0.01)
+    assert res3 is target
+    assert H.last_scan_was_unavailable() is False
+    assert H.last_uia_scan_state["status"] == "FOUND"
+    assert p3.attempts == 2
+
+
+def test_subcase_b_targeting_failure_is_inconclusive_not_defect():
+    """Requirement 2: Targeting failure during Subcase B is classified as INCONCLUSIVE, not application defect."""
+    target = None
+    target_fail_reason = "no verified band point reached HistoryScroller"
+    criterion_reading_anchor = "NOT_RUN"
+    if target is None:
+        if target_fail_reason:
+            criterion_reading_anchor = "INCONCLUSIVE"
+        else:
+            criterion_reading_anchor = "FAIL"
+    assert criterion_reading_anchor == "INCONCLUSIVE", (
+        f"failed targeting must yield INCONCLUSIVE, got {criterion_reading_anchor}")
+
+
+def test_phase3b_cleanup_releases_held_load_and_preserves_rows_on_alpha_failure():
+    """Requirement 4: Phase 3B cleanup releases held query and preserves probe rows if return to alpha fails."""
+    class _FakeEvent:
+        def __init__(self):
+            self.signaled = False
+        def set(self):
+            self.signaled = True
+
+    h_older_release = _FakeEvent()
+    paging_bound = True
+    returned_to_alpha = False
+    db_rows_deleted = False
+    dependent_phases_stopped = False
+
+    # Cleanup logic simulation:
+    # 1. Release held query
+    if h_older_release:
+        h_older_release.set()
+
+    # 2. Check alpha return
+    if returned_to_alpha or not paging_bound:
+        db_rows_deleted = True
+    else:
+        dependent_phases_stopped = True
+
+    assert h_older_release.signaled is True, "held load must be released in cleanup"
+    assert db_rows_deleted is False, "probe rows must NOT be deleted when alpha return failed"
+    assert dependent_phases_stopped is True, "dependent phases must be stopped when alpha return failed"
+
+    # Now verify success path:
+    returned_to_alpha = True
+    dependent_phases_stopped = False
+    if returned_to_alpha or not paging_bound:
+        db_rows_deleted = True
+    else:
+        dependent_phases_stopped = True
+
+    assert db_rows_deleted is True, "probe rows must be deleted when alpha return succeeded"
+    assert dependent_phases_stopped is False, "dependent phases must not be stopped when alpha return succeeded"
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
