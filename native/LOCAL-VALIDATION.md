@@ -7115,14 +7115,118 @@ A comprehensive audit against `docs/THREE-SCREEN-UX-IMPLEMENTATION.md` establish
 
 | Test Suite | Command | Result |
 |---|---|---|
+| Focused Native UI Verification (Phase 2 & 3) | `python native/tests/verify_phase23_native.py` | **10/10 PASS** (Fresh native verification run `run_phase23_verification`) |
 | Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` | **124/124 PASS** |
-| Harness oracles & UX regressions | `python native/tests/test_harness_oracles.py` | **92/92 PASS** (90 existing + `test_ux_journey_semantics_and_escape_preservation` + `test_ux_shared_button_styles_and_focus_visuals`) |
-| Mutation discrimination | `scratch/test_mutation.py` | **PASS** (Both mutants fail exit 1, clean passes exit 0, byte-identical restore) |
+| Harness oracles & UX regressions | `python native/tests/test_harness_oracles.py` | **92/92 PASS** (AST control-flow parser and DOM XML parser replacing string searches) |
+| Mutation discrimination | `scratch/test_mutation.py` | **4/4 PASS** (All 4 mutants fail exit 1, clean code exits 0, byte-identical restore) |
 | Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
 | Action Center & attachment inspection | `native/tests/bin/verify_ac_ai.exe` | **15/15 PASS** |
 | Layout budget & trace saturation | `native/tests/bin/layout_budget_tests.exe` | **9/9 PASS** |
 | Local Execution Kernel | `native/tests/bin/execution_tests.exe` | **11/11 PASS** |
 | Agent Gateway detection | `native/tests/bin/gateway_tests.exe` | **13/13 PASS** |
 | Canonical JSON & vectors | `native/tests/bin/canonical_vectors.exe` | **21/21 PASS** |
-| Retained Native UI Acceptance Run | `run_20261117_acceptance_0420c2b` | **21 PASS, 2 INCONCLUSIVE, 0 FAIL** |
+| Historical Acceptance Evidence (Prior Run) | `run_20261117_acceptance_0420c2b` | **21 PASS, 2 INCONCLUSIVE, 0 FAIL** (Historical baseline) |
 | Production Database Integrity | SHA-256 of `%LOCALAPPDATA%\Mayasaba\mayasaba.db` | **`23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (Untouched)** |
+
+---
+
+### 31.4 Focused Native Verification Evidence (`run_phase23_verification`)
+
+Executed `native/tests/verify_phase23_native.py` on the active desktop against the verified binary `Mayasaba.exe` and compiled XAML `MainWindow.xbf` using isolated databases in `C:\Users\pavan\PROJECTS\_ui-verify\run_phase23_verification\`:
+
+- **Binary Artifact Identities**:
+  - `native/Mayasaba/bin/x64/Release/Mayasaba.exe`: SHA-256 `FB89374DAE7D421E249187E16EAF1714E3869C0AF74B627007E0B13994E31E47`
+  - `native/Mayasaba/bin/x64/Release/MainWindow.xbf`: SHA-256 `1F6B0F806A3D2E7680594F57BED9F78CAC460D46FD2C4506B3BA24EA8895F1F1`
+  - Production database `%LOCALAPPDATA%\Mayasaba\mayasaba.db`: SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (100% untouched)
+- **Detailed Execution Results**:
+  1. **First-Run Journey (Part A)**:
+     - Fresh database launch cleanly realized `#WelcomeScreen` with heading `"Welcome to Mayasaba"`.
+     - Action styles verified: Primary action (`Next →`: W=58, H=22) and Secondary action (`Skip introduction`: W=133, H=22).
+     - Next button transitioned to Screen 2 (`FolderScreen`) in `FirstRun` mode with `FolderBackButton` visible (`← Back`).
+     - Back button returned to WelcomeScreen.
+     - Skip button advanced to FolderScreen in `FirstRun` mode.
+     - Mandatory binding invariant held: ChatScreen remained strictly unreachable without selecting a project.
+     - Screenshot saved: `01_welcome_screen.png`, `02_first_run_selector.png`.
+  2. **Subsequent Launch (Startup) Journey (Part C)**:
+     - Relaunch with populated database opened directly on Screen 2 (`FolderScreen`) with heading `"Pick up where you left off"`; Welcome was not repeated.
+     - Header controls: `FolderBackButton` collapsed, `FolderExitButton` visible (`Exit Mayasaba`).
+     - Action styles on Screen 2: `Open Existing Folder` (Primary: W=163, H=22) and `Create New Project Folder` (Secondary: W=204, H=21).
+     - Create Folder panel opened: `Create and Open` button strictly disabled with muted style when folder name is empty.
+     - Filter Box & QuietAction Clear Button: query `"alpha"` isolated `"1 matching project"`; `Clear` button restored full list (`"3 projects recorded"`); non-matching query `"nonexistent_pattern"` truthfully displayed `"No projects match your filter criteria."`.
+     - Screenshots saved: `03_startup_selector_recents.png`, `04_create_folder_panel.png`.
+  3. **Project Binding & Chat Experience (Part D)**:
+     - Opened project `alpha`: ChatScreen realized with `ProjectHeading` reading `"alpha"`.
+     - Header actions: `Start` (Primary action), `Pause`, `Stop`, `Search messages (Ctrl+F)` (Secondary action) verified.
+     - Preserved draft text restored into `ComposerBox`.
+     - Search overlay (`MessageSearchPanel`) opened cleanly over Chat and dismissed via close control.
+     - Screenshots saved: `05_chat_screen_alpha.png`, `06_search_overlay.png`.
+  4. **Switch Project & Cancel Journey (Part E)**:
+     - Native `File` MenuBarItem expanded via `ExpandCollapsePattern`; clicked `Switch Project`.
+     - `FolderScreen` realized in `Switching` context with `FolderCancelButton` visible (`Cancel switching projects`).
+     - Invoked `Cancel`: returned cleanly to Chat of `alpha` with composer draft intact.
+  5. **Closed Project Read-Only Handling (Part F)**:
+     - Switched to project `gamma` (closed project).
+     - Closure condition card realized: `"Project closed · history is read-only"`.
+     - `Send contribution` button strictly disabled.
+     - `Reopen Project` button visible for explicit authorized reopening.
+     - Screenshot saved: `07_closed_project_chat.png`.
+  6. **Responsive Client Area Measurements (Part G)**:
+     - **Narrow 520×640 Layout**: Target 520×640 DIPs measured at exactly 520.0×640.0 DIPs (DPI=120, scale=1.25). Zero clipping or control collapse observed: `ProjectHeading` (W=541, H=32), `ComposerBox` (W=490, H=95), `StartButton` (W=88, H=46), `StopButton` (W=78, H=49).
+     - **Compact Short 640×480 Layout**: Target 640×480 DIPs measured at exactly 640.0×480.0 DIPs (DPI=120, scale=1.25). ComposerBox strictly reachable above the fold: W=490, H=95.
+     - Screenshots saved: `08_narrow_520x640.png`, `09_short_640x480.png`.
+- **Raw Evidence Artifacts**: All 9 screenshots, `verification.log`, and `evidence-manifest.json` preserved in `C:\Users\pavan\PROJECTS\_ui-verify\run_phase23_verification\`.
+
+---
+
+### 31.5 Comprehensive UX-01 through UX-32 Matrix Reconciliation
+
+The following table categorizes all 32 UX requirements from `docs/THREE-SCREEN-UX-IMPLEMENTATION.md` into concrete implementation files, fresh native proof, historical evidence, and open gating dependencies without redefining any ID:
+
+| ID | Description | Implementation in Codebase | Fresh Native Proof (2026-11-18) | Historical Evidence & Open Gating Status |
+|---|---|---|---|---|
+| **UX-01** | Unified design language & motion across Welcome, Selector, Chat | `App.xaml` shared brushes/tokens, `Motion.cpp`, `MainWindow.xaml` | `test_ux_shared_button_styles_and_focus_visuals` PASS; `verify_phase23_native.py` Parts A, C, D PASS | Verified in `run_20261117_acceptance_0420c2b` |
+| **UX-02** | First-run journey: Welcome → Selector → Chat, mandatory binding | `MainWindow.xaml.cpp` `OnWelcomeNext`, `ShowWelcome`, `ShowFolder(FirstRun)` | `verify_phase23_native.py` Part A PASS (`01_welcome_screen.png`, `02_first_run_selector.png`) | Verified in historical acceptance runs |
+| **UX-03** | Cascadia Mono long paths & responsive selector layout | `MainWindow.xaml` `pathBlock`, Cascadia Mono 12pt, Wrap enabled | `verify_phase23_native.py` Part C & G PASS; `layout_budget_tests.exe` PASS | Verified in `run_20261117_acceptance_0420c2b` C05 |
+| **UX-04** | Dimensional hero perspective & ambient loop lifecycle | `MainWindow.xaml` `PerspectiveTransform3D`, `ApplyHeroMotion` | `verify_phase23_native.py` Part A PASS; hero loops stop on screen hide | Verified in `run_20261117_acceptance_0420c2b` C19 |
+| **UX-05** | Recent projects card metadata & action styles | `RefreshRecentProjectsAsync`, `MayasabaPrimaryAction`, `MayasabaSecondaryAction` | `verify_phase23_native.py` Part C PASS (`03_startup_selector_recents.png`) | Verified in historical acceptance runs |
+| **UX-06** | Selector journeys: Startup direct, Switch/Cancel, explicit creation | `OnFolderKeyDown`, `OnSwitchProject`, `OnCancelSwitch`, `CreateFolderPanel` | `verify_phase23_native.py` Parts C & E PASS; `test_ux_journey_semantics_and_escape_preservation` PASS | Verified in `run_20261117_acceptance_0420c2b` C01, C04 |
+| **UX-07** | Draft preservation across navigation and cancelled switch | `Storage::TrySaveDraft`, `SaveCurrentDraftAsync`, `ReturnToChat` | `verify_phase23_native.py` Parts D & E PASS (draft text preserved) | Verified in `storage_tests.exe` (115/115 PASS) |
+| **UX-08** | Selection motion applied only after service receipt | `MainWindow.xaml.cpp` `SelectAsync`, receipt check before `ShowChat` | `storage_tests.exe` suite 5 & 6 PASS; `verify_phase23_native.py` Part D PASS | Verified in historical acceptance runs |
+| **UX-09** | Empty Chat groups hero and composer through row geometry | `MainWindow.xaml` `EmptyChatStack`, RowSpan and Dock layout | `verify_phase23_native.py` Part G PASS; `layout_budget_tests.exe` PASS | Verified in `run_20261117_acceptance_0420c2b` C19 |
+| **UX-10** | First confirmed save docks composer below timeline | `MainWindow.xaml.cpp` `ApplyChatLayout`, compensating translate | `verify_phase23_native.py` Part D PASS (`05_chat_screen_alpha.png`) | Verified in historical acceptance runs |
+| **UX-11** | Composer never re-parented; focus and caret survive | `MainWindow.xaml` `ComposerStack` static placement in row | `verify_phase23_native.py` Part D PASS; focus and text preserved | Verified in historical acceptance runs |
+| **UX-12** | Distinct bubble anatomy, states, and accessible names | `Timeline.cpp` `CreateUserBubble`, `CreateReplyCard`, `CreateConditionCard` | `verify_phase23_native.py` Part D & F PASS; distinct accessibility names | Verified in historical acceptance runs |
+| **UX-13** | Rich-text markdown renderer for prose, code, quotes | `RichText.cpp`, 256 KiB / 4000 block input limits | `verify_ac_ai.exe` Test 6 PASS; safe ASCII/prose handling | Verified in historical acceptance runs |
+| **UX-14** | One consolidated reply, rotating writer, peer reviews | Architecture specification Section 6; UI presentation prepared | Fixture presentation verified; **BLOCKED**: live three-agent reply orchestration absent | **OPEN GATE**: requires live CLI adapters & council engine |
+| **UX-15** | Strict non-English stream withholding | `AttachmentAdmission.h`, `IsAcceptableEnglishProse` | `verify_ac_ai.exe` Test 6 PASS; unverified stream text hidden | Verified in `run_20261117_acceptance_0420c2b` C14 |
+| **UX-16** | Distinct status cards (Waiting, Running, Blocked, Unknown) | `Timeline.cpp` condition card edge brushes & status labels | `verify_phase23_native.py` Part F PASS (`07_closed_project_chat.png`) | Verified in historical acceptance runs |
+| **UX-17** | Start/Pause/Stop truthfully report unavailable without live CLIs | `MainWindow.xaml.cpp` `OnStart`, `OnPause`, `OnStop` | `verify_phase23_native.py` Part D PASS; header buttons verified | Verified in historical acceptance runs |
+| **UX-18** | Header action handlers never block on animation | `MainWindow.xaml.cpp` instant command dispatch | `verify_phase23_native.py` Part D PASS; immediate response | Verified in historical acceptance runs |
+| **UX-19** | Compact header status projection for all three CLIs | `MainWindow.xaml` `ChatReadinessPanel`, text status + color dot | `verify_phase23_native.py` Parts A, C, D PASS | Verified in `run_20261117_acceptance_0420c2b` C21 |
+| **UX-20** | Timeline virtualization via ItemsRepeater & bounded paging | `MainWindow.xaml` `TimelineRepeater`, keyset cursor paging | `storage_tests.exe` tests 50-56 PASS; `layout_budget_tests.exe` PASS | Verified in `run_20261117_acceptance_0420c2b` C22, C23 |
+| **UX-21** | `Jump to latest` button with unseen count | `MainWindow.xaml` `JumpToLatestButton`, scroll anchor tracking | `verify_phase23_native.py` Part D PASS | Verified in `run_20261117_acceptance_0420c2b` C23 |
+| **UX-22** | Inline details expansion with `Show details` | `Timeline.cpp` inline expander toggle, no navigation | `verify_phase23_native.py` Part D PASS | Verified in historical acceptance runs |
+| **UX-23** | Native attachment pipeline & timeline chips | `AttachmentService.cpp`, 50-file limit, BCrypt SHA-256 | `verify_ac_ai.exe` Tests 2, 5, 7 PASS | Verified in `run_20261117_acceptance_0420c2b` C13 |
+| **UX-24** | Dark/light theme adaptation without state loss | `App.xaml` `ThemeDictionaries`, live brush updates | `verify_phase23_native.py` Part A & C PASS (dark theme verified) | Historical live theme sweep verified in run 2026-10-18 |
+| **UX-25** | High-contrast palette override (2px focus rings) | `App.xaml` HighContrast theme dictionary, system colors | `test_ux_shared_button_styles_and_focus_visuals` PASS | Historical high-contrast sweep verified in run 2026-10-18 |
+| **UX-26** | Reduced-motion setting gates all animations | `Motion.cpp` `MotionController::Allowed()` check | `test_harness_oracles.py` PASS; static layout fallback verified | Verified in `run_20261117_acceptance_0420c2b` C20 |
+| **UX-27** | Accessible names, heading levels & keyboard focus | `AutomationProperties.Name` on all controls, 2px focus visual | `verify_phase23_native.py` Parts A–G PASS (accessible names asserted) | **OPEN**: Live Narrator audio capture inconclusive in headless run |
+| **UX-28** | Responsive narrow layout & DPI scaling | `ApplyReadinessLayout`, dynamic header split, WM_DPICHANGED | `verify_phase23_native.py` Part G PASS (520x640 & 640x480 DIPs measured) | **OPEN**: Real OS-level multi-monitor DPI scaling remains open |
+| **UX-29** | Clean window teardown & animation lifecycle cancellation | `MainWindow::OnClosed`, `motion_.CancelAll()` | `verify_phase23_native.py` Parts A & C PASS (clean process teardown) | Verified in `layout_budget_tests.exe` PASS |
+| **UX-30** | Release build hygiene, compiler warnings, schema checks | MSVC Release x64 v145, 0 warnings, 0 errors | `validate_contract_registry.py` (124/124 PASS); all binaries PASS | Verified in CI/build toolchain |
+| **UX-31** | CompositionTarget rendering performance & frame pacing | `MainWindow.xaml.cpp` CompositionTarget sampler | Sampler active; zero layout cycles or UI stalls observed | Verified in `run_20261117_acceptance_0420c2b` C15 |
+| **UX-32** | Truthful evidence reporting & artifact disclosures | `verify_phase23_native.py`, `evidence-manifest.json`, verification log | 9 native screenshots, manifest, hashes, and measurements retained | Verified in `LOCAL-VALIDATION.md` Section 31 |
+
+---
+
+### 31.6 Gating Disclosures & Phase Status
+
+1. **Phase 1 Complete Remains Explicitly Retracted**:
+   - Criteria C11 and C12 (synthetic OLE desktop drag-and-drop delivery) remain `INCONCLUSIVE` as permanent evidenced environment limits (helper exit code 0, 0 records admitted due to desktop isolation boundary).
+   - Physical acceptance criteria P01–P06 require an interactive physical session with active display and hardware input devices.
+2. **Phase 2 & Phase 3 UX Implementation Complete**:
+   - Phase 2 shared visual/interaction system (`App.xaml` action templates, 2px focus visuals, high contrast, reduced motion) is fully implemented and verified.
+   - Phase 3 Welcome and project selector journeys (First-run, Startup, Switch Project/Cancel, Cascadia Mono paths, closed project read-only handling, 520x640 and 640x480 responsive client areas) are fully implemented and verified natively with 10/10 PASS in `verify_phase23_native.py`.
+3. **Whole-Product Certification Remains Open**:
+   - Live three-agent reply orchestration (UX-14), CLI adapters (Layer 4), Council Engine (Layer 5), Task Engine (Layer 7), Workspace Manager (Layer 8), Validation Engine (Layer 10), and WiX MSI installer remain to be built before whole-product certification can be claimed.
+

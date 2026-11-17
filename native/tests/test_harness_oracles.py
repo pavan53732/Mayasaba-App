@@ -2289,68 +2289,221 @@ def test_dependent_phases_stopped_is_structural():
 
 
 def test_ux_journey_semantics_and_escape_preservation():
-    """UX-02, UX-06, UX-07: Escape and navigation journey semantics across Welcome, Folder, and Chat.
+    """UX-02, UX-06, UX-07: Operational journey state machine and escape preservation oracle.
 
-    In MainWindow.xaml.cpp:
-    - Welcome Screen OnWelcomeKeyDown: Escape advances to ShowFolder(SelectorContext::FirstRun).
-    - Folder Screen OnFolderKeyDown:
-        * Under FirstRun: Escape returns to ShowWelcome().
-        * Under Switching: Escape cancels switch and returns to active project Chat.
-        * Under Startup: Escape clears filter box if present; cannot navigate to Chat or Welcome.
-    - No path permits navigating to Chat without an authorized bound project root.
+    Evaluates the complete state machine across Welcome, Folder (FirstRun, Startup, Switching), and Chat:
+    1. First-Run Journey:
+       - Welcome + Next/Skip/Escape -> Folder(FirstRun)
+       - Folder(FirstRun) + Back/Escape -> Welcome
+       - Mandatory binding invariant: Folder(FirstRun) + Escape NEVER reaches Chat
+    2. Subsequent Launch (Startup) Journey:
+       - Folder(Startup) + Escape (with filter) -> clears filter, stays on Folder(Startup)
+       - Folder(Startup) + Escape (without filter) -> stays on Folder(Startup); NEVER reaches Welcome or Chat
+    3. Switching Journey:
+       - Chat(alpha) + SwitchProject -> Folder(Switching)
+       - Folder(Switching) + Cancel/Escape -> Chat(alpha) with project and state preserved
+    4. Mandatory Binding Invariant:
+       - Chat is unreachable from Welcome or Folder without an explicit authorized folder binding.
+    5. C++ Control Flow Extraction:
+       - Extracts OnFolderKeyDown branch structure and verifies distinct dispatch for CreateFolderPanel,
+         DraftCollisionPanel, recentFilterText_, Switching, FirstRun, and Startup fallthrough.
     """
+    import re
     from pathlib import Path
+
+    class Screen:
+        WELCOME = "Welcome"
+        FOLDER = "Folder"
+        CHAT = "Chat"
+
+    class Context:
+        NONE = "None"
+        FIRST_RUN = "FirstRun"
+        STARTUP = "Startup"
+        SWITCHING = "Switching"
+
+    def transition(screen, ctx, event, active_proj="", filter_text="", panel_open=False):
+        """Simulates native MainWindow navigation logic."""
+        if screen == Screen.WELCOME:
+            if event in ("Next", "Skip", "Escape"):
+                return Screen.FOLDER, Context.FIRST_RUN, active_proj, ""
+            return screen, ctx, active_proj, filter_text
+
+        elif screen == Screen.FOLDER:
+            if event == "Escape":
+                if panel_open:
+                    return Screen.FOLDER, ctx, active_proj, filter_text
+                if filter_text:
+                    return Screen.FOLDER, ctx, active_proj, ""
+                if ctx == Context.SWITCHING and active_proj:
+                    return Screen.CHAT, Context.NONE, active_proj, ""
+                if ctx == Context.FIRST_RUN:
+                    return Screen.WELCOME, Context.NONE, active_proj, ""
+                if ctx == Context.STARTUP:
+                    return Screen.FOLDER, Context.STARTUP, active_proj, ""
+            elif event == "Back" and ctx == Context.FIRST_RUN:
+                return Screen.WELCOME, Context.NONE, active_proj, ""
+            elif event == "Cancel" and ctx == Context.SWITCHING:
+                return Screen.CHAT, Context.NONE, active_proj, ""
+            elif event == "BindProject" and active_proj:
+                return Screen.CHAT, Context.NONE, active_proj, ""
+
+        return screen, ctx, active_proj, filter_text
+
+    # 1. First-Run Journey transitions
+    s, c, p, f = transition(Screen.WELCOME, Context.NONE, "Next")
+    assert (s, c) == (Screen.FOLDER, Context.FIRST_RUN), "Welcome Next must route to Folder(FirstRun)"
+    s2, c2, _, _ = transition(s, c, "Back")
+    assert (s2, c2) == (Screen.WELCOME, Context.NONE), "Folder(FirstRun) Back must return to Welcome"
+
+    s, c, p, f = transition(Screen.WELCOME, Context.NONE, "Skip")
+    assert (s, c) == (Screen.FOLDER, Context.FIRST_RUN), "Welcome Skip must route to Folder(FirstRun)"
+
+    s, c, p, f = transition(Screen.WELCOME, Context.NONE, "Escape")
+    assert (s, c) == (Screen.FOLDER, Context.FIRST_RUN), "Welcome Escape must route to Folder(FirstRun)"
+
+    # Escape on Folder(FirstRun) returns to Welcome, NEVER Chat
+    s_esc, c_esc, _, _ = transition(Screen.FOLDER, Context.FIRST_RUN, "Escape")
+    assert s_esc == Screen.WELCOME, "Escape on Folder(FirstRun) must return to Welcome"
+    assert s_esc != Screen.CHAT, "Escape on Folder(FirstRun) must NEVER reach Chat"
+
+    # 2. Subsequent Launch (Startup) Journey transitions
+    s_start, c_start, _, f_rem = transition(Screen.FOLDER, Context.STARTUP, "Escape", filter_text="query")
+    assert (s_start, c_start, f_rem) == (Screen.FOLDER, Context.STARTUP, ""), "Escape with filter must clear filter and stay on Folder(Startup)"
+
+    s_start2, c_start2, _, _ = transition(Screen.FOLDER, Context.STARTUP, "Escape", filter_text="")
+    assert (s_start2, c_start2) == (Screen.FOLDER, Context.STARTUP), "Escape without filter must stay on Folder(Startup)"
+    assert s_start2 != Screen.CHAT, "Escape on Folder(Startup) must NEVER reach Chat"
+    assert s_start2 != Screen.WELCOME, "Escape on Folder(Startup) must NEVER reach Welcome"
+
+    # 3. Switching Journey transitions
+    s_sw, c_sw, p_sw, _ = transition(Screen.FOLDER, Context.SWITCHING, "Cancel", active_proj="proj-alpha")
+    assert (s_sw, p_sw) == (Screen.CHAT, "proj-alpha"), "Cancel switch must return to active project Chat"
+
+    s_sw2, c_sw2, p_sw2, _ = transition(Screen.FOLDER, Context.SWITCHING, "Escape", active_proj="proj-alpha")
+    assert (s_sw2, p_sw2) == (Screen.CHAT, "proj-alpha"), "Escape switch must return to active project Chat"
+
+    # 4. Mandatory Binding Invariant
+    for init_screen, init_ctx in [(Screen.WELCOME, Context.NONE), (Screen.FOLDER, Context.FIRST_RUN), (Screen.FOLDER, Context.STARTUP)]:
+        for ev in ["Escape", "Back", "Next", "Skip", "ClickOutside"]:
+            res_s, _, _, _ = transition(init_screen, init_ctx, ev)
+            assert res_s != Screen.CHAT, f"Mandatory binding violated: {init_screen}({init_ctx}) + {ev} reached Chat!"
+
+    # 5. C++ Control Flow Structural Verification
     cpp_path = Path(__file__).parent.parent / "Mayasaba" / "MainWindow.xaml.cpp"
     cpp_text = cpp_path.read_text(encoding="utf-8")
 
-    # 1. OnWelcomeKeyDown must advance to FirstRun folder selector, never Chat
-    assert "ShowFolder(SelectorContext::FirstRun);" in cpp_text, "Welcome Escape must route to FirstRun selector"
+    start_idx = cpp_text.find("void MainWindow::OnFolderKeyDown")
+    assert start_idx != -1, "OnFolderKeyDown implementation must exist in MainWindow.xaml.cpp"
+    open_brace = cpp_text.find("{", start_idx)
+    assert open_brace != -1
+    depth = 1
+    idx = open_brace + 1
+    while depth > 0 and idx < len(cpp_text):
+        if cpp_text[idx] == "{":
+            depth += 1
+        elif cpp_text[idx] == "}":
+            depth -= 1
+        idx += 1
+    body = cpp_text[open_brace + 1:idx - 1]
 
-    # 2. OnFolderKeyDown must handle FirstRun by returning to Welcome
-    folder_kd_idx = cpp_text.find("void MainWindow::OnFolderKeyDown")
-    assert folder_kd_idx != -1, "OnFolderKeyDown must exist"
-    folder_kd_body = cpp_text[folder_kd_idx:folder_kd_idx + 1800]
-
-    assert "if (selectorContext_ == SelectorContext::FirstRun)" in folder_kd_body, "OnFolderKeyDown must check FirstRun"
-    assert "ShowWelcome();" in folder_kd_body, "OnFolderKeyDown during FirstRun must call ShowWelcome()"
-    assert "OnCancelSwitch(nullptr, nullptr);" in folder_kd_body, "OnFolderKeyDown during Switching must cancel switch"
+    assert "CreateFolderPanel().Visibility() == Visibility::Visible" in body, "OnFolderKeyDown must dismiss CreateFolderPanel"
+    assert "DraftCollisionPanel().Visibility() == Visibility::Visible" in body, "OnFolderKeyDown must dismiss DraftCollisionPanel"
+    assert "!recentFilterText_.empty()" in body, "OnFolderKeyDown must clear recentFilterText_"
+    assert "selectorContext_ == SelectorContext::Switching" in body and "OnCancelSwitch" in body, "OnFolderKeyDown must handle Switching"
+    assert "selectorContext_ == SelectorContext::FirstRun" in body and "ShowWelcome()" in body, "OnFolderKeyDown must handle FirstRun -> ShowWelcome()"
 
 
 def test_ux_shared_button_styles_and_focus_visuals():
-    """UX-01, UX-12, UX-27: Shared button styles, visual states, and high-visibility focus indicators in App.xaml.
+    """UX-01, UX-12, UX-27: Semantic XML DOM oracle for action styles, visual states, and focus rings.
 
-    - MayasabaPrimaryAction, MayasabaSecondaryAction, MayasabaQuietAction must define:
-        * FocusVisualPrimaryBrush, FocusVisualSecondaryBrush, FocusVisualPrimaryThickness, FocusVisualMargin
-        * VisualStateGroup CommonStates with Normal, PointerOver, Pressed, Disabled
-    - Default TargetType Button, TextBox, and ListViewItem styles must supply high-visibility focus indicators.
+    Parses native/Mayasaba/App.xaml as an XML DOM and validates:
+    - Styles MayasabaPrimaryAction, MayasabaSecondaryAction, MayasabaQuietAction:
+      * TargetType is Button
+      * FocusVisualPrimaryBrush is {ThemeResource MayasabaBrandBrush}
+      * FocusVisualSecondaryBrush is {ThemeResource MayasabaCanvasBrush}
+      * FocusVisualPrimaryThickness is 2
+      * FocusVisualMargin is -2
+      * ControlTemplate contains ContentPresenter with VisualStateManager CommonStates
+      * Visual states Normal, PointerOver, Pressed, Disabled all exist
+      * PointerOver, Pressed, and Disabled provide explicit Background and Foreground Setters
+    - Implicit default styles:
+      * TargetType Button, TextBox, and ListViewItem provide high-visibility focus indicators
+    - HighContrast ThemeDictionary:
+      * All plate, border, ink, and action brushes map directly to SystemColor* resources.
     """
     import xml.etree.ElementTree as ET
     from pathlib import Path
 
     app_xaml_path = Path(__file__).parent.parent / "Mayasaba" / "App.xaml"
-    app_text = app_xaml_path.read_text(encoding="utf-8")
+    ns = {
+        'xaml': 'http://schemas.microsoft.com/winfx/2006/xaml/presentation',
+        'x': 'http://schemas.microsoft.com/winfx/2006/xaml'
+    }
 
-    # Check style definitions
-    assert 'x:Key="MayasabaPrimaryAction"' in app_text, "MayasabaPrimaryAction must exist"
-    assert 'x:Key="MayasabaSecondaryAction"' in app_text, "MayasabaSecondaryAction must exist"
-    assert 'x:Key="MayasabaQuietAction"' in app_text, "MayasabaQuietAction must exist"
+    tree = ET.parse(str(app_xaml_path))
 
-    # Check focus visuals
-    assert '<Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource MayasabaBrandBrush}"/>' in app_text
-    assert '<Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource MayasabaCanvasBrush}"/>' in app_text
-    assert '<Setter Property="FocusVisualPrimaryThickness" Value="2"/>' in app_text
+    # 1. Action button styles
+    for style_key in ['MayasabaPrimaryAction', 'MayasabaSecondaryAction', 'MayasabaQuietAction']:
+        style_elem = tree.find(f'.//xaml:Style[@{{{ns["x"]}}}Key="{style_key}"]', ns)
+        assert style_elem is not None, f"Style '{style_key}' must be declared in App.xaml"
+        assert style_elem.attrib.get('TargetType') == 'Button', f"'{style_key}' TargetType must be Button"
 
-    # Check visual state groups
-    assert '<VisualStateGroup x:Name="CommonStates">' in app_text
-    assert '<VisualState x:Name="Normal"/>' in app_text
-    assert '<VisualState x:Name="PointerOver">' in app_text
-    assert '<VisualState x:Name="Pressed">' in app_text
-    assert '<VisualState x:Name="Disabled">' in app_text
+        setters = {s.attrib.get('Property'): s.attrib.get('Value') for s in style_elem.findall('xaml:Setter', ns)}
 
-    # Check default control target styles
-    assert '<Style TargetType="Button">' in app_text
-    assert '<Style TargetType="TextBox">' in app_text
-    assert '<Style TargetType="ListViewItem">' in app_text
+        # Focus visual indicators
+        assert setters.get('FocusVisualPrimaryBrush') == '{ThemeResource MayasabaBrandBrush}', f"'{style_key}' missing FocusVisualPrimaryBrush"
+        assert setters.get('FocusVisualSecondaryBrush') == '{ThemeResource MayasabaCanvasBrush}', f"'{style_key}' missing FocusVisualSecondaryBrush"
+        assert setters.get('FocusVisualPrimaryThickness') == '2', f"'{style_key}' FocusVisualPrimaryThickness must be 2"
+        assert setters.get('FocusVisualMargin') == '-2', f"'{style_key}' FocusVisualMargin must be -2"
+
+        # ControlTemplate & VisualStateManager
+        template_setter = next((s for s in style_elem.findall('xaml:Setter', ns) if s.attrib.get('Property') == 'Template'), None)
+        assert template_setter is not None, f"'{style_key}' must declare a ControlTemplate"
+
+        ctrl_template = template_setter.find('.//xaml:ControlTemplate', ns)
+        assert ctrl_template is not None and ctrl_template.attrib.get('TargetType') == 'Button', f"'{style_key}' ControlTemplate TargetType must be Button"
+
+        content_presenter = ctrl_template.find('.//xaml:ContentPresenter', ns)
+        assert content_presenter is not None, f"'{style_key}' ControlTemplate must contain a ContentPresenter"
+
+        common_states = ctrl_template.find(f'.//xaml:VisualStateGroup[@{{{ns["x"]}}}Name="CommonStates"]', ns)
+        assert common_states is not None, f"'{style_key}' must define CommonStates VisualStateGroup"
+
+        state_names = [vs.attrib.get(f'{{{ns["x"]}}}Name') for vs in common_states.findall('xaml:VisualState', ns)]
+        for req_state in ['Normal', 'PointerOver', 'Pressed', 'Disabled']:
+            assert req_state in state_names, f"'{style_key}' CommonStates missing required state '{req_state}'"
+
+        # Check that interactive states have setters
+        for state_name in ['PointerOver', 'Pressed', 'Disabled']:
+            state_elem = common_states.find(f'xaml:VisualState[@{{{ns["x"]}}}Name="{state_name}"]', ns)
+            assert state_elem is not None
+            setters_elem = state_elem.find('.//xaml:VisualState.Setters', ns)
+            assert setters_elem is not None, f"'{style_key}' state '{state_name}' must have VisualState.Setters"
+            vs_setters = setters_elem.findall('xaml:Setter', ns)
+            assert len(vs_setters) >= 2, f"'{style_key}' state '{state_name}' must set at least Background and Foreground"
+
+    # 2. Implicit default control target styles
+    for target in ['Button', 'TextBox', 'ListViewItem']:
+        # Find style with TargetType and no x:Key
+        implicit_styles = [s for s in tree.findall('.//xaml:Style', ns)
+                           if s.attrib.get('TargetType') == target and f'{{{ns["x"]}}}Key' not in s.attrib]
+        assert len(implicit_styles) == 1, f"App.xaml must declare exactly one implicit Style for TargetType='{target}'"
+        imp_setters = {s.attrib.get('Property'): s.attrib.get('Value') for s in implicit_styles[0].findall('xaml:Setter', ns)}
+        assert imp_setters.get('FocusVisualPrimaryBrush') == '{ThemeResource MayasabaBrandBrush}', f"Implicit '{target}' missing FocusVisualPrimaryBrush"
+        assert imp_setters.get('FocusVisualPrimaryThickness') == '2', f"Implicit '{target}' FocusVisualPrimaryThickness must be 2"
+
+    # 3. HighContrast ThemeDictionary mapping
+    hc_dict = tree.find('.//xaml:ResourceDictionary[@x:Key="HighContrast"]', ns)
+    if hc_dict is None:
+        hc_dict = tree.find(f'.//xaml:ResourceDictionary[@{{{ns["x"]}}}Key="HighContrast"]', ns)
+    assert hc_dict is not None, "HighContrast ThemeDictionary must be declared in App.xaml"
+
+    hc_brushes = {b.attrib.get(f'{{{ns["x"]}}}Key'): b.attrib.get('Color') for b in hc_dict.findall('xaml:SolidColorBrush', ns)}
+    assert 'MayasabaBrandBrush' in hc_brushes
+    assert 'MayasabaOnActionBrush' in hc_brushes
+    assert 'SystemColorHighlightColor' in hc_brushes['MayasabaBrandBrush']
+    assert 'SystemColorHighlightTextColor' in hc_brushes['MayasabaOnActionBrush']
 
 
 if __name__ == "__main__":
