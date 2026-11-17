@@ -1452,25 +1452,62 @@ last_uia_scan_state = {
     "retries_used": 0
 }
 
-def find_by_aid(parent, aid, retries=3, retry_delay=0.15):
-    """Find descendant element by AutomationId with bounded UIA retries.
+
+class ObservationResult:
+    """Typed result of a UIA element lookup.
     
-    Distinguishes clean absence (enumeration succeeded, element not found)
-    from observation failure (enumeration threw exceptions across all retries).
+    Distinguishes three outcomes:
+    - FOUND: element was found (element is non-None, status="FOUND")
+    - NOT_FOUND: enumeration completed cleanly with no exceptions or property read failures,
+      and element does not exist in the subtree (element is None, status="NOT_FOUND")
+    - UNAVAILABLE: enumeration threw an exception or property reads failed during the scan
+      across retries (element is None, status="UNAVAILABLE", error contains details)
+    """
+    def __init__(self, status, element=None, error=None, retries_used=0):
+        self.status = status
+        self.element = element
+        self.error = error
+        self.retries_used = retries_used
+
+    @property
+    def is_found(self):
+        return self.status == "FOUND" and self.element is not None
+
+    @property
+    def is_absent(self):
+        return self.status == "NOT_FOUND"
+
+    @property
+    def is_unavailable(self):
+        return self.status == "UNAVAILABLE"
+
+
+def observe_by_aid(parent, aid, retries=3, retry_delay=0.15):
+    """Observe descendant element by AutomationId with bounded UIA retries.
+    
+    Returns an ObservationResult distinguishing clean absence from observation failure.
     """
     global last_uia_scan_state
     last_err = None
     for attempt in range(max(1, retries)):
         try:
-            for d in parent.descendants():
+            property_err = None
+            descendants = parent.descendants()
+            for d in descendants:
                 try:
                     if d.element_info.automation_id == aid:
                         last_uia_scan_state = {"status": "FOUND", "error": None, "retries_used": attempt}
-                        return d
-                except Exception:
+                        return ObservationResult("FOUND", element=d, retries_used=attempt)
+                except Exception as exc:
+                    property_err = exc
                     continue
+            if property_err is not None:
+                last_err = property_err
+                if attempt < retries - 1:
+                    time.sleep(retry_delay)
+                continue
             last_uia_scan_state = {"status": "NOT_FOUND", "error": None, "retries_used": attempt}
-            return None
+            return ObservationResult("NOT_FOUND", element=None, retries_used=attempt)
         except Exception as exc:
             last_err = exc
             if attempt < retries - 1:
@@ -1480,7 +1517,93 @@ def find_by_aid(parent, aid, retries=3, retry_delay=0.15):
         "error": f"{type(last_err).__name__}: {last_err}",
         "retries_used": retries
     }
-    return None
+    return ObservationResult("UNAVAILABLE", element=None, error=f"{type(last_err).__name__}: {last_err}", retries_used=retries)
+
+
+def find_by_aid(parent, aid, retries=3, retry_delay=0.15):
+    """Find descendant element by AutomationId with bounded UIA retries.
+    
+    Returns element if FOUND, or None if NOT_FOUND or UNAVAILABLE.
+    """
+    return observe_by_aid(parent, aid, retries=retries, retry_delay=retry_delay).element
+
+
+def observe_by_name(parent, name, retries=3, retry_delay=0.15):
+    """Observe descendant element by Name/window_text with bounded UIA retries.
+    
+    Returns an ObservationResult distinguishing clean absence from observation failure.
+    """
+    global last_uia_scan_state
+    last_err = None
+    for attempt in range(max(1, retries)):
+        try:
+            property_err = None
+            descendants = parent.descendants()
+            for d in descendants:
+                try:
+                    if d.window_text() == name or d.element_info.name == name:
+                        last_uia_scan_state = {"status": "FOUND", "error": None, "retries_used": attempt}
+                        return ObservationResult("FOUND", element=d, retries_used=attempt)
+                except Exception as exc:
+                    property_err = exc
+                    continue
+            if property_err is not None:
+                last_err = property_err
+                if attempt < retries - 1:
+                    time.sleep(retry_delay)
+                continue
+            last_uia_scan_state = {"status": "NOT_FOUND", "error": None, "retries_used": attempt}
+            return ObservationResult("NOT_FOUND", element=None, retries_used=attempt)
+        except Exception as exc:
+            last_err = exc
+            if attempt < retries - 1:
+                time.sleep(retry_delay)
+    last_uia_scan_state = {
+        "status": "UNAVAILABLE",
+        "error": f"{type(last_err).__name__}: {last_err}",
+        "retries_used": retries
+    }
+    return ObservationResult("UNAVAILABLE", element=None, error=f"{type(last_err).__name__}: {last_err}", retries_used=retries)
+
+
+def find_by_name(parent, name, retries=3, retry_delay=0.15):
+    """Find descendant element by Name/window_text with bounded UIA retries.
+    
+    Returns element if FOUND, or None if NOT_FOUND or UNAVAILABLE.
+    """
+    return observe_by_name(parent, name, retries=retries, retry_delay=retry_delay).element
+
+
+def assert_control_withdrawn(parent, aid=None, name=None, retries=3, retry_delay=0.15):
+    """Assert that a control is cleanly absent or collapsed.
+    
+    Returns:
+        tuple[bool | None, str]:
+            (True, reason): Proven cleanly absent or collapsed.
+            (False, reason): Present and visible (assertion failed).
+            (None, reason): Observation unavailable (incomplete scan or error).
+    """
+    if aid is not None:
+        obs = observe_by_aid(parent, aid, retries=retries, retry_delay=retry_delay)
+    elif name is not None:
+        obs = observe_by_name(parent, name, retries=retries, retry_delay=retry_delay)
+    else:
+        raise ValueError("Must provide either aid or name")
+
+    if obs.status == "UNAVAILABLE":
+        return None, f"observation unavailable ({obs.error})"
+    if obs.status == "NOT_FOUND":
+        return True, "element confirmed absent from UIA tree"
+    if obs.status == "FOUND" and obs.element is not None:
+        try:
+            vis = obs.element.is_visible()
+            if not vis:
+                return True, "element present but collapsed (is_visible() == False)"
+            return False, "element is present and visible"
+        except Exception as exc:
+            return None, f"element visibility check unavailable ({type(exc).__name__}: {exc})"
+    return None, f"unexpected observation status: {obs.status}"
+
 
 def last_scan_was_unavailable():
     return last_uia_scan_state.get("status") == "UNAVAILABLE"
@@ -1558,34 +1681,6 @@ def acquire_store_lock(store_path):
         )
     return handle
 
-def find_by_name(parent, name, retries=3, retry_delay=0.15):
-    """Find descendant element by Name/window_text with bounded UIA retries.
-    
-    Distinguishes clean absence from observation failure.
-    """
-    global last_uia_scan_state
-    last_err = None
-    for attempt in range(max(1, retries)):
-        try:
-            for d in parent.descendants():
-                try:
-                    if d.window_text() == name or d.element_info.name == name:
-                        last_uia_scan_state = {"status": "FOUND", "error": None, "retries_used": attempt}
-                        return d
-                except Exception:
-                    continue
-            last_uia_scan_state = {"status": "NOT_FOUND", "error": None, "retries_used": attempt}
-            return None
-        except Exception as exc:
-            last_err = exc
-            if attempt < retries - 1:
-                time.sleep(retry_delay)
-    last_uia_scan_state = {
-        "status": "UNAVAILABLE",
-        "error": f"{type(last_err).__name__}: {last_err}",
-        "retries_used": retries
-    }
-    return None
 
 def get_item_status(element):
     try:
@@ -2349,6 +2444,140 @@ def wait_for_notice_text(win, expected_substring, timeout=6.0):
     return satisfied, texts
 
 
+def classify_subcase_b_targeting_outcome(target, target_fail_reason=None):
+    """Classifies the targeting outcome for Subcase B.
+    
+    If target is None (aim could not be verified or band element unavailable),
+    the outcome is INCONCLUSIVE (observation unavailable / targeting failure),
+    never a product defect (FAIL).
+    """
+    if target is None:
+        reason = target_fail_reason or "band aim not verified; history scroller ancestry could not be established"
+        return "INCONCLUSIVE", reason
+    return "CONTINUE", "target verified"
+
+
+def perform_phase3b_cleanup(win, store_path, probe_id, probe_path, paging_bound,
+                            h_release=None, handles=None, return_verifier=None, logger=None):
+    """Exception-safe move off the probe project before removing its rows.
+    
+    1. Releases any held queries (via h_release event).
+    2. Closes Win32 event handles.
+    3. Verifies return to alpha (via return_verifier or native UI navigation).
+    4. Deletes probe rows only if return to alpha was verified (or probe was never bound).
+       If return to alpha failed, probe rows and evidence are preserved to prevent
+       corrupting active binding, and dependent phases must be stopped.
+    Returns:
+        tuple[bool, bool]: (returned, dependent_phases_stopped)
+    """
+    # 1. Release any held queries first
+    if h_release:
+        try:
+            if hasattr(h_release, "set"):
+                h_release.set()
+            elif hasattr(h_release, "value"):
+                kernel32.SetEvent(h_release)
+            elif isinstance(h_release, int):
+                kernel32.SetEvent(h_release)
+            else:
+                try:
+                    kernel32.SetEvent(h_release)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # 2. Close event handles
+    if handles:
+        for h in handles:
+            if h:
+                try:
+                    if hasattr(h, "close"):
+                        h.close()
+                    elif isinstance(h, int) or hasattr(h, "value"):
+                        kernel32.CloseHandle(h)
+                    else:
+                        try:
+                            kernel32.CloseHandle(h)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+    # 3. Verify return to alpha
+    returned = False
+    if paging_bound:
+        if return_verifier is not None:
+            try:
+                returned = bool(return_verifier())
+            except Exception as exc:
+                if logger:
+                    logger(f"  could not return to alpha: {type(exc).__name__}: {exc}")
+                returned = False
+        elif win is not None:
+            try:
+                if open_switch_project(win):
+                    open_alpha = poll_until(lambda: find_by_name(win, "Open project alpha"),
+                                            timeout=8.0, interval=0.2)
+                    if open_alpha is not None:
+                        open_alpha.iface_invoke.Invoke()
+                        restored = poll_until(lambda: find_by_aid(win, "ComposerBox"),
+                                              timeout=25.0, interval=0.2)
+                        if restored is not None:
+                            heading = find_by_aid(win, "ProjectHeading")
+                            heading_name = heading.element_info.name if heading else ""
+                            if heading_name == "alpha":
+                                returned = True
+                                if logger:
+                                    logger("  returned to alpha after the paging probe: True (ProjectHeading='alpha')")
+                            else:
+                                if logger:
+                                    logger(f"  returned to alpha: ComposerBox restored, but ProjectHeading reads {heading_name!r}")
+                        else:
+                            if logger:
+                                logger("  returned to alpha: ComposerBox did not restore")
+                    else:
+                        if logger:
+                            logger("  returned to alpha: Open project alpha button not found on Screen 2")
+                else:
+                    if logger:
+                        logger("  returned to alpha: open_switch_project did not reach Screen 2")
+            except Exception as exc:
+                if logger:
+                    logger(f"  could not return to alpha: {type(exc).__name__}: {exc}")
+                returned = False
+
+    # 4. Deletion gate and dependent phase disposition
+    dependent_phases_stopped = False
+    if returned or not paging_bound:
+        try:
+            conn = sqlite3.connect(store_path)
+            if logger:
+                logger("DELETE: the temporary paging-probe project and seeded messages")
+            conn.execute("DELETE FROM contributions WHERE project_id = ?;", (probe_id,))
+            conn.execute("DELETE FROM selection_events WHERE project_id = ?;", (probe_id,))
+            conn.execute("DELETE FROM selection_receipts WHERE project_id = ?;", (probe_id,))
+            conn.execute("DELETE FROM pending_submissions WHERE project_id = ?;", (probe_id,))
+            conn.execute("DELETE FROM projects WHERE id = ?;", (probe_id,))
+            conn.commit()
+            conn.close()
+        except Exception as exc:
+            if logger:
+                logger(f"  could not remove the paging-probe rows: {exc}")
+        try:
+            os.rmdir(probe_path)
+        except Exception:
+            pass
+        if logger:
+            logger("  cleaned up probe project rows and directory.")
+    else:
+        if logger:
+            logger("  CRITICAL: Return to alpha failed in Phase 3B! Preserving probe rows and evidence; stopping dependent phases.")
+        dependent_phases_stopped = True
+
+    return returned, dependent_phases_stopped
+
+
 def main():
     apply_cli_overrides(sys.argv[1:])
     log("=================================================================")
@@ -2818,16 +3047,15 @@ def main():
         send_key_to_window(win.handle, VK_ESCAPE)
         time.sleep(1.0)
 
-        search_box_closed = find_by_aid(win, "MessageSearchBox")
-        is_closed = (search_box_closed is None) or (search_box_closed.rectangle().width() == 0)
-        if not is_closed:
+        search_withdrawn, sw_reason = assert_control_withdrawn(win, aid="MessageSearchBox")
+        if search_withdrawn is not True:
             close_btn = find_by_aid(win, "CloseSearchButton")
             if close_btn:
                 close_btn.iface_invoke.Invoke()
                 time.sleep(1.0)
-            search_box_closed = find_by_aid(win, "MessageSearchBox")
-            is_closed = (search_box_closed is None) or (search_box_closed.rectangle().width() == 0)
-        log(f"Search panel closed: {is_closed}")
+            search_withdrawn, sw_reason = assert_control_withdrawn(win, aid="MessageSearchBox")
+        is_closed = (search_withdrawn is True)
+        log(f"Search panel closed: {is_closed} ({sw_reason})")
 
         log("Reopening search via SearchMessagesButton...")
         search_btn.iface_invoke.Invoke()
@@ -4477,936 +4705,890 @@ def main():
 
         if paging_row_created:
             try:
-                if open_switch_project(win):
-                    open_probe = poll_until(lambda: find_by_name(win, f"Open project {paging_probe_name}"),
-                                            timeout=8.0, interval=0.2)
-                    if open_probe is not None:
-                        open_probe.iface_invoke.Invoke()
-                        # The Chat load is asynchronous across the storage lane.
-                        composer_ready = poll_until(lambda: find_by_aid(win, "ComposerBox"),
-                                                    timeout=30.0, interval=0.2)
-                        if composer_ready is None:
-                            paging_reason = "the probe project's chat did not open after binding"
-                            log(f"  FAIL->setup: {paging_reason}")
-                        else:
-                            paging_bound = True
-                            # Baseline identity capture. `Select` re-derives
-                            # displayName from the observed folder, so the
-                            # heading reads the FOLDER name ('paging-probe'),
-                            # not the seeded display name ('zz-paging-probe')
-                            # (f4r5-run12 guard false positive; the re-derivation
-                            # is confirmed at storage_tests.cpp:764). The guard
-                            # must therefore compare against what the heading
-                            # reads right after this bind, not against the seed.
-                            _bound_heading = find_by_aid(win, "ProjectHeading")
-                            paging_heading_baseline = (_bound_heading.element_info.name
-                                                       if _bound_heading is not None else None)
-                            log(f"  identity baseline captured at bind: "
-                                f"ProjectHeading={paging_heading_baseline!r}")
-                            newest_seen = poll_until(
-                                lambda: paging_count("Paging message 120") >= 1,
-                                timeout=20.0, interval=0.3)
-                            if newest_seen is None:
-                                paging_reason = ("the newest seeded message 'Paging message 120' never "
-                                                 "appeared in the rendered timeline")
-                                log(f"  FAIL: {paging_reason}")
-                                criterion_paging_save = "FAIL"
+                try:
+                    if open_switch_project(win):
+                        open_probe = poll_until(lambda: find_by_name(win, f"Open project {paging_probe_name}"),
+                                                timeout=8.0, interval=0.2)
+                        if open_probe is not None:
+                            open_probe.iface_invoke.Invoke()
+                            # The Chat load is asynchronous across the storage lane.
+                            composer_ready = poll_until(lambda: find_by_aid(win, "ComposerBox"),
+                                                        timeout=30.0, interval=0.2)
+                            if composer_ready is None:
+                                paging_reason = "the probe project's chat did not open after binding"
+                                log(f"  FAIL->setup: {paging_reason}")
                             else:
-                                log("  newest page rendered: 'Paging message 120' is visible")
-                                composer_probe = find_by_aid(win, "ComposerBox")
-                                composer_probe.set_edit_text("Paging message 121")
-                                send_probe = find_by_aid(win, "SendButton")
-                                if not send_probe:
-                                    paging_reason = "SendButton not found in the probe chat"
+                                paging_bound = True
+                                # Baseline identity capture. `Select` re-derives
+                                # displayName from the observed folder, so the
+                                # heading reads the FOLDER name ('paging-probe'),
+                                # not the seeded display name ('zz-paging-probe')
+                                # (f4r5-run12 guard false positive; the re-derivation
+                                # is confirmed at storage_tests.cpp:764). The guard
+                                # must therefore compare against what the heading
+                                # reads right after this bind, not against the seed.
+                                _bound_heading = find_by_aid(win, "ProjectHeading")
+                                paging_heading_baseline = (_bound_heading.element_info.name
+                                                           if _bound_heading is not None else None)
+                                log(f"  identity baseline captured at bind: "
+                                    f"ProjectHeading={paging_heading_baseline!r}")
+                                newest_seen = poll_until(
+                                    lambda: paging_count("Paging message 120") >= 1,
+                                    timeout=20.0, interval=0.3)
+                                if newest_seen is None:
+                                    paging_reason = ("the newest seeded message 'Paging message 120' never "
+                                                     "appeared in the rendered timeline")
                                     log(f"  FAIL: {paging_reason}")
                                     criterion_paging_save = "FAIL"
                                 else:
-                                    log("  sending 'Paging message 121' through the real composer...")
-                                    send_probe.iface_invoke.Invoke()
-                                    # A background guard samples what the timeline
-                                    # realizes for the 12 seconds after the send so a
-                                    # collapse is recorded the moment it happens,
-                                    # with the tail that replaced the sent message.
-                                    stable_reader = []
-                                    guard_stop = threading.Event()
-
-                                    def _tail_guard():
-                                        t0 = time.time()
-                                        while not guard_stop.is_set() and (time.time() - t0) < 12.0:
-                                            ts = round(time.time() - t0, 2)
-                                            n121 = paging_count("Paging message 121")
-                                            tail = timeline_tail()
-                                            note = ""
-                                            if n121:
-                                                note += "121-yes"
-                                            guard = "Paging message 120" if paging_count("Paging message 120") else ""
-                                            stable_reader.append((ts, n121, guard, tail[-3:],
-                                                                  window_geometry_note()))
-                                            time.sleep(0.3)
-
-                                    guard_thread = threading.Thread(
-                                        target=_tail_guard, daemon=True)
-                                    guard_thread.start()
-                                    sent_once = poll_until(
-                                        lambda: paging_count("Paging message 121") == 1,
-                                        timeout=25.0, interval=0.3)
-                                    first_occurrences = paging_count("Paging message 121")
-                                    log(f"  {window_geometry_note()}")
-                                    if sent_once is None:
-                                        first_detail = classify_named("Paging message 121")
-                                        log(f"  3B DIAG on never-rendered: {first_detail}")
-                                        log(f"  3B DIAG timeline tail: {timeline_tail()}")
-                                        paging_reason = (f"the composed message 'Paging message 121' never "
-                                                         f"rendered (count {first_occurrences} after 25 s)")
+                                    log("  newest page rendered: 'Paging message 120' is visible")
+                                    composer_probe = find_by_aid(win, "ComposerBox")
+                                    composer_probe.set_edit_text("Paging message 121")
+                                    send_probe = find_by_aid(win, "SendButton")
+                                    if not send_probe:
+                                        paging_reason = "SendButton not found in the probe chat"
                                         log(f"  FAIL: {paging_reason}")
                                         criterion_paging_save = "FAIL"
                                     else:
-                                        # A settle wait so a late duplicate render
-                                        # (a double save) cannot hide behind the
-                                        # moment of first realization.
-                                        time.sleep(1.5)
-                                        late_occurrences = paging_count("Paging message 121")
-                                        log(f"  'Paging message 121' occurrences after settle: "
-                                            f"{late_occurrences}")
-                                        if late_occurrences != 1:
-                                            late_detail = classify_named("Paging message 121")
-                                            log(f"  3B DIAG on settled count {late_occurrences}: "
-                                                f"{late_detail}")
+                                        log("  sending 'Paging message 121' through the real composer...")
+                                        send_probe.iface_invoke.Invoke()
+                                        # A background guard samples what the timeline
+                                        # realizes for the 12 seconds after the send so a
+                                        # collapse is recorded the moment it happens,
+                                        # with the tail that replaced the sent message.
+                                        stable_reader = []
+                                        guard_stop = threading.Event()
+    
+                                        def _tail_guard():
+                                            t0 = time.time()
+                                            while not guard_stop.is_set() and (time.time() - t0) < 12.0:
+                                                ts = round(time.time() - t0, 2)
+                                                n121 = paging_count("Paging message 121")
+                                                tail = timeline_tail()
+                                                note = ""
+                                                if n121:
+                                                    note += "121-yes"
+                                                guard = "Paging message 120" if paging_count("Paging message 120") else ""
+                                                stable_reader.append((ts, n121, guard, tail[-3:],
+                                                                      window_geometry_note()))
+                                                time.sleep(0.3)
+    
+                                        guard_thread = threading.Thread(
+                                            target=_tail_guard, daemon=True)
+                                        guard_thread.start()
+                                        sent_once = poll_until(
+                                            lambda: paging_count("Paging message 121") == 1,
+                                            timeout=25.0, interval=0.3)
+                                        first_occurrences = paging_count("Paging message 121")
+                                        log(f"  {window_geometry_note()}")
+                                        if sent_once is None:
+                                            first_detail = classify_named("Paging message 121")
+                                            log(f"  3B DIAG on never-rendered: {first_detail}")
                                             log(f"  3B DIAG timeline tail: {timeline_tail()}")
-                                            # A second bounded window in case the
-                                            # realized element is genuinely still
-                                            # settling. If it returns, the render was
-                                            # transient rather than absent, and both
-                                            # shapes are recorded instead of guessed.
-                                            regressed = poll_until(
-                                                lambda: paging_count("Paging message 121") == 1,
-                                                timeout=10.0, interval=0.3)
-                                            log(f"  3B DIAG post-regression recount: "
-                                                f"{paging_count('Paging message 121')} "
-                                                f"(returned={regressed is not None})")
-                                            paging_reason = (f"'Paging message 121' rendered "
-                                                             f"{late_occurrences} times after settle "
-                                                             f"(first poll saw {first_occurrences})")
+                                            paging_reason = (f"the composed message 'Paging message 121' never "
+                                                             f"rendered (count {first_occurrences} after 25 s)")
                                             log(f"  FAIL: {paging_reason}")
                                             criterion_paging_save = "FAIL"
                                         else:
-                                            log("PASS: send #121 through the real composer rendered exactly once.")
-                                            criterion_paging_save = "PASS"
-                                    # Record the guard's whole observation, so a
-                                    # collapse the point reads missed is still in
-                                    # the evidence verbatim.
-                                    guard_stop.set()
-                                    guard_thread.join(timeout=16.0)
-                                    for entry in stable_reader:
-                                        log("  3B SENTINEL t=%.2f count=%s set120=%r tail=%s %s"
-                                            % entry)
+                                            # A settle wait so a late duplicate render
+                                            # (a double save) cannot hide behind the
+                                            # moment of first realization.
+                                            time.sleep(1.5)
+                                            late_occurrences = paging_count("Paging message 121")
+                                            log(f"  'Paging message 121' occurrences after settle: "
+                                                f"{late_occurrences}")
+                                            if late_occurrences != 1:
+                                                late_detail = classify_named("Paging message 121")
+                                                log(f"  3B DIAG on settled count {late_occurrences}: "
+                                                    f"{late_detail}")
+                                                log(f"  3B DIAG timeline tail: {timeline_tail()}")
+                                                # A second bounded window in case the
+                                                # realized element is genuinely still
+                                                # settling. If it returns, the render was
+                                                # transient rather than absent, and both
+                                                # shapes are recorded instead of guessed.
+                                                regressed = poll_until(
+                                                    lambda: paging_count("Paging message 121") == 1,
+                                                    timeout=10.0, interval=0.3)
+                                                log(f"  3B DIAG post-regression recount: "
+                                                    f"{paging_count('Paging message 121')} "
+                                                    f"(returned={regressed is not None})")
+                                                paging_reason = (f"'Paging message 121' rendered "
+                                                                 f"{late_occurrences} times after settle "
+                                                                 f"(first poll saw {first_occurrences})")
+                                                log(f"  FAIL: {paging_reason}")
+                                                criterion_paging_save = "FAIL"
+                                            else:
+                                                log("PASS: send #121 through the real composer rendered exactly once.")
+                                                criterion_paging_save = "PASS"
+                                        # Record the guard's whole observation, so a
+                                        # collapse the point reads missed is still in
+                                        # the evidence verbatim.
+                                        guard_stop.set()
+                                        guard_thread.join(timeout=16.0)
+                                        for entry in stable_reader:
+                                            log("  3B SENTINEL t=%.2f count=%s set120=%r tail=%s %s"
+                                                % entry)
+                        else:
+                            paging_reason = "the probe project did not appear in the recent list"
+                            log(f"  FAIL->setup: {paging_reason}")
                     else:
-                        paging_reason = "the probe project did not appear in the recent list"
+                        paging_reason = "the project switch did not reach Screen 2"
                         log(f"  FAIL->setup: {paging_reason}")
-                else:
-                    paging_reason = "the project switch did not reach Screen 2"
-                    log(f"  FAIL->setup: {paging_reason}")
-            except Exception as exc:
-                paging_reason = f"3B paging leg raised {type(exc).__name__}: {exc}"
-                log(f"  INCONCLUSIVE: {paging_reason}")
-
-            # --- Reading-anchor measurement (criterion 23) ----------------------
-            if paging_bound and criterion_paging_save == "PASS":
-                try:
-                    state_before = paging_scroll_state()
-                    vvs_before = state_before[0] if state_before else None
-                    log(f"  pre-prepend viewsize {vvs_before} %, scroll "
-                        f"{state_before[1] if state_before else '?'} %")
-                    scroller_probe = find_by_aid(win, "HistoryScroller")
-                    # Two measured facts drive the design of this leg
-                    # (f4r5-run6 and f4r5-run7 traces):
-                    #
-                    # 1. The UIA Scroll-pattern set is rejected by the
-                    #    provider (COMError 0x80131509) while the pattern's
-                    #    reads work, so the stimulus must be the real wheel
-                    #    gesture the product's trigger declares.
-                    # 2. The scroller element's BoundingRectangle is NOT its
-                    #    viewport: every phase measured it far off-screen
-                    #    (run7: L-13326, T-12265, R540, B1693 with the window
-                    #    at 64,64) while its realized children report sane
-                    #    rects. A point taken from the scroller's own rect
-                    #    is off-screen, and in run7 120 wheel batches landed
-                    #    there with zero `view` events in the trace. The
-                    #    gesture is therefore aimed at a realized message
-                    #    card, and the oracle reads identities, not the
-                    #    scroller's rect.
+                except Exception as exc:
+                    paging_reason = f"3B paging leg raised {type(exc).__name__}: {exc}"
+                    log(f"  INCONCLUSIVE: {paging_reason}")
+    
+                # --- Reading-anchor measurement (criterion 23) ----------------------
+                if paging_bound and criterion_paging_save == "PASS":
                     try:
-                        _r = scroller_probe.rectangle()
-                        log(f"  scroller UIA rect {_r.left},{_r.top}..{_r.right},{_r.bottom} "
-                            "(viewport-unreliable; not used for aiming)")
-                    except Exception:
-                        pass
-                    heading = find_by_aid(win, "ProjectHeading")
-                    header_floor = (heading.rectangle().bottom + 16
-                                    if heading is not None
-                                    else win.rectangle().top + 300)
-                    composer = find_by_aid(win, "ComposerBox")
-                    composer_ceiling = (composer.rectangle().top - 12
-                                        if composer is not None
-                                        else win.rectangle().bottom - 240)
-                    trace_path = os.path.join(os.path.dirname(STORE_PATH),
-                                              "ui-trace.log")
-
-                    def ui_trace_has_lifecycle_truncation():
-                        try:
-                            with open(trace_path, "r", encoding="utf-8", errors="replace") as fh:
-                                for line in fh:
-                                    if "trace-lifecycle-truncated" in line:
-                                        return True
-                        except OSError:
-                            pass
-                        return False
-
-                    def ui_trace_label_counts():
-                        counts = {}
-                        try:
-                            with open(trace_path, "r", encoding="utf-8",
-                                      errors="replace") as fh:
-                                for line in fh:
-                                    if not line.startswith("t+"):
-                                        continue
-                                    parts = line.split(None, 2)
-                                    if len(parts) >= 2:
-                                        counts[parts[1]] = counts.get(parts[1], 0) + 1
-                                    elif len(parts) == 1:
-                                        counts[parts[0]] = counts.get(parts[0], 0) + 1
-                        except OSError:
-                            pass
-                        return counts
-
-                    def paging_realized():
-                        """Sorted indices of the realized 'Paging message N' bodies.
-
-                        Identity-based: the scroller's own rect is not used
-                        because it is not the viewport (comment at the top of
-                        this leg), and the ScrollPattern percent frame is not
-                        the extent frame the trace measures (run7: viewsize
-                        0.58 % where extent/frame arithmetic says ~10 %), so
-                        identity is the only basis both readable and true.
-                        """
-                        indices = []
-                        for node in win.descendants():
-                            name = node.element_info.name or ""
-                            if name.startswith("Paging message "):
-                                tail = name[len("Paging message "):].split(".")[0]
-                                try:
-                                    indices.append(int(tail))
-                                except ValueError:
-                                    pass
-                        return sorted(set(indices))
-
-                    def paging_wheel_target():
-                        """Verified wheel point inside the chat band.
-
-                        MEASURED BASIS (f4r5-run9-probe/wheel-focus-probe.py,
-                        against the live app). The earlier versions aimed at
-                        the bottom-most realized card's UIA rect; the probe
-                        delivered the refutation: ElementFromPoint at the
-                        card's own rect center named SearchMessagesButton,
-                        not the card -- the realized scrolled-subtree rects
-                        do not correspond to their physical screen locations
-                        in this application (the same artifact class as
-                        HistoryScroller's BoundingRectangle, run7), so six
-                        such batches in run8 landed on the header/tool row
-                        and produced zero view events. Realized-card rects
-                        must not aim a wheel.
-
-                        The basis is the band between the two rect sources
-                        the probe measured as truthful: ProjectHeading
-                        (fixed header) and ComposerBox (composer). run9
-                        added the second measured constraint: the notice
-                        banner and the CLI-problem-cards block overlay the
-                        TOP portion of that band (run9's preflight
-                        ancestry: 'Chat, folder selection...' notice text,
-                        then 'Claude Code CLI needs a decision: CHECKING',
-                        then ChatProblemCardsScroller), so a fixed band
-                        middle can be covered by overlays. This function
-                        therefore scans candidate y positions from just
-                        above the composer upward and returns the first
-                        point whose ElementFromPoint ancestry reaches
-                        HistoryScroller (the contact the probe verified
-                        gives 31 view events and moves the ScrollPattern
-                        percent). The point is recomputed per batch so
-                        layout movement cannot desync the aim. A truthfully
-                        unverified aim returns None with the reason
-                        recorded in aim_reason, and the caller stops the
-                        stimulus instead of wheeling blind.
-                        """
-                        winrect = win.rectangle()
-                        heading = find_by_aid(win, "ProjectHeading")
-                        composer = find_by_aid(win, "ComposerBox")
-                        if heading is None or composer is None:
-                            aim_reason.append("project header/composer not"
-                                              " found")
-                            return None
-                        try:
-                            hrect = heading.rectangle()
-                            crect = composer.rectangle()
-                        except Exception as exc:
-                            aim_reason.append(f"header/composer rect failed: "
-                                              f"{type(exc).__name__}")
-                            return None
-                        floor_y = hrect.bottom + 16
-                        ceil_y = crect.top - 12
-                        if ceil_y - floor_y < 40:
-                            aim_reason.append(f"band {floor_y}..{ceil_y} too"
-                                              " small")
-                            return None
-                        cx = (winrect.left + winrect.right) // 2
-                        candidates = []
-                        y = ceil_y - 24
-                        while y > floor_y + 12:
-                            candidates.append(y)
-                            y -= 24
-                        if not candidates:
-                            candidates = [floor_y + 12]
-                        from pywinauto.uia_defines import IUIA
-                        import ctypes.wintypes as _wt
-                        uia = IUIA().iuia
-                        walker = uia.ControlViewWalker
-                        last_reason = ""
-                        for cy in candidates:
-                            try:
-                                ele = uia.ElementFromPoint(
-                                    _wt.POINT(cx, cy))
-                            except Exception as exc:
-                                last_reason = (f"ElementFromPoint at "
-                                               f"({cx},{cy}) raised "
-                                               f"{type(exc).__name__}")
-                                continue
-                            reached = False
-                            chain = []
-                            walk_ok = True
-                            for _ in range(10):
-                                if ele is None:
-                                    walk_ok = False
-                                    break
-                                aid = ""
-                                name = ""
-                                try:
-                                    aid = ele.CurrentAutomationId or ""
-                                except Exception:
-                                    pass
-                                try:
-                                    name = (ele.CurrentName or "")[:48]
-                                except Exception:
-                                    pass
-                                chain.append(f"aid='{aid or '-'}'"
-                                             + (f"/'{name}'" if name else ""))
-                                if aid == "HistoryScroller":
-                                    reached = True
-                                    break
-                                try:
-                                    ele = walker.GetParentElement(ele)
-                                except Exception:
-                                    walk_ok = False
-                                    break
-                            if reached:
-                                if not aim_logged[0]:
-                                    aim_logged[0] = True
-                                    log(f"  aim verified at ({cx},{cy}): "
-                                        "ancestry " + " -> ".join(chain))
-                                return (cx, cy)
-                            if walk_ok and not last_reason:
-                                # A stop before the scroller was read, not
-                                # an error: the topmost elements are the
-                                # overlay cards/notice on top of the band.
-                                last_reason = (f"topmost at ({cx},{cy}): "
-                                               + "; ".join(chain[:3]))
-                        aim_reason.append(last_reason or
-                                          "no candidate point in the chat "
-                                          "band verified as the history "
-                                          "scroller")
-                        return None
-
-                    aim_reason = []
-                    aim_logged = [False]
-                    batches = 0
-                    misses = 0
-                    stim_reason = ""
-                    trigger_count = ui_trace_label_counts().get("older-trigger", 0)
-                    # CONTACT BASIS CORRECTION (f4r5-run10). run10 verified the
-                    # aim and delivered all 80 batches with confirmed
-                    # foreground, streaming view events throughout -- yet the
-                    # leg stopped with "no view-change events for 6 consecutive
-                    # batches". The trace went silent because the product's
-                    # UiTraceEvent line cap (then 3000) was exhausted by the
-                    # inertia streaming itself (each 3-notch batch at
-                    # pause=0.02 nets a measured 14.0 px and emits dozens of
-                    # intermediate view lines). A file the diagnostic cap had
-                    # finished writing is not a statement about the window.
-                    # Contact and progress are therefore read from the
-                    # truthful, cheap ScrollPattern percent
-                    # (paging_scroll_state(), the same read the probe
-                    # validated), with the trace kept as recorded evidence and
-                    # the trace cap itself raised on the product side
-                    # (MainWindow.xaml.cpp) so the older-trigger chain remains
-                    # observable for the whole journey.
-                    #
-                    # JOURNEY BASIS (f4r5-run10 measured unit): one 3-notch
-                    # burst at pause=0.02 nets 14.0 px, ~330 batches for the
-                    # ~4530 px bottom-to-top journey. The notches are spaced
-                    # (pause=0.25) so each notch's inertia completes instead
-                    # of replacing the previous animation, and each batch
-                    # settles 0.35 s so the at-top gate sees agreeing settled
-                    # reads. The remaining-batches estimate is logged per
-                    # batch from the measured deltas; the cap is an 800-batch
-                    # backstop, not the plan.
-                    BATCH_CAP = 800
-                    MISS_BUDGET = 8
-                    while trigger_count == 0 and batches < BATCH_CAP:
-                        target = paging_wheel_target()
-                        if target is None:
-                            stim_reason = ("band aim not verified: "
-                                           + "; ".join(aim_reason[-2:])
-                                           if aim_reason else
-                                           "no verified band point")
-                            log(f"  wheel batching {batches}: stopped before "
-                                f"any wheel at batch {batches + 1} - {stim_reason}")
-                            break
-                        batches += 1
                         state_before = paging_scroll_state()
-                        if not send_wheel_at_point(win, target[0], target[1], 120,
-                                                   steps=3, pause=0.25):
-                            stim_reason = ("foreground could not be established; "
-                                           "stimulus stopped")
-                            log(f"  wheel batching {batches}: stopped - {stim_reason}")
-                            break
-                        time.sleep(0.35)
-                        counts = ui_trace_label_counts()
-                        trigger_count = counts.get("older-trigger", 0)
-                        state_after = paging_scroll_state()
-                        pct_before = state_before[1] if state_before else None
-                        pct_after = state_after[1] if state_after else None
-                        if pct_before is None or pct_after is None:
-                            misses += 1
-                            if misses >= MISS_BUDGET:
-                                stim_reason = (f"the scroller's ScrollPattern "
-                                               f"percent could not be read for "
-                                               f"{misses} consecutive batches; "
-                                               "contact unverifiable")
-                                log(f"  wheel batching {batches}: stopped - "
-                                    f"{stim_reason}")
-                                break
-                            continue
-                        delta = pct_before - pct_after
-                        if delta <= 0.05:
-                            misses += 1
-                            if misses >= MISS_BUDGET:
-                                stim_reason = (f"no scroll progress for {misses} "
-                                               "consecutive batches "
-                                               f"(pct {pct_after:.3f} from "
-                                               f"{pct_before:.3f}); wheel contact "
-                                               "lost")
-                                log(f"  wheel batching {batches}: stopped - "
-                                    f"{stim_reason}")
-                                break
-                        else:
-                            misses = 0
-                            if batches % 10 == 0 or batches <= 3 or pct_after <= 5.0:
-                                est = (f" est-remaining~{pct_after / delta * 1.1:.0f}"
-                                       if delta > 0 else "")
-                                log(f"  wheel batch {batches}: pct {pct_before:.3f}"
-                                    f" -> {pct_after:.3f} (delta {delta:.3f}){est}")
-                        if not trigger_count and pct_after is not None and pct_after <= 0.9:
-                            # The reader is at the top; the settled at-top
-                            # gate needs the agreeing reads this loop already
-                            # stops to allow, so keep wheeling until the
-                            # trigger fires or the budgets exhaust.
-                            pass
-                    log(f"  prepending wheel batches: {batches} "
-                        f"(older-trigger events: {trigger_count})")
-                    if trigger_count:
-                        # The compensation is the final positioning act of the
-                        # prepend chain (nothing users see moves after it).
-                        # Bounded wait so the settle window starts on the
-                        # compensated position rather than mid-transition.
-                        comp_deadline = time.time() + 15.0
-                        comp_labels = ("older-compensate",
-                                       "older-compensate-skip",
-                                       "older-nogrow")
-                        comp_now = {}
-                        while time.time() < comp_deadline:
-                            comp_now = ui_trace_label_counts()
-                            if any(comp_now.get(l, 0) > 0 for l in comp_labels):
-                                break
-                            time.sleep(0.2)
-                        comp_now = ui_trace_label_counts()
-                        log("  prepend chain events observed: " + ", ".join(
-                            l for l in ("older-trigger", "older-capture",
-                                        "older-page", "older-prepend",
-                                        "older-compensate",
-                                        "older-compensate-skip",
-                                        "older-nogrow", "older-decline",
-                                        "older-nopage", "older-error",
-                                        "older-empty")
-                            if comp_now.get(l, 0) > 0))
-                    # Settle: two consecutive agreeing identity reads, spaced
-                    # enough that a mid-transition sample is not mistaken for
-                    # a settled one (the load, prepend and compensation are
-                    # asynchronous across lanes). The ScrollPattern percent is
-                    # in a frame the trace contradicts, so it only contributes
-                    # settle-stability, not a pass/fail comparison.
-                    deadline = time.time() + 45.0
-                    last_sig = None
-                    stable = None
-                    while time.time() < deadline:
-                        time.sleep(0.4)
-                        indices_now = paging_realized()
-                        state_now = paging_scroll_state()
-                        sig = (tuple(indices_now),
-                               state_now[1] if state_now else None,
-                               state_now[0] if state_now else None)
-                        if state_now is None:
-                            last_sig = sig
-                            continue
-                        if (last_sig is not None
-                                and sig[0] == last_sig[0]
-                                and abs((sig[1] or 0.0) - (last_sig[1] or 0.0)) <= 5.0):
-                            stable = sig
-                            break
-                        last_sig = sig
-                    # Project-identity guard, read after the settle window: the
-                    # identity reads below measure THIS project's prepended
-                    # state, and a bound-project change replaces the timeline
-                    # with another project's content. run11 measured how close
-                    # that sits to the verdict: the settle/FAIL read preceded
-                    # the leg's own return-to-alpha cleanup by only ~0.1-0.2 s
-                    # (the post-verdict `loadchat-begin gen=18` adopt of alpha
-                    # in f4r5-run11's trace IS that cleanup -- harness log:
-                    # "Switch Project: foreground established", "returned to
-                    # alpha after the paging probe: True", store-write DELETE
-                    # at run-clock 616.605 s, selection receipt for alpha
-                    # committed 2026-10-26T02:59:27.483Z). Had the settle
-                    # window needed two more polls, the reads below would have
-                    # measured alpha's timeline and the verdict would have
-                    # asserted a defect against content the criterion never
-                    # observed. ProjectHeading names the bound project, so a
-                    # change fail-closes to INCONCLUSIVE with the reason
-                    # recorded instead.
-                    guard_heading = find_by_aid(win, "ProjectHeading")
-                    guard_name = (guard_heading.element_info.name
-                                  if guard_heading is not None else None)
-                    if stable is None:
-                        paging_anchor_reason = ("the prepended state never settled into "
-                                                "two agreeing identity reads within 45 s")
-                        criterion_reading_anchor = "INCONCLUSIVE"
-                        log(f"  INCONCLUSIVE: {paging_anchor_reason}")
-                    elif not trigger_count:
-                        # The observation the criterion needs never happened.
-                        # The recorded state is a truth about the reader, but
-                        # the prepend-and-compensation behaviour was never
-                        # exercised, so a FAIL would assert a defect the
-                        # evidence does not show.
-                        paging_anchor_reason = (stim_reason or
-                                                ("wheel batching exhausted without "
-                                                 "the product's older-trigger event"))
-                        criterion_reading_anchor = "INCONCLUSIVE"
-                        log(f"  INCONCLUSIVE: no prepend was triggered during batching "
-                            f"({trigger_count} older-trigger events); {paging_anchor_reason}")
-                    elif paging_heading_baseline is None:
-                        paging_anchor_reason = (
-                            "the identity baseline was never captured at probe "
-                            "bind (ProjectHeading was not found then), so no "
-                            "bound-identity comparison can be made and a "
-                            "mid-run change cannot be excluded")
-                        criterion_reading_anchor = "INCONCLUSIVE"
-                        log(f"  INCONCLUSIVE: {paging_anchor_reason}")
-                    elif guard_name != paging_heading_baseline:
-                        paging_anchor_reason = (
-                            "the bound project changed during the settle window "
-                            f"(ProjectHeading reads {guard_name!r}, bound baseline "
-                            f"{paging_heading_baseline!r}); a mid-run selection replaced "
-                            "the prepended state, so no identity read afterwards "
-                            "measures this project")
-                        criterion_reading_anchor = "INCONCLUSIVE"
-                        log(f"  INCONCLUSIVE: {paging_anchor_reason}")
-                    else:
-                        indices_after, pct_after, vvs_after = stable
-                        topmost = indices_after[0] if indices_after else None
-                        log(f"  settled post-prepend: realized indices {indices_after[:8]}"
-                            f"{'...' if len(indices_after) > 8 else ''} "
-                            f"(topmost {topmost}, {len(indices_after)} cards), "
-                            f"scroll {pct_after:.1f} %, viewsize {vvs_after:.1f} %")
-                        # Physical-frame sample (evidence only; the verdict
-                        # chain below is unchanged by it). The realized-index
-                        # read cannot separate "genuinely 3 rows short" from
-                        # "correct with a 3-row realization buffer above the
-                        # viewport top" -- both show topmost 69 where the
-                        # oracle wants 72. ElementFromPoint over the band
-                        # reads what is physically under each pixel; pitch and
-                        # the fitted message at the band floor decide which
-                        # reading of the settled state is true.
+                        vvs_before = state_before[0] if state_before else None
+                        log(f"  pre-prepend viewsize {vvs_before} %, scroll "
+                            f"{state_before[1] if state_before else '?'} %")
+                        scroller_probe = find_by_aid(win, "HistoryScroller")
+                        # Two measured facts drive the design of this leg
+                        # (f4r5-run6 and f4r5-run7 traces):
+                        #
+                        # 1. The UIA Scroll-pattern set is rejected by the
+                        #    provider (COMError 0x80131509) while the pattern's
+                        #    reads work, so the stimulus must be the real wheel
+                        #    gesture the product's trigger declares.
+                        # 2. The scroller element's BoundingRectangle is NOT its
+                        #    viewport: every phase measured it far off-screen
+                        #    (run7: L-13326, T-12265, R540, B1693 with the window
+                        #    at 64,64) while its realized children report sane
+                        #    rects. A point taken from the scroller's own rect
+                        #    is off-screen, and in run7 120 wheel batches landed
+                        #    there with zero `view` events in the trace. The
+                        #    gesture is therefore aimed at a realized message
+                        #    card, and the oracle reads identities, not the
+                        #    scroller's rect.
                         try:
-                            phys = paging_physical_samples()
-                            if phys.get("reason"):
-                                log(f"  physical sample unavailable: {phys['reason']}")
-                            else:
-                                rows = {}
-                                for _y, _m in phys["samples"]:
-                                    rows.setdefault(_m, _y)
-                                pitch = phys["pitch_px"]
-                                fit = phys["msg_at_floor"]
-                                log("  physical rows (first y per msg): "
-                                    + ", ".join(f"m{m}@{y}" for m, y in
-                                                sorted(rows.items(), key=lambda kv: kv[1]))
-                                    + (f"; pitch={pitch:.3f} px/row, "
-                                       f"msg_at_floor={fit:.2f}"
-                                       if pitch else "; pitch undetermined"))
-                                if phys["dpi"]:
-                                    log(f"  physical dpi={phys['dpi']}")
-                                if phys["bottom"]:
-                                    log(f"  physical bottom reach: {phys['bottom']}")
-                                if phys["cover"]:
-                                    tops = sorted({d for _y, d in phys["cover"]})
-                                    ys = [y for y, _d in phys["cover"]]
-                                    log(f"  physical cover: {len(ys)} points "
-                                        f"y={min(ys)}..{max(ys)} topmost="
-                                        + "; ".join(tops[:3]))
-                                if phys.get("nomsg"):
-                                    whys = sorted({w for _y, w in phys["nomsg"]})
-                                    nys = [y for y, _w in phys["nomsg"]]
-                                    log(f"  physical reached-no-message: {len(nys)} points "
-                                        f"y={min(nys)}..{max(nys)} why="
-                                        + "; ".join(whys[:3]))
-                        except Exception as exc:
-                            log(f"  physical sample raised {type(exc).__name__}: {exc}")
-                        # ORACLE-ADEQUACY CORRECTION (§13, documented in
-                        # LOCAL-VALIDATION.md before this change). The old oracle
-                        # decided the top edge from the topmost REALIZED card index
-                        # (`topmost < 71 or 72 not in indices`). Under the confirmed
-                        # +-3-row realization buffer (run14), that clause measured
-                        # the buffer's top edge, not the physical top edge: it was
-                        # satisfiable ONLY when the visible row sat 2 BELOW the
-                        # anchor, making PASS unreachable at the one correct state
-                        # and reachable at a 2-row overshoot. The corrected oracle
-                        # reads the product's published top-visible ItemStatus (the
-                        # physical top edge, same instrument as the reconcile `r`)
-                        # and compares it to the anchored row's own submission_id.
-                        # The realized-index reading stays logged above as evidence
-                        # but no longer decides the verdict; `topmost is None` and
-                        # the uncompensated symptom (22 realized) still FAIL because
-                        # they are true product defects independent of the buffer.
-                        page_loaded = (comp_now.get("older-prepend", 0) > 0
-                                       and comp_now.get("older-page", 0) > 0)
-                        _exp_id, _exp_err = paging_expected_anchor_id()
-                        _tv = paging_read_top_visible()
-                        _tv_val = _tv.split("=", 1)[1] if "=" in _tv else _tv
-                        log(f"  top-visible published: {_tv!r} "
-                            f"(expected anchored submission_id {_exp_id!r}; "
-                            f"realized topmost {topmost} is buffer evidence only)")
-                        if topmost is None:
-                            criterion_reading_anchor = "FAIL"
-                            log("  FAIL: no realized message cards after the settle window "
-                                "(the timeline realized nothing at the anchored position).")
-                        elif 22 in indices_after:
-                            criterion_reading_anchor = "FAIL"
-                            log(f"  FAIL: the uncompensated symptom is present: the "
-                                f"prepended rows are realized at the reading position "
-                                f"(message 22 realized; topmost {topmost}). This is the "
-                                "reader losing the content that was at the top edge.")
-                        elif _exp_err:
-                            criterion_reading_anchor = "INCONCLUSIVE"
-                            paging_anchor_reason = (
-                                "the anchored submission_id could not be resolved "
-                                f"from the trace/store: {_exp_err}")
-                            log(f"  INCONCLUSIVE: {paging_anchor_reason}")
-                        elif (not _tv or _tv_val in ("pending", "unknown")
-                                or _tv.startswith("<read-error")):
-                            criterion_reading_anchor = "INCONCLUSIVE"
-                            paging_anchor_reason = (
-                                "the product's published top-visible ItemStatus was "
-                                f"{_tv!r}, so the physical top edge was never observed "
-                                "(pending at timeout, an unknown row, or a read "
-                                "failure) and no identity claim can be made")
-                            log(f"  INCONCLUSIVE: {paging_anchor_reason}")
-                        elif _tv_val != _exp_id:
-                            criterion_reading_anchor = "FAIL"
-                            log(f"  FAIL: the anchored top-edge identity did not hold: "
-                                f"published top-visible is {_tv_val!r}, expected the "
-                                f"anchored row {_exp_id!r} (realized topmost was "
-                                f"{topmost}; the physical top edge must read the "
-                                "anchored row, not a buffer row).")
-                        elif not page_loaded:
-                            criterion_reading_anchor = "FAIL"
-                            log("  FAIL: the trace recorded no older-page prepend chain "
-                                "(older-prepend/older-page missing), so the identity read "
-                                "cannot certify a prepend whose load was never recorded.")
-                        elif comp_now.get("older-trigger", 0) != trigger_count:
-                            criterion_reading_anchor = "FAIL"
-                            log(f"  FAIL: a second prepend chain started during the settle "
-                                f"window ({trigger_count} -> "
-                                f"{comp_now.get('older-trigger', 0)} older-trigger events).")
-                        else:
-                            # Hold read: the compensated position must persist,
-                            # with no oscillation and no additional prepend pass.
-                            time.sleep(1.2)
-                            hold_indices = paging_realized()
-                            hold_state = paging_scroll_state()
-                            hold_counts = ui_trace_label_counts()
-                            hold_topmost = hold_indices[0] if hold_indices else None
-                            hold_tv = paging_read_top_visible()
-                            hold_tv_val = (hold_tv.split("=", 1)[1]
-                                           if "=" in hold_tv else hold_tv)
-                            log(f"  hold read: realized indices {hold_indices[:8]}"
-                                f"{'...' if len(hold_indices) > 8 else ''} "
-                                f"(topmost {hold_topmost}), scroll "
-                                f"{hold_state[1] if hold_state else '?'} %, "
-                                f"top-visible {hold_tv!r}")
-                            # Same identity guard at the hold read: the hold
-                            # must measure this project's timeline, not the
-                            # timeline of a project a mid-run selection bound.
-                            hold_heading = find_by_aid(win, "ProjectHeading")
-                            hold_name = (hold_heading.element_info.name
-                                         if hold_heading is not None else None)
-                            if paging_heading_baseline is None:
-                                paging_anchor_reason = (
-                                    "the identity baseline was never captured at "
-                                    "probe bind, so the hold read's bound identity "
-                                    "cannot be compared")
-                                criterion_reading_anchor = "INCONCLUSIVE"
-                                log(f"  INCONCLUSIVE: {paging_anchor_reason}")
-                            elif hold_name != paging_heading_baseline:
-                                paging_anchor_reason = (
-                                    "the bound project changed during the hold "
-                                    f"read (ProjectHeading reads {hold_name!r}, "
-                                    f"bound baseline {paging_heading_baseline!r}); "
-                                    "the hold would measure another project's timeline")
-                                criterion_reading_anchor = "INCONCLUSIVE"
-                                log(f"  INCONCLUSIVE: {paging_anchor_reason}")
-                            elif (hold_tv_val == _exp_id
-                                    and hold_counts.get("older-trigger", 0) == trigger_count
-                                    and 22 not in hold_indices):
-                                log("PASS: Subcase A: the reading anchor is preserved across the "
-                                    "older-page prepend (the published physical top edge "
-                                    f"read the anchored row {_exp_id!r} before and after "
-                                    f"the hold, the prepended row 22 was never realized, "
-                                    f"the older page loaded "
-                                    f"({comp_now.get('older-page', 0)} older-page events), "
-                                    "and no second prepend chain started).")
-                                criterion_reading_anchor = "PASS"
-
-                                # -------------------------------------------------------------
-                                # Subcase B: Reader intent preservation during held older-page load
-                                # -------------------------------------------------------------
-                                log("\n  --- Subcase B: Reader intent preservation during held older-page load ---")
-                                def older_event_name(base):
-                                    if not older_hold_token or older_hold_token == "1":
-                                        return f"Local\\Mayasaba_OlderPage_{base}"
-                                    return f"Local\\Mayasaba_OlderPage_{older_hold_token}_{base}"
-
-                                h_older_hold = kernel32.CreateEventW(None, True, True, older_event_name("HoldRequested"))
-                                h_older_inflight = kernel32.CreateEventW(None, True, False, older_event_name("InFlight"))
-                                h_older_release = kernel32.CreateEventW(None, True, False, older_event_name("Release"))
-                                h_older_released = kernel32.CreateEventW(None, True, False, older_event_name("Released"))
-
+                            _r = scroller_probe.rectangle()
+                            log(f"  scroller UIA rect {_r.left},{_r.top}..{_r.right},{_r.bottom} "
+                                "(viewport-unreliable; not used for aiming)")
+                        except Exception:
+                            pass
+                        heading = find_by_aid(win, "ProjectHeading")
+                        header_floor = (heading.rectangle().bottom + 16
+                                        if heading is not None
+                                        else win.rectangle().top + 300)
+                        composer = find_by_aid(win, "ComposerBox")
+                        composer_ceiling = (composer.rectangle().top - 12
+                                            if composer is not None
+                                            else win.rectangle().bottom - 240)
+                        trace_path = os.path.join(os.path.dirname(STORE_PATH),
+                                                  "ui-trace.log")
+    
+                        def ui_trace_has_lifecycle_truncation():
+                            try:
+                                with open(trace_path, "r", encoding="utf-8", errors="replace") as fh:
+                                    for line in fh:
+                                        if "trace-lifecycle-truncated" in line:
+                                            return True
+                            except OSError:
+                                pass
+                            return False
+    
+                        def ui_trace_label_counts():
+                            counts = {}
+                            try:
+                                with open(trace_path, "r", encoding="utf-8",
+                                          errors="replace") as fh:
+                                    for line in fh:
+                                        if not line.startswith("t+"):
+                                            continue
+                                        parts = line.split(None, 2)
+                                        if len(parts) >= 2:
+                                            counts[parts[1]] = counts.get(parts[1], 0) + 1
+                                        elif len(parts) == 1:
+                                            counts[parts[0]] = counts.get(parts[0], 0) + 1
+                            except OSError:
+                                pass
+                            return counts
+    
+                        def paging_realized():
+                            """Sorted indices of the realized 'Paging message N' bodies.
+    
+                            Identity-based: the scroller's own rect is not used
+                            because it is not the viewport (comment at the top of
+                            this leg), and the ScrollPattern percent frame is not
+                            the extent frame the trace measures (run7: viewsize
+                            0.58 % where extent/frame arithmetic says ~10 %), so
+                            identity is the only basis both readable and true.
+                            """
+                            indices = []
+                            for node in win.descendants():
+                                name = node.element_info.name or ""
+                                if name.startswith("Paging message "):
+                                    tail = name[len("Paging message "):].split(".")[0]
+                                    try:
+                                        indices.append(int(tail))
+                                    except ValueError:
+                                        pass
+                            return sorted(set(indices))
+    
+                        def paging_wheel_target():
+                            """Verified wheel point inside the chat band.
+    
+                            MEASURED BASIS (f4r5-run9-probe/wheel-focus-probe.py,
+                            against the live app). The earlier versions aimed at
+                            the bottom-most realized card's UIA rect; the probe
+                            delivered the refutation: ElementFromPoint at the
+                            card's own rect center named SearchMessagesButton,
+                            not the card -- the realized scrolled-subtree rects
+                            do not correspond to their physical screen locations
+                            in this application (the same artifact class as
+                            HistoryScroller's BoundingRectangle, run7), so six
+                            such batches in run8 landed on the header/tool row
+                            and produced zero view events. Realized-card rects
+                            must not aim a wheel.
+    
+                            The basis is the band between the two rect sources
+                            the probe measured as truthful: ProjectHeading
+                            (fixed header) and ComposerBox (composer). run9
+                            added the second measured constraint: the notice
+                            banner and the CLI-problem-cards block overlay the
+                            TOP portion of that band (run9's preflight
+                            ancestry: 'Chat, folder selection...' notice text,
+                            then 'Claude Code CLI needs a decision: CHECKING',
+                            then ChatProblemCardsScroller), so a fixed band
+                            middle can be covered by overlays. This function
+                            therefore scans candidate y positions from just
+                            above the composer upward and returns the first
+                            point whose ElementFromPoint ancestry reaches
+                            HistoryScroller (the contact the probe verified
+                            gives 31 view events and moves the ScrollPattern
+                            percent). The point is recomputed per batch so
+                            layout movement cannot desync the aim. A truthfully
+                            unverified aim returns None with the reason
+                            recorded in aim_reason, and the caller stops the
+                            stimulus instead of wheeling blind.
+                            """
+                            winrect = win.rectangle()
+                            heading = find_by_aid(win, "ProjectHeading")
+                            composer = find_by_aid(win, "ComposerBox")
+                            if heading is None or composer is None:
+                                aim_reason.append("project header/composer not"
+                                                  " found")
+                                return None
+                            try:
+                                hrect = heading.rectangle()
+                                crect = composer.rectangle()
+                            except Exception as exc:
+                                aim_reason.append(f"header/composer rect failed: "
+                                                  f"{type(exc).__name__}")
+                                return None
+                            floor_y = hrect.bottom + 16
+                            ceil_y = crect.top - 12
+                            if ceil_y - floor_y < 40:
+                                aim_reason.append(f"band {floor_y}..{ceil_y} too"
+                                                  " small")
+                                return None
+                            cx = (winrect.left + winrect.right) // 2
+                            candidates = []
+                            y = ceil_y - 24
+                            while y > floor_y + 12:
+                                candidates.append(y)
+                                y -= 24
+                            if not candidates:
+                                candidates = [floor_y + 12]
+                            from pywinauto.uia_defines import IUIA
+                            import ctypes.wintypes as _wt
+                            uia = IUIA().iuia
+                            walker = uia.ControlViewWalker
+                            last_reason = ""
+                            for cy in candidates:
                                 try:
-                                    sub_b_trigger_count = ui_trace_label_counts().get("older-trigger", 0)
-                                    sub_b_abort_count = ui_trace_label_counts().get("older-abort-reader", 0)
-                                    sub_b_prepend_count = ui_trace_label_counts().get("older-prepend", 0)
-
-                                    log(f"  subcase B setup: armed HoldRequested, trigger={sub_b_trigger_count}, abort={sub_b_abort_count}")
-                                    b_batches = 0
-                                    target_fail_reason = ""
-                                    while ui_trace_label_counts().get("older-trigger", 0) == sub_b_trigger_count and b_batches < 500:
-                                        target = paging_wheel_target()
-                                        if target is None:
-                                            target_fail_reason = ("; ".join(aim_reason[-2:]) if aim_reason
-                                                                  else "no candidate band point verified ancestry to HistoryScroller")
-                                            log(f"  wheel batching stopped at batch {b_batches}: {target_fail_reason}")
-                                            break
-                                        send_wheel_at_point(win, target[0], target[1], 120, steps=3, pause=0.25)
-                                        b_batches += 1
-                                        time.sleep(0.35)
-
-                                    log(f"  subcase B stimulus: delivered {b_batches} batches upward, awaiting InFlight...")
-                                    if ui_trace_label_counts().get("older-trigger", 0) == sub_b_trigger_count:
-                                        if target_fail_reason:
-                                            log(f"  INCONCLUSIVE: Subcase B: wheel targeting could not verify chat scroller contact ({target_fail_reason})")
-                                            criterion_reading_anchor = "INCONCLUSIVE"
-                                        else:
-                                            log(f"  INCONCLUSIVE: Subcase B: older-trigger was not emitted within batch budget ({b_batches} batches delivered)")
-                                            criterion_reading_anchor = "INCONCLUSIVE"
-                                    else:
-                                        wait_res = kernel32.WaitForSingleObject(h_older_inflight, 10000)
-                                        if wait_res != 0:
-                                            log(f"  FAIL: Subcase B: InFlight was not signaled within 10s (wait result: {wait_res})")
-                                            criterion_reading_anchor = "FAIL"
-                                        else:
-                                            log("  subcase B: InFlight signaled! Older-page query is held before UI adoption.")
-                                            state_before_gesture = paging_scroll_state()
-                                            log(f"  subcase B: scroll state before gesture: {state_before_gesture}")
-                                            if state_before_gesture is None:
-                                                log("  INCONCLUSIVE: Subcase B: baseline scroll state could not be read")
+                                    ele = uia.ElementFromPoint(
+                                        _wt.POINT(cx, cy))
+                                except Exception as exc:
+                                    last_reason = (f"ElementFromPoint at "
+                                                   f"({cx},{cy}) raised "
+                                                   f"{type(exc).__name__}")
+                                    continue
+                                reached = False
+                                chain = []
+                                walk_ok = True
+                                for _ in range(10):
+                                    if ele is None:
+                                        walk_ok = False
+                                        break
+                                    aid = ""
+                                    name = ""
+                                    try:
+                                        aid = ele.CurrentAutomationId or ""
+                                    except Exception:
+                                        pass
+                                    try:
+                                        name = (ele.CurrentName or "")[:48]
+                                    except Exception:
+                                        pass
+                                    chain.append(f"aid='{aid or '-'}'"
+                                                 + (f"/'{name}'" if name else ""))
+                                    if aid == "HistoryScroller":
+                                        reached = True
+                                        break
+                                    try:
+                                        ele = walker.GetParentElement(ele)
+                                    except Exception:
+                                        walk_ok = False
+                                        break
+                                if reached:
+                                    if not aim_logged[0]:
+                                        aim_logged[0] = True
+                                        log(f"  aim verified at ({cx},{cy}): "
+                                            "ancestry " + " -> ".join(chain))
+                                    return (cx, cy)
+                                if walk_ok and not last_reason:
+                                    # A stop before the scroller was read, not
+                                    # an error: the topmost elements are the
+                                    # overlay cards/notice on top of the band.
+                                    last_reason = (f"topmost at ({cx},{cy}): "
+                                                   + "; ".join(chain[:3]))
+                            aim_reason.append(last_reason or
+                                              "no candidate point in the chat "
+                                              "band verified as the history "
+                                              "scroller")
+                            return None
+    
+                        aim_reason = []
+                        aim_logged = [False]
+                        batches = 0
+                        misses = 0
+                        stim_reason = ""
+                        trigger_count = ui_trace_label_counts().get("older-trigger", 0)
+                        # CONTACT BASIS CORRECTION (f4r5-run10). run10 verified the
+                        # aim and delivered all 80 batches with confirmed
+                        # foreground, streaming view events throughout -- yet the
+                        # leg stopped with "no view-change events for 6 consecutive
+                        # batches". The trace went silent because the product's
+                        # UiTraceEvent line cap (then 3000) was exhausted by the
+                        # inertia streaming itself (each 3-notch batch at
+                        # pause=0.02 nets a measured 14.0 px and emits dozens of
+                        # intermediate view lines). A file the diagnostic cap had
+                        # finished writing is not a statement about the window.
+                        # Contact and progress are therefore read from the
+                        # truthful, cheap ScrollPattern percent
+                        # (paging_scroll_state(), the same read the probe
+                        # validated), with the trace kept as recorded evidence and
+                        # the trace cap itself raised on the product side
+                        # (MainWindow.xaml.cpp) so the older-trigger chain remains
+                        # observable for the whole journey.
+                        #
+                        # JOURNEY BASIS (f4r5-run10 measured unit): one 3-notch
+                        # burst at pause=0.02 nets 14.0 px, ~330 batches for the
+                        # ~4530 px bottom-to-top journey. The notches are spaced
+                        # (pause=0.25) so each notch's inertia completes instead
+                        # of replacing the previous animation, and each batch
+                        # settles 0.35 s so the at-top gate sees agreeing settled
+                        # reads. The remaining-batches estimate is logged per
+                        # batch from the measured deltas; the cap is an 800-batch
+                        # backstop, not the plan.
+                        BATCH_CAP = 800
+                        MISS_BUDGET = 8
+                        while trigger_count == 0 and batches < BATCH_CAP:
+                            target = paging_wheel_target()
+                            t_outcome, t_reason = classify_subcase_b_targeting_outcome(
+                                target,
+                                target_fail_reason=("band aim not verified: " + "; ".join(aim_reason[-2:])
+                                                    if aim_reason else "no verified band point")
+                            )
+                            if t_outcome != "CONTINUE":
+                                stim_reason = t_reason
+                                log(f"  wheel batching {batches}: stopped before "
+                                    f"any wheel at batch {batches + 1} - {stim_reason}")
+                                break
+                            batches += 1
+                            state_before = paging_scroll_state()
+                            if not send_wheel_at_point(win, target[0], target[1], 120,
+                                                       steps=3, pause=0.25):
+                                stim_reason = ("foreground could not be established; "
+                                               "stimulus stopped")
+                                log(f"  wheel batching {batches}: stopped - {stim_reason}")
+                                break
+                            time.sleep(0.35)
+                            counts = ui_trace_label_counts()
+                            trigger_count = counts.get("older-trigger", 0)
+                            state_after = paging_scroll_state()
+                            pct_before = state_before[1] if state_before else None
+                            pct_after = state_after[1] if state_after else None
+                            if pct_before is None or pct_after is None:
+                                misses += 1
+                                if misses >= MISS_BUDGET:
+                                    stim_reason = (f"the scroller's ScrollPattern "
+                                                   f"percent could not be read for "
+                                                   f"{misses} consecutive batches; "
+                                                   "contact unverifiable")
+                                    log(f"  wheel batching {batches}: stopped - "
+                                        f"{stim_reason}")
+                                    break
+                                continue
+                            delta = pct_before - pct_after
+                            if delta <= 0.05:
+                                misses += 1
+                                if misses >= MISS_BUDGET:
+                                    stim_reason = (f"no scroll progress for {misses} "
+                                                   "consecutive batches "
+                                                   f"(pct {pct_after:.3f} from "
+                                                   f"{pct_before:.3f}); wheel contact "
+                                                   "lost")
+                                    log(f"  wheel batching {batches}: stopped - "
+                                        f"{stim_reason}")
+                                    break
+                            else:
+                                misses = 0
+                                if batches % 10 == 0 or batches <= 3 or pct_after <= 5.0:
+                                    est = (f" est-remaining~{pct_after / delta * 1.1:.0f}"
+                                           if delta > 0 else "")
+                                    log(f"  wheel batch {batches}: pct {pct_before:.3f}"
+                                        f" -> {pct_after:.3f} (delta {delta:.3f}){est}")
+                            if not trigger_count and pct_after is not None and pct_after <= 0.9:
+                                # The reader is at the top; the settled at-top
+                                # gate needs the agreeing reads this loop already
+                                # stops to allow, so keep wheeling until the
+                                # trigger fires or the budgets exhaust.
+                                pass
+                        log(f"  prepending wheel batches: {batches} "
+                            f"(older-trigger events: {trigger_count})")
+                        if trigger_count:
+                            # The compensation is the final positioning act of the
+                            # prepend chain (nothing users see moves after it).
+                            # Bounded wait so the settle window starts on the
+                            # compensated position rather than mid-transition.
+                            comp_deadline = time.time() + 15.0
+                            comp_labels = ("older-compensate",
+                                           "older-compensate-skip",
+                                           "older-nogrow")
+                            comp_now = {}
+                            while time.time() < comp_deadline:
+                                comp_now = ui_trace_label_counts()
+                                if any(comp_now.get(l, 0) > 0 for l in comp_labels):
+                                    break
+                                time.sleep(0.2)
+                            comp_now = ui_trace_label_counts()
+                            log("  prepend chain events observed: " + ", ".join(
+                                l for l in ("older-trigger", "older-capture",
+                                            "older-page", "older-prepend",
+                                            "older-compensate",
+                                            "older-compensate-skip",
+                                            "older-nogrow", "older-decline",
+                                            "older-nopage", "older-error",
+                                            "older-empty")
+                                if comp_now.get(l, 0) > 0))
+                        # Settle: two consecutive agreeing identity reads, spaced
+                        # enough that a mid-transition sample is not mistaken for
+                        # a settled one (the load, prepend and compensation are
+                        # asynchronous across lanes). The ScrollPattern percent is
+                        # in a frame the trace contradicts, so it only contributes
+                        # settle-stability, not a pass/fail comparison.
+                        deadline = time.time() + 45.0
+                        last_sig = None
+                        stable = None
+                        while time.time() < deadline:
+                            time.sleep(0.4)
+                            indices_now = paging_realized()
+                            state_now = paging_scroll_state()
+                            sig = (tuple(indices_now),
+                                   state_now[1] if state_now else None,
+                                   state_now[0] if state_now else None)
+                            if state_now is None:
+                                last_sig = sig
+                                continue
+                            if (last_sig is not None
+                                    and sig[0] == last_sig[0]
+                                    and abs((sig[1] or 0.0) - (last_sig[1] or 0.0)) <= 5.0):
+                                stable = sig
+                                break
+                            last_sig = sig
+                        # Project-identity guard, read after the settle window: the
+                        # identity reads below measure THIS project's prepended
+                        # state, and a bound-project change replaces the timeline
+                        # with another project's content. run11 measured how close
+                        # that sits to the verdict: the settle/FAIL read preceded
+                        # the leg's own return-to-alpha cleanup by only ~0.1-0.2 s
+                        # (the post-verdict `loadchat-begin gen=18` adopt of alpha
+                        # in f4r5-run11's trace IS that cleanup -- harness log:
+                        # "Switch Project: foreground established", "returned to
+                        # alpha after the paging probe: True", store-write DELETE
+                        # at run-clock 616.605 s, selection receipt for alpha
+                        # committed 2026-10-26T02:59:27.483Z). Had the settle
+                        # window needed two more polls, the reads below would have
+                        # measured alpha's timeline and the verdict would have
+                        # asserted a defect against content the criterion never
+                        # observed. ProjectHeading names the bound project, so a
+                        # change fail-closes to INCONCLUSIVE with the reason
+                        # recorded instead.
+                        guard_heading = find_by_aid(win, "ProjectHeading")
+                        guard_name = (guard_heading.element_info.name
+                                      if guard_heading is not None else None)
+                        if stable is None:
+                            paging_anchor_reason = ("the prepended state never settled into "
+                                                    "two agreeing identity reads within 45 s")
+                            criterion_reading_anchor = "INCONCLUSIVE"
+                            log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                        elif not trigger_count:
+                            # The observation the criterion needs never happened.
+                            # The recorded state is a truth about the reader, but
+                            # the prepend-and-compensation behaviour was never
+                            # exercised, so a FAIL would assert a defect the
+                            # evidence does not show.
+                            paging_anchor_reason = (stim_reason or
+                                                    ("wheel batching exhausted without "
+                                                     "the product's older-trigger event"))
+                            criterion_reading_anchor = "INCONCLUSIVE"
+                            log(f"  INCONCLUSIVE: no prepend was triggered during batching "
+                                f"({trigger_count} older-trigger events); {paging_anchor_reason}")
+                        elif paging_heading_baseline is None:
+                            paging_anchor_reason = (
+                                "the identity baseline was never captured at probe "
+                                "bind (ProjectHeading was not found then), so no "
+                                "bound-identity comparison can be made and a "
+                                "mid-run change cannot be excluded")
+                            criterion_reading_anchor = "INCONCLUSIVE"
+                            log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                        elif guard_name != paging_heading_baseline:
+                            paging_anchor_reason = (
+                                "the bound project changed during the settle window "
+                                f"(ProjectHeading reads {guard_name!r}, bound baseline "
+                                f"{paging_heading_baseline!r}); a mid-run selection replaced "
+                                "the prepended state, so no identity read afterwards "
+                                "measures this project")
+                            criterion_reading_anchor = "INCONCLUSIVE"
+                            log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                        else:
+                            indices_after, pct_after, vvs_after = stable
+                            topmost = indices_after[0] if indices_after else None
+                            log(f"  settled post-prepend: realized indices {indices_after[:8]}"
+                                f"{'...' if len(indices_after) > 8 else ''} "
+                                f"(topmost {topmost}, {len(indices_after)} cards), "
+                                f"scroll {pct_after:.1f} %, viewsize {vvs_after:.1f} %")
+                            # Physical-frame sample (evidence only; the verdict
+                            # chain below is unchanged by it). The realized-index
+                            # read cannot separate "genuinely 3 rows short" from
+                            # "correct with a 3-row realization buffer above the
+                            # viewport top" -- both show topmost 69 where the
+                            # oracle wants 72. ElementFromPoint over the band
+                            # reads what is physically under each pixel; pitch and
+                            # the fitted message at the band floor decide which
+                            # reading of the settled state is true.
+                            try:
+                                phys = paging_physical_samples()
+                                if phys.get("reason"):
+                                    log(f"  physical sample unavailable: {phys['reason']}")
+                                else:
+                                    rows = {}
+                                    for _y, _m in phys["samples"]:
+                                        rows.setdefault(_m, _y)
+                                    pitch = phys["pitch_px"]
+                                    fit = phys["msg_at_floor"]
+                                    log("  physical rows (first y per msg): "
+                                        + ", ".join(f"m{m}@{y}" for m, y in
+                                                    sorted(rows.items(), key=lambda kv: kv[1]))
+                                        + (f"; pitch={pitch:.3f} px/row, "
+                                           f"msg_at_floor={fit:.2f}"
+                                           if pitch else "; pitch undetermined"))
+                                    if phys["dpi"]:
+                                        log(f"  physical dpi={phys['dpi']}")
+                                    if phys["bottom"]:
+                                        log(f"  physical bottom reach: {phys['bottom']}")
+                                    if phys["cover"]:
+                                        tops = sorted({d for _y, d in phys["cover"]})
+                                        ys = [y for y, _d in phys["cover"]]
+                                        log(f"  physical cover: {len(ys)} points "
+                                            f"y={min(ys)}..{max(ys)} topmost="
+                                            + "; ".join(tops[:3]))
+                                    if phys.get("nomsg"):
+                                        whys = sorted({w for _y, w in phys["nomsg"]})
+                                        nys = [y for y, _w in phys["nomsg"]]
+                                        log(f"  physical reached-no-message: {len(nys)} points "
+                                            f"y={min(nys)}..{max(nys)} why="
+                                            + "; ".join(whys[:3]))
+                            except Exception as exc:
+                                log(f"  physical sample raised {type(exc).__name__}: {exc}")
+                            # ORACLE-ADEQUACY CORRECTION (§13, documented in
+                            # LOCAL-VALIDATION.md before this change). The old oracle
+                            # decided the top edge from the topmost REALIZED card index
+                            # (`topmost < 71 or 72 not in indices`). Under the confirmed
+                            # +-3-row realization buffer (run14), that clause measured
+                            # the buffer's top edge, not the physical top edge: it was
+                            # satisfiable ONLY when the visible row sat 2 BELOW the
+                            # anchor, making PASS unreachable at the one correct state
+                            # and reachable at a 2-row overshoot. The corrected oracle
+                            # reads the product's published top-visible ItemStatus (the
+                            # physical top edge, same instrument as the reconcile `r`)
+                            # and compares it to the anchored row's own submission_id.
+                            # The realized-index reading stays logged above as evidence
+                            # but no longer decides the verdict; `topmost is None` and
+                            # the uncompensated symptom (22 realized) still FAIL because
+                            # they are true product defects independent of the buffer.
+                            page_loaded = (comp_now.get("older-prepend", 0) > 0
+                                           and comp_now.get("older-page", 0) > 0)
+                            _exp_id, _exp_err = paging_expected_anchor_id()
+                            _tv = paging_read_top_visible()
+                            _tv_val = _tv.split("=", 1)[1] if "=" in _tv else _tv
+                            log(f"  top-visible published: {_tv!r} "
+                                f"(expected anchored submission_id {_exp_id!r}; "
+                                f"realized topmost {topmost} is buffer evidence only)")
+                            if topmost is None:
+                                criterion_reading_anchor = "FAIL"
+                                log("  FAIL: no realized message cards after the settle window "
+                                    "(the timeline realized nothing at the anchored position).")
+                            elif 22 in indices_after:
+                                criterion_reading_anchor = "FAIL"
+                                log(f"  FAIL: the uncompensated symptom is present: the "
+                                    f"prepended rows are realized at the reading position "
+                                    f"(message 22 realized; topmost {topmost}). This is the "
+                                    "reader losing the content that was at the top edge.")
+                            elif _exp_err:
+                                criterion_reading_anchor = "INCONCLUSIVE"
+                                paging_anchor_reason = (
+                                    "the anchored submission_id could not be resolved "
+                                    f"from the trace/store: {_exp_err}")
+                                log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                            elif (not _tv or _tv_val in ("pending", "unknown")
+                                    or _tv.startswith("<read-error")):
+                                criterion_reading_anchor = "INCONCLUSIVE"
+                                paging_anchor_reason = (
+                                    "the product's published top-visible ItemStatus was "
+                                    f"{_tv!r}, so the physical top edge was never observed "
+                                    "(pending at timeout, an unknown row, or a read "
+                                    "failure) and no identity claim can be made")
+                                log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                            elif _tv_val != _exp_id:
+                                criterion_reading_anchor = "FAIL"
+                                log(f"  FAIL: the anchored top-edge identity did not hold: "
+                                    f"published top-visible is {_tv_val!r}, expected the "
+                                    f"anchored row {_exp_id!r} (realized topmost was "
+                                    f"{topmost}; the physical top edge must read the "
+                                    "anchored row, not a buffer row).")
+                            elif not page_loaded:
+                                criterion_reading_anchor = "FAIL"
+                                log("  FAIL: the trace recorded no older-page prepend chain "
+                                    "(older-prepend/older-page missing), so the identity read "
+                                    "cannot certify a prepend whose load was never recorded.")
+                            elif comp_now.get("older-trigger", 0) != trigger_count:
+                                criterion_reading_anchor = "FAIL"
+                                log(f"  FAIL: a second prepend chain started during the settle "
+                                    f"window ({trigger_count} -> "
+                                    f"{comp_now.get('older-trigger', 0)} older-trigger events).")
+                            else:
+                                # Hold read: the compensated position must persist,
+                                # with no oscillation and no additional prepend pass.
+                                time.sleep(1.2)
+                                hold_indices = paging_realized()
+                                hold_state = paging_scroll_state()
+                                hold_counts = ui_trace_label_counts()
+                                hold_topmost = hold_indices[0] if hold_indices else None
+                                hold_tv = paging_read_top_visible()
+                                hold_tv_val = (hold_tv.split("=", 1)[1]
+                                               if "=" in hold_tv else hold_tv)
+                                log(f"  hold read: realized indices {hold_indices[:8]}"
+                                    f"{'...' if len(hold_indices) > 8 else ''} "
+                                    f"(topmost {hold_topmost}), scroll "
+                                    f"{hold_state[1] if hold_state else '?'} %, "
+                                    f"top-visible {hold_tv!r}")
+                                # Same identity guard at the hold read: the hold
+                                # must measure this project's timeline, not the
+                                # timeline of a project a mid-run selection bound.
+                                hold_heading = find_by_aid(win, "ProjectHeading")
+                                hold_name = (hold_heading.element_info.name
+                                             if hold_heading is not None else None)
+                                if paging_heading_baseline is None:
+                                    paging_anchor_reason = (
+                                        "the identity baseline was never captured at "
+                                        "probe bind, so the hold read's bound identity "
+                                        "cannot be compared")
+                                    criterion_reading_anchor = "INCONCLUSIVE"
+                                    log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                                elif hold_name != paging_heading_baseline:
+                                    paging_anchor_reason = (
+                                        "the bound project changed during the hold "
+                                        f"read (ProjectHeading reads {hold_name!r}, "
+                                        f"bound baseline {paging_heading_baseline!r}); "
+                                        "the hold would measure another project's timeline")
+                                    criterion_reading_anchor = "INCONCLUSIVE"
+                                    log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                                elif (hold_tv_val == _exp_id
+                                        and hold_counts.get("older-trigger", 0) == trigger_count
+                                        and 22 not in hold_indices):
+                                    log("PASS: Subcase A: the reading anchor is preserved across the "
+                                        "older-page prepend (the published physical top edge "
+                                        f"read the anchored row {_exp_id!r} before and after "
+                                        f"the hold, the prepended row 22 was never realized, "
+                                        f"the older page loaded "
+                                        f"({comp_now.get('older-page', 0)} older-page events), "
+                                        "and no second prepend chain started).")
+                                    criterion_reading_anchor = "PASS"
+    
+                                    # -------------------------------------------------------------
+                                    # Subcase B: Reader intent preservation during held older-page load
+                                    # -------------------------------------------------------------
+                                    log("\n  --- Subcase B: Reader intent preservation during held older-page load ---")
+                                    def older_event_name(base):
+                                        if not older_hold_token or older_hold_token == "1":
+                                            return f"Local\\Mayasaba_OlderPage_{base}"
+                                        return f"Local\\Mayasaba_OlderPage_{older_hold_token}_{base}"
+    
+                                    h_older_hold = kernel32.CreateEventW(None, True, True, older_event_name("HoldRequested"))
+                                    h_older_inflight = kernel32.CreateEventW(None, True, False, older_event_name("InFlight"))
+                                    h_older_release = kernel32.CreateEventW(None, True, False, older_event_name("Release"))
+                                    h_older_released = kernel32.CreateEventW(None, True, False, older_event_name("Released"))
+    
+                                    try:
+                                        sub_b_trigger_count = ui_trace_label_counts().get("older-trigger", 0)
+                                        sub_b_abort_count = ui_trace_label_counts().get("older-abort-reader", 0)
+                                        sub_b_prepend_count = ui_trace_label_counts().get("older-prepend", 0)
+    
+                                        log(f"  subcase B setup: armed HoldRequested, trigger={sub_b_trigger_count}, abort={sub_b_abort_count}")
+                                        b_batches = 0
+                                        target_fail_reason = ""
+                                        while ui_trace_label_counts().get("older-trigger", 0) == sub_b_trigger_count and b_batches < 500:
+                                            target = paging_wheel_target()
+                                            if target is None:
+                                                target_fail_reason = ("; ".join(aim_reason[-2:]) if aim_reason
+                                                                      else "no candidate band point verified ancestry to HistoryScroller")
+                                                log(f"  wheel batching stopped at batch {b_batches}: {target_fail_reason}")
+                                                break
+                                            send_wheel_at_point(win, target[0], target[1], 120, steps=3, pause=0.25)
+                                            b_batches += 1
+                                            time.sleep(0.35)
+    
+                                        log(f"  subcase B stimulus: delivered {b_batches} batches upward, awaiting InFlight...")
+                                        if ui_trace_label_counts().get("older-trigger", 0) == sub_b_trigger_count:
+                                            if target_fail_reason:
+                                                log(f"  INCONCLUSIVE: Subcase B: wheel targeting could not verify chat scroller contact ({target_fail_reason})")
                                                 criterion_reading_anchor = "INCONCLUSIVE"
                                             else:
-                                                target = paging_wheel_target()
-                                                if target is None:
-                                                    aim_err = "; ".join(aim_reason[-2:]) if aim_reason else "wheel target not verified"
-                                                    log(f"  INCONCLUSIVE: Subcase B: reader wheel target could not be verified ({aim_err})")
+                                                log(f"  INCONCLUSIVE: Subcase B: older-trigger was not emitted within batch budget ({b_batches} batches delivered)")
+                                                criterion_reading_anchor = "INCONCLUSIVE"
+                                        else:
+                                            wait_res = kernel32.WaitForSingleObject(h_older_inflight, 10000)
+                                            if wait_res != 0:
+                                                log(f"  FAIL: Subcase B: InFlight was not signaled within 10s (wait result: {wait_res})")
+                                                criterion_reading_anchor = "FAIL"
+                                            else:
+                                                log("  subcase B: InFlight signaled! Older-page query is held before UI adoption.")
+                                                state_before_gesture = paging_scroll_state()
+                                                log(f"  subcase B: scroll state before gesture: {state_before_gesture}")
+                                                if state_before_gesture is None:
+                                                    log("  INCONCLUSIVE: Subcase B: baseline scroll state could not be read")
                                                     criterion_reading_anchor = "INCONCLUSIVE"
                                                 else:
-                                                    # Deliver verified reader input while the load is held:
-                                                    # 8 wheel notches down to move reader away from top
-                                                    delivered = send_wheel_at_point(win, target[0], target[1], -120, steps=8, pause=0.08)
-                                                    time.sleep(0.5)
-                                                    state_after_gesture = paging_scroll_state()
-                                                    log(f"  subcase B: reader gesture delivery result: {delivered}, intended state: {state_after_gesture}")
-
-                                                    if not delivered:
-                                                        log("  INCONCLUSIVE: Subcase B: mouse wheel gesture delivery could not verify foreground")
-                                                        criterion_reading_anchor = "INCONCLUSIVE"
-                                                    elif state_after_gesture is None:
-                                                        log("  INCONCLUSIVE: Subcase B: scroll state after gesture could not be read")
-                                                        criterion_reading_anchor = "INCONCLUSIVE"
-                                                    elif state_after_gesture[1] <= state_before_gesture[1] + 0.1:
-                                                        log(f"  INCONCLUSIVE: Subcase B: gesture did not move scroller downward (before={state_before_gesture[1]}%, after={state_after_gesture[1]}%)")
+                                                    target = paging_wheel_target()
+                                                    if target is None:
+                                                        aim_err = "; ".join(aim_reason[-2:]) if aim_reason else "wheel target not verified"
+                                                        log(f"  INCONCLUSIVE: Subcase B: reader wheel target could not be verified ({aim_err})")
                                                         criterion_reading_anchor = "INCONCLUSIVE"
                                                     else:
-                                                        # Release the held load
-                                                        kernel32.SetEvent(h_older_release)
-                                                        rel_res = kernel32.WaitForSingleObject(h_older_released, 6000)
-                                                        log(f"  subcase B: load released, Released event wait result: {rel_res}")
-
-                                                        if rel_res != 0:
-                                                            log(f"  FAIL: Subcase B: production hold release wait failed or timed out (wait result: {rel_res})")
-                                                            criterion_reading_anchor = "FAIL"
+                                                        # Deliver verified reader input while the load is held:
+                                                        # 8 wheel notches down to move reader away from top
+                                                        delivered = send_wheel_at_point(win, target[0], target[1], -120, steps=8, pause=0.08)
+                                                        time.sleep(0.5)
+                                                        state_after_gesture = paging_scroll_state()
+                                                        log(f"  subcase B: reader gesture delivery result: {delivered}, intended state: {state_after_gesture}")
+    
+                                                        if not delivered:
+                                                            log("  INCONCLUSIVE: Subcase B: mouse wheel gesture delivery could not verify foreground")
+                                                            criterion_reading_anchor = "INCONCLUSIVE"
+                                                        elif state_after_gesture is None:
+                                                            log("  INCONCLUSIVE: Subcase B: scroll state after gesture could not be read")
+                                                            criterion_reading_anchor = "INCONCLUSIVE"
+                                                        elif state_after_gesture[1] <= state_before_gesture[1] + 0.1:
+                                                            log(f"  INCONCLUSIVE: Subcase B: gesture did not move scroller downward (before={state_before_gesture[1]}%, after={state_after_gesture[1]}%)")
+                                                            criterion_reading_anchor = "INCONCLUSIVE"
                                                         else:
-                                                            # Await UI thread post-condition:
-                                                            # readerScrollPolicy_.IsSuperseded(readerGenAtStart) == true
-                                                            # emits 'older-abort-reader' and co_returns without prepending or compensating
-                                                            abort_deadline = time.time() + 8.0
-                                                            sub_b_aborted = False
-                                                            while time.time() < abort_deadline:
-                                                                counts_now = ui_trace_label_counts()
-                                                                if counts_now.get("older-abort-reader", 0) > sub_b_abort_count:
-                                                                    sub_b_aborted = True
-                                                                    break
-                                                                time.sleep(0.2)
-
-                                                            counts_final = ui_trace_label_counts()
-                                                            prepends_now = counts_final.get("older-prepend", 0)
-                                                            aborts_now = counts_final.get("older-abort-reader", 0)
-                                                            log(f"  subcase B post-condition: older-abort-reader={aborts_now} (was {sub_b_abort_count}), older-prepend={prepends_now} (was {sub_b_prepend_count})")
-
-                                                            if ui_trace_has_lifecycle_truncation():
-                                                                log("  FAIL: Subcase B: required lifecycle evidence was lost due to trace truncation ('trace-lifecycle-truncated')")
+                                                            # Release the held load
+                                                            kernel32.SetEvent(h_older_release)
+                                                            rel_res = kernel32.WaitForSingleObject(h_older_released, 6000)
+                                                            log(f"  subcase B: load released, Released event wait result: {rel_res}")
+    
+                                                            if rel_res != 0:
+                                                                log(f"  FAIL: Subcase B: production hold release wait failed or timed out (wait result: {rel_res})")
                                                                 criterion_reading_anchor = "FAIL"
-                                                            elif not sub_b_aborted:
-                                                                criterion_reading_anchor = "FAIL"
-                                                                log("  FAIL: Subcase B: older-abort-reader was not emitted after reader interaction during held load!")
-                                                            elif prepends_now > sub_b_prepend_count:
-                                                                criterion_reading_anchor = "FAIL"
-                                                                log("  FAIL: Subcase B: older-prepend occurred despite reader interaction during held load!")
                                                             else:
-                                                                time.sleep(1.2)
-                                                                state_final = paging_scroll_state()
-                                                                log(f"  subcase B: settled scroll state: {state_final} (intended: {state_after_gesture})")
-                                                                criterion_reading_anchor = evaluate_reading_anchor_preservation(state_final, state_after_gesture)
-                                                                if criterion_reading_anchor == "FAIL":
-                                                                    log(f"  FAIL: Subcase B: reader position was not preserved (settled={state_final}, intended={state_after_gesture})")
+                                                                # Await UI thread post-condition:
+                                                                # readerScrollPolicy_.IsSuperseded(readerGenAtStart) == true
+                                                                # emits 'older-abort-reader' and co_returns without prepending or compensating
+                                                                abort_deadline = time.time() + 8.0
+                                                                sub_b_aborted = False
+                                                                while time.time() < abort_deadline:
+                                                                    counts_now = ui_trace_label_counts()
+                                                                    if counts_now.get("older-abort-reader", 0) > sub_b_abort_count:
+                                                                        sub_b_aborted = True
+                                                                        break
+                                                                    time.sleep(0.2)
+    
+                                                                counts_final = ui_trace_label_counts()
+                                                                prepends_now = counts_final.get("older-prepend", 0)
+                                                                aborts_now = counts_final.get("older-abort-reader", 0)
+                                                                log(f"  subcase B post-condition: older-abort-reader={aborts_now} (was {sub_b_abort_count}), older-prepend={prepends_now} (was {sub_b_prepend_count})")
+    
+                                                                if ui_trace_has_lifecycle_truncation():
+                                                                    log("  FAIL: Subcase B: required lifecycle evidence was lost due to trace truncation ('trace-lifecycle-truncated')")
+                                                                    criterion_reading_anchor = "FAIL"
+                                                                elif not sub_b_aborted:
+                                                                    criterion_reading_anchor = "FAIL"
+                                                                    log("  FAIL: Subcase B: older-abort-reader was not emitted after reader interaction during held load!")
+                                                                elif prepends_now > sub_b_prepend_count:
+                                                                    criterion_reading_anchor = "FAIL"
+                                                                    log("  FAIL: Subcase B: older-prepend occurred despite reader interaction during held load!")
                                                                 else:
-                                                                    log(f"PASS: Subcase B: reader intent preserved: reader gesture during held older-page load aborted stale adoption ('older-abort-reader') and preserved the reader's intended position (settled at {state_final[1]:.4f}% vs intended {state_after_gesture[1]:.4f}%).")
-                                finally:
-                                    if h_older_release:
-                                        try:
-                                            kernel32.SetEvent(h_older_release)
-                                        except Exception:
-                                            pass
-                                    for h in (h_older_hold, h_older_inflight, h_older_release, h_older_released):
-                                        if h:
+                                                                    time.sleep(1.2)
+                                                                    state_final = paging_scroll_state()
+                                                                    log(f"  subcase B: settled scroll state: {state_final} (intended: {state_after_gesture})")
+                                                                    criterion_reading_anchor = evaluate_reading_anchor_preservation(state_final, state_after_gesture)
+                                                                    if criterion_reading_anchor == "FAIL":
+                                                                        log(f"  FAIL: Subcase B: reader position was not preserved (settled={state_final}, intended={state_after_gesture})")
+                                                                    else:
+                                                                        log(f"PASS: Subcase B: reader intent preserved: reader gesture during held older-page load aborted stale adoption ('older-abort-reader') and preserved the reader's intended position (settled at {state_final[1]:.4f}% vs intended {state_after_gesture[1]:.4f}%).")
+                                    finally:
+                                        if h_older_release:
                                             try:
-                                                kernel32.CloseHandle(h)
+                                                kernel32.SetEvent(h_older_release)
                                             except Exception:
                                                 pass
-                                    h_older_hold = h_older_inflight = h_older_release = h_older_released = None
-                            else:
-                                criterion_reading_anchor = "FAIL"
-                                log(f"  FAIL: anchor did not hold (top-visible "
-                                    f"{_tv_val!r} -> {hold_tv_val!r}, expected "
-                                    f"{_exp_id!r}; message 22 realized="
-                                    f"{22 in hold_indices}, older-trigger "
-                                    f"{trigger_count} -> "
-                                    f"{hold_counts.get('older-trigger', 0)})")
-                except Exception as exc:
-                    paging_anchor_reason = f"anchor leg raised {type(exc).__name__}: {exc}"
-                    criterion_reading_anchor = "INCONCLUSIVE"
-                    log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+                                        for h in (h_older_hold, h_older_inflight, h_older_release, h_older_released):
+                                            if h:
+                                                try:
+                                                    kernel32.CloseHandle(h)
+                                                except Exception:
+                                                    pass
+                                        h_older_hold = h_older_inflight = h_older_release = h_older_released = None
+                                else:
+                                    criterion_reading_anchor = "FAIL"
+                                    log(f"  FAIL: anchor did not hold (top-visible "
+                                        f"{_tv_val!r} -> {hold_tv_val!r}, expected "
+                                        f"{_exp_id!r}; message 22 realized="
+                                        f"{22 in hold_indices}, older-trigger "
+                                        f"{trigger_count} -> "
+                                        f"{hold_counts.get('older-trigger', 0)})")
+                    except Exception as exc:
+                        paging_anchor_reason = f"anchor leg raised {type(exc).__name__}: {exc}"
+                        criterion_reading_anchor = "INCONCLUSIVE"
+                        log(f"  INCONCLUSIVE: {paging_anchor_reason}")
+            finally:
+                # Cleanup: exception-safe move off the probe BEFORE removing its rows.
+                # Release any held queries first, verify return to alpha, then delete rows.
+                # If return to alpha fails, preserve rows and evidence and stop dependent phases.
+                _returned, _dep_stopped = perform_phase3b_cleanup(
+                    win=win,
+                    store_path=STORE_PATH,
+                    probe_id=paging_probe_id,
+                    probe_path=paging_probe_path,
+                    paging_bound=paging_bound,
+                    h_release=h_older_release,
+                    handles=(h_older_hold, h_older_inflight, h_older_release, h_older_released),
+                    logger=log
+                )
+                h_older_hold = h_older_inflight = h_older_release = h_older_released = None
+                if _dep_stopped:
+                    dependent_phases_stopped = True
+                    paging_reason = (paging_reason + "; " if paging_reason else "") \
+                        + "the application could not be verified returned to alpha; probe rows preserved to prevent corrupting active binding"
         else:
             paging_reason = paging_reason or ("the probe project could not be prepared")
-
-        # Cleanup: exception-safe move off the probe BEFORE removing its rows.
-        # Release any held queries first, verify return to alpha, then delete rows.
-        # If return to alpha fails, preserve rows and evidence and stop dependent phases.
-        if paging_row_created:
-            if h_older_release:
-                try:
-                    kernel32.SetEvent(h_older_release)
-                except Exception:
-                    pass
-            for h in (h_older_hold, h_older_inflight, h_older_release, h_older_released):
-                if h:
-                    try:
-                        kernel32.CloseHandle(h)
-                    except Exception:
-                        pass
-            h_older_hold = h_older_inflight = h_older_release = h_older_released = None
-
-            returned = False
-            if paging_bound:
-                try:
-                    if open_switch_project(win):
-                        open_alpha = poll_until(lambda: find_by_name(win, "Open project alpha"),
-                                                timeout=8.0, interval=0.2)
-                        if open_alpha is not None:
-                            open_alpha.iface_invoke.Invoke()
-                            restored = poll_until(lambda: find_by_aid(win, "ComposerBox"),
-                                                  timeout=25.0, interval=0.2)
-                            if restored is not None:
-                                heading = find_by_aid(win, "ProjectHeading")
-                                heading_name = heading.element_info.name if heading else ""
-                                if heading_name == "alpha":
-                                    returned = True
-                                    log(f"  returned to alpha after the paging probe: True (ProjectHeading='alpha')")
-                                else:
-                                    log(f"  returned to alpha: ComposerBox restored, but ProjectHeading reads {heading_name!r}")
-                            else:
-                                log("  returned to alpha: ComposerBox did not restore")
-                        else:
-                            log("  returned to alpha: Open project alpha button not found on Screen 2")
-                    else:
-                        log("  returned to alpha: open_switch_project did not reach Screen 2")
-                except Exception as exc:
-                    log(f"  could not return to alpha: {type(exc).__name__}: {exc}")
-
-            if returned or not paging_bound:
-                try:
-                    conn = sqlite3.connect(STORE_PATH)
-                    mark_store_write("DELETE: the temporary paging-probe project and seeded messages")
-                    conn.execute("DELETE FROM contributions WHERE project_id = ?;", (paging_probe_id,))
-                    conn.execute("DELETE FROM selection_events WHERE project_id = ?;", (paging_probe_id,))
-                    conn.execute("DELETE FROM selection_receipts WHERE project_id = ?;", (paging_probe_id,))
-                    conn.execute("DELETE FROM pending_submissions WHERE project_id = ?;", (paging_probe_id,))
-                    conn.execute("DELETE FROM projects WHERE id = ?;", (paging_probe_id,))
-                    conn.commit()
-                    conn.close()
-                except Exception as exc:
-                    log(f"  could not remove the paging-probe rows: {exc}")
-                try:
-                    os.rmdir(paging_probe_path)
-                except Exception:
-                    pass
-                log("  cleaned up probe project rows and directory.")
-            else:
-                log("  CRITICAL: Return to alpha failed in Phase 3B! Preserving probe rows and evidence; stopping dependent phases.")
-                paging_reason = (paging_reason + "; " if paging_reason else "") \
-                    + "the application could not be verified returned to alpha; probe rows preserved to prevent corrupting active binding"
-                dependent_phases_stopped = True
         if criterion_paging_save == "NOT_RUN":
             criterion_paging_save = "INCONCLUSIVE"
         if criterion_reading_anchor == "NOT_RUN" and not (paging_bound and criterion_paging_save == "PASS"):
@@ -5424,15 +5606,18 @@ def main():
                 with open(trace_path, "r", encoding="utf-8", errors="replace") as fh:
                     for line in fh:
                         log("  UI-TRACE " + line.rstrip())
+                if EVIDENCE_DIR:
+                    try:
+                        dest_trace = os.path.join(EVIDENCE_DIR, "ui-trace.log")
+                        if os.path.abspath(trace_path) != os.path.abspath(dest_trace):
+                            import shutil
+                            shutil.copy2(trace_path, dest_trace)
+                    except Exception:
+                        pass
                 try:
-                    os.remove(trace_path)
+                    if not EVIDENCE_DIR or os.path.abspath(trace_path) != os.path.abspath(os.path.join(EVIDENCE_DIR, "ui-trace.log")):
+                        os.remove(trace_path)
                 except OSError as exc:
-                    # The application still holds the trace file open (it is
-                    # terminated in the phase-9 cleanup, never before 3B's
-                    # readback), and the sharing grant on the write side makes
-                    # the deletion fail while the reader succeeds. Leftover
-                    # trace files are evidence-directory contents, not run
-                    # blockers; report it rather than discarding the file.
                     log(f"  UI-TRACE: file left in place after readback "
                         f"(delete failed: {exc})")
             else:
@@ -5449,49 +5634,45 @@ def main():
         log("\n--- PHASE 6: WM_DPICHANGED Message Handling Simulation (150% and 200%) ---")
         if dependent_phases_stopped:
             log("SKIPPING PHASE 6: Dependent phase stopped because application could not be verified returned to bound alpha project.")
-            criterion_dpi_scaling = "INCONCLUSIVE"
-            skip_phase_6 = True
+            criterion_dpi_scaling = "BLOCKED"
         else:
-            skip_phase_6 = False
+            # THE WINDOW MUST BE RESTORED BEFORE THIS LEG, AND THE CHECK MUST KNOW
+            # WHETHER IT IS.
+            #
+            # The oracle below is "the window grew to the suggested rect". A window
+            # that is MAXIMIZED cannot grow: it is already clamped to the work area,
+            # so the suggested rect is larger than the screen and the OS refuses the
+            # size. Measured on this machine (1920x1080, work area 1920x1020): a
+            # zoomed window reports L-9,T-9,R1929,B1029 (1938x1038) -- the maximized
+            # frame overhang -- and sending WM_DPICHANGED 144 cannot enlarge it.
+            #
+            # That state is reachable here: run3 arrived at this leg zoomed, because
+            # something outside the harness (nothing in the harness or the
+            # application calls a maximize API; grepped) zoomed the window during
+            # the preceding phase. It is NOT reliably reachable -- a re-run of the
+            # same sequence stayed normal -- so this is a window-state precondition
+            # that has to be established and RECORDED rather than assumed.
+            #
+            # The old code also did `return 1` on either failure, which ended the
+            # whole run and left criteria 8-15 NOT_RUN. That is the same
+            # silent-evidence-loss defect that criterion 17 carried: one leg's
+            # measurement problem must not destroy every later phase's evidence.
+            # The criterion is recorded INCONCLUSIVE instead and the run continues.
+            dpi_failures = []
+            dpi_inconclusive = []
 
-        # THE WINDOW MUST BE RESTORED BEFORE THIS LEG, AND THE CHECK MUST KNOW
-        # WHETHER IT IS.
-        #
-        # The oracle below is "the window grew to the suggested rect". A window
-        # that is MAXIMIZED cannot grow: it is already clamped to the work area,
-        # so the suggested rect is larger than the screen and the OS refuses the
-        # size. Measured on this machine (1920x1080, work area 1920x1020): a
-        # zoomed window reports L-9,T-9,R1929,B1029 (1938x1038) -- the maximized
-        # frame overhang -- and sending WM_DPICHANGED 144 cannot enlarge it.
-        #
-        # That state is reachable here: run3 arrived at this leg zoomed, because
-        # something outside the harness (nothing in the harness or the
-        # application calls a maximize API; grepped) zoomed the window during
-        # the preceding phase. It is NOT reliably reachable -- a re-run of the
-        # same sequence stayed normal -- so this is a window-state precondition
-        # that has to be established and RECORDED rather than assumed.
-        #
-        # The old code also did `return 1` on either failure, which ended the
-        # whole run and left criteria 8-15 NOT_RUN. That is the same
-        # silent-evidence-loss defect that criterion 17 carried: one leg's
-        # measurement problem must not destroy every later phase's evidence.
-        # The criterion is recorded INCONCLUSIVE instead and the run continues.
-        dpi_failures = []
-        dpi_inconclusive = []
+            if user32.IsZoomed(win.handle):
+                log("  the window is maximized, so it cannot expand to a suggested rect; "
+                    "restoring it first")
+                user32.ShowWindow(win.handle, SW_RESTORE)
+                time.sleep(0.6)
+            dpi_zoomed = bool(user32.IsZoomed(win.handle))
+            log(f"  window maximized before the DPI leg: {dpi_zoomed}")
+            if dpi_zoomed:
+                dpi_inconclusive.append(
+                    "the window could not be restored from maximized before the DPI leg, and a "
+                    "maximized window cannot expand to a suggested rect")
 
-        if user32.IsZoomed(win.handle):
-            log("  the window is maximized, so it cannot expand to a suggested rect; "
-                "restoring it first")
-            user32.ShowWindow(win.handle, SW_RESTORE)
-            time.sleep(0.6)
-        dpi_zoomed = bool(user32.IsZoomed(win.handle))
-        log(f"  window maximized before the DPI leg: {dpi_zoomed}")
-        if dpi_zoomed:
-            dpi_inconclusive.append(
-                "the window could not be restored from maximized before the DPI leg, and a "
-                "maximized window cannot expand to a suggested rect")
-
-        if not skip_phase_6:
             curr_rect = safe_window_rect(win)
             if curr_rect is None or curr_rect.width() <= 0 or curr_rect.height() <= 0:
                 log("FAIL->OBSERVATION: window geometry could not be observed from UIA or Win32 GetWindowRect; skipping DPI stimulus")
@@ -5551,20 +5732,20 @@ def main():
                 log("PASS: Display DPI restored to baseline.")
                 log("NOTE: Real OS-level display-scale validation (150%/200%) requires system display settings change / sign-out and remains INCONCLUSIVE.")
 
-        # The verdict is earned from what was measured, not assigned. A maximized
-        # window makes the expansion oracle inapplicable rather than failed, so
-        # that case is INCONCLUSIVE; a measured non-expansion or a collapse is
-        # FAIL; only a leg with neither is PASS.
-        for reason in dpi_failures:
-            log(f"FAIL: {reason}")
-        if dpi_failures:
-            criterion_dpi_scaling = "FAIL"
-        elif dpi_inconclusive:
-            criterion_dpi_scaling = "INCONCLUSIVE"
-            for reason in dpi_inconclusive:
-                log(f"INCONCLUSIVE: {reason}.")
-        else:
-            criterion_dpi_scaling = "PASS"
+            # The verdict is earned from what was measured, not assigned. A maximized
+            # window makes the expansion oracle inapplicable rather than failed, so
+            # that case is INCONCLUSIVE; a measured non-expansion or a collapse is
+            # FAIL; only a leg with neither is PASS.
+            for reason in dpi_failures:
+                log(f"FAIL: {reason}")
+            if dpi_failures:
+                criterion_dpi_scaling = "FAIL"
+            elif dpi_inconclusive:
+                criterion_dpi_scaling = "INCONCLUSIVE"
+                for reason in dpi_inconclusive:
+                    log(f"INCONCLUSIVE: {reason}.")
+            else:
+                criterion_dpi_scaling = "PASS"
 
         # =========================================================================
         # PHASE 9: ACTION CENTER VISIBILITY, OBLIGATION ROUTING & STALE REVALIDATION
@@ -5572,1648 +5753,1669 @@ def main():
         log("\n--- PHASE 9: Action Center Real Action Routing & Stale Item Revalidation ---")
         if dependent_phases_stopped:
             log("SKIPPING PHASE 9: Dependent phase stopped because application could not be verified returned to bound alpha project.")
-            criterion_action_center_paging = "NOT_RUN"
-            criterion_action_center_stale = "NOT_RUN"
-            criterion_action_center_dismiss = "NOT_RUN"
-            skip_phase_9 = True
+            criterion_action_center_paging = "BLOCKED"
+            criterion_action_center_stale = "BLOCKED"
+            criterion_action_center_dismiss = "BLOCKED"
         else:
-            skip_phase_9 = False
-
-        # 9.1 Initial Action Center status in clean alpha project
-        # Contract & Presenter rule: when there are no unresolved obligations (clean project),
-        # Action Center panel is correctly collapsed/withdrawn (confirmedEmpty).
-        if not skip_phase_9:
-            action_center_panel = find_by_aid(win, "ActionCenterPanel")
-        is_ac_initially_withdrawn = (action_center_panel is None) or (not action_center_panel.is_visible())
-        if not is_ac_initially_withdrawn:
-            log("FAIL: ActionCenterPanel should be collapsed/withdrawn when clean alpha has no obligations")
-            return 1
-        log("PASS: Action Center panel correctly confirmed collapsed/withdrawn when project has no unresolved obligations.")
-
-        alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
-        composer_box = find_by_aid(win, "ComposerBox")
-        orig_composer_text = composer_box.window_text() if composer_box else ""
-
-        try:
-            # Establish genuine disposable obligation in isolated test store for project alpha
-            conn = sqlite3.connect(STORE_PATH)
-            mark_store_write("INSERT: 1 seeded alpha draft_attachment (REJECTED)")
-            conn.execute(
-                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
-                "VALUES (?, ?, ?, 10, 'dummy', 'text/plain', '', 'C:/source/alpha_err.txt', 'REJECTED', 'test rejection error', 1);",
-                ("att-alpha-disposable-1", alpha_id, "alpha_err.txt")
-            )
-            conn.commit()
-            conn.close()
-
-            # Trigger production refresh in alpha project via valid production route:
-            # File -> Switch Project, then Cancel switching (ReturnToChat calls RefreshActionCenterAsync)
-            log("Triggering production Action Center refresh via File -> Switch Project -> Cancel...")
-            sw_heading = open_switch_project(win)
-            if not sw_heading or not sw_heading.is_visible():
-                log("FAIL: File -> Switch Project did not reach Screen 2 to trigger refresh")
+            # 9.1 Initial Action Center status in clean alpha project
+            # Contract & Presenter rule: when there are no unresolved obligations (clean project),
+            # Action Center panel is correctly collapsed/withdrawn (confirmedEmpty).
+            withdrawn, reason = assert_control_withdrawn(win, aid="ActionCenterPanel")
+            is_ac_initially_withdrawn = (withdrawn is True)
+            if withdrawn is None:
+                log(f"FAIL->OBSERVATION: ActionCenterPanel withdrawal could not be observed ({reason})")
                 return 1
-            cancel_btn = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
-            if not cancel_btn or not cancel_btn.is_visible():
-                log("FAIL: FolderCancelButton not found on Screen 2 to return to chat")
+            elif not is_ac_initially_withdrawn:
+                log(f"FAIL: ActionCenterPanel should be collapsed/withdrawn when clean alpha has no obligations ({reason})")
                 return 1
-            cancel_btn.iface_invoke.Invoke()
+            log(f"PASS: Action Center panel correctly confirmed collapsed/withdrawn when project has no unresolved obligations ({reason}).")
 
-            def find_visible_chat_heading():
-                h = find_by_aid(win, "ProjectHeading")
-                return h if (h and h.is_visible()) else None
-
-            def find_visible_ac_panel():
-                p = find_by_aid(win, "ActionCenterPanel")
-                return p if (p and p.is_visible()) else None
-
-            def find_visible_details_panel():
-                p = find_by_aid(win, "ActionCenterDetailsPanel")
-                return p if (p and p.is_visible()) else None
-
-            # Mandatory assertion: return to correct project's Chat
-            ret_chat = poll_until(find_visible_chat_heading, timeout=6.0, interval=0.1)
-            if not ret_chat:
-                log("FAIL: Returning from Screen 2 Cancel did not show ProjectHeading in Chat")
-                return 1
-            if "alpha" not in ret_chat.window_text().lower():
-                log(f"FAIL: Returned to unexpected project: {ret_chat.window_text()}")
-                return 1
-            folder_h = find_by_aid(win, "FolderHeading")
-            if folder_h and folder_h.is_visible():
-                log("FAIL: Screen 2 FolderHeading still visible after Cancel")
-                return 1
-            log("PASS: Screen 2 navigation, Cancel, and return to project alpha Chat verified mandatorily.")
-
-            # Wait for ActionCenterPanel to become visible and display the obligation
-            ac_panel_active = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.2)
-            if not ac_panel_active:
-                log("FAIL: ActionCenterPanel did not appear after obligation was introduced and refreshed")
-                return 1
-
-            status_label = find_by_aid(win, "ActionCenterStatusText")
-            status_val = status_label.window_text() if status_label else ""
-            log(f"Alpha Action Center status with 1 obligation: '{status_val}'")
-            if "1 item" not in status_val:
-                log(f"FAIL: Expected '1 item(s) need your attention.', got '{status_val}'")
-                return 1
-            log("PASS: Action Center truthfully surfaced the active obligation via production refresh route.")
-
-            # Mandatory details panel assertions (Item 3)
-            show_details_btn = find_by_aid(win, "ShowActionCenterDetailsButton") or find_by_name(win, "Show details")
-            if not show_details_btn or not show_details_btn.is_visible():
-                log("FAIL: ShowActionCenterDetailsButton is missing or not visible when obligations exist")
-                return 1
-            log("Expanding Action Center details panel via ShowActionCenterDetailsButton...")
-            show_details_btn.iface_invoke.Invoke()
-
-            details_panel = poll_until(find_visible_details_panel, timeout=3.0, interval=0.1)
-            if not details_panel:
-                log("FAIL: ActionCenterDetailsPanel did not become visible after Show details click")
-                return 1
-
-            details_list = find_by_aid(win, "ActionCenterDetailsList")
-            detail_rows = [d for d in details_panel.descendants() if (d.element_info.name or "").startswith("Item ")]
-            if not details_list and len(detail_rows) == 0:
-                log("FAIL: ActionCenterDetailsList and detail items missing inside details panel")
-                return 1
-
-            close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
-            if not close_details_btn or not close_details_btn.is_visible():
-                log("FAIL: CloseActionCenterDetailsButton missing inside details panel")
-                return 1
-            close_details_btn.iface_invoke.Invoke()
-
-            details_closed = poll_until(lambda: not (find_by_aid(win, "ActionCenterDetailsPanel") and find_by_aid(win, "ActionCenterDetailsPanel").is_visible()), timeout=3.0, interval=0.1)
-            if not details_closed:
-                log("FAIL: ActionCenterDetailsPanel remained visible after CloseActionCenterDetailsButton click")
-                return 1
-            log("PASS: Action Center details panel expansion, contents, and collapse verified mandatorily.")
-
-            # -------------------------------------------------------------
-            # Sequence 1: Held in-flight query completing after dismissal
-            # Reject its result without reopening or repopulating.
-            # -------------------------------------------------------------
-            log("\nTesting Sequence 1: In-flight refresh completing after dismissal...")
-            # Set up named Win32 events for deterministic hold using module-level bindings
-
-            # Create the hold trigger, in-flight notification, release, rejection acknowledgement, and trigger events
-            def ac_event_name(base):
-                if not ac_hold_token or ac_hold_token == "1":
-                    return f"Local\\Mayasaba_Ac_{base}"
-                return f"Local\\Mayasaba_Ac_{ac_hold_token}_{base}"
-
-            h_hold = kernel32.CreateEventW(None, True, True, ac_event_name("HoldRequested"))
-            h_inflight = kernel32.CreateEventW(None, True, False, ac_event_name("InFlight"))
-            h_release = kernel32.CreateEventW(None, True, False, ac_event_name("Release"))
-            h_rejected = kernel32.CreateEventW(None, True, False, ac_event_name("Rejected"))
-            h_timeout = kernel32.CreateEventW(None, True, False, ac_event_name("TimedOut"))
-            h_timeout_confirmed = kernel32.CreateEventW(None, True, False, ac_event_name("TimedOutConfirmed"))
-            h_rerun_queued = kernel32.CreateEventW(None, True, False, ac_event_name("RerunQueued"))
-            h_ownership_released = kernel32.CreateEventW(None, True, False, ac_event_name("OwnershipReleased"))
-            h_result_applied = kernel32.CreateEventW(None, True, False, ac_event_name("ResultApplied"))
-            h_trigger = kernel32.CreateEventW(None, False, False, ac_event_name("TriggerRefresh"))
-
+            alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
+            composer_box = find_by_aid(win, "ComposerBox")
+            orig_composer_text = composer_box.window_text() if composer_box else ""
+    
             try:
-                # Action Center is currently visible on Chat screen from the initial refresh.
-                def find_close_ac_btn():
-                    btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
-                    return btn if (btn and btn.is_visible()) else None
-
-                close_ac_btn = poll_until(find_close_ac_btn, timeout=5.0, interval=0.1)
-                if not close_ac_btn:
-                    log("FAIL: CloseActionCenterButton not visible on Chat before triggering held query")
-                    return 1
-
-                # Sequence 0: Deliberately unreleased wait scenario with pending-rerun ownership test
-                log("Testing Sequence 0: In-flight timeout, dispatcher confirmation, and pending-rerun ownership...")
-                kernel32.SetEvent(h_trigger)
-                wait_inflight_0 = kernel32.WaitForSingleObject(h_inflight, 5000)
-                if wait_inflight_0 != 0:
-                    log(f"FAIL: In-flight refresh event was not signaled for timeout test within 5s (wait result: {wait_inflight_0})")
-                    return 1
-                log("PASS: In-flight query confirmed held for deliberate timeout scenario.")
-
-                # While query 1 is held in flight (its snapshot contains only 1 obligation),
-                # introduce a distinguishable second obligation into the isolated store for project alpha
-                log("Seeding distinguishable replacement obligation (att-alpha-disposable-2) while query 1 is held...")
+                # Establish genuine disposable obligation in isolated test store for project alpha
                 conn = sqlite3.connect(STORE_PATH)
-                mark_store_write("INSERT: 1 new alpha draft_attachment (att-alpha-disposable-2)")
+                mark_store_write("INSERT: 1 seeded alpha draft_attachment (REJECTED)")
                 conn.execute(
                     "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
-                    "VALUES (?, ?, ?, 20, 'dummy2', 'text/plain', '', 'C:/source/alpha_err_replacement.txt', 'REJECTED', 'replacement rejection error', 1);",
-                    ("att-alpha-disposable-2", alpha_id, "alpha_err_replacement.txt")
+                    "VALUES (?, ?, ?, 10, 'dummy', 'text/plain', '', 'C:/source/alpha_err.txt', 'REJECTED', 'test rejection error', 1);",
+                    ("att-alpha-disposable-1", alpha_id, "alpha_err.txt")
                 )
                 conn.commit()
                 conn.close()
-
+    
+                # Trigger production refresh in alpha project via valid production route:
+                # File -> Switch Project, then Cancel switching (ReturnToChat calls RefreshActionCenterAsync)
+                log("Triggering production Action Center refresh via File -> Switch Project -> Cancel...")
+                sw_heading = open_switch_project(win)
+                if not sw_heading or not sw_heading.is_visible():
+                    log("FAIL: File -> Switch Project did not reach Screen 2 to trigger refresh")
+                    return 1
+                cancel_btn = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
+                if not cancel_btn or not cancel_btn.is_visible():
+                    log("FAIL: FolderCancelButton not found on Screen 2 to return to chat")
+                    return 1
+                cancel_btn.iface_invoke.Invoke()
+    
+                def find_visible_chat_heading():
+                    h = find_by_aid(win, "ProjectHeading")
+                    return h if (h and h.is_visible()) else None
+    
+                def find_visible_ac_panel():
+                    p = find_by_aid(win, "ActionCenterPanel")
+                    return p if (p and p.is_visible()) else None
+    
+                def find_visible_details_panel():
+                    p = find_by_aid(win, "ActionCenterDetailsPanel")
+                    return p if (p and p.is_visible()) else None
+    
+                # Mandatory assertion: return to correct project's Chat
+                ret_chat = poll_until(find_visible_chat_heading, timeout=6.0, interval=0.1)
+                if not ret_chat:
+                    log("FAIL: Returning from Screen 2 Cancel did not show ProjectHeading in Chat")
+                    return 1
+                if "alpha" not in ret_chat.window_text().lower():
+                    log(f"FAIL: Returned to unexpected project: {ret_chat.window_text()}")
+                    return 1
+                folder_h = find_by_aid(win, "FolderHeading")
+                if folder_h and folder_h.is_visible():
+                    log("FAIL: Screen 2 FolderHeading still visible after Cancel")
+                    return 1
+                log("PASS: Screen 2 navigation, Cancel, and return to project alpha Chat verified mandatorily.")
+    
+                # Wait for ActionCenterPanel to become visible and display the obligation
+                ac_panel_active = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.2)
+                if not ac_panel_active:
+                    log("FAIL: ActionCenterPanel did not appear after obligation was introduced and refreshed")
+                    return 1
+    
+                status_label = find_by_aid(win, "ActionCenterStatusText")
+                status_val = status_label.window_text() if status_label else ""
+                log(f"Alpha Action Center status with 1 obligation: '{status_val}'")
+                if "1 item" not in status_val:
+                    log(f"FAIL: Expected '1 item(s) need your attention.', got '{status_val}'")
+                    return 1
+                log("PASS: Action Center truthfully surfaced the active obligation via production refresh route.")
+    
+                # Mandatory details panel assertions (Item 3)
+                show_details_btn = find_by_aid(win, "ShowActionCenterDetailsButton") or find_by_name(win, "Show details")
+                if not show_details_btn or not show_details_btn.is_visible():
+                    log("FAIL: ShowActionCenterDetailsButton is missing or not visible when obligations exist")
+                    return 1
+                log("Expanding Action Center details panel via ShowActionCenterDetailsButton...")
+                show_details_btn.iface_invoke.Invoke()
+    
+                details_panel = poll_until(find_visible_details_panel, timeout=3.0, interval=0.1)
+                if not details_panel:
+                    log("FAIL: ActionCenterDetailsPanel did not become visible after Show details click")
+                    return 1
+    
+                details_list = find_by_aid(win, "ActionCenterDetailsList")
+                detail_rows = [d for d in details_panel.descendants() if (d.element_info.name or "").startswith("Item ")]
+                if not details_list and len(detail_rows) == 0:
+                    log("FAIL: ActionCenterDetailsList and detail items missing inside details panel")
+                    return 1
+    
+                close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
+                if not close_details_btn or not close_details_btn.is_visible():
+                    log("FAIL: CloseActionCenterDetailsButton missing inside details panel")
+                    return 1
+                close_details_btn.iface_invoke.Invoke()
+    
+                details_closed = poll_until(lambda: assert_control_withdrawn(win, aid="ActionCenterDetailsPanel")[0] is True, timeout=3.0, interval=0.1)
+                if not details_closed:
+                    log("FAIL: ActionCenterDetailsPanel remained visible after CloseActionCenterDetailsButton click")
+                    return 1
+                log("PASS: Action Center details panel expansion, contents, and collapse verified mandatorily.")
+    
+                # -------------------------------------------------------------
+                # Sequence 1: Held in-flight query completing after dismissal
+                # Reject its result without reopening or repopulating.
+                # -------------------------------------------------------------
+                log("\nTesting Sequence 1: In-flight refresh completing after dismissal...")
+                # Set up named Win32 events for deterministic hold using module-level bindings
+    
+                # Create the hold trigger, in-flight notification, release, rejection acknowledgement, and trigger events
+                def ac_event_name(base):
+                    if not ac_hold_token or ac_hold_token == "1":
+                        return f"Local\\Mayasaba_Ac_{base}"
+                    return f"Local\\Mayasaba_Ac_{ac_hold_token}_{base}"
+    
+                h_hold = kernel32.CreateEventW(None, True, True, ac_event_name("HoldRequested"))
+                h_inflight = kernel32.CreateEventW(None, True, False, ac_event_name("InFlight"))
+                h_release = kernel32.CreateEventW(None, True, False, ac_event_name("Release"))
+                h_rejected = kernel32.CreateEventW(None, True, False, ac_event_name("Rejected"))
+                h_timeout = kernel32.CreateEventW(None, True, False, ac_event_name("TimedOut"))
+                h_timeout_confirmed = kernel32.CreateEventW(None, True, False, ac_event_name("TimedOutConfirmed"))
+                h_rerun_queued = kernel32.CreateEventW(None, True, False, ac_event_name("RerunQueued"))
+                h_ownership_released = kernel32.CreateEventW(None, True, False, ac_event_name("OwnershipReleased"))
+                h_result_applied = kernel32.CreateEventW(None, True, False, ac_event_name("ResultApplied"))
+                h_trigger = kernel32.CreateEventW(None, False, False, ac_event_name("TriggerRefresh"))
+    
                 try:
-                    # Request second refresh while first query is held in flight (exercises pending rerun)
-                    log("Requesting second refresh while first query is held in flight (exercises pending rerun)...")
+                    # Action Center is currently visible on Chat screen from the initial refresh.
+                    def find_close_ac_btn():
+                        btn = find_by_aid(win, "CloseActionCenterButton") or find_by_name(win, "Close Action Center")
+                        return btn if (btn and btn.is_visible()) else None
+    
+                    close_ac_btn = poll_until(find_close_ac_btn, timeout=5.0, interval=0.1)
+                    if not close_ac_btn:
+                        log("FAIL: CloseActionCenterButton not visible on Chat before triggering held query")
+                        return 1
+    
+                    # Sequence 0: Deliberately unreleased wait scenario with pending-rerun ownership test
+                    log("Testing Sequence 0: In-flight timeout, dispatcher confirmation, and pending-rerun ownership...")
                     kernel32.SetEvent(h_trigger)
-
-                    # Correlated acknowledgement: must prove second request was received and queued during first flight
-                    wait_rerun_queued = kernel32.WaitForSingleObject(h_rerun_queued, 5000)
-                    if wait_rerun_queued != 0:
-                        log(f"FAIL: Correlated RerunQueued event was not signaled within 5s (wait result: {wait_rerun_queued})")
+                    wait_inflight_0 = kernel32.WaitForSingleObject(h_inflight, 5000)
+                    if wait_inflight_0 != 0:
+                        log(f"FAIL: In-flight refresh event was not signaled for timeout test within 5s (wait result: {wait_inflight_0})")
                         return 1
-                    log("PASS: Correlated acknowledgement confirmed second refresh was received and queued as pending rerun during active flight.")
-
-                    # Disarm the hold event so that the second query (the pending rerun) runs through without holding
-                    kernel32.ResetEvent(h_hold)
-
-                    # Do NOT signal h_release; wait for production to time out (configured at 4500ms)
-                    wait_timed_out = kernel32.WaitForSingleObject(h_timeout, 8000)
-                    if wait_timed_out != 0:
-                        log(f"FAIL: Production query did not signal TimedOut within 8s (wait result: {wait_timed_out})")
-                        return 1
-                    log("PASS: Worker wait-outcome signaled TimedOut event.")
-
-                    # Observe correlated confirmation on UI dispatcher
-                    wait_confirmed = kernel32.WaitForSingleObject(h_timeout_confirmed, 5000)
-                    if wait_confirmed != 0:
-                        log(f"FAIL: Correlated dispatcher confirmation TimedOutConfirmed not signaled within 5s (wait result: {wait_confirmed})")
-                        return 1
-                    log("PASS: Dispatcher-owned completion confirmed with proven thread access (TimedOutConfirmed).")
-
-                    # Observe single-flight ownership release confirmation
-                    wait_ownership = kernel32.WaitForSingleObject(h_ownership_released, 5000)
-                    if wait_ownership != 0:
-                        log(f"FAIL: OwnershipReleased event was not signaled within 5s (wait result: {wait_ownership})")
-                        return 1
-                    log("PASS: Single-flight ownership release confirmed on UI thread (OwnershipReleased).")
-
-                    # Observe replacement query result application confirmation
-                    wait_applied = kernel32.WaitForSingleObject(h_result_applied, 6000)
-                    if wait_applied != 0:
-                        log(f"FAIL: ResultApplied event was not signaled within 6s for replacement flight (wait result: {wait_applied})")
-                        return 1
-                    log("PASS: Replacement flight query and result application confirmed (ResultApplied).")
-
-                    # Verify that the replacement refresh actually queried and applied the fresh results to UI
-                    log("Verifying replacement refresh executed and applied genuinely fresh results to UI...")
-                    ac_panel_refreshed = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.1)
-                    if not ac_panel_refreshed:
-                        log("FAIL: ActionCenterPanel was not visible after pending rerun completed")
-                        return 1
-                    status_text_elem = find_by_aid(win, "ActionCenterStatusText")
-                    status_text_val = status_text_elem.window_text() if status_text_elem else ""
-                    log(f"Observed Action Center status after replacement rerun: '{status_text_val}'")
-                    if "2 item" not in status_text_val:
-                        log(f"FAIL: Expected '2 item(s) need your attention.' after pending rerun with fresh obligation, got '{status_text_val}'")
-                        return 1
-                    if "1 item" in status_text_val:
-                        log(f"FAIL: Obsolete snapshot '1 item' was not replaced!")
-                        return 1
-
-                    # Verify new obligation identity is visible in the ActionCenterList
-                    ac_list = find_by_aid(win, "ActionCenterList")
-                    list_children = ac_list.children() if ac_list else []
-                    list_texts = [c.window_text() for c in list_children]
-                    log(f"Observed Action Center list items: {list_texts}")
-                    if not any("alpha_err_replacement.txt" in t for t in list_texts):
-                        log(f"FAIL: Newly introduced obligation 'alpha_err_replacement.txt' not found in ActionCenterList: {list_texts}")
-                        return 1
-                    log(f"PASS: Replacement refresh truthfully applied and displayed the fresh obligation identity ('{status_text_val}').")
-                finally:
-                    # Clean up the second obligation fixture so alpha returns to 1 obligation for Sequence 1 and 2
+                    log("PASS: In-flight query confirmed held for deliberate timeout scenario.")
+    
+                    # While query 1 is held in flight (its snapshot contains only 1 obligation),
+                    # introduce a distinguishable second obligation into the isolated store for project alpha
+                    log("Seeding distinguishable replacement obligation (att-alpha-disposable-2) while query 1 is held...")
+                    conn = sqlite3.connect(STORE_PATH)
+                    mark_store_write("INSERT: 1 new alpha draft_attachment (att-alpha-disposable-2)")
+                    conn.execute(
+                        "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+                        "VALUES (?, ?, ?, 20, 'dummy2', 'text/plain', '', 'C:/source/alpha_err_replacement.txt', 'REJECTED', 'replacement rejection error', 1);",
+                        ("att-alpha-disposable-2", alpha_id, "alpha_err_replacement.txt")
+                    )
+                    conn.commit()
+                    conn.close()
+    
                     try:
-                        conn = sqlite3.connect(STORE_PATH)
-                        mark_store_write("DELETE: temporary alpha draft_attachment (att-alpha-disposable-2)")
-                        conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id = 'att-alpha-disposable-2';", (alpha_id,))
-                        conn.commit()
-                        conn.close()
-                    except Exception as e:
-                        log(f"WARNING: Exception during att-alpha-disposable-2 cleanup: {e}")
-
-                # Re-arm h_hold and reset events for Sequence 1
-                kernel32.ResetEvent(h_inflight)
-                kernel32.ResetEvent(h_timeout)
-                kernel32.ResetEvent(h_timeout_confirmed)
-                kernel32.ResetEvent(h_rerun_queued)
-                kernel32.ResetEvent(h_ownership_released)
-                kernel32.ResetEvent(h_result_applied)
-                kernel32.SetEvent(h_hold)
-
-                # Trigger the background refresh query for Sequence 1
-                log("Triggering background Action Center refresh query for Sequence 1 (dismissal and rejection)...")
-                kernel32.SetEvent(h_trigger)
-
-                # Wait for the background query to hit the hold hook
-                wait_inflight = kernel32.WaitForSingleObject(h_inflight, 5000)
-                if wait_inflight != 0:
-                    log(f"FAIL: In-flight refresh event was not signaled within 5s (wait result: {wait_inflight})")
-                    return 1
-                log("PASS: Background Action Center query is confirmed in-flight and held.")
-
-                # Card is currently visible on screen. Now dismiss it while query is in-flight!
-                log("Dismissing Action Center via CloseActionCenterButton while query is held in flight...")
-                close_ac_btn.iface_invoke.Invoke()
-
-                # Verify card is collapsed on UI
-                ac_panel_collapsed = poll_until(lambda: not (find_by_aid(win, "ActionCenterPanel") and find_by_aid(win, "ActionCenterPanel").is_visible()), timeout=3.0, interval=0.1)
-                if not ac_panel_collapsed:
-                    log("FAIL: ActionCenterPanel did not collapse upon dismissal click")
-                    return 1
-                log("PASS: ActionCenterPanel collapsed immediately upon CloseActionCenterButton click.")
-
-                # Disarm the hold event before releasing query so subsequent refreshes won't block
-                if h_hold:
-                    kernel32.CloseHandle(h_hold)
-                    h_hold = None
-
-                # Now release the held background query so it resumes to UI thread
-                log("Releasing in-flight query to UI thread...")
-                kernel32.SetEvent(h_release)
-                wait_rej = kernel32.WaitForSingleObject(h_rejected, 5000)
-                if wait_rej != 0:
-                    if kernel32.WaitForSingleObject(h_timeout, 0) == 0:
-                        log("FAIL: In-flight query timed out waiting for release signal (production wait timeout invalidated observation)")
-                    else:
-                        log(f"FAIL: In-flight query completion was not processed and rejected (wait result: {wait_rej})")
-                    return 1
-                if kernel32.WaitForSingleObject(h_timeout, 0) == 0:
-                    log("FAIL: Production reported wait timeout/failure on release handle (invalidated observation)")
-                    return 1
-                log("PASS: In-flight query completion was acknowledged as processed and rejected.")
-
-                # Assert that in-flight completion rejected the result without reopening or repopulating
-                ac_panel_after_release = find_by_aid(win, "ActionCenterPanel")
-                if ac_panel_after_release and ac_panel_after_release.is_visible():
-                    log("FAIL: ActionCenterPanel reopened after held in-flight query finished!")
-                    return 1
-
-                status_label_after = find_by_aid(win, "ActionCenterStatusText")
-                if status_label_after and status_label_after.window_text().strip():
-                    log(f"FAIL: ActionCenterStatusText was repopulated: '{status_label_after.window_text()}'")
-                    return 1
-
-                log("PASS: In-flight query completing after dismissal was rejected: panel remains strictly collapsed and obsolete items discarded.")
-            finally:
-                # Disarm and close events
-                if h_release:
+                        # Request second refresh while first query is held in flight (exercises pending rerun)
+                        log("Requesting second refresh while first query is held in flight (exercises pending rerun)...")
+                        kernel32.SetEvent(h_trigger)
+    
+                        # Correlated acknowledgement: must prove second request was received and queued during first flight
+                        wait_rerun_queued = kernel32.WaitForSingleObject(h_rerun_queued, 5000)
+                        if wait_rerun_queued != 0:
+                            log(f"FAIL: Correlated RerunQueued event was not signaled within 5s (wait result: {wait_rerun_queued})")
+                            return 1
+                        log("PASS: Correlated acknowledgement confirmed second refresh was received and queued as pending rerun during active flight.")
+    
+                        # Disarm the hold event so that the second query (the pending rerun) runs through without holding
+                        kernel32.ResetEvent(h_hold)
+    
+                        # Do NOT signal h_release; wait for production to time out (configured at 4500ms)
+                        wait_timed_out = kernel32.WaitForSingleObject(h_timeout, 8000)
+                        if wait_timed_out != 0:
+                            log(f"FAIL: Production query did not signal TimedOut within 8s (wait result: {wait_timed_out})")
+                            return 1
+                        log("PASS: Worker wait-outcome signaled TimedOut event.")
+    
+                        # Observe correlated confirmation on UI dispatcher
+                        wait_confirmed = kernel32.WaitForSingleObject(h_timeout_confirmed, 5000)
+                        if wait_confirmed != 0:
+                            log(f"FAIL: Correlated dispatcher confirmation TimedOutConfirmed not signaled within 5s (wait result: {wait_confirmed})")
+                            return 1
+                        log("PASS: Dispatcher-owned completion confirmed with proven thread access (TimedOutConfirmed).")
+    
+                        # Observe single-flight ownership release confirmation
+                        wait_ownership = kernel32.WaitForSingleObject(h_ownership_released, 5000)
+                        if wait_ownership != 0:
+                            log(f"FAIL: OwnershipReleased event was not signaled within 5s (wait result: {wait_ownership})")
+                            return 1
+                        log("PASS: Single-flight ownership release confirmed on UI thread (OwnershipReleased).")
+    
+                        # Observe replacement query result application confirmation
+                        wait_applied = kernel32.WaitForSingleObject(h_result_applied, 6000)
+                        if wait_applied != 0:
+                            log(f"FAIL: ResultApplied event was not signaled within 6s for replacement flight (wait result: {wait_applied})")
+                            return 1
+                        log("PASS: Replacement flight query and result application confirmed (ResultApplied).")
+    
+                        # Verify that the replacement refresh actually queried and applied the fresh results to UI
+                        log("Verifying replacement refresh executed and applied genuinely fresh results to UI...")
+                        ac_panel_refreshed = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.1)
+                        if not ac_panel_refreshed:
+                            log("FAIL: ActionCenterPanel was not visible after pending rerun completed")
+                            return 1
+                        status_text_elem = find_by_aid(win, "ActionCenterStatusText")
+                        status_text_val = status_text_elem.window_text() if status_text_elem else ""
+                        log(f"Observed Action Center status after replacement rerun: '{status_text_val}'")
+                        if "2 item" not in status_text_val:
+                            log(f"FAIL: Expected '2 item(s) need your attention.' after pending rerun with fresh obligation, got '{status_text_val}'")
+                            return 1
+                        if "1 item" in status_text_val:
+                            log(f"FAIL: Obsolete snapshot '1 item' was not replaced!")
+                            return 1
+    
+                        # Verify new obligation identity is visible in the ActionCenterList
+                        ac_list = find_by_aid(win, "ActionCenterList")
+                        list_children = ac_list.children() if ac_list else []
+                        list_texts = [c.window_text() for c in list_children]
+                        log(f"Observed Action Center list items: {list_texts}")
+                        if not any("alpha_err_replacement.txt" in t for t in list_texts):
+                            log(f"FAIL: Newly introduced obligation 'alpha_err_replacement.txt' not found in ActionCenterList: {list_texts}")
+                            return 1
+                        log(f"PASS: Replacement refresh truthfully applied and displayed the fresh obligation identity ('{status_text_val}').")
+                    finally:
+                        # Clean up the second obligation fixture so alpha returns to 1 obligation for Sequence 1 and 2
+                        try:
+                            conn = sqlite3.connect(STORE_PATH)
+                            mark_store_write("DELETE: temporary alpha draft_attachment (att-alpha-disposable-2)")
+                            conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id = 'att-alpha-disposable-2';", (alpha_id,))
+                            conn.commit()
+                            conn.close()
+                        except Exception as e:
+                            log(f"WARNING: Exception during att-alpha-disposable-2 cleanup: {e}")
+    
+                    # Re-arm h_hold and reset events for Sequence 1
+                    kernel32.ResetEvent(h_inflight)
+                    kernel32.ResetEvent(h_timeout)
+                    kernel32.ResetEvent(h_timeout_confirmed)
+                    kernel32.ResetEvent(h_rerun_queued)
+                    kernel32.ResetEvent(h_ownership_released)
+                    kernel32.ResetEvent(h_result_applied)
+                    kernel32.SetEvent(h_hold)
+    
+                    # Trigger the background refresh query for Sequence 1
+                    log("Triggering background Action Center refresh query for Sequence 1 (dismissal and rejection)...")
+                    kernel32.SetEvent(h_trigger)
+    
+                    # Wait for the background query to hit the hold hook
+                    wait_inflight = kernel32.WaitForSingleObject(h_inflight, 5000)
+                    if wait_inflight != 0:
+                        log(f"FAIL: In-flight refresh event was not signaled within 5s (wait result: {wait_inflight})")
+                        return 1
+                    log("PASS: Background Action Center query is confirmed in-flight and held.")
+    
+                    # Card is currently visible on screen. Now dismiss it while query is in-flight!
+                    log("Dismissing Action Center via CloseActionCenterButton while query is held in flight...")
+                    close_ac_btn.iface_invoke.Invoke()
+    
+                    # Verify card is collapsed on UI
+                    ac_panel_collapsed = poll_until(lambda: assert_control_withdrawn(win, aid="ActionCenterPanel")[0] is True, timeout=3.0, interval=0.1)
+                    if not ac_panel_collapsed:
+                        log("FAIL: ActionCenterPanel did not collapse upon dismissal click")
+                        return 1
+                    log("PASS: ActionCenterPanel collapsed immediately upon CloseActionCenterButton click.")
+    
+                    # Disarm the hold event before releasing query so subsequent refreshes won't block
+                    if h_hold:
+                        kernel32.CloseHandle(h_hold)
+                        h_hold = None
+    
+                    # Now release the held background query so it resumes to UI thread
+                    log("Releasing in-flight query to UI thread...")
                     kernel32.SetEvent(h_release)
-                    kernel32.CloseHandle(h_release)
-                if h_inflight:
-                    kernel32.CloseHandle(h_inflight)
-                if h_hold:
-                    kernel32.CloseHandle(h_hold)
-                if h_rejected:
-                    kernel32.CloseHandle(h_rejected)
-                if h_timeout:
-                    kernel32.CloseHandle(h_timeout)
-                if h_timeout_confirmed:
-                    kernel32.CloseHandle(h_timeout_confirmed)
-                if h_rerun_queued:
-                    kernel32.CloseHandle(h_rerun_queued)
-                if h_ownership_released:
-                    kernel32.CloseHandle(h_ownership_released)
-                if h_result_applied:
-                    kernel32.CloseHandle(h_result_applied)
-                if h_trigger:
-                    kernel32.CloseHandle(h_trigger)
-
-            # -------------------------------------------------------------
-            # Sequence 2: A new explicit refresh starts after dismissal
-            # Follows existing production contract, which permits reactivation.
-            # -------------------------------------------------------------
-            log("\nTesting Sequence 2: New explicit refresh after dismissal permits reactivation...")
-            sw_h3 = open_switch_project(win)
-            if not sw_h3 or not sw_h3.is_visible():
-                log("FAIL: File -> Switch Project failed during explicit reactivation test")
-                return 1
-            c_btn3 = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
-            if not c_btn3 or not c_btn3.is_visible():
-                log("FAIL: FolderCancelButton not found on Screen 2")
-                return 1
-            c_btn3.iface_invoke.Invoke()
-
-            # Verify return to alpha Chat screen
-            ret3 = poll_until(find_visible_chat_heading, timeout=6.0, interval=0.1)
-            if not ret3 or "alpha" not in ret3.window_text().lower():
-                log("FAIL: Did not return to alpha Chat after Cancel in Sequence 2")
-                return 1
-
-            # Wait for Action Center panel to reactivate as per production contract
-            ac_panel_reactivated = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.2)
-            if not ac_panel_reactivated:
-                log("FAIL: ActionCenterPanel was not reactivated by new explicit refresh after dismissal")
-                return 1
-
-            status_label_reactivated = find_by_aid(win, "ActionCenterStatusText")
-            status_reactivated_val = status_label_reactivated.window_text() if status_label_reactivated else ""
-            log(f"Alpha Action Center status after explicit reactivation: '{status_reactivated_val}'")
-            if "1 item" not in status_reactivated_val:
-                log(f"FAIL: Expected '1 item(s) need your attention.', got '{status_reactivated_val}'")
-                return 1
-            log("PASS: New explicit refresh after dismissal reactivated the card as permitted by production contract.")
-
-        finally:
-            # Clean up disposable obligation in alpha in finally block (exception safe)
-            try:
-                conn = sqlite3.connect(STORE_PATH)
-                mark_store_write("DELETE: seeded alpha draft_attachments (att-alpha-disposable-1, att-alpha-disposable-2)")
-                conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id IN ('att-alpha-disposable-1', 'att-alpha-disposable-2');", (alpha_id,))
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                log(f"WARNING: Exception during alpha obligation cleanup: {e}")
-
-            # Restore original composer text if modified
-            try:
-                if composer_box and composer_box.window_text() != orig_composer_text:
-                    composer_box.set_edit_text(orig_composer_text)
-            except Exception:
-                pass
-
-        # 9.3 Switch to closed project 'gamma' which has ClosedProjectRestriction obligation
-        # Seed gamma with 51 failed attachments so total obligations = 52 (51 attachments + 1 closed project)
-        # to test bounded pagination (pageSize 50) and MoreActionCenterItemsButton continuation
-        gamma_id = "7a546bab-c9dd-49c0-8e77-c67903ab1b66"
-        conn = sqlite3.connect(STORE_PATH)
-        mark_store_write("INSERT: 51 seeded gamma draft_attachments (REJECTED, one transaction)")
-        for i in range(1, 52):
-            conn.execute(
-                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
-                "VALUES (?, ?, ?, 10, 'dummy', 'text/plain', '', 'C:/source/file.txt', 'REJECTED', 'seeded error', 1);",
-                (f"att-gamma-{i}", gamma_id, f"gamma_err_{i:02d}.txt")
-            )
-        conn.commit()
-        conn.close()
-
-        log("\nSwitching to closed project 'gamma' via File -> Switch Project...")
-        gamma_heading = open_switch_project(win)
-        if gamma_heading is None:
-            # The switch is the action under test here. An unchecked failure used
-            # to leave the run looking for 'Open project gamma' on a screen that
-            # never opened, which reported the failure as a missing button
-            # several steps away from its cause.
-            log("FAIL: File -> Switch Project did not reach Screen 2 for the gamma switch")
-            return 1
-
-        # On Screen 2, open gamma
-        open_gamma = find_by_name(win, "Open project gamma")
-        if not open_gamma:
-            log("FAIL: 'Open project gamma' button not found on Screen 2")
-            return 1
-        open_gamma.iface_invoke.Invoke()
-        time.sleep(2.5)
-
-        # Verify gamma opened in Chat and Action Center populated with initial page (50 items)
-        status_label = find_by_aid(win, "ActionCenterStatusText")
-        status_gamma = status_label.window_text() if status_label else ""
-        log(f"Gamma Action Center status (Page 1): '{status_gamma}'")
-        if "50 item(s) loaded (more available)" not in status_gamma:
-            log(f"FAIL: Expected '50 item(s) loaded (more available)' for gamma page 1, got '{status_gamma}'")
-            return 1
-        log("PASS: Action Center truthfully bounded initial page to 50 items and indicated more available.")
-
-        # Verify MoreActionCenterItemsButton is visible and click it to load continuation
-        more_btn = find_by_aid(win, "MoreActionCenterItemsButton")
-        if not more_btn or not more_btn.is_visible():
-            log("FAIL: MoreActionCenterItemsButton should be visible when continuation token is present")
-            return 1
-        log("Clicking MoreActionCenterItemsButton to consume continuation token...")
-        more_btn.iface_invoke.Invoke()
-        time.sleep(1.5)
-
-        status_gamma2 = status_label.window_text() if status_label else ""
-        log(f"Gamma Action Center status (Page 2): '{status_gamma2}'")
-        if "52 item(s) need your attention" not in status_gamma2:
-            log(f"FAIL: Expected '52 item(s) need your attention' after loading continuation, got '{status_gamma2}'")
-            return 1
-
-        more_btn_after = find_by_aid(win, "MoreActionCenterItemsButton")
-        is_more_collapsed = (more_btn_after is None) or (not more_btn_after.is_visible())
-        if not is_more_collapsed:
-            log("FAIL: MoreActionCenterItemsButton should collapse after all items are loaded")
-            return 1
-        log("PASS: Continuation token consumed and MoreActionCenterItemsButton collapsed truthfully.")
-
-        # 9.4 Test Show Details Button
-        show_details_btn = find_by_aid(win, "ShowActionCenterDetailsButton")
-        if not show_details_btn or not show_details_btn.is_visible():
-            log("FAIL: ShowActionCenterDetailsButton not visible when items need attention")
-            return 1
-        # The required behaviour is a source-linked detail for every listed item, not a
-        # NoticeBar sentence: commit 96373fd replaced the generic notice with the detail so
-        # each item shows its owning record, identity, version and reference. Asserting the
-        # removed notice string would have passed only against the defect.
-        #
-        # The detail is a temporary dismissible sheet rather than an in-place expansion of
-        # the card. The card sits in the auto-sized Chat header; on a short window the
-        # header had no room for both the item list and the detail, so the in-place
-        # expansion was arranged to zero height and "Show details" appeared to do nothing.
-        status_before_details = status_label.window_text() if status_label else ""
-        log("Clicking ShowActionCenterDetailsButton...")
-        show_details_btn.iface_invoke.Invoke()
-
-        details_panel = None
-        details_deadline = time.time() + 5.0
-        while time.time() < details_deadline:
-            candidate = find_by_aid(win, "ActionCenterDetailsPanel")
-            if candidate is not None and candidate.is_visible():
-                details_panel = candidate
-                break
-            time.sleep(0.1)
-        if details_panel is None:
-            log("FAIL: ShowActionCenterDetailsButton did not reveal the Action Center source detail sheet")
-            return 1
-
-        # A collapsed Border leaves the UIA tree entirely, so presence already proves it
-        # opened. What the defect did NOT do was leave the tree: it opened at zero size, so
-        # "present" alone is not enough. Assert a usable rendered height as well, otherwise
-        # this check would pass again against the same defect.
-        panel_rect = details_panel.rectangle()
-        log(f"Source detail sheet: W={panel_rect.width()} H={panel_rect.height()}")
-        if panel_rect.width() <= 0 or panel_rect.height() < 120:
-            log(f"FAIL: Source detail sheet opened without usable size "
-                f"({panel_rect.width()}x{panel_rect.height()})")
-            return 1
-        log("PASS: Show details opened a usable dismissible source detail sheet (no navigation).")
-
-        summary = find_by_aid(win, "ActionCenterDetailsSummaryText")
-        summary_text = summary.window_text() if summary else ""
-        log(f"Details summary: '{summary_text}'")
-        if "read-only projection of the owning record" not in summary_text:
-            log(f"FAIL: Details summary did not state the read-only projection contract, got '{summary_text}'")
-            return 1
-
-        # Every detail row must carry the source fields the owner record supplies. The
-        # gamma project seeds 51 rejected attachments plus one closed-project obligation,
-        # so the first described item is a SQLITE_STORAGE attachment record. Rows are
-        # identified by the announced name rather than by control type, which the XAML
-        # container does not fix across WinUI versions.
-        detail_rows = [d for d in details_panel.descendants()
-                       if (d.element_info.name or "").startswith("Item ")
-                       and "Owning record" in (d.element_info.name or "")]
-        log(f"Realized source detail rows: {len(detail_rows)}")
-        if len(detail_rows) == 0:
-            log("FAIL: Details panel rendered no source-linked rows")
-            return 1
-        detail_text = " | ".join(d.element_info.name for d in detail_rows)
-        if "Owning record SQLITE_STORAGE" not in detail_text:
-            log(f"FAIL: First detail row did not name its owning record; got '{detail_text[:200]}'")
-            return 1
-        log("PASS: Source detail rows name the owning record for each listed item.")
-
-        # Field-level content is asserted from the row text so a row that only carried a
-        # title would not pass. The attachment explanation and its source reference are
-        # both derived from the draft_attachments record, never re-authored by the UI.
-        row_fields = [d.window_text() for d in details_panel.descendants() if d.window_text()]
-        joined_fields = " | ".join(row_fields)
-        for required in ("Record identity:", "Record version:", "Source reference:", "Projection state:"):
-            if required not in joined_fields:
-                log(f"FAIL: Source detail omitted required field '{required}'")
-                return 1
-        if "draft_attachments." not in joined_fields:
-            log("FAIL: Source detail did not include a draft_attachments source reference")
-            return 1
-        log("PASS: Source detail exposes record identity, version, state and source reference.")
-
-        # Inspection must not execute the recovery action it describes.
-        status_after_details = status_label.window_text() if status_label else ""
-        if status_after_details != status_before_details:
-            log(f"FAIL: Expanding details mutated the projection: '{status_before_details}' -> '{status_after_details}'")
-            return 1
-        log("PASS: Expanding details was inspection-only; the listed projection was unchanged.")
-
-        # Focus moves into the detail and returns to the invoking control on close, so
-        # keyboard position is preserved across the expansion.
-        #
-        # Focus is POLLED rather than sampled once. The handler sets Visibility and then
-        # calls Focus(Programmatic) in the same tick, before the layout pass that makes
-        # the button focusable, so the transfer lands a frame or two later. A single
-        # immediate read turned that ordering into an intermittent failure: the same
-        # binary passed and failed this assertion across otherwise identical runs.
-        #
-        # Foreground is re-established first. UIA reports CurrentHasKeyboardFocus false
-        # for EVERY element when the top-level window is not foreground, so without this
-        # the assertion would fail for a lost foreground rather than for the app, and the
-        # two are not distinguishable from the result alone.
-        if not window_is_foreground(win):
-            log("  Re-establishing window foreground before measuring focus...")
-            try:
-                win.set_focus()
-            except Exception as exc:
-                log(f"  set_focus raised {type(exc).__name__}: {exc}")
-            fg_ok, fg_detail = establish_foreground(win)
-            log(f"  foreground establishment: established={fg_ok} ({fg_detail})")
-            poll_until(lambda: window_is_foreground(win), timeout=3.0, interval=0.1)
-
-        close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
-        if not close_details_btn:
-            log("FAIL: CloseActionCenterDetailsButton not found inside the details panel")
-            return 1
-        focused = poll_until(lambda: has_focus(close_details_btn), timeout=3.0, interval=0.05)
-        if not focused:
-            log("FAIL: Opening details did not move focus into the detail sheet")
-            # Recorded so an app defect is never confused with a lost foreground: only
-            # the former is a failure of the product.
-            log(f"  window was foreground while measuring: {window_is_foreground(win)}")
-            holders = []
-            for d in win.descendants():
+                    wait_rej = kernel32.WaitForSingleObject(h_rejected, 5000)
+                    if wait_rej != 0:
+                        if kernel32.WaitForSingleObject(h_timeout, 0) == 0:
+                            log("FAIL: In-flight query timed out waiting for release signal (production wait timeout invalidated observation)")
+                        else:
+                            log(f"FAIL: In-flight query completion was not processed and rejected (wait result: {wait_rej})")
+                        return 1
+                    if kernel32.WaitForSingleObject(h_timeout, 0) == 0:
+                        log("FAIL: Production reported wait timeout/failure on release handle (invalidated observation)")
+                        return 1
+                    log("PASS: In-flight query completion was acknowledged as processed and rejected.")
+    
+                    # Assert that in-flight completion rejected the result without reopening or repopulating
+                    withdrawn_after, w_diag = assert_control_withdrawn(win, aid="ActionCenterPanel")
+                    if withdrawn_after is False:
+                        log("FAIL: ActionCenterPanel reopened after held in-flight query finished!")
+                        return 1
+                    elif withdrawn_after is None:
+                        log(f"FAIL->OBSERVATION: ActionCenterPanel state could not be observed ({w_diag})")
+                        return 1
+                    status_label_after = find_by_aid(win, "ActionCenterStatusText")
+                    if status_label_after and status_label_after.window_text().strip():
+                        log(f"FAIL: ActionCenterStatusText was repopulated: '{status_label_after.window_text()}'")
+                        return 1
+    
+                    log("PASS: In-flight query completing after dismissal was rejected: panel remains strictly collapsed and obsolete items discarded.")
+                finally:
+                    # Disarm and close events
+                    if h_release:
+                        kernel32.SetEvent(h_release)
+                        kernel32.CloseHandle(h_release)
+                    if h_inflight:
+                        kernel32.CloseHandle(h_inflight)
+                    if h_hold:
+                        kernel32.CloseHandle(h_hold)
+                    if h_rejected:
+                        kernel32.CloseHandle(h_rejected)
+                    if h_timeout:
+                        kernel32.CloseHandle(h_timeout)
+                    if h_timeout_confirmed:
+                        kernel32.CloseHandle(h_timeout_confirmed)
+                    if h_rerun_queued:
+                        kernel32.CloseHandle(h_rerun_queued)
+                    if h_ownership_released:
+                        kernel32.CloseHandle(h_ownership_released)
+                    if h_result_applied:
+                        kernel32.CloseHandle(h_result_applied)
+                    if h_trigger:
+                        kernel32.CloseHandle(h_trigger)
+    
+                # -------------------------------------------------------------
+                # Sequence 2: A new explicit refresh starts after dismissal
+                # Follows existing production contract, which permits reactivation.
+                # -------------------------------------------------------------
+                log("\nTesting Sequence 2: New explicit refresh after dismissal permits reactivation...")
+                sw_h3 = open_switch_project(win)
+                if not sw_h3 or not sw_h3.is_visible():
+                    log("FAIL: File -> Switch Project failed during explicit reactivation test")
+                    return 1
+                c_btn3 = find_by_aid(win, "FolderCancelButton") or find_by_name(win, "Cancel switching projects") or find_by_name(win, "Cancel")
+                if not c_btn3 or not c_btn3.is_visible():
+                    log("FAIL: FolderCancelButton not found on Screen 2")
+                    return 1
+                c_btn3.iface_invoke.Invoke()
+    
+                # Verify return to alpha Chat screen
+                ret3 = poll_until(find_visible_chat_heading, timeout=6.0, interval=0.1)
+                if not ret3 or "alpha" not in ret3.window_text().lower():
+                    log("FAIL: Did not return to alpha Chat after Cancel in Sequence 2")
+                    return 1
+    
+                # Wait for Action Center panel to reactivate as per production contract
+                ac_panel_reactivated = poll_until(find_visible_ac_panel, timeout=6.0, interval=0.2)
+                if not ac_panel_reactivated:
+                    log("FAIL: ActionCenterPanel was not reactivated by new explicit refresh after dismissal")
+                    return 1
+    
+                status_label_reactivated = find_by_aid(win, "ActionCenterStatusText")
+                status_reactivated_val = status_label_reactivated.window_text() if status_label_reactivated else ""
+                log(f"Alpha Action Center status after explicit reactivation: '{status_reactivated_val}'")
+                if "1 item" not in status_reactivated_val:
+                    log(f"FAIL: Expected '1 item(s) need your attention.', got '{status_reactivated_val}'")
+                    return 1
+                log("PASS: New explicit refresh after dismissal reactivated the card as permitted by production contract.")
+    
+            finally:
+                # Clean up disposable obligation in alpha in finally block (exception safe)
                 try:
-                    if d.element_info.element.CurrentHasKeyboardFocus:
-                        holders.append(f"{d.element_info.control_type}"
-                                       f"[{d.element_info.automation_id or '-'}]")
+                    conn = sqlite3.connect(STORE_PATH)
+                    mark_store_write("DELETE: seeded alpha draft_attachments (att-alpha-disposable-1, att-alpha-disposable-2)")
+                    conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id IN ('att-alpha-disposable-1', 'att-alpha-disposable-2');", (alpha_id,))
+                    conn.commit()
+                    conn.close()
+                except Exception as e:
+                    log(f"WARNING: Exception during alpha obligation cleanup: {e}")
+    
+                # Restore original composer text if modified
+                try:
+                    if composer_box and composer_box.window_text() != orig_composer_text:
+                        composer_box.set_edit_text(orig_composer_text)
                 except Exception:
-                    continue
-            log(f"  elements holding keyboard focus: {holders if holders else 'NONE'}")
-            return 1
-        close_details_btn.iface_invoke.Invoke()
-        time.sleep(0.6)
-        collapsed_panel = find_by_aid(win, "ActionCenterDetailsPanel")
-        if collapsed_panel is not None and collapsed_panel.is_visible():
-            log("FAIL: Closing the details panel left it visible")
-            return 1
-        show_details_again = find_by_aid(win, "ShowActionCenterDetailsButton")
-        if show_details_again is None or not poll_until(
-                lambda: has_focus(show_details_again), timeout=3.0, interval=0.05):
-            log("FAIL: Closing details did not return focus to ShowActionCenterDetailsButton")
-            return 1
-        log("PASS: Details sheet is focus-safe: opens into the sheet and restores the invoking control.")
-
-        # The item list must still be usable after the sheet closes. Bounding the card for a
-        # short window is what previously clipped its own actions, so assert the list and
-        # Show details have rendered size. Load more items is checked only when it is meant
-        # to be shown: once the continuation token is consumed the control is legitimately
-        # collapsed, and demanding size for a collapsed control would assert the wrong thing.
-        def _get_ac_list_with_height():
-            lst = find_by_aid(win, "ActionCenterList") or find_by_name(win, "Action Center items")
-            if lst is not None and lst.rectangle().height() > 0:
-                return lst
-            return None
-
-        ac_list = poll_until(_get_ac_list_with_height, timeout=5.0, interval=0.1)
-        if ac_list is None:
-            raw_list = find_by_aid(win, "ActionCenterList") or find_by_name(win, "Action Center items")
-            if raw_list is None:
-                ac_panel = find_by_aid(win, "ActionCenterPanel")
-                panel_desc = [(d.element_info.automation_id, d.element_info.name, d.element_info.control_type, d.rectangle()) for d in (ac_panel.descendants() if ac_panel else [])]
-                log(f"FAIL: Action Center item list not found in tree after closing details. Panel descendants: {panel_desc}")
-            else:
-                log(f"FAIL: Action Center item list has no usable height after closing details (rect={raw_list.rectangle()}, height={raw_list.rectangle().height()})")
-            return 1
-        log(f"PASS: Action Center list rendered with height={ac_list.rectangle().height()} (rect={ac_list.rectangle()})")
-        show_again_btn = find_by_aid(win, "ShowActionCenterDetailsButton")
-        if (show_again_btn is None or show_again_btn.rectangle().width() <= 0
-                or show_again_btn.rectangle().height() <= 0):
-            log("FAIL: ShowActionCenterDetailsButton is not reachable in the card layout")
-            return 1
-        more_now = find_by_aid(win, "MoreActionCenterItemsButton")
-        if more_now is not None and more_now.is_visible():
-            if more_now.rectangle().width() <= 0 or more_now.rectangle().height() <= 0:
-                log("FAIL: MoreActionCenterItemsButton is visible but has no rendered size")
+                    pass
+    
+            # 9.3 Switch to closed project 'gamma' which has ClosedProjectRestriction obligation
+            # Seed gamma with 51 failed attachments so total obligations = 52 (51 attachments + 1 closed project)
+            # to test bounded pagination (pageSize 50) and MoreActionCenterItemsButton continuation
+            gamma_id = "7a546bab-c9dd-49c0-8e77-c67903ab1b66"
+            conn = sqlite3.connect(STORE_PATH)
+            mark_store_write("INSERT: 51 seeded gamma draft_attachments (REJECTED, one transaction)")
+            for i in range(1, 52):
+                conn.execute(
+                    "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+                    "VALUES (?, ?, ?, 10, 'dummy', 'text/plain', '', 'C:/source/file.txt', 'REJECTED', 'seeded error', 1);",
+                    (f"att-gamma-{i}", gamma_id, f"gamma_err_{i:02d}.txt")
+                )
+            conn.commit()
+            conn.close()
+    
+            log("\nSwitching to closed project 'gamma' via File -> Switch Project...")
+            gamma_heading = open_switch_project(win)
+            if gamma_heading is None:
+                # The switch is the action under test here. An unchecked failure used
+                # to leave the run looking for 'Open project gamma' on a screen that
+                # never opened, which reported the failure as a missing button
+                # several steps away from its cause.
+                log("FAIL: File -> Switch Project did not reach Screen 2 for the gamma switch")
                 return 1
-        log("PASS: Action Center list and its actions remain reachable at this window size.")
-
-        # 9.5 Test Stale Item Handling & Expected-Version Verification at Invocation
-        log("\nSimulating concurrent mutation: altering version of first item in SQLite store before clicking...")
-        conn = sqlite3.connect(STORE_PATH)
-        # Mutate version of att-gamma-1 in SQLite store (from current version to 99)
-        mark_store_write("UPDATE: draft_attachments.version = 99 for att-gamma-1 (the deliberate stale-version injection)")
-        conn.execute("UPDATE draft_attachments SET version = 99 WHERE project_id = ? AND attachment_id = 'att-gamma-1';", (gamma_id,))
-        conn.commit()
-        conn.close()
-
-        # Click the first obligation item in ActionCenterList
-        ac_list = find_by_aid(win, "ActionCenterList")
-        if not ac_list:
-            log("FAIL: ActionCenterList not found")
-            return 1
-        ac_items = ac_list.children()
-        log(f"ActionCenterList realized items count: {len(ac_items)}")
-        if len(ac_items) == 0:
-            log("FAIL: ActionCenterList has no items")
-            return 1
-
-        log("Invoking first obligation item in ActionCenterList to verify expected-version check...")
-        if hasattr(ac_items[0], 'iface_invoke') and ac_items[0].iface_invoke:
-            ac_items[0].iface_invoke.Invoke()
-        else:
-            try:
-                ac_items[0].set_focus()
-                time.sleep(0.2)
-                ac_items[0].click_input()
-            except Exception as e:
-                log(f"Notice during click_input: {e}")
-                send_key_to_window(win.handle, 0x0D)
-        time.sleep(1.5)
-
-        # Verify stale notice with version mismatch was raised
-        notice_bar = find_by_aid(win, "Notice")
-        notice_desc = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
-        log(f"Notice text after clicking mutated item: {notice_desc}")
-        if not any("Action Center item is stale: attachment record version has changed" in t for t in notice_desc):
-            log("FAIL: Expected version mismatch notice not displayed in NoticeBar")
-            return 1
-        log("PASS: Expected-version verification passed: version mismatch caught at invocation and truthful notice displayed.")
-
-        # Clean up seeded gamma draft attachments
-        conn = sqlite3.connect(STORE_PATH)
-        mark_store_write("DELETE: the 51 seeded gamma draft_attachments")
-        conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id LIKE 'att-gamma-%';", (gamma_id,))
-        conn.commit()
-        conn.close()
-
-        # 9.6 Switch back to alpha
-        log("\nSwitching back to project alpha...")
-        open_switch_project(win)
-
-        open_alpha = find_by_name(win, "Open project alpha")
-        if not open_alpha:
-            log("FAIL: 'Open project alpha' button not found")
-            return 1
-        open_alpha.iface_invoke.Invoke()
-        time.sleep(2.5)
-        log("PASS: Switched back to alpha; Action Center isolated to active project.")
-
-        # All three Action Center legs completed: pagination resumed, the stale item
-        # was invalidated and refreshed, and the panel dismissed without residue.
-        criterion_action_center_paging = "PASS"
-        criterion_action_center_stale = "PASS"
-        criterion_action_center_dismiss = "PASS"
-
-        # =========================================================================
+    
+            # On Screen 2, open gamma
+            open_gamma = find_by_name(win, "Open project gamma")
+            if not open_gamma:
+                log("FAIL: 'Open project gamma' button not found on Screen 2")
+                return 1
+            open_gamma.iface_invoke.Invoke()
+            time.sleep(2.5)
+    
+            # Verify gamma opened in Chat and Action Center populated with initial page (50 items)
+            status_label = find_by_aid(win, "ActionCenterStatusText")
+            status_gamma = status_label.window_text() if status_label else ""
+            log(f"Gamma Action Center status (Page 1): '{status_gamma}'")
+            if "50 item(s) loaded (more available)" not in status_gamma:
+                log(f"FAIL: Expected '50 item(s) loaded (more available)' for gamma page 1, got '{status_gamma}'")
+                return 1
+            log("PASS: Action Center truthfully bounded initial page to 50 items and indicated more available.")
+    
+            # Verify MoreActionCenterItemsButton is visible and click it to load continuation
+            more_btn = find_by_aid(win, "MoreActionCenterItemsButton")
+            if not more_btn or not more_btn.is_visible():
+                log("FAIL: MoreActionCenterItemsButton should be visible when continuation token is present")
+                return 1
+            log("Clicking MoreActionCenterItemsButton to consume continuation token...")
+            more_btn.iface_invoke.Invoke()
+            time.sleep(1.5)
+    
+            status_gamma2 = status_label.window_text() if status_label else ""
+            log(f"Gamma Action Center status (Page 2): '{status_gamma2}'")
+            if "52 item(s) need your attention" not in status_gamma2:
+                log(f"FAIL: Expected '52 item(s) need your attention' after loading continuation, got '{status_gamma2}'")
+                return 1
+    
+            more_withdrawn, more_reason = assert_control_withdrawn(win, aid="MoreActionCenterItemsButton")
+            is_more_collapsed = (more_withdrawn is True)
+            if not is_more_collapsed:
+                log(f"FAIL: MoreActionCenterItemsButton should collapse after all items are loaded ({more_reason})")
+                return 1
+            log("PASS: Continuation token consumed and MoreActionCenterItemsButton collapsed truthfully.")
+            show_details_btn = find_by_aid(win, "ShowActionCenterDetailsButton")
+            if not show_details_btn or not show_details_btn.is_visible():
+                log("FAIL: ShowActionCenterDetailsButton not visible when items need attention")
+                return 1
+            # The required behaviour is a source-linked detail for every listed item, not a
+            # NoticeBar sentence: commit 96373fd replaced the generic notice with the detail so
+            # each item shows its owning record, identity, version and reference. Asserting the
+            # removed notice string would have passed only against the defect.
+            #
+            # The detail is a temporary dismissible sheet rather than an in-place expansion of
+            # the card. The card sits in the auto-sized Chat header; on a short window the
+            # header had no room for both the item list and the detail, so the in-place
+            # expansion was arranged to zero height and "Show details" appeared to do nothing.
+            status_before_details = status_label.window_text() if status_label else ""
+            log("Clicking ShowActionCenterDetailsButton...")
+            show_details_btn.iface_invoke.Invoke()
+    
+            details_panel = None
+            details_deadline = time.time() + 5.0
+            while time.time() < details_deadline:
+                candidate = find_by_aid(win, "ActionCenterDetailsPanel")
+                if candidate is not None and candidate.is_visible():
+                    details_panel = candidate
+                    break
+                time.sleep(0.1)
+            if details_panel is None:
+                log("FAIL: ShowActionCenterDetailsButton did not reveal the Action Center source detail sheet")
+                return 1
+    
+            # A collapsed Border leaves the UIA tree entirely, so presence already proves it
+            # opened. What the defect did NOT do was leave the tree: it opened at zero size, so
+            # "present" alone is not enough. Assert a usable rendered height as well, otherwise
+            # this check would pass again against the same defect.
+            panel_rect = details_panel.rectangle()
+            log(f"Source detail sheet: W={panel_rect.width()} H={panel_rect.height()}")
+            if panel_rect.width() <= 0 or panel_rect.height() < 120:
+                log(f"FAIL: Source detail sheet opened without usable size "
+                    f"({panel_rect.width()}x{panel_rect.height()})")
+                return 1
+            log("PASS: Show details opened a usable dismissible source detail sheet (no navigation).")
+    
+            summary = find_by_aid(win, "ActionCenterDetailsSummaryText")
+            summary_text = summary.window_text() if summary else ""
+            log(f"Details summary: '{summary_text}'")
+            if "read-only projection of the owning record" not in summary_text:
+                log(f"FAIL: Details summary did not state the read-only projection contract, got '{summary_text}'")
+                return 1
+    
+            # Every detail row must carry the source fields the owner record supplies. The
+            # gamma project seeds 51 rejected attachments plus one closed-project obligation,
+            # so the first described item is a SQLITE_STORAGE attachment record. Rows are
+            # identified by the announced name rather than by control type, which the XAML
+            # container does not fix across WinUI versions.
+            detail_rows = [d for d in details_panel.descendants()
+                           if (d.element_info.name or "").startswith("Item ")
+                           and "Owning record" in (d.element_info.name or "")]
+            log(f"Realized source detail rows: {len(detail_rows)}")
+            if len(detail_rows) == 0:
+                log("FAIL: Details panel rendered no source-linked rows")
+                return 1
+            detail_text = " | ".join(d.element_info.name for d in detail_rows)
+            if "Owning record SQLITE_STORAGE" not in detail_text:
+                log(f"FAIL: First detail row did not name its owning record; got '{detail_text[:200]}'")
+                return 1
+            log("PASS: Source detail rows name the owning record for each listed item.")
+    
+            # Field-level content is asserted from the row text so a row that only carried a
+            # title would not pass. The attachment explanation and its source reference are
+            # both derived from the draft_attachments record, never re-authored by the UI.
+            row_fields = [d.window_text() for d in details_panel.descendants() if d.window_text()]
+            joined_fields = " | ".join(row_fields)
+            for required in ("Record identity:", "Record version:", "Source reference:", "Projection state:"):
+                if required not in joined_fields:
+                    log(f"FAIL: Source detail omitted required field '{required}'")
+                    return 1
+            if "draft_attachments." not in joined_fields:
+                log("FAIL: Source detail did not include a draft_attachments source reference")
+                return 1
+            log("PASS: Source detail exposes record identity, version, state and source reference.")
+    
+            # Inspection must not execute the recovery action it describes.
+            status_after_details = status_label.window_text() if status_label else ""
+            if status_after_details != status_before_details:
+                log(f"FAIL: Expanding details mutated the projection: '{status_before_details}' -> '{status_after_details}'")
+                return 1
+            log("PASS: Expanding details was inspection-only; the listed projection was unchanged.")
+    
+            # Focus moves into the detail and returns to the invoking control on close, so
+            # keyboard position is preserved across the expansion.
+            #
+            # Focus is POLLED rather than sampled once. The handler sets Visibility and then
+            # calls Focus(Programmatic) in the same tick, before the layout pass that makes
+            # the button focusable, so the transfer lands a frame or two later. A single
+            # immediate read turned that ordering into an intermittent failure: the same
+            # binary passed and failed this assertion across otherwise identical runs.
+            #
+            # Foreground is re-established first. UIA reports CurrentHasKeyboardFocus false
+            # for EVERY element when the top-level window is not foreground, so without this
+            # the assertion would fail for a lost foreground rather than for the app, and the
+            # two are not distinguishable from the result alone.
+            if not window_is_foreground(win):
+                log("  Re-establishing window foreground before measuring focus...")
+                try:
+                    win.set_focus()
+                except Exception as exc:
+                    log(f"  set_focus raised {type(exc).__name__}: {exc}")
+                fg_ok, fg_detail = establish_foreground(win)
+                log(f"  foreground establishment: established={fg_ok} ({fg_detail})")
+                poll_until(lambda: window_is_foreground(win), timeout=3.0, interval=0.1)
+    
+            close_details_btn = find_by_aid(win, "CloseActionCenterDetailsButton")
+            if not close_details_btn:
+                log("FAIL: CloseActionCenterDetailsButton not found inside the details panel")
+                return 1
+            focused = poll_until(lambda: has_focus(close_details_btn), timeout=3.0, interval=0.05)
+            if not focused:
+                log("FAIL: Opening details did not move focus into the detail sheet")
+                # Recorded so an app defect is never confused with a lost foreground: only
+                # the former is a failure of the product.
+                log(f"  window was foreground while measuring: {window_is_foreground(win)}")
+                holders = []
+                for d in win.descendants():
+                    try:
+                        if d.element_info.element.CurrentHasKeyboardFocus:
+                            holders.append(f"{d.element_info.control_type}"
+                                           f"[{d.element_info.automation_id or '-'}]")
+                    except Exception:
+                        continue
+                log(f"  elements holding keyboard focus: {holders if holders else 'NONE'}")
+                return 1
+            close_details_btn.iface_invoke.Invoke()
+            time.sleep(0.6)
+            withdrawn_details, wd_reason = assert_control_withdrawn(win, aid="ActionCenterDetailsPanel")
+            if withdrawn_details is not True:
+                log(f"FAIL: Closing the details panel left it visible or unverified ({wd_reason})")
+                return 1
+            show_details_again = find_by_aid(win, "ShowActionCenterDetailsButton")
+            if show_details_again is None or not poll_until(
+                    lambda: has_focus(show_details_again), timeout=3.0, interval=0.05):
+                log("FAIL: Closing details did not return focus to ShowActionCenterDetailsButton")
+                return 1
+            log("PASS: Details sheet is focus-safe: opens into the sheet and restores the invoking control.")
+    
+            # The item list must still be usable after the sheet closes. Bounding the card for a
+            # short window is what previously clipped its own actions, so assert the list and
+            # Show details have rendered size. Load more items is checked only when it is meant
+            # to be shown: once the continuation token is consumed the control is legitimately
+            # collapsed, and demanding size for a collapsed control would assert the wrong thing.
+            def _get_ac_list_with_height():
+                lst = find_by_aid(win, "ActionCenterList") or find_by_name(win, "Action Center items")
+                if lst is not None and lst.rectangle().height() > 0:
+                    return lst
+                return None
+    
+            ac_list = poll_until(_get_ac_list_with_height, timeout=5.0, interval=0.1)
+            if ac_list is None:
+                raw_list = find_by_aid(win, "ActionCenterList") or find_by_name(win, "Action Center items")
+                if raw_list is None:
+                    ac_panel = find_by_aid(win, "ActionCenterPanel")
+                    panel_desc = [(d.element_info.automation_id, d.element_info.name, d.element_info.control_type, d.rectangle()) for d in (ac_panel.descendants() if ac_panel else [])]
+                    log(f"FAIL: Action Center item list not found in tree after closing details. Panel descendants: {panel_desc}")
+                else:
+                    log(f"FAIL: Action Center item list has no usable height after closing details (rect={raw_list.rectangle()}, height={raw_list.rectangle().height()})")
+                return 1
+            log(f"PASS: Action Center list rendered with height={ac_list.rectangle().height()} (rect={ac_list.rectangle()})")
+            show_again_btn = find_by_aid(win, "ShowActionCenterDetailsButton")
+            if (show_again_btn is None or show_again_btn.rectangle().width() <= 0
+                    or show_again_btn.rectangle().height() <= 0):
+                log("FAIL: ShowActionCenterDetailsButton is not reachable in the card layout")
+                return 1
+            more_now = find_by_aid(win, "MoreActionCenterItemsButton")
+            if more_now is not None and more_now.is_visible():
+                if more_now.rectangle().width() <= 0 or more_now.rectangle().height() <= 0:
+                    log("FAIL: MoreActionCenterItemsButton is visible but has no rendered size")
+                    return 1
+            log("PASS: Action Center list and its actions remain reachable at this window size.")
+    
+            # 9.5 Test Stale Item Handling & Expected-Version Verification at Invocation
+            log("\nSimulating concurrent mutation: altering version of first item in SQLite store before clicking...")
+            conn = sqlite3.connect(STORE_PATH)
+            # Mutate version of att-gamma-1 in SQLite store (from current version to 99)
+            mark_store_write("UPDATE: draft_attachments.version = 99 for att-gamma-1 (the deliberate stale-version injection)")
+            conn.execute("UPDATE draft_attachments SET version = 99 WHERE project_id = ? AND attachment_id = 'att-gamma-1';", (gamma_id,))
+            conn.commit()
+            conn.close()
+    
+            # Click the first obligation item in ActionCenterList
+            ac_list = find_by_aid(win, "ActionCenterList")
+            if not ac_list:
+                log("FAIL: ActionCenterList not found")
+                return 1
+            ac_items = ac_list.children()
+            log(f"ActionCenterList realized items count: {len(ac_items)}")
+            if len(ac_items) == 0:
+                log("FAIL: ActionCenterList has no items")
+                return 1
+    
+            log("Invoking first obligation item in ActionCenterList to verify expected-version check...")
+            if hasattr(ac_items[0], 'iface_invoke') and ac_items[0].iface_invoke:
+                ac_items[0].iface_invoke.Invoke()
+            else:
+                try:
+                    ac_items[0].set_focus()
+                    time.sleep(0.2)
+                    ac_items[0].click_input()
+                except Exception as e:
+                    log(f"Notice during click_input: {e}")
+                    send_key_to_window(win.handle, 0x0D)
+            time.sleep(1.5)
+    
+            # Verify stale notice with version mismatch was raised
+            notice_bar = find_by_aid(win, "Notice")
+            notice_desc = [d.window_text() for d in notice_bar.descendants() if d.window_text()] if notice_bar else []
+            log(f"Notice text after clicking mutated item: {notice_desc}")
+            if not any("Action Center item is stale: attachment record version has changed" in t for t in notice_desc):
+                log("FAIL: Expected version mismatch notice not displayed in NoticeBar")
+                return 1
+            log("PASS: Expected-version verification passed: version mismatch caught at invocation and truthful notice displayed.")
+    
+            # Clean up seeded gamma draft attachments
+            conn = sqlite3.connect(STORE_PATH)
+            mark_store_write("DELETE: the 51 seeded gamma draft_attachments")
+            conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND attachment_id LIKE 'att-gamma-%';", (gamma_id,))
+            conn.commit()
+            conn.close()
+    
+            # 9.6 Switch back to alpha
+            log("\nSwitching back to project alpha...")
+            open_switch_project(win)
+    
+            open_alpha = find_by_name(win, "Open project alpha")
+            if not open_alpha:
+                log("FAIL: 'Open project alpha' button not found")
+                return 1
+            open_alpha.iface_invoke.Invoke()
+            time.sleep(2.5)
+            log("PASS: Switched back to alpha; Action Center isolated to active project.")
+    
+            # All three Action Center legs completed: pagination resumed, the stale item
+            # was invalidated and refreshed, and the panel dismissed without residue.
+            criterion_action_center_paging = "PASS"
+            criterion_action_center_stale = "PASS"
+            criterion_action_center_dismiss = "PASS"
+    
+            # =========================================================================
         # PHASE 10: NATIVE DRAG-AND-DROP INGESTION PATH & ATTACHMENT INSPECTION
         # =========================================================================
         log("\n--- PHASE 10: Native Drag-and-Drop Ingestion Path & Attachment Inspection ---")
-
-        # 10.1 Verify Composer drop capability & Native OLE Drag-Drop Invocation
-        composer_box = find_by_aid(win, "ComposerBox")
-        attach_btn = find_by_aid(win, "AttachButton")
-        if not composer_box or not attach_btn:
-            log("FAIL: Composer controls missing from UIA tree")
-            return 1
-        log("PASS: ComposerBox and AttachButton confirmed present with AllowDrop support.")
-
-        alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
-        test_drop_dir = os.path.join(os.path.dirname(STORE_PATH), "drop_test_files")
-        os.makedirs(test_drop_dir, exist_ok=True)
-        single_drop_file = os.path.join(test_drop_dir, "native_drop_single.txt")
-        single_drop_content = b"Native OLE drag-and-drop verification payload with valid English prose.\n"
-        import hashlib
-        single_drop_sha256 = hashlib.sha256(single_drop_content).hexdigest()
-        single_drop_size = len(single_drop_content)
-        with open(single_drop_file, "wb") as f:
-            f.write(single_drop_content)
-
-        # Baseline check before drop: query contributions and pending submissions
-        conn = sqlite3.connect(STORE_PATH)
-        contribs_before = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
-        pending_before = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
-        conn.close()
-        comp_text_before = composer_box.window_text() if composer_box else ""
-
-        # Single admission test via ole_drop.exe
-        log(f"Invoking ole_drop.exe on window handle {win.handle} with single file '{single_drop_file}'...")
-        drop_proc_returncode = -1
-        ole_start = mark_event("ole_drop.exe started (single-file drop attempt)")
-        try:
-            drop_proc = subprocess.run(
-                [OLE_DROP_EXE, str(win.handle), single_drop_file],
-                capture_output=True,
-                text=True,
-                timeout=OLE_DROP_TIMEOUT_S
-            )
-            drop_proc_returncode = drop_proc.returncode
-            log(f"ole_drop.exe exit code: {drop_proc.returncode}")
-            log(f"ole_drop.exe stdout: {drop_proc.stdout.strip()}")
-            if drop_proc.stderr:
-                log(f"ole_drop.exe stderr: {drop_proc.stderr.strip()}")
-        except subprocess.TimeoutExpired:
-            log(f"ole_drop.exe invocation reached bounded {OLE_DROP_TIMEOUT_S:.1f}s timeout "
-                f"(helper watchdog {OLE_DROP_WATCHDOG_MS}ms + escape {OLE_DROP_ESCAPE_MS}ms "
-                f"+ {OLE_DROP_MARGIN_S:.1f}s margin).")
-        ole_end = mark_event("ole_drop.exe finished (single-file drop attempt)")
-        # The pump readings taken DURING the OLE attempt are the measurement
-        # that separates "the application's UI thread was blocked, so the drop
-        # could not complete" from "the application's UI thread was answering
-        # throughout, so the drop failed for a reason of its own".
-        log(f"  pump latency during the OLE attempt: "
-            f"{pump_latency_between(ole_start, ole_end)}")
-
-        time.sleep(1.5) # allow background file copy, hash, and staging to complete
-
-        conn = sqlite3.connect(STORE_PATH)
-        dropped_records = conn.execute(
-            "SELECT attachment_id, file_name, file_size, status, sha256, staged_path FROM draft_attachments WHERE project_id = ? AND file_name = 'native_drop_single.txt';",
-            (alpha_id,)
-        ).fetchall()
-        contribs_after = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
-        pending_after = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
-        conn.close()
-
-        criterion_drop_execution = "INCONCLUSIVE"
-        criterion_mixed_batch = "INCONCLUSIVE"
-
-        comp_text = composer_box.window_text() if composer_box else ""
-        staged_exists = os.path.exists(dropped_records[0][5]) if len(dropped_records) == 1 else True
-
-        # Evaluate single-drop verdict using pure classification function (independently of helper success)
-        drop_verdict, drop_reason = classify_drop_verdict(
-            drop_proc_returncode=drop_proc_returncode,
-            dropped_records=dropped_records,
-            contribs_before=contribs_before,
-            contribs_after=contribs_after,
-            pending_before=pending_before,
-            pending_after=pending_after,
-            composer_text_before=comp_text_before,
-            composer_text_after=comp_text,
-            expected_filename="native_drop_single.txt",
-            expected_size=single_drop_size,
-            expected_sha256=single_drop_sha256,
-            staged_file_exists=staged_exists
-        )
-
-        if drop_verdict == "FAIL":
-            log(f"FAIL: Drop operation violation: {drop_reason}")
-            # No `return 1` here. The mixed-batch leg below is an independent
-            # observation and the attachment phases after it are the ones this
-            # assignment exists to verify; aborting here skipped them all.
-            criterion_drop_execution = "FAIL"
-        elif drop_verdict == "PASS":
-            log(f"PASS: {drop_reason}")
-            criterion_drop_execution = "PASS"
-        else: # INCONCLUSIVE
-            log("DIAGNOSTIC: Native synthetic desktop OLE drag-drop execution did not complete via synthetic injection.")
-            log(f"  ole_drop exit code: {drop_proc_returncode}")
-            log(f"  dropped records count: {len(dropped_records)} (expected 1 on pass)")
-            log("NOTE: Synthetic cross-process OLE drag-and-drop in headless/automation environment has OS-level security/session constraints (UIPI/modal loop timeout).")
-            log(f"  Classification: {drop_reason}")
-            criterion_drop_execution = "INCONCLUSIVE"
-
-        # Test Mixed-Batch Rejection (Folder + File in batch) independently:
-        log("\nTesting mixed-batch rejection (folder + file)...")
-        # Clear any previous notice before the operation
-        clear_notice(win)
-        time.sleep(0.3)
-
-        sub_folder = os.path.join(test_drop_dir, "test_folder")
-        os.makedirs(sub_folder, exist_ok=True)
-        mixed_drop_file = os.path.join(test_drop_dir, "test_mixed_file.txt")
-        with open(mixed_drop_file, "wb") as f:
-            f.write(b"Mixed batch test file.\n")
-
-        mixed_proc_returncode = -1
-        mixed_start = mark_event("ole_drop.exe started (mixed-batch folder+file attempt)")
-        try:
-            mixed_batch_proc = subprocess.run(
-                [OLE_DROP_EXE, str(win.handle), sub_folder, mixed_drop_file],
-                capture_output=True,
-                text=True,
-                timeout=OLE_DROP_TIMEOUT_S
-            )
-            mixed_proc_returncode = mixed_batch_proc.returncode
-        except subprocess.TimeoutExpired:
-            log(f"Mixed batch ole_drop.exe reached bounded {OLE_DROP_TIMEOUT_S:.1f}s timeout.")
-        mixed_end = mark_event("ole_drop.exe finished (mixed-batch folder+file attempt)")
-        log(f"  pump latency during the mixed-batch OLE attempt: "
-            f"{pump_latency_between(mixed_start, mixed_end)}")
-
-        # Locate actual control "Notice" and wait for fresh rejection tied to the attempted batch
-        rejection_msg = "Folders cannot be attached; entire batch rejected."
-        found_rejection, notice_desc = wait_for_notice_text(win, rejection_msg, timeout=3.5)
-        log(f"Notice text after mixed-batch drop: {notice_desc}")
-
-        conn = sqlite3.connect(STORE_PATH)
-        mixed_admitted = conn.execute(
-            "SELECT COUNT(*) FROM draft_attachments WHERE project_id = ? AND (file_name LIKE '%test_folder%' OR file_name LIKE '%test_mixed_file%');",
-            (alpha_id,)
-        ).fetchone()[0]
-        mixed_contribs = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
-        mixed_pending = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
-        conn.close()
-
-        # Prohibited side effect checks for mixed batch. All three are evaluated
-        # so the log names every side effect that appeared, not just the first.
-        mixed_failures = []
-        if mixed_admitted > 0:
-            mixed_failures.append(f"Mixed batch items admitted ({mixed_admitted} records found)")
-        if mixed_contribs != contribs_before:
-            mixed_failures.append(
-                f"Contributions created during mixed-batch drop ({mixed_contribs} != {contribs_before})")
-        if mixed_pending != pending_before:
-            mixed_failures.append(
-                f"Pending submissions created during mixed-batch drop ({mixed_pending} != {pending_before})")
-
-        if mixed_failures:
-            for reason in mixed_failures:
-                log(f"FAIL: {reason}")
-            criterion_mixed_batch = "FAIL"
-        elif found_rejection:
-            log("PASS: Mixed batch rejection proven: Notice control displays 'Folders cannot be attached; entire batch rejected.' and 0 files/folders admitted.")
-            criterion_mixed_batch = "PASS"
-        else:
-            log("DIAGNOSTIC: Mixed batch drop did not present expected rejection notice in Notice control (insufficient delivery evidence).")
-            criterion_mixed_batch = "INCONCLUSIVE"
-
-        # Clean up dropped test records
-        conn = sqlite3.connect(STORE_PATH)
-        mark_store_write("DELETE: the native_drop_% test records")
-        conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND file_name LIKE 'native_drop_%';", (alpha_id,))
-        conn.commit()
-        conn.close()
-
-        staging_dir = os.path.join(os.path.dirname(STORE_PATH), "attachments", "staging", alpha_id)
-        os.makedirs(staging_dir, exist_ok=True)
-
-        # 10.2 Managed Draft Attachment Chip Realization & Content Preview Panel (Seeded Fixture Evidence)
-        log("\n--- 10.2 Managed Draft Attachment Chip Realization & Content Preview Panel (Seeded Fixture Evidence) ---")
-        log("NOTE: The following checks provide verified evidence for attachment chip UI controls and content preview panel using seeded managed records.")
-        test_att_id = "att-ui-test-001"
-        test_file_name = "sample_spec.txt"
-        test_content = b"Mayasaba native attachment inspection verification payload with valid English prose.\n"
-        import hashlib
-        test_sha256 = hashlib.sha256(test_content).hexdigest()
-        test_size = len(test_content)
-
-        source_path = os.path.join(os.path.dirname(STORE_PATH), test_file_name)
-        with open(source_path, "wb") as f:
-            f.write(test_content)
-
-        staged_path = os.path.join(staging_dir, f"{test_att_id}_{test_file_name}")
-        with open(staged_path, "wb") as f:
-            f.write(test_content)
-
-        # Seed draft_attachments table
-        conn = sqlite3.connect(STORE_PATH)
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(draft_attachments)").fetchall()]
-        if "version" in cols:
-            mark_store_write("INSERT: the seeded sample_spec.txt draft attachment")
-            conn.execute(
-                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '', 1);",
-                (test_att_id, alpha_id, test_file_name, test_size, test_sha256, "text/plain", staged_path, source_path)
-            )
-        else:
-            conn.execute(
-                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '');",
-                (test_att_id, alpha_id, test_file_name, test_size, test_sha256, "text/plain", staged_path, source_path)
-            )
-        conn.commit()
-        conn.close()
-
-        # Reload alpha project to realize draft attachment chip
-        log("Reloading alpha project to realize draft attachment chip...")
-        reload_heading = open_switch_project(win)
-        if reload_heading is None:
-            # The switch is the action under test. Without this check a flyout
-            # that never opened was reported as a missing attachment chip, which
-            # pointed the reader at the chip instead of at the menu.
-            #
-            # The chip was never observed, so the criterion is BLOCKED rather
-            # than FAIL: the evidence does not say anything about the chip. The
-            # run continues so the remaining phases are still exercised.
-            log("FAIL: File -> Switch Project did not reach Screen 2 when reloading alpha")
-            log("      Criterion 13 is BLOCKED, not FAIL: the attachment chip was never")
-            log("      reached because the project switch that would show it failed first.")
+        if dependent_phases_stopped:
+            log("SKIPPING PHASE 10: Dependent phase stopped because application could not be verified returned to bound alpha project.")
+            criterion_drop_execution = "BLOCKED"
+            criterion_mixed_batch = "BLOCKED"
             criterion_attachment_chip = "BLOCKED"
-            reload_heading = None
-
-        open_alpha = find_by_name(win, "Open project alpha") if reload_heading is not None else None
-        if open_alpha:
-            open_alpha.iface_invoke.Invoke()
-            time.sleep(2.5)
-
-        # ---------------------------------------------------------------------
-        # The checks below are one criterion. A failure raises CriterionFailure
-        # so the dependent steps are skipped without ending the run: the old
-        # `return 1` here meant Phase 10.3, Phase 7, Phase 8 and the verdict
-        # table were never reached whenever a single assertion failed.
-        # ---------------------------------------------------------------------
-        try:
+            criterion_preview_withholding = "BLOCKED"
+        else:
+    
+            # 10.1 Verify Composer drop capability & Native OLE Drag-Drop Invocation
+            composer_box = find_by_aid(win, "ComposerBox")
+            attach_btn = find_by_aid(win, "AttachButton")
+            if not composer_box or not attach_btn:
+                log("FAIL: Composer controls missing from UIA tree")
+                return 1
+            log("PASS: ComposerBox and AttachButton confirmed present with AllowDrop support.")
+    
+            alpha_id = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
+            test_drop_dir = os.path.join(os.path.dirname(STORE_PATH), "drop_test_files")
+            os.makedirs(test_drop_dir, exist_ok=True)
+            single_drop_file = os.path.join(test_drop_dir, "native_drop_single.txt")
+            single_drop_content = b"Native OLE drag-and-drop verification payload with valid English prose.\n"
+            import hashlib
+            single_drop_sha256 = hashlib.sha256(single_drop_content).hexdigest()
+            single_drop_size = len(single_drop_content)
+            with open(single_drop_file, "wb") as f:
+                f.write(single_drop_content)
+    
+            # Baseline check before drop: query contributions and pending submissions
+            conn = sqlite3.connect(STORE_PATH)
+            contribs_before = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+            pending_before = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+            conn.close()
+            comp_text_before = composer_box.window_text() if composer_box else ""
+    
+            # Single admission test via ole_drop.exe
+            log(f"Invoking ole_drop.exe on window handle {win.handle} with single file '{single_drop_file}'...")
+            drop_proc_returncode = -1
+            ole_start = mark_event("ole_drop.exe started (single-file drop attempt)")
+            try:
+                drop_proc = subprocess.run(
+                    [OLE_DROP_EXE, str(win.handle), single_drop_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=OLE_DROP_TIMEOUT_S
+                )
+                drop_proc_returncode = drop_proc.returncode
+                log(f"ole_drop.exe exit code: {drop_proc.returncode}")
+                log(f"ole_drop.exe stdout: {drop_proc.stdout.strip()}")
+                if drop_proc.stderr:
+                    log(f"ole_drop.exe stderr: {drop_proc.stderr.strip()}")
+            except subprocess.TimeoutExpired:
+                log(f"ole_drop.exe invocation reached bounded {OLE_DROP_TIMEOUT_S:.1f}s timeout "
+                    f"(helper watchdog {OLE_DROP_WATCHDOG_MS}ms + escape {OLE_DROP_ESCAPE_MS}ms "
+                    f"+ {OLE_DROP_MARGIN_S:.1f}s margin).")
+            ole_end = mark_event("ole_drop.exe finished (single-file drop attempt)")
+            # The pump readings taken DURING the OLE attempt are the measurement
+            # that separates "the application's UI thread was blocked, so the drop
+            # could not complete" from "the application's UI thread was answering
+            # throughout, so the drop failed for a reason of its own".
+            log(f"  pump latency during the OLE attempt: "
+                f"{pump_latency_between(ole_start, ole_end)}")
+    
+            time.sleep(1.5) # allow background file copy, hash, and staging to complete
+    
+            conn = sqlite3.connect(STORE_PATH)
+            dropped_records = conn.execute(
+                "SELECT attachment_id, file_name, file_size, status, sha256, staged_path FROM draft_attachments WHERE project_id = ? AND file_name = 'native_drop_single.txt';",
+                (alpha_id,)
+            ).fetchall()
+            contribs_after = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+            pending_after = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+            conn.close()
+    
+            criterion_drop_execution = "INCONCLUSIVE"
+            criterion_mixed_batch = "INCONCLUSIVE"
+    
+            comp_text = composer_box.window_text() if composer_box else ""
+            staged_exists = os.path.exists(dropped_records[0][5]) if len(dropped_records) == 1 else True
+    
+            # Evaluate single-drop verdict using pure classification function (independently of helper success)
+            drop_verdict, drop_reason = classify_drop_verdict(
+                drop_proc_returncode=drop_proc_returncode,
+                dropped_records=dropped_records,
+                contribs_before=contribs_before,
+                contribs_after=contribs_after,
+                pending_before=pending_before,
+                pending_after=pending_after,
+                composer_text_before=comp_text_before,
+                composer_text_after=comp_text,
+                expected_filename="native_drop_single.txt",
+                expected_size=single_drop_size,
+                expected_sha256=single_drop_sha256,
+                staged_file_exists=staged_exists
+            )
+    
+            if drop_verdict == "FAIL":
+                log(f"FAIL: Drop operation violation: {drop_reason}")
+                # No `return 1` here. The mixed-batch leg below is an independent
+                # observation and the attachment phases after it are the ones this
+                # assignment exists to verify; aborting here skipped them all.
+                criterion_drop_execution = "FAIL"
+            elif drop_verdict == "PASS":
+                log(f"PASS: {drop_reason}")
+                criterion_drop_execution = "PASS"
+            else: # INCONCLUSIVE
+                log("DIAGNOSTIC: Native synthetic desktop OLE drag-drop execution did not complete via synthetic injection.")
+                log(f"  ole_drop exit code: {drop_proc_returncode}")
+                log(f"  dropped records count: {len(dropped_records)} (expected 1 on pass)")
+                log("NOTE: Synthetic cross-process OLE drag-and-drop in headless/automation environment has OS-level security/session constraints (UIPI/modal loop timeout).")
+                log(f"  Classification: {drop_reason}")
+                criterion_drop_execution = "INCONCLUSIVE"
+    
+            # Test Mixed-Batch Rejection (Folder + File in batch) independently:
+            log("\nTesting mixed-batch rejection (folder + file)...")
+            # Clear any previous notice before the operation
+            clear_notice(win)
+            time.sleep(0.3)
+    
+            sub_folder = os.path.join(test_drop_dir, "test_folder")
+            os.makedirs(sub_folder, exist_ok=True)
+            mixed_drop_file = os.path.join(test_drop_dir, "test_mixed_file.txt")
+            with open(mixed_drop_file, "wb") as f:
+                f.write(b"Mixed batch test file.\n")
+    
+            mixed_proc_returncode = -1
+            mixed_start = mark_event("ole_drop.exe started (mixed-batch folder+file attempt)")
+            try:
+                mixed_batch_proc = subprocess.run(
+                    [OLE_DROP_EXE, str(win.handle), sub_folder, mixed_drop_file],
+                    capture_output=True,
+                    text=True,
+                    timeout=OLE_DROP_TIMEOUT_S
+                )
+                mixed_proc_returncode = mixed_batch_proc.returncode
+            except subprocess.TimeoutExpired:
+                log(f"Mixed batch ole_drop.exe reached bounded {OLE_DROP_TIMEOUT_S:.1f}s timeout.")
+            mixed_end = mark_event("ole_drop.exe finished (mixed-batch folder+file attempt)")
+            log(f"  pump latency during the mixed-batch OLE attempt: "
+                f"{pump_latency_between(mixed_start, mixed_end)}")
+    
+            # Locate actual control "Notice" and wait for fresh rejection tied to the attempted batch
+            rejection_msg = "Folders cannot be attached; entire batch rejected."
+            found_rejection, notice_desc = wait_for_notice_text(win, rejection_msg, timeout=3.5)
+            log(f"Notice text after mixed-batch drop: {notice_desc}")
+    
+            conn = sqlite3.connect(STORE_PATH)
+            mixed_admitted = conn.execute(
+                "SELECT COUNT(*) FROM draft_attachments WHERE project_id = ? AND (file_name LIKE '%test_folder%' OR file_name LIKE '%test_mixed_file%');",
+                (alpha_id,)
+            ).fetchone()[0]
+            mixed_contribs = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+            mixed_pending = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (alpha_id,)).fetchone()[0]
+            conn.close()
+    
+            # Prohibited side effect checks for mixed batch. All three are evaluated
+            # so the log names every side effect that appeared, not just the first.
+            mixed_failures = []
+            if mixed_admitted > 0:
+                mixed_failures.append(f"Mixed batch items admitted ({mixed_admitted} records found)")
+            if mixed_contribs != contribs_before:
+                mixed_failures.append(
+                    f"Contributions created during mixed-batch drop ({mixed_contribs} != {contribs_before})")
+            if mixed_pending != pending_before:
+                mixed_failures.append(
+                    f"Pending submissions created during mixed-batch drop ({mixed_pending} != {pending_before})")
+    
+            if mixed_failures:
+                for reason in mixed_failures:
+                    log(f"FAIL: {reason}")
+                criterion_mixed_batch = "FAIL"
+            elif found_rejection:
+                log("PASS: Mixed batch rejection proven: Notice control displays 'Folders cannot be attached; entire batch rejected.' and 0 files/folders admitted.")
+                criterion_mixed_batch = "PASS"
+            else:
+                log("DIAGNOSTIC: Mixed batch drop did not present expected rejection notice in Notice control (insufficient delivery evidence).")
+                criterion_mixed_batch = "INCONCLUSIVE"
+    
+            # Clean up dropped test records
+            conn = sqlite3.connect(STORE_PATH)
+            mark_store_write("DELETE: the native_drop_% test records")
+            conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND file_name LIKE 'native_drop_%';", (alpha_id,))
+            conn.commit()
+            conn.close()
+    
+            staging_dir = os.path.join(os.path.dirname(STORE_PATH), "attachments", "staging", alpha_id)
+            os.makedirs(staging_dir, exist_ok=True)
+    
+            # 10.2 Managed Draft Attachment Chip Realization & Content Preview Panel (Seeded Fixture Evidence)
+            log("\n--- 10.2 Managed Draft Attachment Chip Realization & Content Preview Panel (Seeded Fixture Evidence) ---")
+            log("NOTE: The following checks provide verified evidence for attachment chip UI controls and content preview panel using seeded managed records.")
+            test_att_id = "att-ui-test-001"
+            test_file_name = "sample_spec.txt"
+            test_content = b"Mayasaba native attachment inspection verification payload with valid English prose.\n"
+            import hashlib
+            test_sha256 = hashlib.sha256(test_content).hexdigest()
+            test_size = len(test_content)
+    
+            source_path = os.path.join(os.path.dirname(STORE_PATH), test_file_name)
+            with open(source_path, "wb") as f:
+                f.write(test_content)
+    
+            staged_path = os.path.join(staging_dir, f"{test_att_id}_{test_file_name}")
+            with open(staged_path, "wb") as f:
+                f.write(test_content)
+    
+            # Seed draft_attachments table
+            conn = sqlite3.connect(STORE_PATH)
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(draft_attachments)").fetchall()]
+            if "version" in cols:
+                mark_store_write("INSERT: the seeded sample_spec.txt draft attachment")
+                conn.execute(
+                    "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '', 1);",
+                    (test_att_id, alpha_id, test_file_name, test_size, test_sha256, "text/plain", staged_path, source_path)
+                )
+            else:
+                conn.execute(
+                    "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '');",
+                    (test_att_id, alpha_id, test_file_name, test_size, test_sha256, "text/plain", staged_path, source_path)
+                )
+            conn.commit()
+            conn.close()
+    
+            # Reload alpha project to realize draft attachment chip
+            log("Reloading alpha project to realize draft attachment chip...")
+            reload_heading = open_switch_project(win)
             if reload_heading is None:
-                raise CriterionFailure("the attachment chip was never reached")
-
-            # Locate attachment chip and inspect button
-            inspect_btn = find_by_name(win, f"Inspect {test_file_name}")
-            if not inspect_btn:
-                raise CriterionFailure(
-                    f"'Inspect {test_file_name}' button not found in AttachmentChipsPanel")
-            log(f"PASS: Attachment chip realized with inspect button 'Inspect {test_file_name}'.")
-
-            # Click inspect button and verify NoticeBar diagnostics.
-            #
-            # The notice is cleared first: a notice left open by an earlier
-            # phase would otherwise satisfy the poll and report an inspection
-            # that never happened.
-            log("Invoking inspect button on attachment chip...")
-            clear_notice(win)
-            inspect_btn.iface_invoke.Invoke()
-            ok, notice_desc, _found = wait_for_notice(
-                win,
-                lambda t: (any(test_file_name in x for x in t)
-                           and any("Digest: Verified" in x for x in t)
-                           and any("Staged: Yes" in x for x in t)),
-                label="attachment inspection notice")
-            log(f"Notice text after inspecting attachment: {notice_desc}")
-            if not ok:
-                raise CriterionFailure(
-                    f"Notice bar did not contain expected attachment inspection details: {notice_desc}")
-            log("PASS: Attachment inspection verified: digest verified, managed staged copy confirmed, status READY.")
-
-            # Verify AttachmentPreviewPanel controls
-            preview_panel = find_by_aid(win, "AttachmentPreviewPanel")
-            if not preview_panel or not preview_panel.is_visible():
-                raise CriterionFailure("AttachmentPreviewPanel not visible after invoking chip inspect")
-
-            preview_title = find_by_aid(win, "AttachmentPreviewTitle")
-            title_text = preview_title.window_text() if preview_title else ""
-            log(f"Preview panel title: '{title_text}'")
-            if test_file_name not in title_text:
-                raise CriterionFailure(f"Expected preview title '{test_file_name}', got '{title_text}'")
-
-            preview_meta = find_by_aid(win, "AttachmentPreviewMeta")
-            meta_text = preview_meta.window_text() if preview_meta else ""
-            log(f"Preview panel meta: '{meta_text}'")
-            if "text/plain" not in meta_text or "Digest verified" not in meta_text:
-                raise CriterionFailure(f"Preview metadata incomplete: '{meta_text}'")
-
-            preview_box = find_by_aid(win, "AttachmentPreviewContentBox")
-            box_text = preview_box.window_text() if preview_box else ""
-            log(f"Preview content text: '{box_text.strip()}'")
-            if "Mayasaba native attachment inspection verification payload with valid English prose." not in box_text:
-                raise CriterionFailure(f"Preview content mismatch: '{box_text}'")
-            log("PASS: Bounded UTF-8 English text preview loaded and displayed in AttachmentPreviewPanel.")
-
-            # Focus verification on ClosePreviewButton
-            close_preview_btn = find_by_aid(win, "ClosePreviewButton")
-            has_preview_focus = close_preview_btn.has_keyboard_focus() if close_preview_btn else False
-            log(f"ClosePreviewButton has keyboard focus: {has_preview_focus}")
-            if not has_preview_focus:
-                raise CriterionFailure("ClosePreviewButton did not receive programmatic keyboard focus")
-            log("PASS: ClosePreviewButton verified with programmatic keyboard focus upon preview opening.")
-
-            # Dismissal via Escape key and focus restoration
-            log("Sending Escape key to dismiss AttachmentPreviewPanel...")
-            send_key_to_window(win.handle, VK_ESCAPE)
-            time.sleep(1.0)
-
-            preview_panel_after = find_by_aid(win, "AttachmentPreviewPanel")
-            is_preview_closed = (preview_panel_after is None) or (not preview_panel_after.is_visible())
-            log(f"AttachmentPreviewPanel closed after Escape: {is_preview_closed}")
-            if not is_preview_closed:
-                raise CriterionFailure("AttachmentPreviewPanel did not collapse on Escape key")
-            log("PASS: Escape dismissed preview panel and cleared content memory.")
-
-            criterion_attachment_chip = "PASS"
-        except CriterionFailure as exc:
-            log(f"FAIL: {exc}")
-            if criterion_attachment_chip != "BLOCKED":
-                criterion_attachment_chip = "FAIL"
-            # Leave the window in a known state so 10.3 starts clean rather than
-            # inheriting a half-open preview from this criterion.
-            try:
-                if find_by_aid(win, "AttachmentPreviewPanel") is not None:
-                    send_key_to_window(win.handle, VK_ESCAPE)
-                    time.sleep(0.6)
-            except Exception:
-                pass
-
-        # Clean up first test attachment
-        try:
-            conn = sqlite3.connect(STORE_PATH)
-            mark_store_write("DELETE: the sample_spec.txt draft attachment")
-            conn.execute("DELETE FROM draft_attachments WHERE attachment_id = ?;", (test_att_id,))
-            conn.commit()
-            conn.close()
-            if os.path.exists(staged_path): os.remove(staged_path)
-            if os.path.exists(source_path): os.remove(source_path)
-        except Exception:
-            pass
-
-        # 10.3 Non-English ASCII Content Preview Withholding (Defect 1 Verification in Live UI)
-        log("\n--- 10.3 Non-English ASCII Content Preview Withholding (Defect 1 in Live UI) ---")
-        non_eng_id = "att-ui-test-noneng"
-        non_eng_file = "hola_mundo.txt"
-        non_eng_content = b"hola mundo"
-        non_eng_sha = hashlib.sha256(non_eng_content).hexdigest()
-        non_eng_size = len(non_eng_content)
-
-        source_path_ne = os.path.join(os.path.dirname(STORE_PATH), non_eng_file)
-        with open(source_path_ne, "wb") as f:
-            f.write(non_eng_content)
-
-        staged_path_ne = os.path.join(staging_dir, f"{non_eng_id}_{non_eng_file}")
-        with open(staged_path_ne, "wb") as f:
-            f.write(non_eng_content)
-
-        conn = sqlite3.connect(STORE_PATH)
-        if "version" in cols:
-            mark_store_write("INSERT: the seeded non-English draft attachment")
-            conn.execute(
-                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '', 1);",
-                (non_eng_id, alpha_id, non_eng_file, non_eng_size, non_eng_sha, "text/plain", staged_path_ne, source_path_ne)
-            )
-        else:
-            conn.execute(
-                "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '');",
-                (non_eng_id, alpha_id, non_eng_file, non_eng_size, non_eng_sha, "text/plain", staged_path_ne, source_path_ne)
-            )
-        conn.commit()
-        conn.close()
-
-        # Reload alpha project to realize non-English attachment chip
-        log("Reloading alpha project to realize non-English attachment chip...")
-        ne_heading = open_switch_project(win)
-
-        open_alpha = find_by_name(win, "Open project alpha") if ne_heading is not None else None
-        if open_alpha:
-            open_alpha.iface_invoke.Invoke()
-            time.sleep(2.5)
-
-        # The withheld-preview reason, verbatim from MainWindow::InspectAttachmentAsync
-        # (line ~2633, `details + L" · Preview unavailable: " + reason`). Both the
-        # preview panel and the notice carry this exact string.
-        ne_reason = "Preview unavailable: Attachment contains non-English characters or unverifiable prose"
-
-        try:
-            if ne_heading is None:
+                # The switch is the action under test. Without this check a flyout
+                # that never opened was reported as a missing attachment chip, which
+                # pointed the reader at the chip instead of at the menu.
+                #
+                # The chip was never observed, so the criterion is BLOCKED rather
+                # than FAIL: the evidence does not say anything about the chip. The
+                # run continues so the remaining phases are still exercised.
                 log("FAIL: File -> Switch Project did not reach Screen 2 when reloading alpha")
-                raise CriterionFailure(
-                    "the non-English chip was never reached because the project switch failed first")
-
-            inspect_ne_btn = find_by_name(win, f"Inspect {non_eng_file}")
-            if not inspect_ne_btn:
-                raise CriterionFailure(f"'Inspect {non_eng_file}' button not found in AttachmentChipsPanel")
-            log(f"PASS: Attachment chip realized with inspect button 'Inspect {non_eng_file}'.")
-
-            # Click inspect on non-English chip
-            log("Invoking inspect on non-English attachment chip...")
-            clear_notice(win)
-            inspect_ne_btn.iface_invoke.Invoke()
-
-            # Poll the notice instead of sampling it once. The previous run read
-            # an empty descendant list after a single 1.0 s sleep and could not
-            # distinguish "no notice was opened" from "not opened yet"; the
-            # timeline in the log is what makes that distinction possible.
-            has_ne_preview_withheld, notice_desc_ne, notice_element_found = wait_for_notice(
-                win, lambda t: any(ne_reason in x for x in t), label="non-English notice")
-            log(f"Notice text after inspecting non-English attachment: {notice_desc_ne}")
-            log(f"  Notice InfoBar element found at all: {notice_element_found}")
-
-            # The withholding itself lives in the preview panel, not in the
-            # notice. The old order asserted the notice first and returned
-            # before the panel was ever examined, so a failure there said
-            # nothing about whether the preview was actually withheld.
-            preview_panel_ne = find_by_aid(win, "AttachmentPreviewPanel")
-            panel_open = bool(preview_panel_ne) and preview_panel_ne.is_visible()
-            log(f"AttachmentPreviewPanel visible for non-English inspection: {panel_open}")
-
-            unavail_text = ""
-            content_visible = None
-            if panel_open:
-                unavail_notice = find_by_aid(win, "AttachmentPreviewUnavailableNotice")
-                unavail_text = unavail_notice.window_text() if unavail_notice else ""
-                log(f"Unavailable notice text: '{unavail_text}'")
-                content_scroller = find_by_aid(win, "AttachmentPreviewContentScroller")
-                content_visible = bool(content_scroller) and content_scroller.is_visible()
-                preview_box_ne = find_by_aid(win, "AttachmentPreviewContentBox")
-                box_text_ne = preview_box_ne.window_text() if preview_box_ne else ""
-                log(f"Preview content scroller visible: {content_visible}; "
-                    f"content box text: '{box_text_ne.strip()}'")
-
-            panel_withheld = (panel_open
-                              and ne_reason in unavail_text
-                              and content_visible is False)
-            if panel_withheld:
-                log("PASS: The preview panel withheld the non-English prose and stated the reason; "
-                    "the content scroller is collapsed and the content box is empty.")
-            elif not panel_open:
-                log("FAIL: The preview panel never opened, so no withholding was demonstrated.")
-            else:
-                log("FAIL: The preview panel is open but does not demonstrate withholding: "
-                    f"reason_present={ne_reason in unavail_text}, content_scroller_visible={content_visible}")
-
-            # The notice is a second surface reporting the same decision. It is
-            # judged separately and reported separately, so a failure here is
-            # never mistaken for the preview having been shown.
-            if not has_ne_preview_withheld:
-                log(f"FAIL: The notice surface did not report the withholding. "
-                    f"element_found={notice_element_found}, texts={notice_desc_ne}")
-                if panel_withheld:
-                    log("NOTE: The withholding itself held -- the preview panel is correct. "
-                        "The defect is confined to the notice surface, which did not open "
-                        "or did not carry the reason within the polling window.")
-
-            if panel_withheld and has_ne_preview_withheld:
-                criterion_preview_withholding = "PASS"
-                log("PASS: Non-English ASCII prose ('hola mundo') preview withheld in the preview panel "
-                    "and reported truthfully in the notice surface.")
-            else:
-                criterion_preview_withholding = "FAIL"
-
-            # Dismiss preview
-            send_key_to_window(win.handle, VK_ESCAPE)
-            time.sleep(1.0)
-        except CriterionFailure as exc:
-            log(f"FAIL: {exc}")
-            if ne_heading is None:
-                log("      Criterion 14 is BLOCKED, not FAIL: the chip was never reached.")
-                criterion_preview_withholding = "BLOCKED"
-            else:
-                criterion_preview_withholding = "FAIL"
+                log("      Criterion 13 is BLOCKED, not FAIL: the attachment chip was never")
+                log("      reached because the project switch that would show it failed first.")
+                criterion_attachment_chip = "BLOCKED"
+                reload_heading = None
+    
+            open_alpha = find_by_name(win, "Open project alpha") if reload_heading is not None else None
+            if open_alpha:
+                open_alpha.iface_invoke.Invoke()
+                time.sleep(2.5)
+    
+            # ---------------------------------------------------------------------
+            # The checks below are one criterion. A failure raises CriterionFailure
+            # so the dependent steps are skipped without ending the run: the old
+            # `return 1` here meant Phase 10.3, Phase 7, Phase 8 and the verdict
+            # table were never reached whenever a single assertion failed.
+            # ---------------------------------------------------------------------
             try:
-                if find_by_aid(win, "AttachmentPreviewPanel") is not None:
-                    send_key_to_window(win.handle, VK_ESCAPE)
-                    time.sleep(0.6)
+                if reload_heading is None:
+                    raise CriterionFailure("the attachment chip was never reached")
+    
+                # Locate attachment chip and inspect button
+                inspect_btn = find_by_name(win, f"Inspect {test_file_name}")
+                if not inspect_btn:
+                    raise CriterionFailure(
+                        f"'Inspect {test_file_name}' button not found in AttachmentChipsPanel")
+                log(f"PASS: Attachment chip realized with inspect button 'Inspect {test_file_name}'.")
+    
+                # Click inspect button and verify NoticeBar diagnostics.
+                #
+                # The notice is cleared first: a notice left open by an earlier
+                # phase would otherwise satisfy the poll and report an inspection
+                # that never happened.
+                log("Invoking inspect button on attachment chip...")
+                clear_notice(win)
+                inspect_btn.iface_invoke.Invoke()
+                ok, notice_desc, _found = wait_for_notice(
+                    win,
+                    lambda t: (any(test_file_name in x for x in t)
+                               and any("Digest: Verified" in x for x in t)
+                               and any("Staged: Yes" in x for x in t)),
+                    label="attachment inspection notice")
+                log(f"Notice text after inspecting attachment: {notice_desc}")
+                if not ok:
+                    raise CriterionFailure(
+                        f"Notice bar did not contain expected attachment inspection details: {notice_desc}")
+                log("PASS: Attachment inspection verified: digest verified, managed staged copy confirmed, status READY.")
+    
+                # Verify AttachmentPreviewPanel controls
+                preview_panel = find_by_aid(win, "AttachmentPreviewPanel")
+                if not preview_panel or not preview_panel.is_visible():
+                    raise CriterionFailure("AttachmentPreviewPanel not visible after invoking chip inspect")
+    
+                preview_title = find_by_aid(win, "AttachmentPreviewTitle")
+                title_text = preview_title.window_text() if preview_title else ""
+                log(f"Preview panel title: '{title_text}'")
+                if test_file_name not in title_text:
+                    raise CriterionFailure(f"Expected preview title '{test_file_name}', got '{title_text}'")
+    
+                preview_meta = find_by_aid(win, "AttachmentPreviewMeta")
+                meta_text = preview_meta.window_text() if preview_meta else ""
+                log(f"Preview panel meta: '{meta_text}'")
+                if "text/plain" not in meta_text or "Digest verified" not in meta_text:
+                    raise CriterionFailure(f"Preview metadata incomplete: '{meta_text}'")
+    
+                preview_box = find_by_aid(win, "AttachmentPreviewContentBox")
+                box_text = preview_box.window_text() if preview_box else ""
+                log(f"Preview content text: '{box_text.strip()}'")
+                if "Mayasaba native attachment inspection verification payload with valid English prose." not in box_text:
+                    raise CriterionFailure(f"Preview content mismatch: '{box_text}'")
+                log("PASS: Bounded UTF-8 English text preview loaded and displayed in AttachmentPreviewPanel.")
+    
+                # Focus verification on ClosePreviewButton
+                close_preview_btn = find_by_aid(win, "ClosePreviewButton")
+                has_preview_focus = close_preview_btn.has_keyboard_focus() if close_preview_btn else False
+                log(f"ClosePreviewButton has keyboard focus: {has_preview_focus}")
+                if not has_preview_focus:
+                    raise CriterionFailure("ClosePreviewButton did not receive programmatic keyboard focus")
+                log("PASS: ClosePreviewButton verified with programmatic keyboard focus upon preview opening.")
+    
+                # Dismissal via Escape key and focus restoration
+                log("Sending Escape key to dismiss AttachmentPreviewPanel...")
+                send_key_to_window(win.handle, VK_ESCAPE)
+                time.sleep(1.0)
+    
+                preview_withdrawn, preview_reason = assert_control_withdrawn(win, aid="AttachmentPreviewPanel")
+                is_preview_closed = (preview_withdrawn is True)
+                log(f"AttachmentPreviewPanel closed after Escape: {is_preview_closed} ({preview_reason})")
+                if not is_preview_closed:
+                    raise CriterionFailure(f"AttachmentPreviewPanel did not collapse on Escape key ({preview_reason})")
+                log("PASS: Escape dismissed preview panel and cleared content memory.")
+                criterion_attachment_chip = "PASS"
+            except CriterionFailure as exc:
+                log(f"FAIL: {exc}")
+                if criterion_attachment_chip != "BLOCKED":
+                    criterion_attachment_chip = "FAIL"
+                # Leave the window in a known state so 10.3 starts clean rather than
+                # inheriting a half-open preview from this criterion.
+                try:
+                    if find_by_aid(win, "AttachmentPreviewPanel") is not None:
+                        send_key_to_window(win.handle, VK_ESCAPE)
+                        time.sleep(0.6)
+                except Exception:
+                    pass
+    
+            # Clean up first test attachment
+            try:
+                conn = sqlite3.connect(STORE_PATH)
+                mark_store_write("DELETE: the sample_spec.txt draft attachment")
+                conn.execute("DELETE FROM draft_attachments WHERE attachment_id = ?;", (test_att_id,))
+                conn.commit()
+                conn.close()
+                if os.path.exists(staged_path): os.remove(staged_path)
+                if os.path.exists(source_path): os.remove(source_path)
             except Exception:
                 pass
-
-        # Clean up non-English test attachment
-        try:
+    
+            # 10.3 Non-English ASCII Content Preview Withholding (Defect 1 Verification in Live UI)
+            log("\n--- 10.3 Non-English ASCII Content Preview Withholding (Defect 1 in Live UI) ---")
+            non_eng_id = "att-ui-test-noneng"
+            non_eng_file = "hola_mundo.txt"
+            non_eng_content = b"hola mundo"
+            non_eng_sha = hashlib.sha256(non_eng_content).hexdigest()
+            non_eng_size = len(non_eng_content)
+    
+            source_path_ne = os.path.join(os.path.dirname(STORE_PATH), non_eng_file)
+            with open(source_path_ne, "wb") as f:
+                f.write(non_eng_content)
+    
+            staged_path_ne = os.path.join(staging_dir, f"{non_eng_id}_{non_eng_file}")
+            with open(staged_path_ne, "wb") as f:
+                f.write(non_eng_content)
+    
             conn = sqlite3.connect(STORE_PATH)
-            mark_store_write("DELETE: the non-English draft attachment")
-            conn.execute("DELETE FROM draft_attachments WHERE attachment_id = ?;", (non_eng_id,))
+            if "version" in cols:
+                mark_store_write("INSERT: the seeded non-English draft attachment")
+                conn.execute(
+                    "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message, version) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '', 1);",
+                    (non_eng_id, alpha_id, non_eng_file, non_eng_size, non_eng_sha, "text/plain", staged_path_ne, source_path_ne)
+                )
+            else:
+                conn.execute(
+                    "INSERT OR REPLACE INTO draft_attachments (attachment_id, project_id, file_name, file_size, sha256, detected_type, staged_path, source_path, status, error_message) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'READY', '');",
+                    (non_eng_id, alpha_id, non_eng_file, non_eng_size, non_eng_sha, "text/plain", staged_path_ne, source_path_ne)
+                )
             conn.commit()
             conn.close()
-            if os.path.exists(staged_path_ne): os.remove(staged_path_ne)
-            if os.path.exists(source_path_ne): os.remove(source_path_ne)
-        except Exception:
-            pass
-
-        # Reload alpha again to clear the chip before performance profiling.
-        #
-        # This block was duplicated verbatim in the previous revision: the
-        # second copy switched project a second time for no reason, which added
-        # a whole project load to the run and left two identical PASS lines in
-        # the log that read like two separate observations. There is one reload.
-        log("Reloading clean alpha project for performance profiling...")
-        open_switch_project(win)
-
-        open_alpha = find_by_name(win, "Open project alpha")
-        if open_alpha:
-            open_alpha.iface_invoke.Invoke()
-            time.sleep(2.5)
-            log("PASS: Clean alpha project restored for performance profiling.")
-        else:
-            # This used to log PASS unconditionally. When the File menu could not
-            # be reached the project was never reloaded, and the line asserted a
-            # restore that had not happened -- the profile below would then be of
-            # whatever project happened to be open. The line says which one it is.
-            log("NOTE: the alpha project was NOT reloaded (the File menu was unreachable); "
-                "the profile below describes whichever project is currently open.")
-
-        # =========================================================================
-        # =========================================================================
+    
+            # Reload alpha project to realize non-English attachment chip
+            log("Reloading alpha project to realize non-English attachment chip...")
+            ne_heading = open_switch_project(win)
+    
+            open_alpha = find_by_name(win, "Open project alpha") if ne_heading is not None else None
+            if open_alpha:
+                open_alpha.iface_invoke.Invoke()
+                time.sleep(2.5)
+    
+            # The withheld-preview reason, verbatim from MainWindow::InspectAttachmentAsync
+            # (line ~2633, `details + L" · Preview unavailable: " + reason`). Both the
+            # preview panel and the notice carry this exact string.
+            ne_reason = "Preview unavailable: Attachment contains non-English characters or unverifiable prose"
+    
+            try:
+                if ne_heading is None:
+                    log("FAIL: File -> Switch Project did not reach Screen 2 when reloading alpha")
+                    raise CriterionFailure(
+                        "the non-English chip was never reached because the project switch failed first")
+    
+                inspect_ne_btn = find_by_name(win, f"Inspect {non_eng_file}")
+                if not inspect_ne_btn:
+                    raise CriterionFailure(f"'Inspect {non_eng_file}' button not found in AttachmentChipsPanel")
+                log(f"PASS: Attachment chip realized with inspect button 'Inspect {non_eng_file}'.")
+    
+                # Click inspect on non-English chip
+                log("Invoking inspect on non-English attachment chip...")
+                clear_notice(win)
+                inspect_ne_btn.iface_invoke.Invoke()
+    
+                # Poll the notice instead of sampling it once. The previous run read
+                # an empty descendant list after a single 1.0 s sleep and could not
+                # distinguish "no notice was opened" from "not opened yet"; the
+                # timeline in the log is what makes that distinction possible.
+                has_ne_preview_withheld, notice_desc_ne, notice_element_found = wait_for_notice(
+                    win, lambda t: any(ne_reason in x for x in t), label="non-English notice")
+                log(f"Notice text after inspecting non-English attachment: {notice_desc_ne}")
+                log(f"  Notice InfoBar element found at all: {notice_element_found}")
+    
+                # The withholding itself lives in the preview panel, not in the
+                # notice. The old order asserted the notice first and returned
+                # before the panel was ever examined, so a failure there said
+                # nothing about whether the preview was actually withheld.
+                preview_panel_ne = find_by_aid(win, "AttachmentPreviewPanel")
+                panel_open = bool(preview_panel_ne) and preview_panel_ne.is_visible()
+                log(f"AttachmentPreviewPanel visible for non-English inspection: {panel_open}")
+    
+                unavail_text = ""
+                content_visible = None
+                if panel_open:
+                    unavail_notice = find_by_aid(win, "AttachmentPreviewUnavailableNotice")
+                    unavail_text = unavail_notice.window_text() if unavail_notice else ""
+                    log(f"Unavailable notice text: '{unavail_text}'")
+                    content_scroller = find_by_aid(win, "AttachmentPreviewContentScroller")
+                    content_visible = bool(content_scroller) and content_scroller.is_visible()
+                    preview_box_ne = find_by_aid(win, "AttachmentPreviewContentBox")
+                    box_text_ne = preview_box_ne.window_text() if preview_box_ne else ""
+                    log(f"Preview content scroller visible: {content_visible}; "
+                        f"content box text: '{box_text_ne.strip()}'")
+    
+                panel_withheld = (panel_open
+                                  and ne_reason in unavail_text
+                                  and content_visible is False)
+                if panel_withheld:
+                    log("PASS: The preview panel withheld the non-English prose and stated the reason; "
+                        "the content scroller is collapsed and the content box is empty.")
+                elif not panel_open:
+                    log("FAIL: The preview panel never opened, so no withholding was demonstrated.")
+                else:
+                    log("FAIL: The preview panel is open but does not demonstrate withholding: "
+                        f"reason_present={ne_reason in unavail_text}, content_scroller_visible={content_visible}")
+    
+                # The notice is a second surface reporting the same decision. It is
+                # judged separately and reported separately, so a failure here is
+                # never mistaken for the preview having been shown.
+                if not has_ne_preview_withheld:
+                    log(f"FAIL: The notice surface did not report the withholding. "
+                        f"element_found={notice_element_found}, texts={notice_desc_ne}")
+                    if panel_withheld:
+                        log("NOTE: The withholding itself held -- the preview panel is correct. "
+                            "The defect is confined to the notice surface, which did not open "
+                            "or did not carry the reason within the polling window.")
+    
+                if panel_withheld and has_ne_preview_withheld:
+                    criterion_preview_withholding = "PASS"
+                    log("PASS: Non-English ASCII prose ('hola mundo') preview withheld in the preview panel "
+                        "and reported truthfully in the notice surface.")
+                else:
+                    criterion_preview_withholding = "FAIL"
+    
+                # Dismiss preview
+                send_key_to_window(win.handle, VK_ESCAPE)
+                time.sleep(1.0)
+            except CriterionFailure as exc:
+                log(f"FAIL: {exc}")
+                if ne_heading is None:
+                    log("      Criterion 14 is BLOCKED, not FAIL: the chip was never reached.")
+                    criterion_preview_withholding = "BLOCKED"
+                else:
+                    criterion_preview_withholding = "FAIL"
+                try:
+                    if find_by_aid(win, "AttachmentPreviewPanel") is not None:
+                        send_key_to_window(win.handle, VK_ESCAPE)
+                        time.sleep(0.6)
+                except Exception:
+                    pass
+    
+            # Clean up non-English test attachment
+            try:
+                conn = sqlite3.connect(STORE_PATH)
+                mark_store_write("DELETE: the non-English draft attachment")
+                conn.execute("DELETE FROM draft_attachments WHERE attachment_id = ?;", (non_eng_id,))
+                conn.commit()
+                conn.close()
+                if os.path.exists(staged_path_ne): os.remove(staged_path_ne)
+                if os.path.exists(source_path_ne): os.remove(source_path_ne)
+            except Exception:
+                pass
+    
+            # Reload alpha again to clear the chip before performance profiling.
+            #
+            # This block was duplicated verbatim in the previous revision: the
+            # second copy switched project a second time for no reason, which added
+            # a whole project load to the run and left two identical PASS lines in
+            # the log that read like two separate observations. There is one reload.
+            log("Reloading clean alpha project for performance profiling...")
+            open_switch_project(win)
+    
+            open_alpha = find_by_name(win, "Open project alpha")
+            if open_alpha:
+                open_alpha.iface_invoke.Invoke()
+                time.sleep(2.5)
+                log("PASS: Clean alpha project restored for performance profiling.")
+            else:
+                # This used to log PASS unconditionally. When the File menu could not
+                # be reached the project was never reloaded, and the line asserted a
+                # restore that had not happened -- the profile below would then be of
+                # whatever project happened to be open. The line says which one it is.
+                log("NOTE: the alpha project was NOT reloaded (the File menu was unreachable); "
+                    "the profile below describes whichever project is currently open.")
+    
+            # =========================================================================
+            # =========================================================================
         # PHASE 6C: CLI READINESS PROJECTION & NON-GATING (CRITERION 21)
         # =========================================================================
         log("\n--- PHASE 6C: CLI Readiness Projection & Non-Gating ---")
-
-        # What this criterion asserts, and why each part is written the way it is:
-        #
-        # 1. One entry per required CLI, each carrying the CLI name, a state from
-        #    the five registered states, and a dot. The state must be READ FROM
-        #    THE PRODUCT, never hardcoded here.
-        # 2. The projection gates nothing. Send is enabled by the draft alone
-        #    (`SendButton().IsEnabled(hasText || hasAttachments)`), and readiness
-        #    is not consulted by Send, folder selection, drafts, history or
-        #    navigation.
-        # 3. A card appears exactly for the CLIs that owe the user something, and
-        #    it offers the actions that condition actually needs.
-        #
-        # SCOPE LIMIT, stated rather than papered over: once a project is bound,
-        # Welcome is not reachable again (Screen 2 is the startup screen and the
-        # prelude has no Back to Welcome after the first binding), so this
-        # criterion compares Screen 2 against the Chat header. Welcome-vs-Chat
-        # agreement was observed separately by `probe_readiness_ui.py`, which
-        # launches against an unbound store and reads both preludes; that
-        # observation is recorded in LOCAL-VALIDATION.md rather than claimed here.
-        READINESS_STATES = ("CHECKING", "READY", "MISSING", "UNSUPPORTED", "PROBE_FAILED")
-        CLI_ENTRIES = (
-            ("Hermes Agent CLI", "HermesStatus"),
-            ("Kilo Code CLI", "KiloStatus"),
-            ("Claude Code CLI", "ClaudeStatus"),
-        )
-        FOLDER_CLI_ENTRIES = (
-            ("Hermes Agent CLI", "FolderHermesStatus"),
-            ("Kilo Code CLI", "FolderKiloStatus"),
-            ("Claude Code CLI", "FolderClaudeStatus"),
-        )
-
-        def parse_readiness(text):
-            """Map an entry's visible text to one of the five states, or None."""
-            if not text:
-                return None
-            for state in READINESS_STATES:
-                if text.rstrip().endswith(state):
-                    return state
-            return "UNRECOGNIZED"
-
-        def read_entries(mapping):
-            found = {}
-            for cli_name, aid in mapping:
-                element = find_by_aid(win, aid)
-                found[cli_name] = element.window_text() if element is not None else None
-            return found
-
-        # PRECONDITION FIRST, before any polling. Every assertion below reads the
-        # Chat header, so if Chat is not open the criterion has observed nothing
-        # and must not report FAIL -- that would assert a defect in the projection
-        # from an observation that was never made. It is BLOCKED, which is what
-        # this harness calls a precondition that stopped an observation. Checked
-        # before the 60s poll so a closed Chat cannot burn the budget and then
-        # report the absence as a projection defect.
-        if find_by_aid(win, "ComposerBox") is None:
-            log("BLOCKED: Chat is not open, so the readiness projection was never "
-                "observable. Criterion 21 is BLOCKED, not FAIL.")
-            try:
-                log(f"  window title: {win.window_text()!r}")
-            except Exception as exc:
-                log(f"  window title unreadable: {type(exc).__name__}: {exc}")
+        if dependent_phases_stopped:
+            log("SKIPPING PHASE 6C: Dependent phase stopped because application could not be verified returned to bound alpha project.")
             criterion_cli_readiness = "BLOCKED"
-            return 1
-
-        # The postcondition is polled and confirmed by two agreeing reads.
-        # "All three read a registered state" is satisfied by the initial markup
-        # (CHECKING is a registered state AND the shipped literal), so it would
-        # report PASS before any detection ran. The only postcondition the markup
-        # cannot produce is "at least one entry left CHECKING".
-        chat_raw = {}
-        chat_states = {}
-        readiness_deadline = time.time() + 60.0
-        while time.time() < readiness_deadline:
-            chat_raw = read_entries(CLI_ENTRIES)
-            parsed = {name: parse_readiness(text) for name, text in chat_raw.items()}
-            if all(text is not None for text in chat_raw.values()) and any(
-                    state not in (None, "CHECKING") for state in parsed.values()):
+        else:
+    
+            # What this criterion asserts, and why each part is written the way it is:
+            #
+            # 1. One entry per required CLI, each carrying the CLI name, a state from
+            #    the five registered states, and a dot. The state must be READ FROM
+            #    THE PRODUCT, never hardcoded here.
+            # 2. The projection gates nothing. Send is enabled by the draft alone
+            #    (`SendButton().IsEnabled(hasText || hasAttachments)`), and readiness
+            #    is not consulted by Send, folder selection, drafts, history or
+            #    navigation.
+            # 3. A card appears exactly for the CLIs that owe the user something, and
+            #    it offers the actions that condition actually needs.
+            #
+            # SCOPE LIMIT, stated rather than papered over: once a project is bound,
+            # Welcome is not reachable again (Screen 2 is the startup screen and the
+            # prelude has no Back to Welcome after the first binding), so this
+            # criterion compares Screen 2 against the Chat header. Welcome-vs-Chat
+            # agreement was observed separately by `probe_readiness_ui.py`, which
+            # launches against an unbound store and reads both preludes; that
+            # observation is recorded in LOCAL-VALIDATION.md rather than claimed here.
+            READINESS_STATES = ("CHECKING", "READY", "MISSING", "UNSUPPORTED", "PROBE_FAILED")
+            CLI_ENTRIES = (
+                ("Hermes Agent CLI", "HermesStatus"),
+                ("Kilo Code CLI", "KiloStatus"),
+                ("Claude Code CLI", "ClaudeStatus"),
+            )
+            FOLDER_CLI_ENTRIES = (
+                ("Hermes Agent CLI", "FolderHermesStatus"),
+                ("Kilo Code CLI", "FolderKiloStatus"),
+                ("Claude Code CLI", "FolderClaudeStatus"),
+            )
+    
+            def parse_readiness(text):
+                """Map an entry's visible text to one of the five states, or None."""
+                if not text:
+                    return None
+                for state in READINESS_STATES:
+                    if text.rstrip().endswith(state):
+                        return state
+                return "UNRECOGNIZED"
+    
+            def read_entries(mapping):
+                found = {}
+                for cli_name, aid in mapping:
+                    element = find_by_aid(win, aid)
+                    found[cli_name] = element.window_text() if element is not None else None
+                return found
+    
+            # PRECONDITION FIRST, before any polling. Every assertion below reads the
+            # Chat header, so if Chat is not open the criterion has observed nothing
+            # and must not report FAIL -- that would assert a defect in the projection
+            # from an observation that was never made. It is BLOCKED, which is what
+            # this harness calls a precondition that stopped an observation. Checked
+            # before the 60s poll so a closed Chat cannot burn the budget and then
+            # report the absence as a projection defect.
+            if find_by_aid(win, "ComposerBox") is None:
+                log("BLOCKED: Chat is not open, so the readiness projection was never "
+                    "observable. Criterion 21 is BLOCKED, not FAIL.")
+                try:
+                    log(f"  window title: {win.window_text()!r}")
+                except Exception as exc:
+                    log(f"  window title unreadable: {type(exc).__name__}: {exc}")
+                criterion_cli_readiness = "BLOCKED"
+                return 1
+    
+            # The postcondition is polled and confirmed by two agreeing reads.
+            # "All three read a registered state" is satisfied by the initial markup
+            # (CHECKING is a registered state AND the shipped literal), so it would
+            # report PASS before any detection ran. The only postcondition the markup
+            # cannot produce is "at least one entry left CHECKING".
+            chat_raw = {}
+            chat_states = {}
+            readiness_deadline = time.time() + 60.0
+            while time.time() < readiness_deadline:
+                chat_raw = read_entries(CLI_ENTRIES)
+                parsed = {name: parse_readiness(text) for name, text in chat_raw.items()}
+                if all(text is not None for text in chat_raw.values()) and any(
+                        state not in (None, "CHECKING") for state in parsed.values()):
+                    time.sleep(1.0)
+                    again = {name: parse_readiness(text)
+                             for name, text in read_entries(CLI_ENTRIES).items()}
+                    if again == parsed:
+                        chat_states = again
+                        break
                 time.sleep(1.0)
-                again = {name: parse_readiness(text)
-                         for name, text in read_entries(CLI_ENTRIES).items()}
-                if again == parsed:
-                    chat_states = again
-                    break
-            time.sleep(1.0)
-
-        readiness_failures = []
-        readiness_notes = []
-
-        if not chat_states:
-            # Report what was actually read. "No entry left CHECKING" is true
-            # both for an entry that stayed at its markup value and for an entry
-            # that is not in the tree at all, and those are different defects.
-            # Without this line the two are indistinguishable in the evidence.
-            log(f"  last readiness read: {json.dumps(chat_raw, ensure_ascii=False)}")
-            readiness_failures.append(
-                "no Chat readiness entry left CHECKING within 60s, so the projection "
-                "could not be distinguished from the initial markup")
-        else:
-            log(f"Chat readiness entries: {json.dumps(chat_raw, ensure_ascii=False)}")
-            for cli_name, aid in CLI_ENTRIES:
-                text = chat_raw.get(cli_name)
-                state = chat_states.get(cli_name)
-                if text is None:
-                    readiness_failures.append(f"{cli_name}: no readiness entry is present")
-                    continue
-                if state == "UNRECOGNIZED":
-                    readiness_failures.append(
-                        f"{cli_name}: entry '{text}' ends in no registered state "
-                        f"({', '.join(READINESS_STATES)})")
-                elif cli_name not in text:
-                    readiness_failures.append(
-                        f"{cli_name}: entry '{text}' does not carry the CLI name")
-                else:
-                    log(f"PASS: {cli_name} reads '{text}' (state {state}).")
-
-            # The dot is decorative in the accessibility tree: the entry's text
-            # already carries both the name and the state, which is what "never
-            # colour-only" requires. Whether the Ellipse itself has a UIA peer is
-            # therefore recorded as an observation, not asserted as a contract --
-            # failing the product for a decorative shape's reachability would be
-            # asserting something the UI contract does not require.
-            dot_ids = ("HermesDot", "KiloDot", "ClaudeDot")
-            dots_found = {aid: find_by_aid(win, aid) is not None for aid in dot_ids}
-            log(f"Readiness dot elements reachable in UIA: {json.dumps(dots_found)}")
-            if not any(dots_found.values()):
-                readiness_notes.append(
-                    "the readiness dots are Ellipses with no UIA peer, so their presence "
-                    "is verified from the XAML rather than from UIA; the entry text carries "
-                    "name and state, so the projection is not colour-only")
-
-            # A settled CHECKING is not "still asking": two agreeing reads confirmed
-            # it, and every path that settles there requires the user to act. A
-            # D-11 tie is therefore a legitimate, non-failure state, not a defect.
-            if "CHECKING" in chat_states.values():
-                tied = [n for n, s in chat_states.items() if s == "CHECKING"]
-                log(f"NOTE: {', '.join(tied)} reads CHECKING. This is a settled state "
-                    f"requiring a user decision (D-11), not a pending detection.")
-
-        # --- The projection must gate nothing ---------------------------------
-        # Behavioural proof at the point the contract names: a draft enables Send
-        # regardless of what the header says about any CLI.
-        composer_probe = find_by_aid(win, "ComposerBox")
-        send_probe = find_by_aid(win, "SendButton")
-        if composer_probe is None or send_probe is None:
-            readiness_failures.append(
-                "the composer or Send control is absent, so non-gating could not be observed")
-        else:
-            send_before = send_probe.is_enabled()
-            composer_probe.set_edit_text("readiness non-gating probe")
-            enabled = poll_until(lambda: find_by_aid(win, "SendButton") is not None
-                                 and find_by_aid(win, "SendButton").is_enabled(),
-                                 timeout=6.0, interval=0.1, min_samples=2)
-            if not enabled:
-                readiness_failures.append(
-                    "Send did not become enabled with a draft present while a CLI reads "
-                    f"{'/'.join(sorted(set(chat_states.values()) or {'unknown'}))}; "
-                    "the readiness projection is gating Send")
-            else:
-                log("PASS: Send enabled from the draft alone, with a CLI not READY in the "
-                    "header; readiness gates nothing.")
-            composer_probe.set_edit_text("")
-            poll_until(lambda: find_by_aid(win, "SendButton") is not None
-                       and not find_by_aid(win, "SendButton").is_enabled(),
-                       timeout=6.0, interval=0.1, min_samples=2)
-            log(f"  Send enabled before the probe: {send_before}")
-
-        # --- Screen 2 must project the same observation ------------------------
-        folder_states = {}
-        if open_switch_project(win) is None:
-            readiness_failures.append(
-                "File -> Switch Project did not reach Screen 2, so the Screen 2 entries "
-                "could not be compared with the Chat header")
-        else:
-            folder_raw = read_entries(FOLDER_CLI_ENTRIES)
-            folder_states = {name: parse_readiness(text) for name, text in folder_raw.items()}
-            log(f"Screen 2 readiness entries: {json.dumps(folder_raw, ensure_ascii=False)}")
+    
+            readiness_failures = []
+            readiness_notes = []
+    
             if not chat_states:
-                readiness_notes.append(
-                    "the Chat header never settled, so no agreement could be computed")
-            else:
-                for cli_name, _ in FOLDER_CLI_ENTRIES:
-                    chat_state = chat_states.get(cli_name)
-                    folder_state = folder_states.get(cli_name)
-                    if folder_state is None:
-                        readiness_failures.append(
-                            f"{cli_name}: Screen 2 has no readiness entry")
-                    elif folder_state != chat_state:
-                        readiness_failures.append(
-                            f"{cli_name}: Screen 2 reads {folder_state} while the Chat "
-                            f"header reads {chat_state}; the two preludes disagree")
-                if not any(cli_name in " ".join(readiness_failures)
-                           for cli_name, _ in FOLDER_CLI_ENTRIES):
-                    log("PASS: Screen 2 projects the same observation as the Chat header.")
-
-            # Return to alpha so the phases after this one run against the same
-            # project they would have run against without this criterion.
-            reopen_alpha = find_by_name(win, "Open project alpha")
-            if reopen_alpha is None:
+                # Report what was actually read. "No entry left CHECKING" is true
+                # both for an entry that stayed at its markup value and for an entry
+                # that is not in the tree at all, and those are different defects.
+                # Without this line the two are indistinguishable in the evidence.
+                log(f"  last readiness read: {json.dumps(chat_raw, ensure_ascii=False)}")
                 readiness_failures.append(
-                    "the Screen 2 switch left no 'Open project alpha' action, so the run "
-                    "could not be returned to the project the later phases expect")
+                    "no Chat readiness entry left CHECKING within 60s, so the projection "
+                    "could not be distinguished from the initial markup")
             else:
-                reopen_alpha.iface_invoke.Invoke()
-                poll_until(lambda: find_by_aid(win, "ComposerBox") is not None,
-                           timeout=20.0, interval=0.2, min_samples=2)
-                time.sleep(1.0)
-
-        # --- Cards must name the cause and offer the actions it needs ----------
-        def read_readiness_cards():
-            cards = []
-            actions = {"locate": [], "choose": [], "recheck": []}
-            try:
-                for d in win.descendants():
-                    try:
-                        name = d.element_info.name or ""
-                    except Exception:
+                log(f"Chat readiness entries: {json.dumps(chat_raw, ensure_ascii=False)}")
+                for cli_name, aid in CLI_ENTRIES:
+                    text = chat_raw.get(cli_name)
+                    state = chat_states.get(cli_name)
+                    if text is None:
+                        readiness_failures.append(f"{cli_name}: no readiness entry is present")
                         continue
-                    if (" problem: " in name) or (" needs a decision: " in name):
-                        cards.append(name)
-                    elif name.startswith("Locate the executable for "):
-                        actions["locate"].append(name)
-                    elif name.startswith("Choose the executable for "):
-                        actions["choose"].append(name)
-                    elif name.startswith("Recheck "):
-                        actions["recheck"].append(name)
-            except Exception as exc:
-                log(f"  NOTE: the readiness card scan raised {type(exc).__name__}: {exc}")
-            return cards, actions
-
-        cards, actions = read_readiness_cards()
-        log(f"Readiness cards: {json.dumps(cards, ensure_ascii=False)}")
-        log(f"Readiness card actions: {json.dumps(actions, ensure_ascii=False)}")
-
-        if chat_states:
-            for cli_name, state in chat_states.items():
-                if state == "READY":
-                    if any(cli_name in card for card in cards):
+                    if state == "UNRECOGNIZED":
                         readiness_failures.append(
-                            f"{cli_name} is READY but still shows a problem card")
-                    continue
-                if state is None:
-                    continue
-                # A non-READY CLI owes the user either a fix (Locate) or a
-                # decision (Choose), and always a Recheck. Which one depends on
-                # the state, and the criterion accepts exactly the right one:
-                # demanding Locate for a D-11 tie would assert a control that
-                # cannot resolve a tie, and the tie is not a failure.
-                has_card = any(cli_name in card for card in cards)
-                has_recheck = any(cli_name in name for name in actions["recheck"])
-                if state == "CHECKING":
-                    has_resolver = any(cli_name in name for name in actions["choose"])
-                    resolver = "Choose the executable"
+                            f"{cli_name}: entry '{text}' ends in no registered state "
+                            f"({', '.join(READINESS_STATES)})")
+                    elif cli_name not in text:
+                        readiness_failures.append(
+                            f"{cli_name}: entry '{text}' does not carry the CLI name")
+                    else:
+                        log(f"PASS: {cli_name} reads '{text}' (state {state}).")
+    
+                # The dot is decorative in the accessibility tree: the entry's text
+                # already carries both the name and the state, which is what "never
+                # colour-only" requires. Whether the Ellipse itself has a UIA peer is
+                # therefore recorded as an observation, not asserted as a contract --
+                # failing the product for a decorative shape's reachability would be
+                # asserting something the UI contract does not require.
+                dot_ids = ("HermesDot", "KiloDot", "ClaudeDot")
+                dots_found = {aid: find_by_aid(win, aid) is not None for aid in dot_ids}
+                log(f"Readiness dot elements reachable in UIA: {json.dumps(dots_found)}")
+                if not any(dots_found.values()):
+                    readiness_notes.append(
+                        "the readiness dots are Ellipses with no UIA peer, so their presence "
+                        "is verified from the XAML rather than from UIA; the entry text carries "
+                        "name and state, so the projection is not colour-only")
+    
+                # A settled CHECKING is not "still asking": two agreeing reads confirmed
+                # it, and every path that settles there requires the user to act. A
+                # D-11 tie is therefore a legitimate, non-failure state, not a defect.
+                if "CHECKING" in chat_states.values():
+                    tied = [n for n, s in chat_states.items() if s == "CHECKING"]
+                    log(f"NOTE: {', '.join(tied)} reads CHECKING. This is a settled state "
+                        f"requiring a user decision (D-11), not a pending detection.")
+    
+            # --- The projection must gate nothing ---------------------------------
+            # Behavioural proof at the point the contract names: a draft enables Send
+            # regardless of what the header says about any CLI.
+            composer_probe = find_by_aid(win, "ComposerBox")
+            send_probe = find_by_aid(win, "SendButton")
+            if composer_probe is None or send_probe is None:
+                readiness_failures.append(
+                    "the composer or Send control is absent, so non-gating could not be observed")
+            else:
+                send_before = send_probe.is_enabled()
+                composer_probe.set_edit_text("readiness non-gating probe")
+                enabled = poll_until(lambda: find_by_aid(win, "SendButton") is not None
+                                     and find_by_aid(win, "SendButton").is_enabled(),
+                                     timeout=6.0, interval=0.1, min_samples=2)
+                if not enabled:
+                    readiness_failures.append(
+                        "Send did not become enabled with a draft present while a CLI reads "
+                        f"{'/'.join(sorted(set(chat_states.values()) or {'unknown'}))}; "
+                        "the readiness projection is gating Send")
                 else:
-                    has_resolver = any(cli_name in name for name in actions["locate"])
-                    resolver = "Locate executable"
-                if not has_card:
-                    readiness_failures.append(
-                        f"{cli_name} reads {state} but has no card explaining it")
-                elif not has_resolver:
-                    readiness_failures.append(
-                        f"{cli_name} reads {state} but its card offers no {resolver} action")
-                elif not has_recheck:
-                    readiness_failures.append(
-                        f"{cli_name} reads {state} but its card offers no Recheck action")
+                    log("PASS: Send enabled from the draft alone, with a CLI not READY in the "
+                        "header; readiness gates nothing.")
+                composer_probe.set_edit_text("")
+                poll_until(lambda: find_by_aid(win, "SendButton") is not None
+                           and not find_by_aid(win, "SendButton").is_enabled(),
+                           timeout=6.0, interval=0.1, min_samples=2)
+                log(f"  Send enabled before the probe: {send_before}")
+    
+            # --- Screen 2 must project the same observation ------------------------
+            folder_states = {}
+            if open_switch_project(win) is None:
+                readiness_failures.append(
+                    "File -> Switch Project did not reach Screen 2, so the Screen 2 entries "
+                    "could not be compared with the Chat header")
+            else:
+                folder_raw = read_entries(FOLDER_CLI_ENTRIES)
+                folder_states = {name: parse_readiness(text) for name, text in folder_raw.items()}
+                log(f"Screen 2 readiness entries: {json.dumps(folder_raw, ensure_ascii=False)}")
+                if not chat_states:
+                    readiness_notes.append(
+                        "the Chat header never settled, so no agreement could be computed")
                 else:
-                    log(f"PASS: {cli_name} ({state}) has a card naming the cause, "
-                        f"{resolver} and Recheck.")
-
-        for note in readiness_notes:
-            log(f"NOTE: {note}")
-
-        if readiness_failures:
-            for reason in readiness_failures:
-                log(f"FAIL: {reason}")
-            criterion_cli_readiness = "FAIL"
-        else:
-            criterion_cli_readiness = "PASS"
-            log("PASS: criterion 21 - one entry per CLI with name, observed state and dot; "
-                "Screen 2 agrees with the Chat header; Send is not gated by readiness; "
-                "cards offer the resolver their condition needs plus Recheck.")
-
-        # =========================================================================
+                    for cli_name, _ in FOLDER_CLI_ENTRIES:
+                        chat_state = chat_states.get(cli_name)
+                        folder_state = folder_states.get(cli_name)
+                        if folder_state is None:
+                            readiness_failures.append(
+                                f"{cli_name}: Screen 2 has no readiness entry")
+                        elif folder_state != chat_state:
+                            readiness_failures.append(
+                                f"{cli_name}: Screen 2 reads {folder_state} while the Chat "
+                                f"header reads {chat_state}; the two preludes disagree")
+                    if not any(cli_name in " ".join(readiness_failures)
+                               for cli_name, _ in FOLDER_CLI_ENTRIES):
+                        log("PASS: Screen 2 projects the same observation as the Chat header.")
+    
+                # Return to alpha so the phases after this one run against the same
+                # project they would have run against without this criterion.
+                reopen_alpha = find_by_name(win, "Open project alpha")
+                if reopen_alpha is None:
+                    readiness_failures.append(
+                        "the Screen 2 switch left no 'Open project alpha' action, so the run "
+                        "could not be returned to the project the later phases expect")
+                else:
+                    reopen_alpha.iface_invoke.Invoke()
+                    poll_until(lambda: find_by_aid(win, "ComposerBox") is not None,
+                               timeout=20.0, interval=0.2, min_samples=2)
+                    time.sleep(1.0)
+    
+            # --- Cards must name the cause and offer the actions it needs ----------
+            def read_readiness_cards():
+                cards = []
+                actions = {"locate": [], "choose": [], "recheck": []}
+                try:
+                    for d in win.descendants():
+                        try:
+                            name = d.element_info.name or ""
+                        except Exception:
+                            continue
+                        if (" problem: " in name) or (" needs a decision: " in name):
+                            cards.append(name)
+                        elif name.startswith("Locate the executable for "):
+                            actions["locate"].append(name)
+                        elif name.startswith("Choose the executable for "):
+                            actions["choose"].append(name)
+                        elif name.startswith("Recheck "):
+                            actions["recheck"].append(name)
+                except Exception as exc:
+                    log(f"  NOTE: the readiness card scan raised {type(exc).__name__}: {exc}")
+                return cards, actions
+    
+            cards, actions = read_readiness_cards()
+            log(f"Readiness cards: {json.dumps(cards, ensure_ascii=False)}")
+            log(f"Readiness card actions: {json.dumps(actions, ensure_ascii=False)}")
+    
+            if chat_states:
+                for cli_name, state in chat_states.items():
+                    if state == "READY":
+                        if any(cli_name in card for card in cards):
+                            readiness_failures.append(
+                                f"{cli_name} is READY but still shows a problem card")
+                        continue
+                    if state is None:
+                        continue
+                    # A non-READY CLI owes the user either a fix (Locate) or a
+                    # decision (Choose), and always a Recheck. Which one depends on
+                    # the state, and the criterion accepts exactly the right one:
+                    # demanding Locate for a D-11 tie would assert a control that
+                    # cannot resolve a tie, and the tie is not a failure.
+                    has_card = any(cli_name in card for card in cards)
+                    has_recheck = any(cli_name in name for name in actions["recheck"])
+                    if state == "CHECKING":
+                        has_resolver = any(cli_name in name for name in actions["choose"])
+                        resolver = "Choose the executable"
+                    else:
+                        has_resolver = any(cli_name in name for name in actions["locate"])
+                        resolver = "Locate executable"
+                    if not has_card:
+                        readiness_failures.append(
+                            f"{cli_name} reads {state} but has no card explaining it")
+                    elif not has_resolver:
+                        readiness_failures.append(
+                            f"{cli_name} reads {state} but its card offers no {resolver} action")
+                    elif not has_recheck:
+                        readiness_failures.append(
+                            f"{cli_name} reads {state} but its card offers no Recheck action")
+                    else:
+                        log(f"PASS: {cli_name} ({state}) has a card naming the cause, "
+                            f"{resolver} and Recheck.")
+    
+            for note in readiness_notes:
+                log(f"NOTE: {note}")
+    
+            if readiness_failures:
+                for reason in readiness_failures:
+                    log(f"FAIL: {reason}")
+                criterion_cli_readiness = "FAIL"
+            else:
+                criterion_cli_readiness = "PASS"
+                log("PASS: criterion 21 - one entry per CLI with name, observed state and dot; "
+                    "Screen 2 agrees with the Chat header; Send is not gated by readiness; "
+                    "cards offer the resolver their condition needs plus Recheck.")
+    
+            # =========================================================================
         # PHASE 7: ACTUAL UI PERFORMANCE PROFILING (UNCAPPED STALL RETENTION)
         # =========================================================================
         log("\n--- PHASE 7: UI Performance Profiling (Uncapped Stalls & Consecutive Scroll) ---")
-
-        # A dead application cannot be profiled, and the difference matters: an
-        # exit code says the process ended, while "ComposerBox not found" says a
-        # control was missing. The previous run reported the second for the first
-        # and then aborted on a rectangle. Checked before the stimulus, so an
-        # earlier crash is BLOCKED -- the stimulus was never applied -- and not
-        # FAIL, which would assert a profiling result that was never measured.
-        perf_exit_code = proc.poll()
-        if perf_exit_code is not None:
-            log(f"BLOCKED: the application had already exited (0x{perf_exit_code & 0xFFFFFFFF:08X}) "
-                f"when profiling was due to start.")
-            log("         No stimulus was applied and no measurement exists; criterion 15 is")
-            log("         BLOCKED, not FAIL. See the phase that ran before this one for the cause.")
+        if dependent_phases_stopped:
+            log("SKIPPING PHASE 7: Dependent phase stopped because application could not be verified returned to bound alpha project.")
             criterion_perf_profiling = "BLOCKED"
-            return 1
-
-        log("Typing test keystrokes into ComposerBox to measure input presentation latency...")
-        composer_box = find_by_aid(win, "ComposerBox")
-        if composer_box:
-            for text in ["Performance", " measurement", " keystroke", " latency", " profiling."]:
-                composer_box.set_edit_text(text)
-                time.sleep(0.08)
-        time.sleep(1.0)
-
-        log("Scrolling HistoryScroller via consecutive mouse wheel events to measure consecutive scroll frames...")
-        history = find_by_aid(win, "HistoryScroller")
-        # Reading an element's rectangle is a live UIA round-trip and can fail
-        # transiently with 0x80040201 ("An event was unable to invoke any of the
-        # subscribers") while the application is dispatching. That error aborted
-        # the whole run here: Phase 8 never evaluated the perf log it had already
-        # collected and criterion 15 was reported NOT_RUN for a criterion that
-        # had in fact been stimulated. A geometry probe must not be able to end
-        # the suite; it falls back to the window centre, which is inside the
-        # conversation scroller anyway, and says so in the log.
-        history_rect = None
-        if history is not None:
-            try:
-                history_rect = history.rectangle()
-            except Exception as exc:
-                log(f"  NOTE: could not read HistoryScroller's rectangle "
-                    f"({type(exc).__name__}: {exc}); using the window centre instead")
-        if history_rect is not None:
-            try:
-                win_left = win.rectangle().left
-            except Exception as exc:
-                log(f"  NOTE: could not read the window rectangle ({type(exc).__name__}: {exc}); "
-                    f"clamping against the scroller's own left edge")
-                win_left = history_rect.left
-            hx = max(history_rect.left, win_left + 40) + 40
-            hy = (history_rect.top + history_rect.bottom) // 2
+            log("Cleanly closing application via WM_CLOSE to flush complete performance log...")
+            user32.PostMessageW(win.handle, WM_CLOSE, 0, 0)
+            time.sleep(2.5)
         else:
-            try:
-                rect = win.rectangle()
-            except Exception as exc:
-                # A dead application makes every rectangle read fail with
-                # 0x80040201, and this branch is the last place a geometry probe
-                # can end the run. There is nothing left to point a wheel at, so
-                # the phase is abandoned with the reason rather than with a
-                # traceback.
-                log(f"BLOCKED: could not read the window rectangle either "
-                    f"({type(exc).__name__}: {exc}); no window is left to point the wheel at.")
+    
+            # A dead application cannot be profiled, and the difference matters: an
+            # exit code says the process ended, while "ComposerBox not found" says a
+            # control was missing. The previous run reported the second for the first
+            # and then aborted on a rectangle. Checked before the stimulus, so an
+            # earlier crash is BLOCKED -- the stimulus was never applied -- and not
+            # FAIL, which would assert a profiling result that was never measured.
+            perf_exit_code = proc.poll()
+            if perf_exit_code is not None:
+                log(f"BLOCKED: the application had already exited (0x{perf_exit_code & 0xFFFFFFFF:08X}) "
+                    f"when profiling was due to start.")
+                log("         No stimulus was applied and no measurement exists; criterion 15 is")
+                log("         BLOCKED, not FAIL. See the phase that ran before this one for the cause.")
                 criterion_perf_profiling = "BLOCKED"
                 return 1
-            hx = (rect.left + rect.right) // 2
-            hy = (rect.top + rect.bottom) // 2
-        send_wheel_at_point(win, hx, hy, 120, steps=15, pause=0.04)
-        send_wheel_at_point(win, hx, hy, -120, steps=15, pause=0.04)
-        time.sleep(1.5)
-
-        log("Cleanly closing application via WM_CLOSE to flush complete performance log...")
-        user32.PostMessageW(win.handle, WM_CLOSE, 0, 0)
-        time.sleep(2.5)
-
-        # =========================================================================
+    
+            log("Typing test keystrokes into ComposerBox to measure input presentation latency...")
+            composer_box = find_by_aid(win, "ComposerBox")
+            if composer_box:
+                for text in ["Performance", " measurement", " keystroke", " latency", " profiling."]:
+                    composer_box.set_edit_text(text)
+                    time.sleep(0.08)
+            time.sleep(1.0)
+    
+            log("Scrolling HistoryScroller via consecutive mouse wheel events to measure consecutive scroll frames...")
+            history = find_by_aid(win, "HistoryScroller")
+            # Reading an element's rectangle is a live UIA round-trip and can fail
+            # transiently with 0x80040201 ("An event was unable to invoke any of the
+            # subscribers") while the application is dispatching. That error aborted
+            # the whole run here: Phase 8 never evaluated the perf log it had already
+            # collected and criterion 15 was reported NOT_RUN for a criterion that
+            # had in fact been stimulated. A geometry probe must not be able to end
+            # the suite; it falls back to the window centre, which is inside the
+            # conversation scroller anyway, and says so in the log.
+            history_rect = None
+            if history is not None:
+                try:
+                    history_rect = history.rectangle()
+                except Exception as exc:
+                    log(f"  NOTE: could not read HistoryScroller's rectangle "
+                        f"({type(exc).__name__}: {exc}); using the window centre instead")
+            if history_rect is not None:
+                try:
+                    win_left = win.rectangle().left
+                except Exception as exc:
+                    log(f"  NOTE: could not read the window rectangle ({type(exc).__name__}: {exc}); "
+                        f"clamping against the scroller's own left edge")
+                    win_left = history_rect.left
+                hx = max(history_rect.left, win_left + 40) + 40
+                hy = (history_rect.top + history_rect.bottom) // 2
+            else:
+                try:
+                    rect = win.rectangle()
+                except Exception as exc:
+                    # A dead application makes every rectangle read fail with
+                    # 0x80040201, and this branch is the last place a geometry probe
+                    # can end the run. There is nothing left to point a wheel at, so
+                    # the phase is abandoned with the reason rather than with a
+                    # traceback.
+                    log(f"BLOCKED: could not read the window rectangle either "
+                        f"({type(exc).__name__}: {exc}); no window is left to point the wheel at.")
+                    criterion_perf_profiling = "BLOCKED"
+                    return 1
+                hx = (rect.left + rect.right) // 2
+                hy = (rect.top + rect.bottom) // 2
+            send_wheel_at_point(win, hx, hy, 120, steps=15, pause=0.04)
+            send_wheel_at_point(win, hx, hy, -120, steps=15, pause=0.04)
+            time.sleep(1.5)
+    
+            log("Cleanly closing application via WM_CLOSE to flush complete performance log...")
+            user32.PostMessageW(win.handle, WM_CLOSE, 0, 0)
+            time.sleep(2.5)
+    
+            # =========================================================================
         # PHASE 8: PERFORMANCE METRICS ANALYSIS (TRUTHFUL DATA REPORTING)
         # =========================================================================
         log("\n--- PHASE 8: Empirical Performance Metrics Analysis ---")
-        if not os.path.exists(PERF_LOG_PATH):
-            log(f"FAIL: Perf log file '{PERF_LOG_PATH}' was not created")
-            log("      The profiling criterion is FAIL, not NOT_RUN: the stimulus was")
-            log("      applied and the artifact it is supposed to produce is absent.")
-            criterion_perf_profiling = "FAIL"
-            return 1
-
-        with open(PERF_LOG_PATH, "r", encoding="utf-8") as f:
-            perf_data = json.load(f)
-
-        log("Empirical UI Performance Measurements recorded from WinUI 3 CompositionTarget (NO stalls discarded):")
-        log(f"  Total UI render callbacks:        {perf_data.get('total_frames')}")
-        log(f"  Average render callback interval: {perf_data.get('avg_frame_ms'):.2f} ms")
-        log(f"  Max render callback interval:     {perf_data.get('max_frame_ms'):.2f} ms")
-        log(f"  Callbacks exceeding 33.3ms:       {perf_data.get('dropped_frames_gt_33ms')}")
-        log(f"  Stall callbacks exceeding 100ms:  {perf_data.get('stall_frames_gt_100ms')}")
-        log(f"  Typing latency samples:           {perf_data.get('typing_sample_count')}")
-        log(f"  Typing p50 latency:               {perf_data.get('typing_p50_latency_ms'):.2f} ms")
-        log(f"  Typing p95 latency:               {perf_data.get('typing_p95_latency_ms'):.2f} ms")
-        log(f"  Typing max latency:               {perf_data.get('typing_max_latency_ms'):.2f} ms")
-        log(f"  Scroll ViewChanged samples:       {perf_data.get('scroll_sample_count')}")
-        log(f"  Scroll ViewChanged p50 interval:  {perf_data.get('scroll_p50_frame_ms'):.2f} ms")
-        log(f"  Scroll ViewChanged p95 interval:  {perf_data.get('scroll_p95_frame_ms'):.2f} ms")
-        log(f"  Scroll ViewChanged max interval:  {perf_data.get('scroll_max_frame_ms'):.2f} ms")
-        log(f"  Scroll intervals exceeding 33ms:  {perf_data.get('dropped_scroll_frames_gt_33ms')}")
-
-        # Evaluate every threshold before deciding, so the log carries the full
-        # set of misses rather than only the first one.
-        perf_failures = []
-        if perf_data.get("total_frames", 0) < 50:
-            perf_failures.append("Insufficient frames rendered during test session")
-        if perf_data.get("avg_frame_ms", 999.0) > 33.33:
-            perf_failures.append(
-                f"Average frame time exceeded 33.33ms: {perf_data.get('avg_frame_ms')} ms")
-        if perf_data.get("typing_sample_count", 0) > 0:
-            if perf_data.get("typing_p95_latency_ms", 999.0) > 100.0:
-                perf_failures.append(
-                    f"Typing p95 latency exceeded 100ms: {perf_data.get('typing_p95_latency_ms')} ms")
-
-        if perf_failures:
-            for reason in perf_failures:
-                log(f"FAIL: {reason}")
-            criterion_perf_profiling = "FAIL"
-            return 1
+        if dependent_phases_stopped:
+            log("SKIPPING PHASE 8: Dependent phase stopped because application could not be verified returned to bound alpha project.")
         else:
-            criterion_perf_profiling = "PASS"
-
+            if not os.path.exists(PERF_LOG_PATH):
+                log(f"FAIL: Perf log file '{PERF_LOG_PATH}' was not created")
+                log("      The profiling criterion is FAIL, not NOT_RUN: the stimulus was")
+                log("      applied and the artifact it is supposed to produce is absent.")
+                criterion_perf_profiling = "FAIL"
+                return 1
+    
+            with open(PERF_LOG_PATH, "r", encoding="utf-8") as f:
+                perf_data = json.load(f)
+    
+            log("Empirical UI Performance Measurements recorded from WinUI 3 CompositionTarget (NO stalls discarded):")
+            log(f"  Total UI render callbacks:        {perf_data.get('total_frames')}")
+            log(f"  Average render callback interval: {perf_data.get('avg_frame_ms'):.2f} ms")
+            log(f"  Max render callback interval:     {perf_data.get('max_frame_ms'):.2f} ms")
+            log(f"  Callbacks exceeding 33.3ms:       {perf_data.get('dropped_frames_gt_33ms')}")
+            log(f"  Stall callbacks exceeding 100ms:  {perf_data.get('stall_frames_gt_100ms')}")
+            log(f"  Typing latency samples:           {perf_data.get('typing_sample_count')}")
+            log(f"  Typing p50 latency:               {perf_data.get('typing_p50_latency_ms'):.2f} ms")
+            log(f"  Typing p95 latency:               {perf_data.get('typing_p95_latency_ms'):.2f} ms")
+            log(f"  Typing max latency:               {perf_data.get('typing_max_latency_ms'):.2f} ms")
+            log(f"  Scroll ViewChanged samples:       {perf_data.get('scroll_sample_count')}")
+            log(f"  Scroll ViewChanged p50 interval:  {perf_data.get('scroll_p50_frame_ms'):.2f} ms")
+            log(f"  Scroll ViewChanged p95 interval:  {perf_data.get('scroll_p95_frame_ms'):.2f} ms")
+            log(f"  Scroll ViewChanged max interval:  {perf_data.get('scroll_max_frame_ms'):.2f} ms")
+            log(f"  Scroll intervals exceeding 33ms:  {perf_data.get('dropped_scroll_frames_gt_33ms')}")
+    
+            # Evaluate every threshold before deciding, so the log carries the full
+            # set of misses rather than only the first one.
+            perf_failures = []
+            if perf_data.get("total_frames", 0) < 50:
+                perf_failures.append("Insufficient frames rendered during test session")
+            if perf_data.get("avg_frame_ms", 999.0) > 33.33:
+                perf_failures.append(
+                    f"Average frame time exceeded 33.33ms: {perf_data.get('avg_frame_ms')} ms")
+            if perf_data.get("typing_sample_count", 0) > 0:
+                if perf_data.get("typing_p95_latency_ms", 999.0) > 100.0:
+                    perf_failures.append(
+                        f"Typing p95 latency exceeded 100ms: {perf_data.get('typing_p95_latency_ms')} ms")
+    
+            if perf_failures:
+                for reason in perf_failures:
+                    log(f"FAIL: {reason}")
+                criterion_perf_profiling = "FAIL"
+                return 1
+            else:
+                criterion_perf_profiling = "PASS"
+    
+        if dependent_phases_stopped:
+            return 1
         return 0
 
 
@@ -7287,6 +7489,22 @@ def main():
         if not restore_ok:
             desktop_restoration_failed = True
             log(f"FATAL: Desktop restoration failed: {desktop_scope.restore_error}")
+
+        if EVIDENCE_DIR:
+            try:
+                dest_rec = {
+                    "orig_desktop_name": desktop_scope.orig_desktop_name,
+                    "thread_desktop_name": desktop_scope.thread_desktop_name,
+                    "switched": desktop_scope.switched,
+                    "restored": desktop_scope.restored,
+                    "restore_ok": restore_ok,
+                    "switch_error": desktop_scope.switch_error,
+                    "restore_error": desktop_scope.restore_error,
+                }
+                with open(os.path.join(EVIDENCE_DIR, "desktop-restoration.json"), "w", encoding="utf-8") as f:
+                    json.dump(dest_rec, f, indent=2)
+            except Exception as exc:
+                log(f"Notice while recording desktop restoration: {exc}")
 
     # Single finalization boundary
     custom_override = getattr(sys.modules[__name__], "custom_verdicts_override", None)

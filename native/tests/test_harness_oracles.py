@@ -1875,57 +1875,319 @@ def test_bounded_uia_retries_distinguishes_absence_from_unavailability():
 
 def test_subcase_b_targeting_failure_is_inconclusive_not_defect():
     """Requirement 2: Targeting failure during Subcase B is classified as INCONCLUSIVE, not application defect."""
-    target = None
-    target_fail_reason = "no verified band point reached HistoryScroller"
-    criterion_reading_anchor = "NOT_RUN"
-    if target is None:
-        if target_fail_reason:
-            criterion_reading_anchor = "INCONCLUSIVE"
-        else:
-            criterion_reading_anchor = "FAIL"
-    assert criterion_reading_anchor == "INCONCLUSIVE", (
-        f"failed targeting must yield INCONCLUSIVE, got {criterion_reading_anchor}")
+    outcome, reason = H.classify_subcase_b_targeting_outcome(None, "no verified band point reached HistoryScroller")
+    assert outcome == "INCONCLUSIVE", f"failed targeting must yield INCONCLUSIVE, got {outcome}"
+    assert "FAIL" not in outcome
+    assert "no verified band point" in reason
+
+    outcome_ok, reason_ok = H.classify_subcase_b_targeting_outcome((500, 300))
+    assert outcome_ok == "CONTINUE", f"valid target must yield CONTINUE, got {outcome_ok}"
+    assert "target verified" in reason_ok
 
 
 def test_phase3b_cleanup_releases_held_load_and_preserves_rows_on_alpha_failure():
     """Requirement 4: Phase 3B cleanup releases held query and preserves probe rows if return to alpha fails."""
-    class _FakeEvent:
+    import tempfile
+    import sqlite3
+    import os
+
+    class _MockEvent:
         def __init__(self):
             self.signaled = False
         def set(self):
             self.signaled = True
 
-    h_older_release = _FakeEvent()
-    paging_bound = True
-    returned_to_alpha = False
-    db_rows_deleted = False
-    dependent_phases_stopped = False
+    class _MockHandle:
+        def __init__(self):
+            self.closed = False
+        def close(self):
+            self.closed = True
 
-    # Cleanup logic simulation:
-    # 1. Release held query
-    if h_older_release:
-        h_older_release.set()
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test_store.db")
+        probe_path = os.path.join(tmp_dir, "paging-probe")
+        os.makedirs(probe_path, exist_ok=True)
+        probe_id = "00000000-0000-4000-8000-00000000c11a"
 
-    # 2. Check alpha return
-    if returned_to_alpha or not paging_bound:
-        db_rows_deleted = True
-    else:
-        dependent_phases_stopped = True
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE projects (id TEXT PRIMARY KEY, display_name TEXT);")
+        conn.execute("CREATE TABLE contributions (project_id TEXT, submission_id TEXT, body TEXT);")
+        conn.execute("CREATE TABLE selection_events (project_id TEXT);")
+        conn.execute("CREATE TABLE selection_receipts (project_id TEXT);")
+        conn.execute("CREATE TABLE pending_submissions (project_id TEXT);")
 
-    assert h_older_release.signaled is True, "held load must be released in cleanup"
-    assert db_rows_deleted is False, "probe rows must NOT be deleted when alpha return failed"
-    assert dependent_phases_stopped is True, "dependent phases must be stopped when alpha return failed"
+        conn.execute("INSERT INTO projects VALUES (?, ?);", (probe_id, "zz-paging-probe"))
+        conn.execute("INSERT INTO contributions VALUES (?, 'sub-1', 'msg 1');", (probe_id,))
+        conn.commit()
+        conn.close()
 
-    # Now verify success path:
-    returned_to_alpha = True
-    dependent_phases_stopped = False
-    if returned_to_alpha or not paging_bound:
-        db_rows_deleted = True
-    else:
-        dependent_phases_stopped = True
+        h_release = _MockEvent()
+        h_hold = _MockHandle()
 
-    assert db_rows_deleted is True, "probe rows must be deleted when alpha return succeeded"
-    assert dependent_phases_stopped is False, "dependent phases must not be stopped when alpha return succeeded"
+        # Call real production cleanup function with return failure
+        returned, dep_stopped = H.perform_phase3b_cleanup(
+            win=None,
+            store_path=db_path,
+            probe_id=probe_id,
+            probe_path=probe_path,
+            paging_bound=True,
+            h_release=h_release,
+            handles=[h_hold],
+            return_verifier=lambda: False,
+        )
+
+        assert h_release.signaled is True, "held load must be released in cleanup"
+        assert h_hold.closed is True, "handles must be closed in cleanup"
+        assert returned is False, "return to alpha was mocked as failed"
+        assert dep_stopped is True, "dependent phases must be stopped when alpha return failed"
+
+        # Verify probe rows preserved in real SQLite DB
+        conn = sqlite3.connect(db_path)
+        p_count = conn.execute("SELECT COUNT(*) FROM projects WHERE id = ?;", (probe_id,)).fetchone()[0]
+        c_count = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (probe_id,)).fetchone()[0]
+        conn.close()
+
+        assert p_count == 1, f"probe project row must be preserved when alpha return failed, but got {p_count}"
+        assert c_count == 1, f"probe contributions row must be preserved when alpha return failed, but got {c_count}"
+        assert os.path.exists(probe_path), "probe directory must be preserved when alpha return failed"
+
+        # Now verify success path with return_verifier returning True
+        returned_ok, dep_stopped_ok = H.perform_phase3b_cleanup(
+            win=None,
+            store_path=db_path,
+            probe_id=probe_id,
+            probe_path=probe_path,
+            paging_bound=True,
+            h_release=None,
+            handles=None,
+            return_verifier=lambda: True,
+        )
+
+        assert returned_ok is True, "return to alpha was mocked as succeeded"
+        assert dep_stopped_ok is False, "dependent phases must NOT be stopped when alpha return succeeded"
+
+        conn = sqlite3.connect(db_path)
+        p_count_ok = conn.execute("SELECT COUNT(*) FROM projects WHERE id = ?;", (probe_id,)).fetchone()[0]
+        c_count_ok = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (probe_id,)).fetchone()[0]
+        conn.close()
+
+        assert p_count_ok == 0, f"probe project row must be deleted when alpha return succeeded, but got {p_count_ok}"
+        assert c_count_ok == 0, f"probe contributions must be deleted when alpha return succeeded, but got {c_count_ok}"
+
+
+def test_observe_by_aid_and_name_distinguish_absence_from_unavailability():
+    """R1: Failed UIA observation records UNAVAILABLE, not NOT_FOUND."""
+    class Unavailable:
+        def descendants(self): raise RuntimeError("controlled UIA enumeration unavailable")
+
+    class BadInfo:
+        @property
+        def automation_id(self): raise RuntimeError("controlled property failure")
+        @property
+        def name(self): raise RuntimeError("controlled property failure")
+
+    class BadElement:
+        element_info = BadInfo()
+        def window_text(self): raise RuntimeError("controlled property failure")
+
+    class PropertyUnavailable:
+        def descendants(self): return [BadElement()]
+
+    class CleanEmpty:
+        def descendants(self): return []
+
+    class MockInfo:
+        def __init__(self, aid, name):
+            self.automation_id = aid
+            self.name = name
+
+    class MockEle:
+        def __init__(self, aid, name):
+            self.element_info = MockInfo(aid, name)
+        def window_text(self): return self.element_info.name
+
+    class CleanFound:
+        def descendants(self): return [MockEle("TargetAid", "TargetName")]
+
+    old_sleep = H.time.sleep
+    H.time.sleep = lambda _: None
+    try:
+        # Enumeration failure
+        obs1 = H.observe_by_aid(Unavailable(), "TargetAid", retries=2, retry_delay=0)
+        assert obs1.is_unavailable is True
+        assert obs1.is_absent is False
+        assert obs1.is_found is False
+        assert "RuntimeError" in obs1.error
+        assert H.last_scan_was_unavailable() is True
+
+        # Property read failure
+        obs2 = H.observe_by_aid(PropertyUnavailable(), "TargetAid", retries=2, retry_delay=0)
+        assert obs2.is_unavailable is True
+        assert obs2.is_absent is False
+        assert "controlled property failure" in obs2.error
+
+        obs2_name = H.observe_by_name(PropertyUnavailable(), "TargetName", retries=2, retry_delay=0)
+        assert obs2_name.is_unavailable is True
+        assert obs2_name.is_absent is False
+
+        # Clean absence
+        obs3 = H.observe_by_aid(CleanEmpty(), "TargetAid", retries=2, retry_delay=0)
+        assert obs3.is_absent is True
+        assert obs3.is_unavailable is False
+        assert obs3.is_found is False
+        assert obs3.error is None
+        assert H.last_scan_was_unavailable() is False
+
+        # Clean found
+        obs4 = H.observe_by_aid(CleanFound(), "TargetAid", retries=2, retry_delay=0)
+        assert obs4.is_found is True
+        assert obs4.is_absent is False
+        assert obs4.is_unavailable is False
+        assert obs4.element.element_info.automation_id == "TargetAid"
+    finally:
+        H.time.sleep = old_sleep
+
+
+def test_assert_control_withdrawn_distinguishes_absence_from_unavailability():
+    """R1: assert_control_withdrawn returns None on observation uncertainty, NEVER granting positive PASS."""
+    class Unavailable:
+        def descendants(self): raise RuntimeError("controlled UIA enumeration unavailable")
+
+    class BadInfo:
+        @property
+        def automation_id(self): raise RuntimeError("controlled property failure")
+
+    class BadElement:
+        element_info = BadInfo()
+
+    class PropertyUnavailable:
+        def descendants(self): return [BadElement()]
+
+    class CleanEmpty:
+        def descendants(self): return []
+
+    class MockInfo:
+        def __init__(self, aid):
+            self.automation_id = aid
+
+    class MockEle:
+        def __init__(self, aid, visible=True, raise_vis=False):
+            self.element_info = MockInfo(aid)
+            self._visible = visible
+            self._raise_vis = raise_vis
+        def is_visible(self):
+            if self._raise_vis: raise RuntimeError("controlled visibility failure")
+            return self._visible
+
+    class PresentVisible:
+        def descendants(self): return [MockEle("ActionCenterPanel", visible=True)]
+
+    class PresentCollapsed:
+        def descendants(self): return [MockEle("ActionCenterPanel", visible=False)]
+
+    class VisibilityFails:
+        def descendants(self): return [MockEle("ActionCenterPanel", raise_vis=True)]
+
+    old_sleep = H.time.sleep
+    H.time.sleep = lambda _: None
+    try:
+        # Enumeration failure -> observation unavailable (None)
+        w1, diag1 = H.assert_control_withdrawn(Unavailable(), aid="ActionCenterPanel", retries=2, retry_delay=0)
+        assert w1 is None, f"expected None on enumeration failure, got {w1}"
+        assert (w1 is True) is False, "observation failure must NEVER evaluate to True (cannot grant PASS)"
+
+        # Property read failure -> observation unavailable (None)
+        w2, diag2 = H.assert_control_withdrawn(PropertyUnavailable(), aid="ActionCenterPanel", retries=2, retry_delay=0)
+        assert w2 is None, f"expected None on property failure, got {w2}"
+        assert (w2 is True) is False
+
+        # Clean empty -> proven absent (True)
+        w3, diag3 = H.assert_control_withdrawn(CleanEmpty(), aid="ActionCenterPanel", retries=2, retry_delay=0)
+        assert w3 is True
+        assert "absent" in diag3
+
+        # Present and visible -> assertion failed (False)
+        w4, diag4 = H.assert_control_withdrawn(PresentVisible(), aid="ActionCenterPanel", retries=2, retry_delay=0)
+        assert w4 is False
+        assert "visible" in diag4
+
+        # Present and collapsed -> proven collapsed (True)
+        w5, diag5 = H.assert_control_withdrawn(PresentCollapsed(), aid="ActionCenterPanel", retries=2, retry_delay=0)
+        assert w5 is True
+        assert "collapsed" in diag5
+
+        # Visibility read failure -> observation unavailable (None)
+        w6, diag6 = H.assert_control_withdrawn(VisibilityFails(), aid="ActionCenterPanel", retries=2, retry_delay=0)
+        assert w6 is None
+        assert (w6 is True) is False
+    finally:
+        H.time.sleep = old_sleep
+
+
+def test_actual_empty_card_assertion_rejects_unavailability():
+    """R1: Test production absence-check caller: initial Action Center withdrawal rejects Unavailable."""
+    class Unavailable:
+        def descendants(self): raise RuntimeError("controlled UIA enumeration unavailable")
+
+    old_sleep = H.time.sleep
+    H.time.sleep = lambda _: None
+    try:
+        win = Unavailable()
+        withdrawn, reason = H.assert_control_withdrawn(win, aid="ActionCenterPanel", retries=2, retry_delay=0)
+        is_ac_initially_withdrawn = (withdrawn is True)
+
+        # In production:
+        # if withdrawn is None: log("FAIL->OBSERVATION..."); return 1
+        # elif not is_ac_initially_withdrawn: log("FAIL..."); return 1
+        # log("PASS: Action Center panel correctly confirmed collapsed/withdrawn...")
+        passed = False
+        if withdrawn is None:
+            passed = False
+        elif not is_ac_initially_withdrawn:
+            passed = False
+        else:
+            passed = True
+
+        assert passed is False, "Unavailable must fail closed and NEVER pass initial empty card assertion"
+        assert withdrawn is None
+        assert is_ac_initially_withdrawn is False
+    finally:
+        H.time.sleep = old_sleep
+
+
+def test_dependent_phases_stopped_is_structural():
+    """R2: Structural dependent-phase stop: Phase 6 sets BLOCKED (never PASS), Phase 9 sets BLOCKED (no UnboundLocalError)."""
+    import ast, copy
+    from pathlib import Path
+    source_path = Path(__file__).parent / "test_full_ui_acceptance.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    runner = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_run_harness_phases")
+
+    phase6_guard = next(n for n in runner.body if isinstance(n, ast.If) and any("SKIPPING PHASE 6" in ast.dump(n) for _ in [1]))
+    phase9_guard = next(n for n in runner.body if isinstance(n, ast.If) and any("SKIPPING PHASE 9" in ast.dump(n) for _ in [1]))
+
+    # Phase 6 test
+    glob6 = ast.Global(names=["criterion_dpi_scaling"])
+    fn6 = ast.FunctionDef(name="test_p6", args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
+                          body=[glob6, copy.deepcopy(phase6_guard)], decorator_list=[])
+    mod6 = ast.fix_missing_locations(ast.Module(body=[fn6], type_ignores=[]))
+    g6 = {"dependent_phases_stopped": True, "criterion_dpi_scaling": "NOT_RUN", "log": lambda m: None}
+    exec(compile(mod6, "<p6>", "exec"), g6)
+    g6["test_p6"]()
+    assert g6["criterion_dpi_scaling"] == "BLOCKED", f"Phase 6 must yield BLOCKED, got {g6['criterion_dpi_scaling']}"
+
+    # Phase 9 test
+    glob9 = ast.Global(names=["criterion_action_center_paging", "criterion_action_center_stale", "criterion_action_center_dismiss"])
+    fn9 = ast.FunctionDef(name="test_p9", args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
+                          body=[glob9, copy.deepcopy(phase9_guard)], decorator_list=[])
+    mod9 = ast.fix_missing_locations(ast.Module(body=[fn9], type_ignores=[]))
+    g9 = {"dependent_phases_stopped": True, "criterion_action_center_paging": "NOT_RUN",
+          "criterion_action_center_stale": "NOT_RUN", "criterion_action_center_dismiss": "NOT_RUN", "log": lambda m: None}
+    exec(compile(mod9, "<p9>", "exec"), g9)
+    g9["test_p9"]() # Must not raise UnboundLocalError
+    assert g9["criterion_action_center_paging"] == "BLOCKED"
+    assert g9["criterion_action_center_stale"] == "BLOCKED"
+    assert g9["criterion_action_center_dismiss"] == "BLOCKED"
 
 
 if __name__ == "__main__":

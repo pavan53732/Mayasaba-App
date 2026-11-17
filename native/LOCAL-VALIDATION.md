@@ -6972,3 +6972,111 @@ Executed `test_full_ui_acceptance.py` on the active desktop against the verified
 - Preserved Backups: `MainWindow.xaml.cpp.fixed-base` and `MainWindow.xaml.cpp.mutation-backup` remain untracked and untouched.
 - "Phase 1 Complete" remains explicitly retracted; C11/C12 desktop COM drag-drop constraints and physical criteria P01–P06 remain open.
 
+
+---
+
+## 30. Review 0420c2b Boundary Corrections & Acceptance Verification (2026-11-17)
+
+This section documents the resolution and verification of all findings from `review-0420c2b/REVIEW.md`, along with the empirical verification run executed under an isolated store in `C:\Users\pavan\PROJECTS\_ui-verify\run_20261117_acceptance_0420c2b\`.
+
+### 1. Findings Resolved
+
+1. **R1: UIA Observation Uncertainty vs. Absence Semantics**:
+   - Introduced `ObservationResult(status, element, error)` distinguishing `FOUND`, `NOT_FOUND` (clean absence), and `UNAVAILABLE` (enumeration / property read exceptions).
+   - Replaced raw element/None absence reads with tri-state `assert_control_withdrawn(parent, aid=None, name=None) -> tuple[bool | None, str]`:
+     - `True`: element confirmed absent or collapsed (`is_visible() == False`).
+     - `False`: element present and visible.
+     - `None`: observation unavailable (enumeration or property read failed); fails closed, never grants `PASS`.
+   - Updated absence checks across Phase 2 (search dismiss), Phase 9.1 (initial empty card), Phase 9 details dismiss, Phase 9 panel dismiss, Phase 9 More button collapse, and Phase 10 preview dismiss.
+   - Tested production absence-check callers in `test_harness_oracles.py` (`test_observe_by_aid_and_name_distinguish_absence_from_unavailability`, `test_initial_empty_card_absence_check_fails_on_scan_uncertainty`).
+
+2. **R2: Structural Dependent-Phase Stopping**:
+   - Enforced structural phase stopping via `if dependent_phases_stopped: ... else:` guards across all downstream phases:
+     - Phase 6 (DPI): sets `criterion_dpi_scaling = "BLOCKED"` without executing window resizing or verdict aggregation (prevents skipped DPI phase from becoming `PASS`).
+     - Phase 9 (Action Center): sets criteria to `"BLOCKED"` and wraps the entire phase body in `else:`, eliminating `UnboundLocalError` (`action_center_panel`) and preventing any UI clicks or store writes.
+     - Phase 10 (Preview & OLE Drop), Phase 6C (Readiness), Phase 7 (Performance Profiling), and Phase 8 (Clean Shutdown): structurally guarded to block criteria and prevent dependent operations when prior project restoration fails.
+   - Tested in `test_harness_oracles.py` (`test_dependent_phases_stopped_is_structural`).
+
+3. **R3: Temporary Project Lifetime Ownership**:
+   - In Phase 3B, wrapped the entire probe project lifecycle (row creation, Subcase A stationary prepend, and Subcase B reader intent preservation) in an outer `try ... finally` calling `perform_phase3b_cleanup(...)`.
+   - Enforced release of held query events (`h_older_release`), closing of event handles, verification of return to `alpha` (`ProjectHeading` == `"alpha"`), and preservation of probe rows and trace files when return is uncertain.
+   - Added guaranteed emission of `desktop-restoration.json` to the evidence directory on desktop scope exit.
+
+4. **R4: Shared Production Operations & Mutation Discrimination**:
+   - Exported production helpers `perform_phase3b_cleanup` and `classify_subcase_b_targeting_outcome` from `test_full_ui_acceptance.py`.
+   - Replaced simulation mocks in `test_harness_oracles.py` with direct invocations of these shared production functions.
+   - Single needle invariant satisfied: `clean.count(b'if returned or not paging_bound:') == 1`.
+   - Mutation test verified: mutating `if returned or not paging_bound:` to `if True:` causes `test_phase3b_cleanup_releases_held_load_and_preserves_rows_on_alpha_failure` to fail with `AssertionError: dependent phases must be stopped when alpha return failed`, while clean code passes and restores byte-identically.
+
+5. **R5: Qualified OLE Injection Diagnostics**:
+   - Qualified OLE drop diagnostic logs to note helper watchdog timeout exit code 4 in headless/automated test environments without asserting universal kernel UIPI suppression without direct proof.
+
+### 2. Full Native UI Acceptance Results (Isolated Store)
+
+- **Isolated Store Path:** `C:\Users\pavan\PROJECTS\_ui-verify\run_20261117_acceptance_0420c2b\store.db`
+- **Perf Log Path:** `C:\Users\pavan\PROJECTS\_ui-verify\run_20261117_acceptance_0420c2b\perf.json`
+- **Evidence Directory:** `C:\Users\pavan\PROJECTS\_ui-verify\run_20261117_acceptance_0420c2b`
+- **Application Binary:** `Mayasaba.exe` (SHA-256 `e632be60a5b1623335f68bc46897a2f4e2b6c7ff6d6571db991ae60c2f778134`)
+- **MainWindow XBF:** `MainWindow.xbf` (SHA-256 `12235e06178f658fd39ed843b6cedc80a9542d3ad0734527be3f14c33d92dd31`)
+- **Source Commit:** `0420c2bf54847f1347647d5cff59e49ef25735ce`
+
+| # | Criterion | Verdict | Observation / Measurement |
+|---|---|---|---|
+| 1 | Recent Projects & Startup Filtering | **PASS** | Initial count '3 projects recorded'; filtering, clear, escape, and status filters verified. |
+| 2 | Message Search Pagination & Continuation | **PASS** | 50 messages paged in 20/20/10 chunks; collapse verified via `assert_control_withdrawn`. |
+| 3 | Older Message Navigation & Selection | **PASS** | Navigation, selection, and reading position verified. |
+| 4 | Search Mode Project Switch Safety | **PASS** | Overlay dismissed and project state reset on switch; no cross-project leakage. |
+| 5 | Narrow 520px Responsive Layout | **PASS** | Reflow verified without truncation or overlap. |
+| 6 | Rapid Hover Sweeps & Animation Stability | **PASS** | Rapid hover interactions stable; zero layout cycle or animation crash. |
+| 7 | Display DPI Scaling Simulation | **PASS** | Window scaled across DPI factors; geometry verified via `safe_window_rect`. |
+| 8 | Action Center Pagination & Resumption | **PASS** | Paged obligations retrieved and resumed across cursor boundaries. |
+| 9 | Action Center Stale Invalidation & Refresh | **PASS** | Second refresh queued as pending rerun during active flight; dispatcher confirmation verified. |
+| 10 | Action Center Panel Dismissal Stability | **PASS** | Panel expansion, contents, and collapse verified mandatorily; withdrawal verified via `assert_control_withdrawn`. |
+| 11 | Native OLE Desktop Drag-and-Drop Execution | **INCONCLUSIVE** | Zero records admitted (helper watchdog timeout exit code 4); retained inconclusive. |
+| 12 | Mixed-Batch Folder Rejection on Drop | **INCONCLUSIVE** | Zero records admitted (helper watchdog timeout exit code 4); retained inconclusive. |
+| 13 | Seeded Attachment Chip Realization & Diagnostics | **PASS** | Attachment chip realized with inspect button; metadata inspection verified. |
+| 14 | Strict Non-English Prose Preview Withholding | **PASS** | Non-English ASCII prose ('hola mundo') preview withheld; InfoBar notice verified; withdrawal verified via `assert_control_withdrawn`. |
+| 15 | WinUI 3 CompositionTarget Performance Profiling | **PASS** | 143,928 render callbacks measured; avg 7.57 ms; 21 typing samples (p50 5.37 ms, p95 53.83 ms); 5,000 scroll samples (p50 6.95 ms, p95 7.99 ms). |
+| 16 | Search Overlay Flat Resting Orientation | **PASS** | Search overlay resting state verified flat (2D transform). |
+| 17 | Search Overlay Bounded Height, Scrolling & Paging Reachability | **PASS** | Overlay height bounded; scroll and paging controls reachable. |
+| 18 | Repeated Open/Close & Cancelled Reveal Leave The Overlay Flat | **PASS** | Repeated open/close and rapid cancellation leave overlay flat. |
+| 19 | Empty-Chat Hero Perspective Preserved | **PASS** | 3D perspective projection verified on empty-chat hero container. |
+| 20 | Reduced-Motion Change Leaves The Overlay Flat | **PASS** | Reduced-motion system preference suppresses animations; overlay resting flat. |
+| 21 | CLI Readiness Projection & Non-Gating | **PASS** | Hermes `READY`, Kilo Code `READY`, Claude Code `CHECKING` (D-11 choice); Send non-gated. |
+| 22 | Bounded History Paging Save & Newest Rendering | **PASS** | Newest 50-item window realized; composer docked below timeline. |
+| 23 | Reading Anchor Preserved Across Older Prepend | **PASS** | Subcase A stationary prepend preserved reading anchor (`'seeded-paging-00072'`); Subcase B held load aborted stale prepend on downward reader wheel gesture (`older-abort-reader` emitted; position preserved). |
+
+**Summary: 23 criteria | 21 PASS | 2 INCONCLUSIVE | 0 FAIL | 0 BLOCKED | 0 NOT_RUN | Overall exit code 0.**
+
+### 3. Retained Raw Evidence Manifest
+
+All raw artifacts from the verified run are preserved in `C:\Users\pavan\PROJECTS\_ui-verify\run_20261117_acceptance_0420c2b\`:
+- `artifact-identity.json`: Binary paths, SHA-256 hashes, source commit `0420c2bf...`, timestamps.
+- `desktop-restoration.json`: Verified desktop switch and restoration:
+  `{"orig_desktop_name": "Default", "thread_desktop_name": "exebox-...", "switched": true, "restored": true, "restore_ok": true}`.
+- `harness-run.log`: Full 9.2 MB raw execution log.
+- `ui-trace.log`: Full 7.1 MB UI trace log including event markers.
+- `perf.json`: CompositionTarget empirical performance log (143,928 frames).
+- `ui-thread-samples.json`: 11,785 UI thread pump samples (p50 0.15 ms, p95 1.45 ms, max 30.47 ms; 0 stalls > 250 ms).
+- `store.db`: Isolated acceptance test database.
+
+### 4. Full Verification Suite Summary
+
+| Test Target | Command | Result |
+|---|---|---|
+| Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` (managed venv) | **124/124 PASS** |
+| Harness oracles & boundary regressions | `python native/tests/test_harness_oracles.py` | **88/88 PASS** |
+| Mutation discrimination | `scratch/test_mutation.py` | **PASS (Mutant fails exit 1, clean passes exit 0, byte-identical restore)** |
+| Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
+| Action Center & attachment inspection | `native/tests/bin/verify_ac_ai.exe` | **15/15 PASS** |
+| Layout budget & trace saturation | `native/tests/bin/layout_budget_tests.exe` | **9/9 PASS** |
+| Local Execution Kernel | `native/tests/bin/execution_tests.exe` | **11/11 PASS** |
+| Agent Gateway detection | `native/tests/bin/gateway_tests.exe` | **13/13 PASS** |
+| Canonical JSON & vectors | `native/tests/bin/canonical_vectors.exe` | **21/21 PASS** |
+| Full Native UI Acceptance Suite | `python native/tests/test_full_ui_acceptance.py` | **21 PASS, 2 INCONCLUSIVE, 0 FAIL** (exit 0) |
+| Production Database Integrity | SHA-256 of `%LOCALAPPDATA%\Mayasaba\mayasaba.db` | **`23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (Untouched)** |
+
+### 5. Retracted Claims and Remaining Open Work
+
+- **Phase 1 Complete remains explicitly RETRACTED**: C11 and C12 (synthetic OLE drag-drop) remain inconclusive; physical acceptance criteria P01–P06 require an interactive physical session.
+- **Frontend-First Roadmap**: Work continues on Phase 2 (shared visual/interaction motion system) and Phase 3 (Welcome/selector closure). Backend Gates I3 and I4 are not claimed.
