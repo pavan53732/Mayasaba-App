@@ -138,10 +138,56 @@
         <Style x:Key="MayasabaPrimaryAction" TargetType="Button">
           <Setter Property="Background" Value="{ThemeResource MayasabaActionGradientBrush}"/>
           <Setter Property="Foreground" Value="{ThemeResource MayasabaOnActionBrush}"/>
+          <Setter Property="BorderBrush" Value="Transparent"/>
+          <Setter Property="BorderThickness" Value="0"/>
           <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusControl}"/>
           <Setter Property="Padding" Value="20,10"/>
           <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
           <Setter Property="FontWeight" Value="SemiBold"/>
+          <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource MayasabaBrandBrush}"/>
+          <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource MayasabaCanvasBrush}"/>
+          <Setter Property="FocusVisualPrimaryThickness" Value="2"/>
+          <Setter Property="FocusVisualSecondaryThickness" Value="1"/>
+          <Setter Property="FocusVisualMargin" Value="-2"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <ContentPresenter x:Name="ContentPresenter"
+                                  Background="{TemplateBinding Background}"
+                                  Foreground="{TemplateBinding Foreground}"
+                                  BorderBrush="{TemplateBinding BorderBrush}"
+                                  BorderThickness="{TemplateBinding BorderThickness}"
+                                  CornerRadius="{TemplateBinding CornerRadius}"
+                                  Padding="{TemplateBinding Padding}"
+                                  HorizontalContentAlignment="Center"
+                                  VerticalContentAlignment="Center">
+                  <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup x:Name="CommonStates">
+                      <VisualState x:Name="Normal"/>
+                      <VisualState x:Name="PointerOver">
+                        <VisualState.Setters>
+                          <Setter Target="ContentPresenter.Background" Value="{ThemeResource MayasabaBrandStrongBrush}"/>
+                          <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource MayasabaOnActionBrush}"/>
+                        </VisualState.Setters>
+                      </VisualState>
+                      <VisualState x:Name="Pressed">
+                        <VisualState.Setters>
+                          <Setter Target="ContentPresenter.Background" Value="{ThemeResource MayasabaBrandStrongBrush}"/>
+                          <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource MayasabaOnActionBrush}"/>
+                        </VisualState.Setters>
+                      </VisualState>
+                      <VisualState x:Name="Disabled">
+                        <VisualState.Setters>
+                          <Setter Target="ContentPresenter.Background" Value="{ThemeResource MayasabaSecondaryBrush}"/>
+                          <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource MayasabaSoftBrush}"/>
+                        </VisualState.Setters>
+                      </VisualState>
+                    </VisualStateGroup>
+                  </VisualStateManager.VisualStateGroups>
+                </ContentPresenter>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
         </Style>
         <Style x:Key="MayasabaSecondaryAction" TargetType="Button">
           <Setter Property="Background" Value="{ThemeResource MayasabaSecondaryBrush}"/>
@@ -151,6 +197,53 @@
           <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusControl}"/>
           <Setter Property="Padding" Value="16,10"/>
           <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+          <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource MayasabaBrandBrush}"/>
+          <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource MayasabaCanvasBrush}"/>
+          <Setter Property="FocusVisualPrimaryThickness" Value="2"/>
+          <Setter Property="FocusVisualSecondaryThickness" Value="1"/>
+          <Setter Property="FocusVisualMargin" Value="-2"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <ContentPresenter x:Name="ContentPresenter"
+                                  Background="{TemplateBinding Background}"
+                                  Foreground="{TemplateBinding Foreground}"
+                                  BorderBrush="{TemplateBinding BorderBrush}"
+                                  BorderThickness="{TemplateBinding BorderThickness}"
+                                  CornerRadius="{TemplateBinding CornerRadius}"
+                                  Padding="{TemplateBinding Padding}"
+                                  HorizontalContentAlignment="Center"
+                                  VerticalContentAlignment="Center">
+                  <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup x:Name="CommonStates">
+                      <VisualState x:Name="Normal"/>
+                      <VisualState x:Name="PointerOver">
+                        <VisualState.Setters>
+                          <Setter Target="ContentPresenter.Background" Value="{ThemeResource MayasabaLineBrush}"/>
+                          <Setter Target="ContentPresenter.BorderBrush" Value="{ThemeResource MayasabaBrandBrush}"/>
+                          <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource MayasabaInkBrush}"/>
+                        </VisualState.Setters>
+                      </VisualState>
+                      <VisualState x:Name="Pressed">
+                        <VisualState.Setters>
+                          <Setter Target="ContentPresenter.Background" Value="{ThemeResource MayasabaBorderBrush}"/>
+                          <Setter Target="ContentPresenter.BorderBrush" Value="{ThemeResource MayasabaBrandStrongBrush}"/>
+                          <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource MayasabaInkBrush}"/>
+                        </VisualState.Setters>
+                      </VisualState>
+                      <VisualState x:Name="Disabled">
+                        <VisualState.Setters>
+                          <Setter Target="ContentPresenter.Background" Value="{ThemeResource MayasabaCanvasBrush}"/>
+                          <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource MayasabaSoftBrush}"/>
+                          <Setter Target="ContentPresenter.BorderBrush" Value="{ThemeResource MayasabaLineBrush}"/>
+                        </VisualState.Setters>
+                      </VisualState>
+                    </VisualStateGroup>
+                  </VisualStateManager.VisualStateGroups>
+                </ContentPresenter>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
         </Style>
         <Style x:Key="MayasabaQuietAction" TargetType="Button">
           <Setter Property="Background" Value="Transparent"/>
@@ -159,6 +252,77 @@
           <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusControl}"/>
           <Setter Property="Padding" Value="12,8"/>
           <Setter Property="FontFamily" Value="Segoe UI Variable Text"/>
+          <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource MayasabaBrandBrush}"/>
+          <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource MayasabaCanvasBrush}"/>
+          <Setter Property="FocusVisualPrimaryThickness" Value="2"/>
+          <Setter Property="FocusVisualSecondaryThickness" Value="1"/>
+          <Setter Property="FocusVisualMargin" Value="-2"/>
+          <Setter Property="Template">
+            <Setter.Value>
+              <ControlTemplate TargetType="Button">
+                <ContentPresenter x:Name="ContentPresenter"
+                                  Background="{TemplateBinding Background}"
+                                  Foreground="{TemplateBinding Foreground}"
+                                  BorderBrush="Transparent"
+                                  BorderThickness="0"
+                                  CornerRadius="{TemplateBinding CornerRadius}"
+                                  Padding="{TemplateBinding Padding}"
+                                  HorizontalContentAlignment="Center"
+                                  VerticalContentAlignment="Center">
+                  <VisualStateManager.VisualStateGroups>
+                    <VisualStateGroup x:Name="CommonStates">
+                      <VisualState x:Name="Normal"/>
+                      <VisualState x:Name="PointerOver">
+                        <VisualState.Setters>
+                          <Setter Target="ContentPresenter.Background" Value="{ThemeResource MayasabaSecondaryBrush}"/>
+                          <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource MayasabaBrandBrush}"/>
+                        </VisualState.Setters>
+                      </VisualState>
+                      <VisualState x:Name="Pressed">
+                        <VisualState.Setters>
+                          <Setter Target="ContentPresenter.Background" Value="{ThemeResource MayasabaLineBrush}"/>
+                          <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource MayasabaBrandStrongBrush}"/>
+                        </VisualState.Setters>
+                      </VisualState>
+                      <VisualState x:Name="Disabled">
+                        <VisualState.Setters>
+                          <Setter Target="ContentPresenter.Background" Value="Transparent"/>
+                          <Setter Target="ContentPresenter.Foreground" Value="{ThemeResource MayasabaSoftBrush}"/>
+                        </VisualState.Setters>
+                      </VisualState>
+                    </VisualStateGroup>
+                  </VisualStateManager.VisualStateGroups>
+                </ContentPresenter>
+              </ControlTemplate>
+            </Setter.Value>
+          </Setter>
+        </Style>
+
+        <!-- Default focus and geometry treatments across interactive controls -->
+        <Style TargetType="Button">
+          <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusControl}"/>
+          <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource MayasabaBrandBrush}"/>
+          <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource MayasabaCanvasBrush}"/>
+          <Setter Property="FocusVisualPrimaryThickness" Value="2"/>
+          <Setter Property="FocusVisualSecondaryThickness" Value="1"/>
+          <Setter Property="FocusVisualMargin" Value="-2"/>
+        </Style>
+
+        <Style TargetType="TextBox">
+          <Setter Property="CornerRadius" Value="{StaticResource MayasabaRadiusControl}"/>
+          <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource MayasabaBrandBrush}"/>
+          <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource MayasabaCanvasBrush}"/>
+          <Setter Property="FocusVisualPrimaryThickness" Value="2"/>
+          <Setter Property="FocusVisualSecondaryThickness" Value="1"/>
+          <Setter Property="FocusVisualMargin" Value="-2"/>
+        </Style>
+
+        <Style TargetType="ListViewItem">
+          <Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource MayasabaBrandBrush}"/>
+          <Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource MayasabaCanvasBrush}"/>
+          <Setter Property="FocusVisualPrimaryThickness" Value="2"/>
+          <Setter Property="FocusVisualSecondaryThickness" Value="1"/>
+          <Setter Property="FocusVisualMargin" Value="-2"/>
         </Style>
 
         <ResourceDictionary.ThemeDictionaries>

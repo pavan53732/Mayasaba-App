@@ -2794,7 +2794,13 @@ namespace winrt::Mayasaba::implementation
             e.Handled(true);
             return;
         }
-        // FirstRun or Startup: Escape cannot reach Chat!
+        if (selectorContext_ == SelectorContext::FirstRun)
+        {
+            ShowWelcome();
+            e.Handled(true);
+            return;
+        }
+        // Startup: Escape cannot reach Chat!
         e.Handled(true);
     }
 
@@ -4613,6 +4619,7 @@ namespace winrt::Mayasaba::implementation
 
             Button open{};
             open.Content(box_value(p.closed?L"View history":L"Open project"));
+            try { open.Style(Application::Current().Resources().Lookup(box_value(L"MayasabaPrimaryAction")).as<Style>()); } catch (...) {}
             open.CornerRadius(CornerRadius{11});
             open.Padding(Thickness{14,7,14,7});
             Automation::AutomationProperties::SetName(open,L"Open project "+Utf16(p.displayName));
@@ -4621,6 +4628,7 @@ namespace winrt::Mayasaba::implementation
 
             Button locate{};
             locate.Content(box_value(L"Locate folder"));
+            try { locate.Style(Application::Current().Resources().Lookup(box_value(L"MayasabaSecondaryAction")).as<Style>()); } catch (...) {}
             Automation::AutomationProperties::SetName(locate,L"Locate folder for "+Utf16(p.displayName));
             locate.CornerRadius(CornerRadius{11});
             locate.Padding(Thickness{14,7,14,7});

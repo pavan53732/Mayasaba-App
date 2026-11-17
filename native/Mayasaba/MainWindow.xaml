@@ -298,13 +298,13 @@
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
                         <Button x:Name="FolderBackButton" Click="OnWelcomeBack" Content="← Back"
-                                Padding="14,7" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                Style="{StaticResource MayasabaSecondaryAction}"
                                 Visibility="Collapsed" AutomationProperties.Name="Back to the introduction"/>
                         <Button x:Name="FolderExitButton" Click="OnExit" Content="Exit"
-                                Padding="14,7" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                Style="{StaticResource MayasabaSecondaryAction}"
                                 Visibility="Collapsed" AutomationProperties.Name="Exit Mayasaba"/>
                         <Button x:Name="FolderCancelButton" Click="OnCancelSwitch" Content="Cancel"
-                                Padding="14,7" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                Style="{StaticResource MayasabaSecondaryAction}"
                                 Visibility="Collapsed" AutomationProperties.Name="Cancel switching projects"/>
                         <TextBlock x:Name="FolderWordmark" Grid.Column="1" Text="Mayasaba"
                                    FontFamily="Segoe UI Variable Display"
@@ -411,7 +411,7 @@
                                                      PlaceholderText="Select a parent folder..."
                                                      AutomationProperties.Name="Parent location"/>
                                             <Button Grid.Column="1" Click="OnBrowseParentFolder" Content="Browse…"
-                                                    Padding="16,8" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                                    Style="{StaticResource MayasabaSecondaryAction}"
                                                     AutomationProperties.Name="Browse for a parent folder"/>
                                         </Grid>
                                     </StackPanel>
@@ -430,8 +430,8 @@
 
                                     <StackPanel Orientation="Horizontal" Spacing="10"
                                                 HorizontalAlignment="Right" Margin="0,4,0,0">
-                                        <Button Click="OnCancelCreateFolder" Content="Cancel" Padding="16,8"
-                                                CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                        <Button Click="OnCancelCreateFolder" Content="Cancel"
+                                                Style="{StaticResource MayasabaSecondaryAction}"/>
                                         <Button x:Name="CreateAndOpenButton" Click="OnCreateAndOpenFolder"
                                                 Content="Create and Open" IsEnabled="False"
                                                 Style="{StaticResource MayasabaPrimaryAction}"/>
@@ -472,11 +472,11 @@
                                     </Grid>
 
                                     <StackPanel Spacing="10" HorizontalAlignment="Stretch" Margin="0,4,0,0">
-                                        <Button Click="OnCancelDraftCollision" Content="Cancel" Padding="16,8"
-                                                CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                        <Button Click="OnCancelDraftCollision" Content="Cancel"
+                                                Style="{StaticResource MayasabaSecondaryAction}"/>
                                         <Button x:Name="KeepTargetDraftButton" Click="OnKeepTargetDraft"
-                                                Content="Keep project draft" Padding="16,8"
-                                                CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                                Content="Keep project draft"
+                                                Style="{StaticResource MayasabaSecondaryAction}"/>
                                         <Button x:Name="UsePrebindDraftButton" Click="OnUsePrebindDraft"
                                                 Content="Use selector draft"
                                                 Style="{StaticResource MayasabaPrimaryAction}"/>
@@ -515,7 +515,7 @@
                                                  AutomationProperties.Name="Filter recent projects"/>
                                         <Button x:Name="RecentProjectsClearFilterButton" Grid.Column="1"
                                                 Click="OnClearRecentFilter" Content="Clear" Visibility="Collapsed"
-                                                Padding="12,6" CornerRadius="{StaticResource MayasabaRadiusControl}"
+                                                Style="{StaticResource MayasabaQuietAction}"
                                                 AutomationProperties.Name="Clear project filter"/>
                                         <ComboBox x:Name="RecentProjectsStatusFilter" Grid.Column="2"
                                                   SelectedIndex="0" SelectionChanged="OnRecentStatusFilterChanged"
@@ -536,15 +536,15 @@
                                               AutomationProperties.Name="Recent projects"/>
                                     <StackPanel Orientation="Horizontal" Spacing="10">
                                         <Button x:Name="PreviousRecentButton" Content="Previous projects"
-                                                Click="OnRecentPrevious" IsEnabled="False" Padding="14,7"
-                                                CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                                Click="OnRecentPrevious" IsEnabled="False"
+                                                Style="{StaticResource MayasabaSecondaryAction}"/>
                                         <Button x:Name="NextRecentButton" Content="Next projects"
-                                                Click="OnRecentNext" IsEnabled="False" Padding="14,7"
-                                                CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                                Click="OnRecentNext" IsEnabled="False"
+                                                Style="{StaticResource MayasabaSecondaryAction}"/>
                                     </StackPanel>
                                     <Button x:Name="RetryStoreButton" Content="Retry opening local store"
-                                            Click="OnRetryStore" Visibility="Collapsed" Padding="14,7"
-                                            CornerRadius="{StaticResource MayasabaRadiusControl}"/>
+                                            Click="OnRetryStore" Visibility="Collapsed"
+                                            Style="{StaticResource MayasabaSecondaryAction}"/>
                                     <StackPanel x:Name="RecoveryList" Spacing="10"
                                                 AutomationProperties.Name="Folder creation recovery"/>
                                 </StackPanel>
@@ -617,7 +617,7 @@
                         <StackPanel x:Name="ChatHeaderActionsPanel" Grid.Row="0" Grid.Column="1"
                                     Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
                             <Button x:Name="SearchMessagesButton" Click="OnSearchMessagesClick"
-                                    Padding="13,7" CornerRadius="11"
+                                    Style="{StaticResource MayasabaSecondaryAction}"
                                     AutomationProperties.Name="Search saved user messages"
                                     AutomationProperties.AcceleratorKey="Control F">
                                 <StackPanel Orientation="Horizontal" Spacing="6">
@@ -625,16 +625,19 @@
                                     <TextBlock Text="Search"/>
                                 </StackPanel>
                             </Button>
-                            <Button x:Name="StartButton" Content="Start" Click="OnStart" Padding="15,7"
-                                    CornerRadius="11"
+                            <Button x:Name="StartButton" Content="Start" Click="OnStart"
+                                    Style="{StaticResource MayasabaPrimaryAction}"
                                     AutomationProperties.HelpText="Blocked: no native CLI adapter, applied-context proof or confinement proof exists yet. CLI readiness is a detection result and does not authorize a session."/>
-                            <Button x:Name="PauseButton" Content="Pause" Click="OnPause" Padding="15,7" CornerRadius="11"/>
-                            <Button x:Name="StopButton" Content="Stop" Click="OnStop" Padding="15,7" CornerRadius="11"
+                            <Button x:Name="PauseButton" Content="Pause" Click="OnPause"
+                                    Style="{StaticResource MayasabaSecondaryAction}"/>
+                            <Button x:Name="StopButton" Content="Stop" Click="OnStop"
+                                    Style="{StaticResource MayasabaSecondaryAction}"
                                     AutomationProperties.HelpText="Immediate control. Never waits for an animation or a reply."/>
                             <Button x:Name="ReopenButton" Content="Reopen Project" Click="OnReopen"
-                                    Visibility="Collapsed" CornerRadius="11" Padding="15,7"/>
+                                    Visibility="Collapsed"
+                                    Style="{StaticResource MayasabaPrimaryAction}"/>
                             <Button Content="•••" AutomationProperties.Name="More project actions"
-                                    CornerRadius="11" Padding="13,7">
+                                    Style="{StaticResource MayasabaSecondaryAction}">
                                 <Button.Flyout>
                                     <MenuFlyout>
                                         <MenuFlyoutItem Text="CLI diagnostics" Click="OnDiagnostics"/>
@@ -642,8 +645,9 @@
                                     </MenuFlyout>
                                 </Button.Flyout>
                             </Button>
-                            <Button x:Name="ExitButton" Content="Exit" Click="OnExit" Padding="15,7"
-                                    CornerRadius="11" AutomationProperties.Name="Exit Mayasaba"/>
+                            <Button x:Name="ExitButton" Content="Exit" Click="OnExit"
+                                    Style="{StaticResource MayasabaSecondaryAction}"
+                                    AutomationProperties.Name="Exit Mayasaba"/>
                                                             </StackPanel>
                                                             <!-- Compact Action Center: read-only projection of unresolved owner obligations. -->
                                                             <Border x:Name="ActionCenterPanel" Grid.Row="2" Grid.ColumnSpan="2" Visibility="Collapsed"

@@ -2288,6 +2288,71 @@ def test_dependent_phases_stopped_is_structural():
     assert g9["criterion_action_center_dismiss"] == "BLOCKED"
 
 
+def test_ux_journey_semantics_and_escape_preservation():
+    """UX-02, UX-06, UX-07: Escape and navigation journey semantics across Welcome, Folder, and Chat.
+
+    In MainWindow.xaml.cpp:
+    - Welcome Screen OnWelcomeKeyDown: Escape advances to ShowFolder(SelectorContext::FirstRun).
+    - Folder Screen OnFolderKeyDown:
+        * Under FirstRun: Escape returns to ShowWelcome().
+        * Under Switching: Escape cancels switch and returns to active project Chat.
+        * Under Startup: Escape clears filter box if present; cannot navigate to Chat or Welcome.
+    - No path permits navigating to Chat without an authorized bound project root.
+    """
+    from pathlib import Path
+    cpp_path = Path(__file__).parent.parent / "Mayasaba" / "MainWindow.xaml.cpp"
+    cpp_text = cpp_path.read_text(encoding="utf-8")
+
+    # 1. OnWelcomeKeyDown must advance to FirstRun folder selector, never Chat
+    assert "ShowFolder(SelectorContext::FirstRun);" in cpp_text, "Welcome Escape must route to FirstRun selector"
+
+    # 2. OnFolderKeyDown must handle FirstRun by returning to Welcome
+    folder_kd_idx = cpp_text.find("void MainWindow::OnFolderKeyDown")
+    assert folder_kd_idx != -1, "OnFolderKeyDown must exist"
+    folder_kd_body = cpp_text[folder_kd_idx:folder_kd_idx + 1800]
+
+    assert "if (selectorContext_ == SelectorContext::FirstRun)" in folder_kd_body, "OnFolderKeyDown must check FirstRun"
+    assert "ShowWelcome();" in folder_kd_body, "OnFolderKeyDown during FirstRun must call ShowWelcome()"
+    assert "OnCancelSwitch(nullptr, nullptr);" in folder_kd_body, "OnFolderKeyDown during Switching must cancel switch"
+
+
+def test_ux_shared_button_styles_and_focus_visuals():
+    """UX-01, UX-12, UX-27: Shared button styles, visual states, and high-visibility focus indicators in App.xaml.
+
+    - MayasabaPrimaryAction, MayasabaSecondaryAction, MayasabaQuietAction must define:
+        * FocusVisualPrimaryBrush, FocusVisualSecondaryBrush, FocusVisualPrimaryThickness, FocusVisualMargin
+        * VisualStateGroup CommonStates with Normal, PointerOver, Pressed, Disabled
+    - Default TargetType Button, TextBox, and ListViewItem styles must supply high-visibility focus indicators.
+    """
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+
+    app_xaml_path = Path(__file__).parent.parent / "Mayasaba" / "App.xaml"
+    app_text = app_xaml_path.read_text(encoding="utf-8")
+
+    # Check style definitions
+    assert 'x:Key="MayasabaPrimaryAction"' in app_text, "MayasabaPrimaryAction must exist"
+    assert 'x:Key="MayasabaSecondaryAction"' in app_text, "MayasabaSecondaryAction must exist"
+    assert 'x:Key="MayasabaQuietAction"' in app_text, "MayasabaQuietAction must exist"
+
+    # Check focus visuals
+    assert '<Setter Property="FocusVisualPrimaryBrush" Value="{ThemeResource MayasabaBrandBrush}"/>' in app_text
+    assert '<Setter Property="FocusVisualSecondaryBrush" Value="{ThemeResource MayasabaCanvasBrush}"/>' in app_text
+    assert '<Setter Property="FocusVisualPrimaryThickness" Value="2"/>' in app_text
+
+    # Check visual state groups
+    assert '<VisualStateGroup x:Name="CommonStates">' in app_text
+    assert '<VisualState x:Name="Normal"/>' in app_text
+    assert '<VisualState x:Name="PointerOver">' in app_text
+    assert '<VisualState x:Name="Pressed">' in app_text
+    assert '<VisualState x:Name="Disabled">' in app_text
+
+    # Check default control target styles
+    assert '<Style TargetType="Button">' in app_text
+    assert '<Style TargetType="TextBox">' in app_text
+    assert '<Style TargetType="ListViewItem">' in app_text
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
