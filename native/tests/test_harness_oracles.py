@@ -1975,6 +1975,104 @@ def test_phase3b_cleanup_releases_held_load_and_preserves_rows_on_alpha_failure(
         assert c_count_ok == 0, f"probe contributions must be deleted when alpha return succeeded, but got {c_count_ok}"
 
 
+def test_phase3b_selection_attempt_unconfirmed_restoration_failure_preserves_rows():
+    """R4 / Uncertain Selection: Invoke issued -> confirmation unavailable -> restoration fails.
+
+    Proves that when probe selection is attempted (Invoke issued) but confirmation
+    fails (ComposerBox unavailable), cleanup treats restoration as required.
+    If restoration to alpha fails, probe database rows and directory are preserved,
+    held query is released, handles are closed, and dependent phases are stopped.
+    """
+    import tempfile
+    import sqlite3
+
+    class _MockInvokeElement:
+        def __init__(self):
+            self.invoked = False
+        class _Iface:
+            def __init__(self, outer):
+                self.outer = outer
+            def Invoke(self):
+                self.outer.invoked = True
+        @property
+        def iface_invoke(self):
+            return self._Iface(self)
+
+    class _MockEvent:
+        def __init__(self):
+            self.signaled = False
+        def set(self):
+            self.signaled = True
+
+    class _MockHandle:
+        def __init__(self):
+            self.closed = False
+        def close(self):
+            self.closed = True
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test_store.db")
+        probe_path = os.path.join(tmp_dir, "paging-probe")
+        os.makedirs(probe_path, exist_ok=True)
+        probe_id = "00000000-0000-4000-8000-00000000c11a"
+
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE projects (id TEXT PRIMARY KEY, display_name TEXT);")
+        conn.execute("CREATE TABLE contributions (project_id TEXT, submission_id TEXT, body TEXT);")
+        conn.execute("CREATE TABLE selection_events (project_id TEXT);")
+        conn.execute("CREATE TABLE selection_receipts (project_id TEXT);")
+        conn.execute("CREATE TABLE pending_submissions (project_id TEXT);")
+
+        conn.execute("INSERT INTO projects VALUES (?, ?);", (probe_id, "zz-paging-probe"))
+        conn.execute("INSERT INTO contributions VALUES (?, 'sub-1', 'msg 1');", (probe_id,))
+        conn.commit()
+        conn.close()
+
+        open_probe_elem = _MockInvokeElement()
+        h_release = _MockEvent()
+        h_hold = _MockHandle()
+
+        # Step 1: Attempt probe selection (Invoke issued -> confirmation unavailable)
+        poll_composer_unavailable = lambda: None
+        sel_attempted, bound, reason = H.attempt_probe_selection(
+            open_probe_elem=open_probe_elem,
+            poll_composer_fn=poll_composer_unavailable,
+        )
+
+        assert open_probe_elem.invoked is True, "Invoke must have been issued on the probe element"
+        assert sel_attempted is True, "selection_attempted must be True once Invoke was issued"
+        assert bound is False, "bound must be False when confirmation was unavailable"
+        assert "did not open" in reason
+
+        # Step 2: Cleanup when restoration to alpha fails
+        returned, dep_stopped = H.perform_phase3b_cleanup(
+            win=None,
+            store_path=db_path,
+            probe_id=probe_id,
+            probe_path=probe_path,
+            paging_bound=bound,
+            h_release=h_release,
+            handles=[h_hold],
+            return_verifier=lambda: False,
+            selection_attempted=sel_attempted,
+        )
+
+        assert h_release.signaled is True, "held load must be released in cleanup"
+        assert h_hold.closed is True, "handles must be closed in cleanup"
+        assert returned is False, "return to alpha failed"
+        assert dep_stopped is True, "dependent phases must be stopped when restoration fails after selection attempt"
+
+        # Step 3: Assert retained database rows and directory
+        conn = sqlite3.connect(db_path)
+        p_count = conn.execute("SELECT COUNT(*) FROM projects WHERE id = ?;", (probe_id,)).fetchone()[0]
+        c_count = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (probe_id,)).fetchone()[0]
+        conn.close()
+
+        assert p_count == 1, f"probe project row must be retained on uncertain restoration, got {p_count}"
+        assert c_count == 1, f"probe contributions must be retained on uncertain restoration, got {c_count}"
+        assert os.path.exists(probe_path), "probe directory must be retained on uncertain restoration"
+
+
 def test_observe_by_aid_and_name_distinguish_absence_from_unavailability():
     """R1: Failed UIA observation records UNAVAILABLE, not NOT_FOUND."""
     class Unavailable:

@@ -2457,16 +2457,60 @@ def classify_subcase_b_targeting_outcome(target, target_fail_reason=None):
     return "CONTINUE", "target verified"
 
 
+def attempt_probe_selection(open_probe_elem, poll_composer_fn, logger=None):
+    """Issues selection invoke on probe project; records attempt before invoking.
+    
+    1. Records selection_attempted = True BEFORE invoking, as selection may take
+       effect asynchronously before confirmed successful binding.
+    2. Issues Invoke() on the probe project element.
+    3. Polls for ComposerBox confirmation.
+    
+    Returns:
+        tuple[bool, bool, str]: (selection_attempted, paging_bound, failure_reason)
+    """
+    if open_probe_elem is None:
+        return False, False, "open probe element not found"
+    selection_attempted = True
+    if logger:
+        logger("  issuing selection invoke for probe project (selection may take effect before confirmation)...")
+    try:
+        if hasattr(open_probe_elem, "iface_invoke"):
+            open_probe_elem.iface_invoke.Invoke()
+        elif hasattr(open_probe_elem, "Invoke"):
+            open_probe_elem.Invoke()
+        elif callable(open_probe_elem):
+            open_probe_elem()
+    except Exception as exc:
+        if logger:
+            logger(f"  selection invoke raised {type(exc).__name__}: {exc}")
+        return True, False, f"selection invoke raised {type(exc).__name__}: {exc}"
+
+    try:
+        composer_ready = poll_composer_fn()
+    except Exception as exc:
+        if logger:
+            logger(f"  polling composer after selection raised {type(exc).__name__}: {exc}")
+        return True, False, f"polling composer raised {type(exc).__name__}: {exc}"
+
+    if composer_ready is None:
+        return True, False, "the probe project's chat did not open after binding"
+    return True, True, ""
+
+
 def perform_phase3b_cleanup(win, store_path, probe_id, probe_path, paging_bound,
-                            h_release=None, handles=None, return_verifier=None, logger=None):
+                            h_release=None, handles=None, return_verifier=None, logger=None,
+                            selection_attempted=False):
     """Exception-safe move off the probe project before removing its rows.
     
     1. Releases any held queries (via h_release event).
     2. Closes Win32 event handles.
-    3. Verifies return to alpha (via return_verifier or native UI navigation).
-    4. Deletes probe rows only if return to alpha was verified (or probe was never bound).
-       If return to alpha failed, probe rows and evidence are preserved to prevent
-       corrupting active binding, and dependent phases must be stopped.
+    3. Verifies return to alpha (via return_verifier or native UI navigation)
+       if probe was confirmed bound OR if selection was attempted.
+    4. Deletes probe rows and directory only if return to alpha was verified,
+       or if probe was neither bound nor selected.
+       If restoration fails or remains uncertain, probe rows, directory and
+       evidence are preserved to prevent corrupting active binding, and
+       dependent phases must be stopped.
     Returns:
         tuple[bool, bool]: (returned, dependent_phases_stopped)
     """
@@ -2506,7 +2550,8 @@ def perform_phase3b_cleanup(win, store_path, probe_id, probe_path, paging_bound,
 
     # 3. Verify return to alpha
     returned = False
-    if paging_bound:
+    needs_restoration = bool(paging_bound or selection_attempted)
+    if needs_restoration:
         if return_verifier is not None:
             try:
                 returned = bool(return_verifier())
@@ -2549,7 +2594,7 @@ def perform_phase3b_cleanup(win, store_path, probe_id, probe_path, paging_bound,
 
     # 4. Deletion gate and dependent phase disposition
     dependent_phases_stopped = False
-    if returned or not paging_bound:
+    if returned or not (paging_bound or selection_attempted):
         try:
             conn = sqlite3.connect(store_path)
             if logger:
@@ -4271,6 +4316,7 @@ def main():
         paging_probe_name = "zz-paging-probe"
         paging_probe_path = os.path.join(os.path.dirname(STORE_PATH), "paging-probe")
         paging_bound = False
+        paging_selection_attempted = False
         paging_row_created = False
         # ProjectHeading's read at the moment the probe bound (None until then).
         # Guards compare against this baseline, never against the seeded display
@@ -4709,16 +4755,18 @@ def main():
                     if open_switch_project(win):
                         open_probe = poll_until(lambda: find_by_name(win, f"Open project {paging_probe_name}"),
                                                 timeout=8.0, interval=0.2)
-                        if open_probe is not None:
-                            open_probe.iface_invoke.Invoke()
-                            # The Chat load is asynchronous across the storage lane.
-                            composer_ready = poll_until(lambda: find_by_aid(win, "ComposerBox"),
-                                                        timeout=30.0, interval=0.2)
-                            if composer_ready is None:
-                                paging_reason = "the probe project's chat did not open after binding"
-                                log(f"  FAIL->setup: {paging_reason}")
+                        paging_selection_attempted, paging_bound, sel_reason = attempt_probe_selection(
+                            open_probe,
+                            lambda: poll_until(lambda: find_by_aid(win, "ComposerBox"), timeout=30.0, interval=0.2),
+                            logger=log,
+                        )
+                        if not paging_bound:
+                            if open_probe is None:
+                                paging_reason = "Open project button not found for probe"
                             else:
-                                paging_bound = True
+                                paging_reason = sel_reason or "the probe project's chat did not open after binding"
+                            log(f"  FAIL->setup: {paging_reason}")
+                        else:
                                 # Baseline identity capture. `Select` re-derives
                                 # displayName from the observed folder, so the
                                 # heading reads the FOLDER name ('paging-probe'),
@@ -4829,9 +4877,6 @@ def main():
                                         for entry in stable_reader:
                                             log("  3B SENTINEL t=%.2f count=%s set120=%r tail=%s %s"
                                                 % entry)
-                        else:
-                            paging_reason = "the probe project did not appear in the recent list"
-                            log(f"  FAIL->setup: {paging_reason}")
                     else:
                         paging_reason = "the project switch did not reach Screen 2"
                         log(f"  FAIL->setup: {paging_reason}")
@@ -5580,7 +5625,8 @@ def main():
                     paging_bound=paging_bound,
                     h_release=h_older_release,
                     handles=(h_older_hold, h_older_inflight, h_older_release, h_older_released),
-                    logger=log
+                    logger=log,
+                    selection_attempted=paging_selection_attempted,
                 )
                 h_older_hold = h_older_inflight = h_older_release = h_older_released = None
                 if _dep_stopped:
