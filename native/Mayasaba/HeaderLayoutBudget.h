@@ -35,13 +35,14 @@ namespace mayasaba::ui
 
         if (!attentionPresent)
         {
-            // When problem cards are present without Action Center, guarantee at least
-            // problemsFloor (40.0) so the card scroller never collapses into an unusable
-            // slice on compact windows and buttons remain reachable when scrolled into view.
-            result.problems = problemsPresent ? std::min(std::max(result.pool, problemsFloor), 300.0) : 0.0;
+            // Conserve the layout budget: single problem card region allocates up to
+            // available pool (capped at 300.0) without consuming space reserved for
+            // the composer. When pool is 0 or constrained (< 40.0), allocation never exceeds pool.
+            result.problems = problemsPresent ? std::min(result.pool, 300.0) : 0.0;
         }
         else if (!problemsPresent)
         {
+            // Conserve the layout budget: single attention region allocates up to pool.
             result.attention = std::min(result.pool, 300.0);
         }
         else

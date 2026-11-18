@@ -74,6 +74,49 @@ int main()
             }
         }
 
+        // Constrained single-card regressions: verify layout budget conservation across all pool sizes
+        // (including 0.0 and 9.6), ensuring neither region exceeds pool or consumes composer space.
+        for (double constrainedPool : {0.0, 5.0, 9.6, 20.0, 40.0, 64.0, 70.0, 100.0, 140.0, 180.0, 200.0, 350.0})
+        {
+            // 1. Single problem card (attention false, problems true)
+            auto const bProb = mayasaba::ui::AllocateHeaderLayout(
+                100 + 200 + 24 + constrainedPool, 100, 0, 0, 200, false, true);
+            REQUIRE(bProb.attention == 0.0);
+            REQUIRE(bProb.problems <= constrainedPool + 0.001); // NEVER exceeds pool!
+            REQUIRE(bProb.problems <= 300.0 + 0.001);           // Capped at 300.0
+            if (constrainedPool == 0.0)
+            {
+                REQUIRE(bProb.problems == 0.0);
+            }
+            else
+            {
+                REQUIRE(bProb.problems > 0.0); // Provides compact recovery access up to pool
+                REQUIRE(std::abs(bProb.problems - std::min(constrainedPool, 300.0)) < 0.001);
+            }
+            if (constrainedPool == 9.6)
+            {
+                // Specifically verify that 9.6 does NOT allocate 40.0 DIPs
+                REQUIRE(bProb.problems <= 9.601);
+                REQUIRE(bProb.problems > 0.0);
+            }
+
+            // 2. Single attention card (attention true, problems false)
+            auto const bAttn = mayasaba::ui::AllocateHeaderLayout(
+                100 + 200 + 24 + constrainedPool, 100, 0, 0, 200, true, false);
+            REQUIRE(bAttn.problems == 0.0);
+            REQUIRE(bAttn.attention <= constrainedPool + 0.001);
+            REQUIRE(bAttn.attention <= 300.0 + 0.001);
+            if (constrainedPool == 0.0)
+            {
+                REQUIRE(bAttn.attention == 0.0);
+            }
+            else
+            {
+                REQUIRE(bAttn.attention > 0.0);
+                REQUIRE(std::abs(bAttn.attention - std::min(constrainedPool, 300.0)) < 0.001);
+            }
+        }
+
         // Supported logical sizes (600, 720, 900, 1080) and text scale variations (compact/expanded composer)
         for (double screenH : {600.0, 720.0, 900.0, 1080.0})
         {

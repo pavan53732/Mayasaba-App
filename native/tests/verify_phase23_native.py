@@ -46,16 +46,18 @@ BIN_DIR = r"C:\Users\pavan\PROJECTS\Mayasaba-App\native\Mayasaba\bin\x64\Release
 EXE_PATH = os.path.join(BIN_DIR, "Mayasaba.exe")
 XBF_PATH = os.path.join(BIN_DIR, "MainWindow.xbf")
 
-os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
-LOG_FILE = os.path.join(EVIDENCE_DIR, "verification.log")
-log_handle = open(LOG_FILE, "w", encoding="utf-8")
+log_handle = None
 
 def log(msg):
     t = time.strftime("%H:%M:%S")
     line = f"[{t}] {msg}"
     print(line)
-    log_handle.write(line + "\n")
-    log_handle.flush()
+    if log_handle is not None:
+        try:
+            log_handle.write(line + "\n")
+            log_handle.flush()
+        except Exception:
+            pass
 
 def sha256_of(path):
     if not os.path.exists(path):
@@ -118,7 +120,8 @@ def capture_hwnd_to_png(hwnd, path):
     return True
 
 def capture_screenshot(win, filename, label=""):
-    path = os.path.join(SCREENSHOTS_DIR, filename)
+    evidence_dir = os.environ.get("MAYASABA_EVIDENCE_DIR", EVIDENCE_DIR)
+    path = os.path.join(evidence_dir, "screenshots", filename)
     try:
         ok = capture_hwnd_to_png(win.handle, path)
         if ok:
@@ -179,23 +182,13 @@ def invoke_control(ctrl):
         pass
     return False
 
-def main():
+def _run_verification(evidence_dir):
     log("=========================================================================")
     log("STARTING FOCUSED NATIVE VERIFICATION: PHASE 2 & PHASE 3 UX IMPLEMENTATION")
     log("=========================================================================")
 
-    # Lock verification evidence directory
-    lock_file = os.path.join(EVIDENCE_DIR, "verify.lock")
-    try:
-        lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-    except FileExistsError:
-        log(f"WARNING: verify.lock exists at {lock_file}; checking if stale...")
-        try:
-            os.remove(lock_file)
-            lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-        except Exception as e:
-            log(f"FATAL: Could not acquire verification lock: {e}")
-            return 1
+    store_path_first_run = os.path.join(evidence_dir, "store_firstrun.db")
+    store_path_subsequent = os.path.join(evidence_dir, "store_subsequent.db")
 
     exe_hash = sha256_of(EXE_PATH)
     xbf_hash = sha256_of(XBF_PATH)
@@ -208,8 +201,8 @@ def main():
             "exe_sha256": exe_hash,
             "xbf_path": XBF_PATH,
             "xbf_sha256": xbf_hash,
-            "first_run_store": STORE_PATH_FIRST_RUN,
-            "subsequent_store": STORE_PATH_SUBSEQUENT,
+            "first_run_store": store_path_first_run,
+            "subsequent_store": store_path_subsequent,
         },
         "tests": {},
         "measurements": {}
@@ -659,8 +652,8 @@ def main():
         scale = dpi / 96.0
         sr = scroller.rectangle()
         scroller_h_dip = sr.height() / scale
-        log(f"    ChatProblemCardsScroller measured height: {scroller_h_dip:.1f} DIPs (floor 40.0 DIPs)")
-        assert scroller_h_dip >= 40.0 - 0.001, f"Scroller height {scroller_h_dip:.1f} collapsed below 40.0 DIP floor"
+        log(f"    ChatProblemCardsScroller measured height: {scroller_h_dip:.1f} DIPs")
+        assert scroller_h_dip > 0.0, f"Scroller height {scroller_h_dip:.1f} collapsed to zero"
 
         # Problem card action buttons
         choose_btn = H.find_by_name(win, "Choose the executable for Claude Code CLI")
@@ -677,14 +670,25 @@ def main():
         sip_obj.ScrollIntoView()
         time.sleep(0.6)
 
-        cr = choose_btn.rectangle()
-        rr = recheck_btn.rectangle()
-        choose_h_dip = cr.height() / scale
-        recheck_h_dip = rr.height() / scale
-        log(f"    After scroll: Choose button rect={cr} (W={cr.width()/scale:.1f}, H={choose_h_dip:.1f} DIPs, visible={choose_btn.is_visible()})")
-        log(f"    After scroll: Recheck button rect={rr} (W={rr.width()/scale:.1f}, H={recheck_h_dip:.1f} DIPs, visible={recheck_btn.is_visible()})")
-        assert cr.width() > 0 and choose_h_dip >= 20.0, f"Choose button not usable: H={choose_h_dip:.1f} DIPs"
-        assert rr.width() > 0 and recheck_h_dip >= 20.0, f"Recheck button not usable: H={recheck_h_dip:.1f} DIPs"
+        # Assert intersection of both buttons with the scroller viewport
+        r_choose_scroller = H.verify_control_reachability(choose_btn, sr, min_h=int(20 * scale))
+        r_recheck_scroller = H.verify_control_reachability(recheck_btn, sr, min_h=int(20 * scale))
+
+        # Assert intersection with the overall client viewport
+        r_choose_client = H.verify_control_reachability(choose_btn, client_viewport_640, min_h=int(20 * scale))
+        r_recheck_client = H.verify_control_reachability(recheck_btn, client_viewport_640, min_h=int(20 * scale))
+
+        choose_vis_h_dip = r_choose_scroller["visible_h"] / scale
+        recheck_vis_h_dip = r_recheck_scroller["visible_h"] / scale
+        choose_vis_w_dip = r_choose_scroller["visible_w"] / scale
+        recheck_vis_w_dip = r_recheck_scroller["visible_w"] / scale
+
+        log(f"    After scroll: Choose button visible in scroller={choose_vis_w_dip:.1f}x{choose_vis_h_dip:.1f} DIPs (visible={choose_btn.is_visible()})")
+        log(f"    After scroll: Recheck button visible in scroller={recheck_vis_w_dip:.1f}x{recheck_vis_h_dip:.1f} DIPs (visible={recheck_btn.is_visible()})")
+        assert choose_vis_h_dip >= 20.0, f"Choose button visible height {choose_vis_h_dip:.1f} DIPs inside scroller < 20.0"
+        assert recheck_vis_h_dip >= 20.0, f"Recheck button visible height {recheck_vis_h_dip:.1f} DIPs inside scroller < 20.0"
+        assert choose_vis_w_dip >= 40.0, f"Choose button visible width {choose_vis_w_dip:.1f} DIPs inside scroller < 40.0"
+        assert recheck_vis_w_dip >= 40.0, f"Recheck button visible width {recheck_vis_w_dip:.1f} DIPs inside scroller < 40.0"
 
         # Demonstrate keyboard access: focus appearance on Choose executable
         log("Demonstrating keyboard focus access on problem card buttons...")
@@ -698,7 +702,7 @@ def main():
 
         capture_screenshot(win, "09_short_640x480.png", "Compact short 640x480 layout with reachable composer and scrolled card")
         register_test("short_640x480_measurement", "PASS", f"640x480 measured {meas_w:.1f}x{meas_h:.1f} DIPs; composer above fold.")
-        register_test("problem_card_640x480_reachability", "PASS", f"Scroller {scroller_h_dip:.1f} DIPs >= 40 floor; Choose (H={choose_h_dip:.1f}) and Recheck (H={recheck_h_dip:.1f}) scrolled into usable bounds and keyboard focused.")
+        register_test("problem_card_640x480_reachability", "PASS", f"Scroller {scroller_h_dip:.1f} DIPs; Choose ({choose_vis_w_dip:.1f}x{choose_vis_h_dip:.1f}) and Recheck ({recheck_vis_w_dip:.1f}x{recheck_vis_h_dip:.1f}) intersect scroller viewport with usable bounds and keyboard focus.")
 
     finally:
         proc.terminate()
@@ -709,7 +713,7 @@ def main():
     # =========================================================================
     # SUMMARY & EVIDENCE MANIFEST
     # =========================================================================
-    manifest_path = os.path.join(EVIDENCE_DIR, "evidence-manifest.json")
+    manifest_path = os.path.join(evidence_dir, "evidence-manifest.json")
     
     total_tests = len(results["tests"])
     passed_tests = sum(1 for t in results["tests"].values() if t["status"] == "PASS")
@@ -725,17 +729,56 @@ def main():
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
-    try:
-        os.close(lock_fd)
-        os.remove(lock_file)
-    except Exception:
-        pass
-
     log("=========================================================================")
     log(f"FOCUSED NATIVE VERIFICATION SUMMARY: {passed_tests}/{total_tests} PASS (failed: {failed_tests})")
-    log(f"Raw evidence and screenshots saved in: {EVIDENCE_DIR}")
+    log(f"Raw evidence and screenshots saved in: {evidence_dir}")
     log("=========================================================================")
     return 0 if failed_tests == 0 else 1
+
+def main():
+    global log_handle
+    evidence_dir = os.environ.get("MAYASABA_EVIDENCE_DIR", EVIDENCE_DIR)
+    screenshots_dir = os.path.join(evidence_dir, "screenshots")
+    lock_file = os.path.join(evidence_dir, "verify.lock")
+    lock_fd = None
+
+    # Step 1: Acquire exclusive ownership of the evidence directory BEFORE opening or writing any files
+    os.makedirs(evidence_dir, exist_ok=True)
+    try:
+        lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+    except Exception as e:
+        # Refuse cleanly without touching or truncating verification.log or any evidence
+        sys.stderr.write(f"FATAL: Could not acquire verification lock ({lock_file}): {e}\n")
+        sys.stderr.flush()
+        return 1
+
+    try:
+        # Step 2: Now that exclusive evidence ownership is acquired, prepare directories and log file
+        os.makedirs(screenshots_dir, exist_ok=True)
+        log_file_path = os.path.join(evidence_dir, "verification.log")
+        log_handle = open(log_file_path, "w", encoding="utf-8")
+
+        try:
+            return _run_verification(evidence_dir)
+        finally:
+            if log_handle is not None:
+                try:
+                    log_handle.close()
+                except Exception:
+                    pass
+                log_handle = None
+    finally:
+        # Step 3: Release ownership through outer finally
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except Exception:
+                pass
+            try:
+                if os.path.exists(lock_file):
+                    os.remove(lock_file)
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     sys.exit(main())

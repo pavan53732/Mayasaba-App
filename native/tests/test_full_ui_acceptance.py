@@ -554,9 +554,10 @@ def verify_client_logical_dimensions(hwnd, target_logical_w, target_logical_h, t
     return (act_log_w, act_log_h)
 
 
-def verify_control_reachability(ctrl, viewport_rect, min_w=1, min_h=1):
-    """Verifies that a UI control is visible, non-collapsed, and has usable bounds inside the viewport.
+def verify_control_reachability(ctrl, viewport_rect, min_w=None, min_h=None, min_visible_ratio=0.5):
+    """Verifies that a UI control is visible, non-collapsed, and has usable visible bounds inside the viewport.
     
+    Rejects controls that are off-screen or partially clipped beyond usable bounds.
     Both ctrl.rectangle() and viewport_rect are expected in screen coordinates.
     """
     if hasattr(ctrl, "is_visible") and not ctrl.is_visible():
@@ -566,12 +567,25 @@ def verify_control_reachability(ctrl, viewport_rect, min_w=1, min_h=1):
     cr = ctrl.rectangle() if hasattr(ctrl, "rectangle") else ctrl
     cw = cr.right - cr.left
     ch = cr.bottom - cr.top
-    if cw < min_w or ch < min_h:
+    if cw <= 0 or ch <= 0:
         name = getattr(ctrl, "window_text", lambda: "")() or getattr(ctrl, "automation_id", lambda: "")()
         raise AssertionError(
-            f"Control '{name}' has collapsed/invalid geometry: W={cw}, H={ch} (min required {min_w}x{min_h})"
+            f"Control '{name}' has collapsed/invalid geometry: W={cw}, H={ch}"
         )
     
+    # Calculate required usable visible dimensions:
+    # If caller specifies min_w / min_h, those explicit bounds are strictly enforced alongside min_visible_ratio.
+    # Otherwise, requires at least min_visible_ratio (default 50%) and at least 16px (or full dimension if smaller).
+    if min_w is not None:
+        req_w = max(min_w, int(cw * min_visible_ratio))
+    else:
+        req_w = min(cw, max(16, int(cw * min_visible_ratio)))
+
+    if min_h is not None:
+        req_h = max(min_h, int(ch * min_visible_ratio))
+    else:
+        req_h = min(ch, max(16, int(ch * min_visible_ratio)))
+
     # Viewport intersection
     v_left = viewport_rect.left
     v_top = viewport_rect.top
@@ -583,23 +597,27 @@ def verify_control_reachability(ctrl, viewport_rect, min_w=1, min_h=1):
     inter_right = min(cr.right, v_right)
     inter_bottom = min(cr.bottom, v_bottom)
 
-    inter_w = inter_right - inter_left
-    inter_h = inter_bottom - inter_top
+    inter_w = max(0, inter_right - inter_left)
+    inter_h = max(0, inter_bottom - inter_top)
 
-    if inter_w < min_w or inter_h < min_h:
+    if inter_w < req_w or inter_h < req_h:
         name = getattr(ctrl, "window_text", lambda: "")() or getattr(ctrl, "automation_id", lambda: "")()
         raise AssertionError(
-            f"Control '{name}' is clipped or outside viewport! "
-            f"Control rect: ({cr.left}, {cr.top}, {cr.right}, {cr.bottom}); "
+            f"Control '{name}' is partially clipped or outside viewport! "
+            f"Control rect: ({cr.left}, {cr.top}, {cr.right}, {cr.bottom}) [W={cw}, H={ch}]; "
             f"Viewport rect: ({v_left}, {v_top}, {v_right}, {v_bottom}); "
-            f"Intersection: W={inter_w}, H={inter_h} (min required {min_w}x{min_h})"
+            f"Visible intersection: W={inter_w}, H={inter_h} (usable visible bounds require W>={req_w}, H>={req_h})"
         )
     return {
         "ctrl_rect": (cr.left, cr.top, cr.right, cr.bottom),
         "viewport_rect": (v_left, v_top, v_right, v_bottom),
         "visible_rect": (inter_left, inter_top, inter_right, inter_bottom),
         "visible_w": inter_w,
-        "visible_h": inter_h
+        "visible_h": inter_h,
+        "ctrl_w": cw,
+        "ctrl_h": ch,
+        "ratio_w": inter_w / cw if cw > 0 else 0.0,
+        "ratio_h": inter_h / ch if ch > 0 else 0.0
     }
 
 WM_KEYDOWN = 0x0100

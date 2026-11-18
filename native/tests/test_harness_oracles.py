@@ -1086,6 +1086,127 @@ def test_reachability_oracle_rejects_offscreen_or_invisible_controls():
         assert "is not visible" in str(exc)
 
 
+def test_reachability_oracle_rejects_partially_clipped_controls():
+    """[Negative Unit Test] verify_control_reachability rejects controls partially clipped beyond usable bounds."""
+    class _MockRect:
+        def __init__(self, left, top, right, bottom):
+            self.left = left; self.top = top; self.right = right; self.bottom = bottom
+        def width(self): return self.right - self.left
+        def height(self): return self.bottom - self.top
+
+    class _MockControl:
+        def __init__(self, rect, visible=True, name="TestButton"):
+            self._rect = rect; self._visible = visible; self._name = name
+        def is_visible(self): return self._visible
+        def rectangle(self): return self._rect
+        def window_text(self): return self._name
+        def automation_id(self): return self._name
+
+    viewport = _MockRect(0, 0, 800, 600)
+
+    # 1. 200x40 control with only 1x1 pixel visible in bottom-right corner of viewport -> REJECTED
+    ctrl_1x1 = _MockControl(_MockRect(799, 599, 999, 639), name="TinySliver")
+    try:
+        H.verify_control_reachability(ctrl_1x1, viewport)
+        assert False, "Should have rejected 200x40 control with only 1x1 pixel visible"
+    except AssertionError as exc:
+        assert "partially clipped" in str(exc)
+
+    # 2. 200x40 control with only 5px height visible at bottom fold (top 5px inside viewport) -> REJECTED
+    ctrl_5px_h = _MockControl(_MockRect(100, 595, 300, 635), name="BottomClippedButton")
+    try:
+        H.verify_control_reachability(ctrl_5px_h, viewport)
+        assert False, "Should have rejected 200x40 control with only 5px height visible"
+    except AssertionError as exc:
+        assert "partially clipped" in str(exc)
+
+    # 3. 200x40 control with only 10px width visible on right edge -> REJECTED
+    ctrl_10px_w = _MockControl(_MockRect(790, 100, 990, 140), name="RightClippedButton")
+    try:
+        H.verify_control_reachability(ctrl_10px_w, viewport)
+        assert False, "Should have rejected 200x40 control with only 10px width visible"
+    except AssertionError as exc:
+        assert "partially clipped" in str(exc)
+
+    # 4. 200x40 control with only 5px height visible on top edge -> REJECTED
+    ctrl_top_clipped = _MockControl(_MockRect(100, -35, 300, 5), name="TopClippedButton")
+    try:
+        H.verify_control_reachability(ctrl_top_clipped, viewport)
+        assert False, "Should have rejected 200x40 control clipped on top edge"
+    except AssertionError as exc:
+        assert "partially clipped" in str(exc)
+
+    # 5. 200x40 control with only 10px width visible on left edge -> REJECTED
+    ctrl_left_clipped = _MockControl(_MockRect(-190, 100, 10, 140), name="LeftClippedButton")
+    try:
+        H.verify_control_reachability(ctrl_left_clipped, viewport)
+        assert False, "Should have rejected 200x40 control clipped on left edge"
+    except AssertionError as exc:
+        assert "partially clipped" in str(exc)
+
+    # 6. 200x40 control with 200x30 pixels visible (75% height visible >= 50% floor) -> PASSES
+    ctrl_usable = _MockControl(_MockRect(100, 100, 300, 130), name="UsableButton")
+    res = H.verify_control_reachability(ctrl_usable, viewport)
+    assert res["visible_w"] == 200 and res["visible_h"] == 30
+
+    # 7. Explicit min_h requirement enforced: 200x40 control with 200x20 visible fails if min_h=25
+    ctrl_20h = _MockControl(_MockRect(100, 100, 300, 120), name="Button20h")
+    try:
+        H.verify_control_reachability(ctrl_20h, viewport, min_h=25)
+        assert False, "Should have rejected visible_h=20 when min_h=25 required"
+    except AssertionError as exc:
+        assert "partially clipped" in str(exc)
+
+
+def test_evidence_lock_acquisition_protects_existing_log():
+    """[Unit Test] verify_phase23_native acquires verify.lock before opening or writing to verification.log.
+    
+    If verify.lock is already held:
+    1. Lock acquisition refuses and main() returns 1.
+    2. Existing verification.log content is strictly preserved and NEVER truncated.
+    """
+    import tempfile, shutil
+    tmp_evidence = tempfile.mkdtemp(prefix="mayasaba_evidence_test_")
+    try:
+        lock_file = os.path.join(tmp_evidence, "verify.lock")
+        log_file = os.path.join(tmp_evidence, "verification.log")
+        original_content = "EXISTING VERIFIED AUDIT LOG CONTENT - DO NOT DESTROY\n"
+        with open(log_file, "w", encoding="utf-8") as f:
+            f.write(original_content)
+
+        # 1. Acquire the lock file first (simulating another running test runner)
+        held_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        try:
+            # 2. Point MAYASABA_EVIDENCE_DIR to tmp_evidence and invoke runner
+            old_env = os.environ.get("MAYASABA_EVIDENCE_DIR")
+            os.environ["MAYASABA_EVIDENCE_DIR"] = tmp_evidence
+            try:
+                import verify_phase23_native as V
+                V.EVIDENCE_DIR = tmp_evidence
+                
+                # Verify that calling main() fails to acquire lock and returns 1
+                exit_code = V.main()
+                assert exit_code == 1, f"Expected main() to return 1 when lock is held, got {exit_code}"
+
+                # 3. CRITICAL: Assert that existing verification.log content was NOT truncated or destroyed
+                with open(log_file, "r", encoding="utf-8") as f:
+                    retained_content = f.read()
+                assert retained_content == original_content, (
+                    f"Log file was corrupted or truncated! Expected {repr(original_content)}, got {repr(retained_content)}"
+                )
+            finally:
+                if old_env is not None:
+                    os.environ["MAYASABA_EVIDENCE_DIR"] = old_env
+                else:
+                    os.environ.pop("MAYASABA_EVIDENCE_DIR", None)
+        finally:
+            os.close(held_fd)
+            if os.path.exists(lock_file):
+                os.remove(lock_file)
+    finally:
+        shutil.rmtree(tmp_evidence, ignore_errors=True)
+
+
 def test_assert_control_withdrawn_rejects_unavailability():
     """[Negative Unit Test] assert_control_withdrawn returns None (not True) on UNAVAILABLE observation."""
     class _MockFailingParent:
