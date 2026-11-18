@@ -1158,6 +1158,37 @@ def test_reachability_oracle_rejects_partially_clipped_controls():
         assert "partially clipped" in str(exc)
 
 
+def test_reachability_uses_combined_clipping_viewport():
+    """Reject separate visible portions that leave no usable area through all clips."""
+    from unittest import TestCase
+
+    class Control:
+        def is_visible(self): return True
+        def rectangle(self): return H.Rect(0, 0, 200, 40)
+
+    control = Control()
+    scroller = H.Rect(0, 0, 105, 40)
+    client = H.Rect(95, 0, 200, 40)
+    # Each clip separately exposes enough area; only their shared area is too small.
+    assert H.verify_control_reachability(control, scroller, min_w=40, min_h=20)["visible_w"] == 105
+    assert H.verify_control_reachability(control, client, min_w=40, min_h=20)["visible_w"] == 105
+    case = TestCase()
+    for clips in (
+        [scroller, client],
+        [H.Rect(0, 0, 100, 40), H.Rect(100, 0, 200, 40)],
+    ):
+        with case.assertRaisesRegex(AssertionError, "partially clipped"):
+            H.verify_control_reachability(control, clips, min_w=40, min_h=20)
+
+    visible = H.verify_control_reachability(
+        control,
+        [H.Rect(-10, -10, 210, 50), H.Rect(20, 0, 190, 40), H.Rect(0, 5, 180, 35)],
+        min_w=40, min_h=20,
+    )
+    assert visible["viewport_rect"] == (20, 5, 180, 35)
+    assert (visible["visible_w"], visible["visible_h"]) == (160, 30)
+
+
 def test_evidence_lock_acquisition_protects_existing_log():
     """[Unit Test] verify_phase23_native acquires verify.lock before opening or writing to verification.log.
     

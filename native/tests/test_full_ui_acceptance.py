@@ -554,10 +554,83 @@ def verify_client_logical_dimensions(hwnd, target_logical_w, target_logical_h, t
     return (act_log_w, act_log_h)
 
 
+class Rect:
+    """Represents a 2D bounding rectangle / viewport in pixel coordinates."""
+    def __init__(self, left, top, right, bottom):
+        self.left = int(left)
+        self.top = int(top)
+        self.right = int(right)
+        self.bottom = int(bottom)
+
+    def width(self):
+        return max(0, self.right - self.left)
+
+    def height(self):
+        return max(0, self.bottom - self.top)
+
+    def rectangle(self):
+        return self
+
+    def __iter__(self):
+        return iter((self.left, self.top, self.right, self.bottom))
+
+    def __getitem__(self, index):
+        return (self.left, self.top, self.right, self.bottom)[index]
+
+    def __repr__(self):
+        return f"Rect({self.left}, {self.top}, {self.right}, {self.bottom}) [W={self.width()}, H={self.height()}]"
+
+    def __eq__(self, other):
+        if hasattr(other, "left") and hasattr(other, "top") and hasattr(other, "right") and hasattr(other, "bottom"):
+            return (self.left == other.left and self.top == other.top and
+                    self.right == other.right and self.bottom == other.bottom)
+        return False
+
+
+def intersect_rectangles(*rects):
+    """Computes the mutual intersection of two or more rectangles/viewports.
+
+    Accepts multiple rectangle objects (with .left, .top, .right, .bottom or indexing)
+    or a single iterable of rectangles.
+    Returns a Rect representing the combined clipping region.
+    If the regions do not overlap, returns a Rect with width=0 and height=0.
+    """
+    if len(rects) == 1 and isinstance(rects[0], (list, tuple)):
+        rects = rects[0]
+    if not rects:
+        raise ValueError("intersect_rectangles requires at least one rectangle")
+
+    left = -float("inf")
+    top = -float("inf")
+    right = float("inf")
+    bottom = float("inf")
+
+    for r in rects:
+        r_rect = r.rectangle() if hasattr(r, "rectangle") and callable(r.rectangle) else r
+        r_left = r_rect.left if hasattr(r_rect, "left") else r_rect[0]
+        r_top = r_rect.top if hasattr(r_rect, "top") else r_rect[1]
+        r_right = r_rect.right if hasattr(r_rect, "right") else r_rect[2]
+        r_bottom = r_rect.bottom if hasattr(r_rect, "bottom") else r_rect[3]
+
+        left = max(left, r_left)
+        top = max(top, r_top)
+        right = min(right, r_right)
+        bottom = min(bottom, r_bottom)
+
+    if right < left:
+        right = left
+    if bottom < top:
+        bottom = top
+
+    return Rect(left, top, right, bottom)
+
+
 def verify_control_reachability(ctrl, viewport_rect, min_w=None, min_h=None, min_visible_ratio=0.5):
     """Verifies that a UI control is visible, non-collapsed, and has usable visible bounds inside the viewport.
     
     Rejects controls that are off-screen or partially clipped beyond usable bounds.
+    viewport_rect can be a single rectangle or a collection/list of clipping regions (e.g. scroller and window).
+    When multiple clipping regions are provided, they are intersected into a combined viewport first.
     Both ctrl.rectangle() and viewport_rect are expected in screen coordinates.
     """
     if hasattr(ctrl, "is_visible") and not ctrl.is_visible():
@@ -572,6 +645,12 @@ def verify_control_reachability(ctrl, viewport_rect, min_w=None, min_h=None, min
         raise AssertionError(
             f"Control '{name}' has collapsed/invalid geometry: W={cw}, H={ch}"
         )
+
+    # Intersect multiple clipping regions if a sequence of viewports was passed
+    if isinstance(viewport_rect, (list, tuple)):
+        combined_viewport = intersect_rectangles(*viewport_rect)
+    else:
+        combined_viewport = viewport_rect
     
     # Calculate required usable visible dimensions:
     # If caller specifies min_w / min_h, those explicit bounds are strictly enforced alongside min_visible_ratio.
@@ -586,11 +665,11 @@ def verify_control_reachability(ctrl, viewport_rect, min_w=None, min_h=None, min
     else:
         req_h = min(ch, max(16, int(ch * min_visible_ratio)))
 
-    # Viewport intersection
-    v_left = viewport_rect.left
-    v_top = viewport_rect.top
-    v_right = viewport_rect.right
-    v_bottom = viewport_rect.bottom
+    # Combined viewport bounds
+    v_left = combined_viewport.left if hasattr(combined_viewport, "left") else combined_viewport[0]
+    v_top = combined_viewport.top if hasattr(combined_viewport, "top") else combined_viewport[1]
+    v_right = combined_viewport.right if hasattr(combined_viewport, "right") else combined_viewport[2]
+    v_bottom = combined_viewport.bottom if hasattr(combined_viewport, "bottom") else combined_viewport[3]
 
     inter_left = max(cr.left, v_left)
     inter_top = max(cr.top, v_top)
@@ -605,7 +684,7 @@ def verify_control_reachability(ctrl, viewport_rect, min_w=None, min_h=None, min
         raise AssertionError(
             f"Control '{name}' is partially clipped or outside viewport! "
             f"Control rect: ({cr.left}, {cr.top}, {cr.right}, {cr.bottom}) [W={cw}, H={ch}]; "
-            f"Viewport rect: ({v_left}, {v_top}, {v_right}, {v_bottom}); "
+            f"Combined viewport: ({v_left}, {v_top}, {v_right}, {v_bottom}); "
             f"Visible intersection: W={inter_w}, H={inter_h} (usable visible bounds require W>={req_w}, H>={req_h})"
         )
     return {
