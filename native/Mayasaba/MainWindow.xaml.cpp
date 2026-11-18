@@ -1012,9 +1012,14 @@ namespace winrt::Mayasaba::implementation
         pendingAttemptId_ = pending ? pending->id : "";
         pendingAttemptProject_ = pending ? activeProject_ : "";
         pendingAttemptBody_ = pending ? pending->body : "";
-        suppressDraft_ = true;
-        ComposerBox().Text(Utf16(pending ? pending->body : project->draft));
-        suppressDraft_ = false;
+        auto const targetDraft = Utf16(pending ? pending->body : project->draft);
+        if (ComposerBox().Text() != targetDraft)
+        {
+            suppressDraft_ = true;
+            ComposerBox().Text(targetDraft);
+            suppressDraft_ = false;
+            ComposerBox().Select(static_cast<int32_t>(targetDraft.size()), 0);
+        }
         ComposerBox().IsReadOnly(project->closed || pending.has_value());
         // The draft attachment set is reverified off the UI thread: it reads durable
         // records, hashes every staged copy and writes the reverified set back.
