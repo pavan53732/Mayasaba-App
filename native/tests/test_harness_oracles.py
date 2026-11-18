@@ -970,6 +970,141 @@ def test_sizing_oracle_rejects_unknown_or_invalid_dpi():
         H.user32 = real_user32
 
 
+def test_logical_dimension_oracle_asserts_target_bounds():
+    """[Unit Test] verify_client_logical_dimensions asserts measured logical client bounds within tolerance."""
+    class _MockUser32Dimensions:
+        def __init__(self, phys_w, phys_h, dpi=96):
+            self.phys_w = phys_w
+            self.phys_h = phys_h
+            self.dpi = dpi
+        def IsWindow(self, hwnd): return True
+        def GetDpiForWindow(self, hwnd): return self.dpi
+        def GetClientRect(self, hwnd, rect_ptr):
+            rect = rect_ptr.contents
+            rect.left = 0
+            rect.top = 0
+            rect.right = self.phys_w
+            rect.bottom = self.phys_h
+            return True
+
+    real_user32 = H.user32
+    try:
+        # 1. Matching 520x640 at 96 DPI (scale 1.0)
+        H.user32 = _MockUser32Dimensions(520, 640, 96)
+        w, h = H.verify_client_logical_dimensions(1234, 520, 640, tolerance=2.0)
+        assert abs(w - 520.0) < 0.001 and abs(h - 640.0) < 0.001
+
+        # 2. Matching 640x480 at 120 DPI (scale 1.25 -> phys 800x600)
+        H.user32 = _MockUser32Dimensions(800, 600, 120)
+        w, h = H.verify_client_logical_dimensions(1234, 640, 480, tolerance=2.0)
+        assert abs(w - 640.0) < 0.001 and abs(h - 480.0) < 0.001
+
+        # 3. Deviating beyond tolerance: target 520x640 measured as 600x640
+        H.user32 = _MockUser32Dimensions(600, 640, 96)
+        try:
+            H.verify_client_logical_dimensions(1234, 520, 640, tolerance=2.0)
+            assert False, "Should have raised AssertionError for width deviation"
+        except AssertionError as exc:
+            assert "mismatch" in str(exc) and "520" in str(exc)
+
+        # 4. Deviating beyond tolerance: target 640x480 measured as 640x400
+        H.user32 = _MockUser32Dimensions(800, 500, 120) # 640x400 at 120 DPI
+        try:
+            H.verify_client_logical_dimensions(1234, 640, 480, tolerance=2.0)
+            assert False, "Should have raised AssertionError for height deviation"
+        except AssertionError as exc:
+            assert "mismatch" in str(exc) and "480" in str(exc)
+
+        # 5. Invalid window handle rejection
+        try:
+            H.verify_client_logical_dimensions(0, 520, 640)
+            assert False, "Should have raised ValueError for hwnd=0"
+        except ValueError:
+            pass
+    finally:
+        H.user32 = real_user32
+
+
+def test_reachability_oracle_rejects_offscreen_or_invisible_controls():
+    """[Negative Unit Test] verify_control_reachability rejects invisible, collapsed, and off-screen controls."""
+    class _MockRect:
+        def __init__(self, left, top, right, bottom):
+            self.left = left; self.top = top; self.right = right; self.bottom = bottom
+        def width(self): return self.right - self.left
+        def height(self): return self.bottom - self.top
+
+    class _MockControl:
+        def __init__(self, rect, visible=True, name="TestControl"):
+            self._rect = rect; self._visible = visible; self._name = name
+        def is_visible(self): return self._visible
+        def rectangle(self): return self._rect
+        def window_text(self): return self._name
+        def automation_id(self): return self._name
+
+    viewport = _MockRect(0, 0, 800, 600)
+
+    # 1. Fully visible control inside viewport passes
+    ctrl_good = _MockControl(_MockRect(100, 100, 300, 200), visible=True)
+    res = H.verify_control_reachability(ctrl_good, viewport)
+    assert res["visible_w"] == 200 and res["visible_h"] == 100
+
+    # 2. Partially inside viewport with positive usable bounds passes
+    ctrl_partial = _MockControl(_MockRect(750, 550, 850, 650), visible=True)
+    res = H.verify_control_reachability(ctrl_partial, viewport, min_w=10, min_h=10)
+    assert res["visible_w"] == 50 and res["visible_h"] == 50
+
+    # 3. Off-screen vertically (below bottom fold) raises AssertionError
+    ctrl_below = _MockControl(_MockRect(100, 650, 300, 700), visible=True)
+    try:
+        H.verify_control_reachability(ctrl_below, viewport)
+        assert False, "Should have rejected control below fold"
+    except AssertionError as exc:
+        assert "clipped or outside viewport" in str(exc)
+
+    # 4. Off-screen horizontally (past right margin) raises AssertionError
+    ctrl_right = _MockControl(_MockRect(850, 100, 950, 200), visible=True)
+    try:
+        H.verify_control_reachability(ctrl_right, viewport)
+        assert False, "Should have rejected control past right margin"
+    except AssertionError as exc:
+        assert "clipped or outside viewport" in str(exc)
+
+    # 5. Collapsed 0x0 geometry raises AssertionError
+    ctrl_collapsed = _MockControl(_MockRect(100, 100, 100, 100), visible=True)
+    try:
+        H.verify_control_reachability(ctrl_collapsed, viewport)
+        assert False, "Should have rejected collapsed control"
+    except AssertionError as exc:
+        assert "collapsed/invalid geometry" in str(exc)
+
+    # 6. Invisible control (is_visible() == False) raises AssertionError
+    ctrl_invis = _MockControl(_MockRect(100, 100, 300, 200), visible=False)
+    try:
+        H.verify_control_reachability(ctrl_invis, viewport)
+        assert False, "Should have rejected is_visible=False"
+    except AssertionError as exc:
+        assert "is not visible" in str(exc)
+
+
+def test_assert_control_withdrawn_rejects_unavailability():
+    """[Negative Unit Test] assert_control_withdrawn returns None (not True) on UNAVAILABLE observation."""
+    class _MockFailingParent:
+        def descendants(self):
+            raise RuntimeError("UIA COM walk timeout")
+
+    parent = _MockFailingParent()
+    withdrawn, reason = H.assert_control_withdrawn(parent, aid="SomeControl", retries=1)
+    assert withdrawn is None, f"Observation failure must yield None, got {withdrawn}"
+    assert "observation unavailable" in reason
+
+    # Code asserting 'withdrawn is True' fails-closed and rejects observation failure
+    try:
+        assert withdrawn is True, "Absence must not be claimed when observation is unavailable"
+        assert False, "Assertion should have failed"
+    except AssertionError:
+        pass
+
+
 def test_dpi_awareness_established_and_verified():
     """[Unit Test] establish_dpi_awareness explicitly verifies effective awareness context."""
     name, ctx = H.establish_dpi_awareness()
@@ -2308,88 +2443,8 @@ def test_ux_journey_semantics_and_escape_preservation():
        - Extracts OnFolderKeyDown branch structure and verifies distinct dispatch for CreateFolderPanel,
          DraftCollisionPanel, recentFilterText_, Switching, FirstRun, and Startup fallthrough.
     """
-    import re
     from pathlib import Path
 
-    class Screen:
-        WELCOME = "Welcome"
-        FOLDER = "Folder"
-        CHAT = "Chat"
-
-    class Context:
-        NONE = "None"
-        FIRST_RUN = "FirstRun"
-        STARTUP = "Startup"
-        SWITCHING = "Switching"
-
-    def transition(screen, ctx, event, active_proj="", filter_text="", panel_open=False):
-        """Simulates native MainWindow navigation logic."""
-        if screen == Screen.WELCOME:
-            if event in ("Next", "Skip", "Escape"):
-                return Screen.FOLDER, Context.FIRST_RUN, active_proj, ""
-            return screen, ctx, active_proj, filter_text
-
-        elif screen == Screen.FOLDER:
-            if event == "Escape":
-                if panel_open:
-                    return Screen.FOLDER, ctx, active_proj, filter_text
-                if filter_text:
-                    return Screen.FOLDER, ctx, active_proj, ""
-                if ctx == Context.SWITCHING and active_proj:
-                    return Screen.CHAT, Context.NONE, active_proj, ""
-                if ctx == Context.FIRST_RUN:
-                    return Screen.WELCOME, Context.NONE, active_proj, ""
-                if ctx == Context.STARTUP:
-                    return Screen.FOLDER, Context.STARTUP, active_proj, ""
-            elif event == "Back" and ctx == Context.FIRST_RUN:
-                return Screen.WELCOME, Context.NONE, active_proj, ""
-            elif event == "Cancel" and ctx == Context.SWITCHING:
-                return Screen.CHAT, Context.NONE, active_proj, ""
-            elif event == "BindProject" and active_proj:
-                return Screen.CHAT, Context.NONE, active_proj, ""
-
-        return screen, ctx, active_proj, filter_text
-
-    # 1. First-Run Journey transitions
-    s, c, p, f = transition(Screen.WELCOME, Context.NONE, "Next")
-    assert (s, c) == (Screen.FOLDER, Context.FIRST_RUN), "Welcome Next must route to Folder(FirstRun)"
-    s2, c2, _, _ = transition(s, c, "Back")
-    assert (s2, c2) == (Screen.WELCOME, Context.NONE), "Folder(FirstRun) Back must return to Welcome"
-
-    s, c, p, f = transition(Screen.WELCOME, Context.NONE, "Skip")
-    assert (s, c) == (Screen.FOLDER, Context.FIRST_RUN), "Welcome Skip must route to Folder(FirstRun)"
-
-    s, c, p, f = transition(Screen.WELCOME, Context.NONE, "Escape")
-    assert (s, c) == (Screen.FOLDER, Context.FIRST_RUN), "Welcome Escape must route to Folder(FirstRun)"
-
-    # Escape on Folder(FirstRun) returns to Welcome, NEVER Chat
-    s_esc, c_esc, _, _ = transition(Screen.FOLDER, Context.FIRST_RUN, "Escape")
-    assert s_esc == Screen.WELCOME, "Escape on Folder(FirstRun) must return to Welcome"
-    assert s_esc != Screen.CHAT, "Escape on Folder(FirstRun) must NEVER reach Chat"
-
-    # 2. Subsequent Launch (Startup) Journey transitions
-    s_start, c_start, _, f_rem = transition(Screen.FOLDER, Context.STARTUP, "Escape", filter_text="query")
-    assert (s_start, c_start, f_rem) == (Screen.FOLDER, Context.STARTUP, ""), "Escape with filter must clear filter and stay on Folder(Startup)"
-
-    s_start2, c_start2, _, _ = transition(Screen.FOLDER, Context.STARTUP, "Escape", filter_text="")
-    assert (s_start2, c_start2) == (Screen.FOLDER, Context.STARTUP), "Escape without filter must stay on Folder(Startup)"
-    assert s_start2 != Screen.CHAT, "Escape on Folder(Startup) must NEVER reach Chat"
-    assert s_start2 != Screen.WELCOME, "Escape on Folder(Startup) must NEVER reach Welcome"
-
-    # 3. Switching Journey transitions
-    s_sw, c_sw, p_sw, _ = transition(Screen.FOLDER, Context.SWITCHING, "Cancel", active_proj="proj-alpha")
-    assert (s_sw, p_sw) == (Screen.CHAT, "proj-alpha"), "Cancel switch must return to active project Chat"
-
-    s_sw2, c_sw2, p_sw2, _ = transition(Screen.FOLDER, Context.SWITCHING, "Escape", active_proj="proj-alpha")
-    assert (s_sw2, p_sw2) == (Screen.CHAT, "proj-alpha"), "Escape switch must return to active project Chat"
-
-    # 4. Mandatory Binding Invariant
-    for init_screen, init_ctx in [(Screen.WELCOME, Context.NONE), (Screen.FOLDER, Context.FIRST_RUN), (Screen.FOLDER, Context.STARTUP)]:
-        for ev in ["Escape", "Back", "Next", "Skip", "ClickOutside"]:
-            res_s, _, _, _ = transition(init_screen, init_ctx, ev)
-            assert res_s != Screen.CHAT, f"Mandatory binding violated: {init_screen}({init_ctx}) + {ev} reached Chat!"
-
-    # 5. C++ Control Flow Structural Verification
     cpp_path = Path(__file__).parent.parent / "Mayasaba" / "MainWindow.xaml.cpp"
     cpp_text = cpp_path.read_text(encoding="utf-8")
 
@@ -2407,11 +2462,101 @@ def test_ux_journey_semantics_and_escape_preservation():
         idx += 1
     body = cpp_text[open_brace + 1:idx - 1]
 
-    assert "CreateFolderPanel().Visibility() == Visibility::Visible" in body, "OnFolderKeyDown must dismiss CreateFolderPanel"
-    assert "DraftCollisionPanel().Visibility() == Visibility::Visible" in body, "OnFolderKeyDown must dismiss DraftCollisionPanel"
-    assert "!recentFilterText_.empty()" in body, "OnFolderKeyDown must clear recentFilterText_"
-    assert "selectorContext_ == SelectorContext::Switching" in body and "OnCancelSwitch" in body, "OnFolderKeyDown must handle Switching"
-    assert "selectorContext_ == SelectorContext::FirstRun" in body and "ShowWelcome()" in body, "OnFolderKeyDown must handle FirstRun -> ShowWelcome()"
+    # Tokenize if-blocks properly by condition parentheses and body braces
+    def extract_if_blocks(code):
+        pos = 0
+        blocks = []
+        while True:
+            pos = code.find("if", pos)
+            if pos == -1: break
+            if pos > 0 and (code[pos-1].isalnum() or code[pos-1] == "_"):
+                pos += 2
+                continue
+            p_open = code.find("(", pos)
+            if p_open == -1: break
+            p_depth = 1
+            p_idx = p_open + 1
+            while p_depth > 0 and p_idx < len(code):
+                if code[p_idx] == "(": p_depth += 1
+                elif code[p_idx] == ")": p_depth -= 1
+                p_idx += 1
+            cond = code[p_open+1:p_idx-1].strip()
+            b_open = code.find("{", p_idx)
+            if b_open == -1: break
+            b_depth = 1
+            b_idx = b_open + 1
+            while b_depth > 0 and b_idx < len(code):
+                if code[b_idx] == "{": b_depth += 1
+                elif code[b_idx] == "}": b_depth -= 1
+                b_idx += 1
+            block_body = code[b_open+1:b_idx-1].strip()
+            blocks.append((cond, block_body))
+            pos = b_idx
+        return blocks
+
+    blocks = extract_if_blocks(body)
+    assert len(blocks) >= 5, f"Expected at least 5 if-blocks in OnFolderKeyDown, found {len(blocks)}"
+
+    # 1. Structural condition-to-action bindings
+    first_run_blocks = [b for c, b in blocks if "SelectorContext::FirstRun" in c]
+    switching_blocks = [b for c, b in blocks if "SelectorContext::Switching" in c]
+    create_panel_blocks = [b for c, b in blocks if "CreateFolderPanel" in c]
+    draft_panel_blocks = [b for c, b in blocks if "DraftCollisionPanel" in c]
+    filter_blocks = [b for c, b in blocks if "!recentFilterText_.empty()" in c]
+
+    assert len(first_run_blocks) == 1, "Must have exactly 1 FirstRun branch in OnFolderKeyDown"
+    assert len(switching_blocks) == 1, "Must have exactly 1 Switching branch in OnFolderKeyDown"
+    assert len(create_panel_blocks) == 1, "Must have exactly 1 CreateFolderPanel branch in OnFolderKeyDown"
+    assert len(draft_panel_blocks) == 1, "Must have exactly 1 DraftCollisionPanel branch in OnFolderKeyDown"
+    assert len(filter_blocks) == 1, "Must have exactly 1 filter clearing branch in OnFolderKeyDown"
+
+    fr_body = first_run_blocks[0]
+    sw_body = switching_blocks[0]
+    cp_body = create_panel_blocks[0]
+    dp_body = draft_panel_blocks[0]
+    fl_body = filter_blocks[0]
+
+    # FirstRun must call ShowWelcome, must NOT call OnCancelSwitch, must not touch Chat
+    assert "ShowWelcome();" in fr_body, "FirstRun Escape must call ShowWelcome()"
+    assert "OnCancelSwitch" not in fr_body, "FirstRun Escape must NOT invoke OnCancelSwitch"
+    assert "ChatScreen" not in fr_body, "FirstRun Escape must NEVER reach ChatScreen"
+    assert "e.Handled(true);" in fr_body, "FirstRun Escape must mark event handled"
+
+    # Switching must call OnCancelSwitch, must NOT call ShowWelcome
+    assert "OnCancelSwitch" in sw_body, "Switching Escape must call OnCancelSwitch"
+    assert "ShowWelcome" not in sw_body, "Switching Escape must NOT invoke ShowWelcome"
+    assert "e.Handled(true);" in sw_body, "Switching Escape must mark event handled"
+
+    # Sub-panels must collapse visibility
+    assert "CreateFolderPanel().Visibility(Visibility::Collapsed);" in cp_body
+    assert "DraftCollisionPanel().Visibility(Visibility::Collapsed);" in dp_body
+    assert "collisionTargetProjectId_.clear();" in dp_body
+
+    # Filter clearing must clear text
+    assert 'box.Text(L"");' in fl_body
+
+    # 2. Production dispatch emulator over extracted C++ blocks
+    def dispatch_escape(ctx, active_project, filter_text, panel_open):
+        for cond, act in blocks:
+            if "CreateFolderPanel" in cond and panel_open:
+                assert "Visibility::Collapsed" in act
+                return "PanelDismissed"
+            if "!recentFilterText_.empty()" in cond and filter_text:
+                assert 'box.Text(L"");' in act
+                return "FilterCleared"
+            if "SelectorContext::Switching" in cond and ctx == "Switching" and active_project:
+                assert "OnCancelSwitch" in act
+                return "ReturnToChat"
+            if "SelectorContext::FirstRun" in cond and ctx == "FirstRun":
+                assert "ShowWelcome" in act
+                return "ReturnToWelcome"
+        return "StartupFallthrough"
+
+    assert dispatch_escape("FirstRun", "", "", False) == "ReturnToWelcome"
+    assert dispatch_escape("Switching", "alpha", "", False) == "ReturnToChat"
+    assert dispatch_escape("Startup", "", "query", False) == "FilterCleared"
+    assert dispatch_escape("Startup", "", "", False) == "StartupFallthrough"
+    assert dispatch_escape("Startup", "", "", True) == "PanelDismissed"
 
 
 def test_ux_shared_button_styles_and_focus_visuals():

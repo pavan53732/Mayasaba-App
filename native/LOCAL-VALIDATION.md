@@ -7096,29 +7096,31 @@ All raw artifacts from the verified run are preserved in `C:\Users\pavan\PROJECT
 ## 31. Phase 2 & Phase 3 UX Implementation: Shared System, Journey Closure & Responsive Verification (2026-11-18)
 
 ### 31.1 Scope and Objective
-This milestone implements Phase 2 (shared visual & interaction system) and Phase 3 (Welcome and project selector closure) under the frontend-first roadmap, addressing UX-01 through UX-32 specifications defined in `docs/THREE-SCREEN-UX-IMPLEMENTATION.md`:
+This milestone implements Phase 2 (shared visual & interaction system) and Phase 3 (Welcome and project selector closure) under the frontend-first roadmap, addressing UX-01 through UX-32 specifications defined in `docs/THREE-SCREEN-UX-IMPLEMENTATION.md` and resolving all verification corrections from `review-358f1fb/REVIEW.md`:
 1. **Shared Visual & Interaction System**: Complete focus, hover, pressed, disabled, loading, and error treatments across Welcome, Project Selection (Screen 2), and Chat.
 2. **Journey Semantics Closure**: First-run onboarding, subsequent-launch selector, and Switch Project/Cancel journeys with strict preservation of mandatory project binding on Next, Skip, Back, and Escape.
 3. **Data & Path Safety**: Inspectable Cascadia Mono rendering for long paths (>260 chars) without truncation or layout cycle; truthful open/closed status; read-only history enforcement for closed projects with explicit Reopen Project authorization.
-4. **Responsive Reachability**: Logical client sizing at 520×640 (narrow) and 640×480 (compact short) without maximizing the window or clipping controls.
-5. **Preservation Invariants**: The 21 PASS / 2 INCONCLUSIVE acceptance run (`run_20261117_acceptance_0420c2b`) is preserved for what it measured; C11/C12 and P01–P06 remain explicitly open; Phase 1 Complete remains retracted.
+4. **Responsive Reachability & 640×480 Layout Resolution**: Logical client sizing at 520×640 (narrow) and 640×480 (compact short) without maximizing the window. Resolved CLI problem card squishing by enforcing a 40.0 DIP floor in `HeaderLayoutBudget.h` and correcting row assignment in `MainWindow.xaml.cpp` (moving `ChatProblemCardsScroller` to Row 4 in stacked narrow headers), ensuring `Choose executable` and `Recheck` buttons remain scrollable, reachable, and keyboard-focusable.
+5. **Rigorous Oracles & Checked Observation Helpers**: Replaced disconnected simulators with direct C++ AST extraction of `OnFolderKeyDown` verifying Escape condition-to-action bindings; implemented `verify_client_logical_dimensions` rejecting unknown DPI and asserting logical bounds; added `verify_control_reachability` asserting positive dimensions, visibility, and viewport containment; updated `assert_control_withdrawn` to fail closed when observation is unavailable (`None`); dynamically registered 11 test outcomes with parameterized directory isolation and exclusive file locks (`verify.lock`).
+6. **Preservation Invariants**: The 21 PASS / 2 INCONCLUSIVE acceptance run (`run_20261117_acceptance_0420c2b`) is preserved for what it measured; C11/C12 and P01–P06 remain explicitly open; Phase 1 Complete remains retracted.
 
-### 31.2 Mapping and Gap Analysis (UX-01 to UX-32)
-A comprehensive audit against `docs/THREE-SCREEN-UX-IMPLEMENTATION.md` established:
-- **Focus & Interaction States (UX-01, UX-12, UX-27)**: Identified lack of explicit VisualStateManager groups on action styles in `App.xaml`. Resolved by adding `ControlTemplate` definitions for `MayasabaPrimaryAction`, `MayasabaSecondaryAction`, and `MayasabaQuietAction` defining `Normal`, `PointerOver`, `Pressed`, and `Disabled` states, along with high-visibility 2px focus indicators (`FocusVisualPrimaryBrush="{ThemeResource MayasabaBrandBrush}"`, `FocusVisualSecondaryBrush="{ThemeResource MayasabaCanvasBrush}"`, `FocusVisualPrimaryThickness="2"`, `FocusVisualMargin="-2"`). Default implicit styles for `Button`, `TextBox`, and `ListViewItem` were also declared.
-- **Escape Journey Semantics (UX-02, UX-06, UX-07)**: Identified that `OnFolderKeyDown` on Screen 2 during `FirstRun` did not return to Welcome on Escape. Resolved by adding `if (selectorContext_ == SelectorContext::FirstRun) { ShowWelcome(); e.Handled(true); return; }`, ensuring Escape mirrors `FolderBackButton` during initial introduction while preserving mandatory project binding.
-- **Recent Projects Action Styles (UX-05)**: Dynamically instantiated `open` and `locate` buttons in `RefreshRecentProjectsAsync` were updated to explicitly apply `MayasabaPrimaryAction` and `MayasabaSecondaryAction`.
+### 31.2 Mapping and Gap Analysis (UX-01 to UX-32) & Review-358f1fb Resolution
+A comprehensive audit against `docs/THREE-SCREEN-UX-IMPLEMENTATION.md` and `review-358f1fb/REVIEW.md` established:
+- **Focus & Interaction States (UX-01, UX-12, UX-27)**: Added `ControlTemplate` definitions in `App.xaml` for `MayasabaPrimaryAction`, `MayasabaSecondaryAction`, and `MayasabaQuietAction` defining `Normal`, `PointerOver`, `Pressed`, and `Disabled` states, along with high-visibility 2px focus indicators (`FocusVisualPrimaryBrush="{ThemeResource MayasabaBrandBrush}"`, `FocusVisualSecondaryBrush="{ThemeResource MayasabaCanvasBrush}"`, `FocusVisualPrimaryThickness="2"`, `FocusVisualMargin="-2"`). Default implicit styles for `Button`, `TextBox`, and `ListViewItem` were declared.
+- **Escape Journey Semantics & C++ AST Oracle (UX-02, UX-06, UX-07)**: `OnFolderKeyDown` returns to Welcome on Escape during `FirstRun` while preserving mandatory project binding. Tested via direct C++ AST parsing of `OnFolderKeyDown` blocks in `test_harness_oracles.py`, proving that swapping `FirstRun` and `Switching` Escape dispatch actions fails the regression (Mutant 5 discriminated).
+- **Recent Projects Action Styles (UX-05)**: Dynamically instantiated `open` and `locate` buttons in `RefreshRecentProjectsAsync` apply `MayasabaPrimaryAction` and `MayasabaSecondaryAction`.
 - **High-Contrast System Palette (UX-25)**: Verified that all button states, plates, borders, and monograms map to system colors (`SystemColorHighlightColor`, `SystemColorHighlightTextColor`, `SystemColorWindowColor`, `SystemColorWindowTextColor`) with decorative gradients, 3D transforms, and ambient loops disabled.
 - **Reduced Motion (UX-26)**: Verified that `MotionController::Allowed()` gates all transitions behind `animationsEnabled_ && !highContrast_`; Dock and entrance transitions complete instantly as zero-duration layout updates when animations are disabled.
+- **Clipped Problem Card Layout Resolution (UX-19, UX-28)**: In `MainWindow.xaml.cpp` line 2271, corrected row assignment from `ChatProblemCards()` to `ChatProblemCardsScroller()`, properly moving the scroller container into Row 4 when `narrowHeader` is active. In `HeaderLayoutBudget.h`, added `problemsFloor` (40.0 DIPs) when `!attentionPresent` to prevent card collapse down to 9.6 DIPs on short windows. Verified in `verify_phase23_native.py` Part G that `ChatProblemCardsScroller` measures 104.8 DIPs, and invoking `ScrollItem.ScrollIntoView` expands `Choose executable` and `Recheck` buttons to 31.2 DIPs with full hit targets and keyboard focus.
 
 ### 31.3 Verified Test Results
 
 | Test Suite | Command | Result |
 |---|---|---|
-| Focused Native UI Verification (Phase 2 & 3) | `python native/tests/verify_phase23_native.py` | **10/10 PASS** (Fresh native verification run `run_phase23_verification`) |
+| Focused Native UI Verification (Phase 2 & 3) | `python native/tests/verify_phase23_native.py` | **11/11 PASS** (Fresh native verification run `run_phase23_verification`) |
 | Contract registry & Screen 2 schemas | `python native/tests/validate_contract_registry.py` | **124/124 PASS** |
-| Harness oracles & UX regressions | `python native/tests/test_harness_oracles.py` | **92/92 PASS** (AST control-flow parser and DOM XML parser replacing string searches) |
-| Mutation discrimination | `scratch/test_mutation.py` | **4/4 PASS** (All 4 mutants fail exit 1, clean code exits 0, byte-identical restore) |
+| Harness oracles & UX regressions | `python native/tests/test_harness_oracles.py` | **95/95 PASS** (AST control-flow parser, logical sizing, reachability, checked helpers, fail-closed withdrawal) |
+| Mutation discrimination | `scratch/test_mutation.py` | **5/5 PASS** (All 5 mutants fail exit 1, clean code exits 0, byte-identical restore) |
 | Storage regressions | `native/tests/bin/storage_tests.exe` | **115/115 PASS** |
 | Action Center & attachment inspection | `native/tests/bin/verify_ac_ai.exe` | **15/15 PASS** |
 | Layout budget & trace saturation | `native/tests/bin/layout_budget_tests.exe` | **9/9 PASS** |
@@ -7135,46 +7137,50 @@ A comprehensive audit against `docs/THREE-SCREEN-UX-IMPLEMENTATION.md` establish
 Executed `native/tests/verify_phase23_native.py` on the active desktop against the verified binary `Mayasaba.exe` and compiled XAML `MainWindow.xbf` using isolated databases in `C:\Users\pavan\PROJECTS\_ui-verify\run_phase23_verification\`:
 
 - **Binary Artifact Identities**:
-  - `native/Mayasaba/bin/x64/Release/Mayasaba.exe`: SHA-256 `FB89374DAE7D421E249187E16EAF1714E3869C0AF74B627007E0B13994E31E47`
+  - `native/Mayasaba/bin/x64/Release/Mayasaba.exe`: SHA-256 `306450132B3B83E8AF22D035F50575E4EA0EFDA1B4D5071F957979F1441F74DC`
   - `native/Mayasaba/bin/x64/Release/MainWindow.xbf`: SHA-256 `1F6B0F806A3D2E7680594F57BED9F78CAC460D46FD2C4506B3BA24EA8895F1F1`
   - Production database `%LOCALAPPDATA%\Mayasaba\mayasaba.db`: SHA-256 `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (100% untouched)
-- **Detailed Execution Results**:
-  1. **First-Run Journey (Part A)**:
+- **Detailed Execution Results (11 Registered Outcomes)**:
+  1. **First-Run Journey (Part A - `first_run_journey`)**:
      - Fresh database launch cleanly realized `#WelcomeScreen` with heading `"Welcome to Mayasaba"`.
-     - Action styles verified: Primary action (`Next →`: W=58, H=22) and Secondary action (`Skip introduction`: W=133, H=22).
-     - Next button transitioned to Screen 2 (`FolderScreen`) in `FirstRun` mode with `FolderBackButton` visible (`← Back`).
-     - Back button returned to WelcomeScreen.
-     - Skip button advanced to FolderScreen in `FirstRun` mode.
-     - Mandatory binding invariant held: ChatScreen remained strictly unreachable without selecting a project.
-     - Screenshot saved: `01_welcome_screen.png`, `02_first_run_selector.png`.
-  2. **Subsequent Launch (Startup) Journey (Part C)**:
-     - Relaunch with populated database opened directly on Screen 2 (`FolderScreen`) with heading `"Pick up where you left off"`; Welcome was not repeated.
-     - Header controls: `FolderBackButton` collapsed, `FolderExitButton` visible (`Exit Mayasaba`).
-     - Action styles on Screen 2: `Open Existing Folder` (Primary: W=163, H=22) and `Create New Project Folder` (Secondary: W=204, H=21).
-     - Create Folder panel opened: `Create and Open` button strictly disabled with muted style when folder name is empty.
-     - Filter Box & QuietAction Clear Button: query `"alpha"` isolated `"1 matching project"`; `Clear` button restored full list (`"3 projects recorded"`); non-matching query `"nonexistent_pattern"` truthfully displayed `"No projects match your filter criteria."`.
-     - Screenshots saved: `03_startup_selector_recents.png`, `04_create_folder_panel.png`.
-  3. **Project Binding & Chat Experience (Part D)**:
-     - Opened project `alpha`: ChatScreen realized with `ProjectHeading` reading `"alpha"`.
-     - Header actions: `Start` (Primary action), `Pause`, `Stop`, `Search messages (Ctrl+F)` (Secondary action) verified.
-     - Preserved draft text restored into `ComposerBox`.
-     - Search overlay (`MessageSearchPanel`) opened cleanly over Chat and dismissed via close control.
+     - Tab key navigated focus from NextButton to SkipButton; Enter key on SkipButton advanced to Screen 2 (`FolderScreen`).
+     - Escape key on FolderScreen cleanly returned to WelcomeScreen.
+     - Mandatory binding invariant held: ChatScreen remained strictly unreachable without selecting a project; `assert_control_withdrawn` confirmed Chat absent from UIA tree.
+     - Screenshots saved: `01_welcome_screen.png`, `02_first_run_selector.png`.
+  2. **Welcome Action Styles (Part A - `welcome_action_styles`)**:
+     - NextButton (W=108, H=46) and SkipButton (W=175, H=49) verified with visual focus, hover, pressed, and keyboard activation.
+  3. **Subsequent Launch Journey (Part C - `later_launch_journey`)**:
+     - Relaunch with populated database opened directly on Screen 2 (`FolderScreen`) with heading `"Pick up where you left off"`; Welcome and Back buttons cleanly withdrawn; `FolderExitButton` visible (`Exit Mayasaba`).
+     - Screenshot saved: `03_startup_selector_recents.png`.
+  4. **Selector Action Styles (Part C - `selector_action_styles`)**:
+     - Screen 2 primary action (`Open Existing Folder`: W=939), secondary action (`Create New Project Folder`: W=939), and disabled action style on `Create and Open` button verified.
+     - Screenshot saved: `04_create_folder_panel.png`.
+  5. **Filter Box, Paging & Escape Clear (Part C - `filter_paging_clear`)**:
+     - Filter Box query `"alpha"` isolated `"1 matching project"`; Escape key cleared query; `Clear` button restored full list (`"3 projects recorded"`); non-matching query `"nonexistent_pattern"` truthfully displayed `"No projects match your filter criteria."`.
+  6. **Project Binding & Chat Experience (Part D - `first_run_journey` / Alpha binding)**:
+     - Bound project `alpha`: ChatScreen realized with `ProjectHeading` reading `"alpha"`.
+     - Saved-message search overlay (`MessageSearchPanel`, Ctrl+F) opened cleanly and dismissed via Escape.
      - Screenshots saved: `05_chat_screen_alpha.png`, `06_search_overlay.png`.
-  4. **Switch Project & Cancel Journey (Part E)**:
-     - Native `File` MenuBarItem expanded via `ExpandCollapsePattern`; clicked `Switch Project`.
-     - `FolderScreen` realized in `Switching` context with `FolderCancelButton` visible (`Cancel switching projects`).
-     - Invoked `Cancel`: returned cleanly to Chat of `alpha` with composer draft intact.
-  5. **Closed Project Read-Only Handling (Part F)**:
+  7. **Switch Project & Cancel Journey (Part E - `switching_cancel_journey`)**:
+     - Native `File` MenuBarItem expanded; clicked `Switch Project`.
+     - `FolderScreen` realized in `Switching` context with `FolderCancelButton` visible; Escape returned cleanly to Chat of `alpha`.
+  8. **Draft Preservation Across Switch (Part E - `draft_preservation_across_switch`)**:
+     - Explicit candidate draft `"Preserve draft across switch: verification 42"` entered in `ComposerBox`; after Switch Project and Escape cancel, exact draft string verified preserved in ComposerBox.
+  9. **Closed Project Read-Only Handling (Part F - `closed_project_handling`)**:
      - Switched to project `gamma` (closed project).
-     - Closure condition card realized: `"Project closed · history is read-only"`.
-     - `Send contribution` button strictly disabled.
-     - `Reopen Project` button visible for explicit authorized reopening.
+     - Closure condition card realized: `"Project closed · history is read-only"`; `Send contribution` button strictly disabled; `Reopen Project` button visible for authorized reopening.
      - Screenshot saved: `07_closed_project_chat.png`.
-  6. **Responsive Client Area Measurements (Part G)**:
-     - **Narrow 520×640 Layout**: Target 520×640 DIPs measured at exactly 520.0×640.0 DIPs (DPI=120, scale=1.25). Zero clipping or control collapse observed: `ProjectHeading` (W=541, H=32), `ComposerBox` (W=490, H=95), `StartButton` (W=88, H=46), `StopButton` (W=78, H=49).
-     - **Compact Short 640×480 Layout**: Target 640×480 DIPs measured at exactly 640.0×480.0 DIPs (DPI=120, scale=1.25). ComposerBox strictly reachable above the fold: W=490, H=95.
-     - Screenshots saved: `08_narrow_520x640.png`, `09_short_640x480.png`.
-- **Raw Evidence Artifacts**: All 9 screenshots, `verification.log`, and `evidence-manifest.json` preserved in `C:\Users\pavan\PROJECTS\_ui-verify\run_phase23_verification\`.
+  10. **Narrow 520×640 Layout Measurement (Part G - `narrow_520x640_measurement`)**:
+      - Measured logical dimensions: 520.0×640.0 DIPs (target 520×640, DPI=120, phys client 650×800).
+      - All controls within viewport: `ProjectHeading` (usable 541×32 px), `ComposerBox` (usable 490×95 px), `StartButton` (usable 88×46 px), `StopButton` (usable 78×49 px).
+      - Screenshot saved: `08_narrow_520x640.png`.
+  11. **Short 640×480 Layout Measurement & Problem Card Reachability (Part G - `short_640x480_measurement` & `problem_card_640x480_reachability`)**:
+      - Measured logical dimensions: 640.0×480.0 DIPs (target 640×480, DPI=120, phys client 800×600).
+      - ComposerBox strictly reachable above the fold: 490×95 px visible.
+      - `ChatProblemCardsScroller` measured height: 104.8 DIPs (floor 40.0 DIPs enforced).
+      - `ScrollItem.ScrollIntoView` brought `Choose executable` (W=141.6, H=31.2 DIPs) and `Recheck` (W=76.8, H=31.2 DIPs) into visible viewport; keyboard focus verified on both controls.
+      - Screenshot saved: `09_short_640x480.png`.
+- **Raw Evidence Artifacts**: All 9 screenshots, `verification.log`, exclusive `verify.lock`, and `evidence-manifest.json` preserved in `C:\Users\pavan\PROJECTS\_ui-verify\run_phase23_verification\`.
 
 ---
 
@@ -7226,7 +7232,8 @@ The following table categorizes all 32 UX requirements from `docs/THREE-SCREEN-U
    - Physical acceptance criteria P01–P06 require an interactive physical session with active display and hardware input devices.
 2. **Phase 2 & Phase 3 UX Implementation Complete**:
    - Phase 2 shared visual/interaction system (`App.xaml` action templates, 2px focus visuals, high contrast, reduced motion) is fully implemented and verified.
-   - Phase 3 Welcome and project selector journeys (First-run, Startup, Switch Project/Cancel, Cascadia Mono paths, closed project read-only handling, 520x640 and 640x480 responsive client areas) are fully implemented and verified natively with 10/10 PASS in `verify_phase23_native.py`.
+   - Phase 3 Welcome and project selector journeys (First-run, Startup, Switch Project/Cancel, Cascadia Mono paths, closed project read-only handling, 520x640 and 640x480 responsive client areas with unclipped problem cards) are fully implemented and verified natively with 11/11 PASS in `verify_phase23_native.py`.
 3. **Whole-Product Certification Remains Open**:
    - Live three-agent reply orchestration (UX-14), CLI adapters (Layer 4), Council Engine (Layer 5), Task Engine (Layer 7), Workspace Manager (Layer 8), Validation Engine (Layer 10), and WiX MSI installer remain to be built before whole-product certification can be claimed.
+
 

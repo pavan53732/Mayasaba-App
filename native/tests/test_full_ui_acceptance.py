@@ -526,6 +526,82 @@ def resize_to_logical_client(win, target_logical_w, target_logical_h, max_retrie
     )
     return (act_log_w, act_log_h)
 
+
+def verify_client_logical_dimensions(hwnd, target_logical_w, target_logical_h, tolerance=2.0):
+    """Verifies that a window's client area matches target logical dimensions within tolerance."""
+    if not hwnd or not user32.IsWindow(hwnd):
+        raise ValueError(f"Invalid window handle: {hwnd}")
+    dpi = get_window_dpi(hwnd)
+    if dpi <= 0:
+        raise RuntimeError(f"Invalid DPI {dpi} for window {hwnd}")
+    scale = dpi / 96.0
+    c_rect = RECT()
+    if not user32.GetClientRect(hwnd, ctypes.pointer(c_rect)):
+        err = ctypes.get_last_error()
+        raise RuntimeError(f"GetClientRect failed with error {err}")
+    act_phys_w = c_rect.right - c_rect.left
+    act_phys_h = c_rect.bottom - c_rect.top
+    act_log_w = act_phys_w / scale
+    act_log_h = act_phys_h / scale
+    diff_w = abs(target_logical_w - act_log_w)
+    diff_h = abs(target_logical_h - act_log_h)
+    if diff_w > tolerance or diff_h > tolerance:
+        raise AssertionError(
+            f"Logical client area mismatch: target {target_logical_w}x{target_logical_h} DIPs, "
+            f"measured {act_log_w:.1f}x{act_log_h:.1f} DIPs (phys {act_phys_w}x{act_phys_h}, "
+            f"diff_w={diff_w:.1f}, diff_h={diff_h:.1f}, tolerance={tolerance}, DPI={dpi})"
+        )
+    return (act_log_w, act_log_h)
+
+
+def verify_control_reachability(ctrl, viewport_rect, min_w=1, min_h=1):
+    """Verifies that a UI control is visible, non-collapsed, and has usable bounds inside the viewport.
+    
+    Both ctrl.rectangle() and viewport_rect are expected in screen coordinates.
+    """
+    if hasattr(ctrl, "is_visible") and not ctrl.is_visible():
+        name = getattr(ctrl, "window_text", lambda: "")() or getattr(ctrl, "automation_id", lambda: "")()
+        raise AssertionError(f"Control '{name}' is not visible (is_visible() == False)")
+    
+    cr = ctrl.rectangle() if hasattr(ctrl, "rectangle") else ctrl
+    cw = cr.right - cr.left
+    ch = cr.bottom - cr.top
+    if cw < min_w or ch < min_h:
+        name = getattr(ctrl, "window_text", lambda: "")() or getattr(ctrl, "automation_id", lambda: "")()
+        raise AssertionError(
+            f"Control '{name}' has collapsed/invalid geometry: W={cw}, H={ch} (min required {min_w}x{min_h})"
+        )
+    
+    # Viewport intersection
+    v_left = viewport_rect.left
+    v_top = viewport_rect.top
+    v_right = viewport_rect.right
+    v_bottom = viewport_rect.bottom
+
+    inter_left = max(cr.left, v_left)
+    inter_top = max(cr.top, v_top)
+    inter_right = min(cr.right, v_right)
+    inter_bottom = min(cr.bottom, v_bottom)
+
+    inter_w = inter_right - inter_left
+    inter_h = inter_bottom - inter_top
+
+    if inter_w < min_w or inter_h < min_h:
+        name = getattr(ctrl, "window_text", lambda: "")() or getattr(ctrl, "automation_id", lambda: "")()
+        raise AssertionError(
+            f"Control '{name}' is clipped or outside viewport! "
+            f"Control rect: ({cr.left}, {cr.top}, {cr.right}, {cr.bottom}); "
+            f"Viewport rect: ({v_left}, {v_top}, {v_right}, {v_bottom}); "
+            f"Intersection: W={inter_w}, H={inter_h} (min required {min_w}x{min_h})"
+        )
+    return {
+        "ctrl_rect": (cr.left, cr.top, cr.right, cr.bottom),
+        "viewport_rect": (v_left, v_top, v_right, v_bottom),
+        "visible_rect": (inter_left, inter_top, inter_right, inter_bottom),
+        "visible_w": inter_w,
+        "visible_h": inter_h
+    }
+
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_CLOSE = 0x0010

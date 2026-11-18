@@ -30,9 +30,15 @@ namespace mayasaba::ui
         HeaderLayoutBudget result;
         result.pool = std::max(0.0, screen - (header - attentionActual - problemsActual)
                                     - composerContent - 24.0);
+        constexpr double attentionFloor = 140.0, problemsFloor = 40.0;
+        constexpr double combinedFloor = attentionFloor + problemsFloor; // 180.0
+
         if (!attentionPresent)
         {
-            result.problems = problemsPresent ? std::min(result.pool, 300.0) : 0.0;
+            // When problem cards are present without Action Center, guarantee at least
+            // problemsFloor (40.0) so the card scroller never collapses into an unusable
+            // slice on compact windows and buttons remain reachable when scrolled into view.
+            result.problems = problemsPresent ? std::min(std::max(result.pool, problemsFloor), 300.0) : 0.0;
         }
         else if (!problemsPresent)
         {
@@ -43,9 +49,6 @@ namespace mayasaba::ui
             // Both regions are actionable and present. Allocate the constrained pool
             // proportionally with non-zero minimum floors for each region so neither region
             // collapses to zero when both are actionable.
-            constexpr double attentionFloor = 140.0, problemsFloor = 40.0;
-            constexpr double combinedFloor = attentionFloor + problemsFloor; // 180.0
-
             if (result.pool <= 0.0)
             {
                 result.attention = 0.0;

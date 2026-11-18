@@ -2268,11 +2268,11 @@ namespace winrt::Mayasaba::implementation
             // The CLI problem cards take the row after the Action Center, so on a
             // narrow header the surfaces stack in a fixed order instead of sharing a
             // row. On a wide header they sit under the readiness entries.
-            if (auto problems = ChatProblemCards())
+            if (auto scroller = ChatProblemCardsScroller())
             {
-                problems.SetValue(Grid::RowProperty(), winrt::box_value(narrowHeader ? 4 : 3));
-                problems.SetValue(Grid::ColumnProperty(), winrt::box_value(0));
-                problems.SetValue(Grid::ColumnSpanProperty(), winrt::box_value(2));
+                scroller.SetValue(Grid::RowProperty(), winrt::box_value(narrowHeader ? 4 : 3));
+                scroller.SetValue(Grid::ColumnProperty(), winrt::box_value(0));
+                scroller.SetValue(Grid::ColumnSpanProperty(), winrt::box_value(2));
             }
         }
     }
