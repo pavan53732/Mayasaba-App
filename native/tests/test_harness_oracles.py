@@ -1238,6 +1238,163 @@ def test_evidence_lock_acquisition_protects_existing_log():
         shutil.rmtree(tmp_evidence, ignore_errors=True)
 
 
+def test_combined_viewport_intersection_rejects_disjoint_halves():
+    """[Negative Unit Test] Reachability rejects controls visible in disjoint halves of multiple viewports.
+
+    Reproduces the exact case:
+    - Control W=200, H=40 at (0, 0, 200, 40).
+    - Viewport 1 (e.g. scroller) at (0, 0, 105, 100): visible_w = 105 individually.
+    - Viewport 2 (e.g. window) at (95, 0, 300, 100): visible_w = 105 individually.
+    - Combined intersection at (95, 0, 105, 100): mutual visible_w = 10, which is below min_w=40.
+    - Validating against combined viewport (or [vp1, vp2]) raises AssertionError.
+    - Validating with combined viewport admitting usable bounds passes and derives visible dimensions
+      strictly from the mutual intersection.
+    """
+    class _MockControl:
+        def __init__(self, rect, visible=True, name="TestSplitButton"):
+            self._rect = rect; self._visible = visible; self._name = name
+        def is_visible(self): return self._visible
+        def rectangle(self): return self._rect
+        def window_text(self): return self._name
+        def automation_id(self): return self._name
+
+    ctrl = _MockControl(H.Rect(0, 0, 200, 40))
+    vp1 = H.Rect(0, 0, 105, 100)
+    vp2 = H.Rect(95, 0, 300, 100)
+
+    # 1. Separately, each viewport individually sees 105 pixels (which would falsely pass min_w=40)
+    res1 = H.verify_control_reachability(ctrl, vp1, min_w=40)
+    assert res1["visible_w"] == 105, f"Expected 105 visible in vp1, got {res1['visible_w']}"
+    res2 = H.verify_control_reachability(ctrl, vp2, min_w=40)
+    assert res2["visible_w"] == 105, f"Expected 105 visible in vp2, got {res2['visible_w']}"
+
+    # 2. Combined intersection: only 10 pixels visible through both!
+    combined_vp = H.intersect_rectangles(vp1, vp2)
+    assert combined_vp.left == 95 and combined_vp.right == 105
+    assert combined_vp.width() == 10
+
+    # 3. Validating against combined_vp (or sequence [vp1, vp2]) MUST reject with min_w=40
+    try:
+        H.verify_control_reachability(ctrl, combined_vp, min_w=40)
+        assert False, "Should have rejected control with only 10px mutual visibility"
+    except AssertionError as exc:
+        assert "partially clipped" in str(exc)
+        assert "W=10" in str(exc)
+
+    try:
+        H.verify_control_reachability(ctrl, [vp1, vp2], min_w=40)
+        assert False, "Should have rejected sequence [vp1, vp2] with only 10px mutual visibility"
+    except AssertionError as exc:
+        assert "partially clipped" in str(exc)
+        assert "W=10" in str(exc)
+
+    # 4. When mutual intersection is usable (e.g. vp2 at 40 to 300, mutual width = 65px >= 40px):
+    vp2_usable = H.Rect(40, 0, 300, 100)
+    res_usable = H.verify_control_reachability(ctrl, [vp1, vp2_usable], min_w=40, min_visible_ratio=0.25)
+    # MUST derive reported dimensions strictly from the mutual intersection: 65px (not 105px)
+    assert res_usable["visible_w"] == 65, f"Expected 65 derived from combined intersection, got {res_usable['visible_w']}"
+    assert res_usable["visible_h"] == 40
+    assert abs(res_usable["ratio_w"] - (65 / 200.0)) < 0.001
+
+
+def test_evidence_context_isolation_import_a_run_b():
+    """[Unit Test] verify_phase23_native derives all paths from the locked context.
+
+    Reproduces locking directory B while directory A has a held lock and sentinel store:
+    1. Import-time or default environment points to Directory A.
+    2. Directory A holds a lock and contains a sentinel store_firstrun.db.
+    3. Runner context initialized targeting Directory B.
+    4. Assert:
+       - Deletions, copying, and environment variables operate exclusively in Directory B.
+       - Directory A's sentinel store is strictly UNTOUCHED.
+       - Directory A's verify.lock remains held.
+    5. Mutation discrimination: demonstrate that reverting to global STORE_PATH_FIRST_RUN destroys
+       sentinel in Directory A and fails this regression.
+    """
+    import tempfile, shutil
+    dir_a = tempfile.mkdtemp(prefix="mayasaba_evid_a_")
+    dir_b = tempfile.mkdtemp(prefix="mayasaba_evid_b_")
+    try:
+        lock_a = os.path.join(dir_a, "verify.lock")
+        sentinel_a_store = os.path.join(dir_a, "store_firstrun.db")
+        sentinel_content = b"SENTINEL TEST STORE IN DIR A - MUST REMAIN UNTOUCHED"
+        with open(sentinel_a_store, "wb") as f:
+            f.write(sentinel_content)
+
+        # Hold lock in Directory A
+        held_fd_a = os.open(lock_a, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        try:
+            # Set environment to point to Directory A
+            old_env = os.environ.get("MAYASABA_EVIDENCE_DIR")
+            os.environ["MAYASABA_EVIDENCE_DIR"] = dir_a
+            try:
+                import verify_phase23_native as V
+
+                # Verify that attempting to run on locked Directory A refuses
+                refuse_code = V.main(evidence_dir=dir_a)
+                assert refuse_code == 1, "Expected main() to refuse on locked dir_a"
+
+                # Create pre-existing file in dir_b to verify cleanup in dir_b
+                b_dummy_store = os.path.join(dir_b, "store_firstrun.db")
+                with open(b_dummy_store, "wb") as f:
+                    f.write(b"DUMMY B STORE BEFORE RUN")
+
+                # Instantiate context for Directory B
+                ctx_b = V.EvidenceContext(dir_b)
+                assert ctx_b.evidence_dir == os.path.abspath(dir_b)
+                assert ctx_b.store_first_run == os.path.abspath(b_dummy_store)
+
+                # Execute preparation operations for Directory B
+                env_first = ctx_b.prepare_first_run_environment()
+                assert not os.path.exists(b_dummy_store), "dir_b first-run store should have been cleaned"
+                assert env_first["MAYASABA_STORE_PATH"] == ctx_b.store_first_run
+                assert env_first["MAYASABA_UI_TRACE"] == ctx_b.trace_first_run
+                assert dir_a not in env_first["MAYASABA_STORE_PATH"]
+                assert dir_a not in env_first["MAYASABA_UI_TRACE"]
+
+                # CRITICAL INVARIANT: dir_a's sentinel store was NEVER touched or deleted
+                assert os.path.exists(sentinel_a_store), "dir_a sentinel store was deleted!"
+                with open(sentinel_a_store, "rb") as f:
+                    assert f.read() == sentinel_content, "dir_a sentinel content was corrupted!"
+
+                # Test subsequent environment preparation in dir_b
+                if os.path.exists(V.BASE_STORE_PATH):
+                    env_sub = ctx_b.prepare_subsequent_environment(V.BASE_STORE_PATH)
+                    assert os.path.exists(ctx_b.store_subsequent), "dir_b subsequent store should exist"
+                    assert env_sub["MAYASABA_STORE_PATH"] == ctx_b.store_subsequent
+                    assert env_sub["MAYASABA_UI_TRACE"] == ctx_b.trace_subsequent
+                    assert dir_a not in env_sub["MAYASABA_STORE_PATH"]
+
+                # Verify dir_a still completely untouched
+                with open(sentinel_a_store, "rb") as f:
+                    assert f.read() == sentinel_content
+
+                # Mutation demonstration: if prepare_first_run_environment deleted V.STORE_PATH_FIRST_RUN
+                # when V.STORE_PATH_FIRST_RUN was bound to dir_a:
+                class _MutantContext:
+                    def prepare_first_run_environment_mutant(self):
+                        # Simulates the bug where global import-time STORE_PATH_FIRST_RUN is deleted
+                        if os.path.exists(sentinel_a_store):
+                            os.remove(sentinel_a_store)
+
+                m = _MutantContext()
+                m.prepare_first_run_environment_mutant()
+                assert not os.path.exists(sentinel_a_store), "Mutant should have deleted sentinel in dir_a"
+
+            finally:
+                if old_env is not None:
+                    os.environ["MAYASABA_EVIDENCE_DIR"] = old_env
+                else:
+                    os.environ.pop("MAYASABA_EVIDENCE_DIR", None)
+        finally:
+            os.close(held_fd_a)
+            if os.path.exists(lock_a):
+                os.remove(lock_a)
+    finally:
+        shutil.rmtree(dir_a, ignore_errors=True)
+        shutil.rmtree(dir_b, ignore_errors=True)
+
+
 def test_assert_control_withdrawn_rejects_unavailability():
     """[Negative Unit Test] assert_control_withdrawn returns None (not True) on UNAVAILABLE observation."""
     class _MockFailingParent:

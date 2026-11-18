@@ -37,14 +37,55 @@ user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 kernel32 = ctypes.windll.kernel32
 
-EVIDENCE_DIR = os.environ.get("MAYASABA_EVIDENCE_DIR", r"C:\Users\pavan\PROJECTS\_ui-verify\run_phase23_verification")
-SCREENSHOTS_DIR = os.path.join(EVIDENCE_DIR, "screenshots")
-STORE_PATH_FIRST_RUN = os.path.join(EVIDENCE_DIR, "store_firstrun.db")
-STORE_PATH_SUBSEQUENT = os.path.join(EVIDENCE_DIR, "store_subsequent.db")
+DEFAULT_EVIDENCE_DIR = r"C:\Users\pavan\PROJECTS\_ui-verify\run_phase23_verification"
+EVIDENCE_DIR = DEFAULT_EVIDENCE_DIR
+SCREENSHOTS_DIR = os.path.join(DEFAULT_EVIDENCE_DIR, "screenshots")
+STORE_PATH_FIRST_RUN = os.path.join(DEFAULT_EVIDENCE_DIR, "store_firstrun.db")
+STORE_PATH_SUBSEQUENT = os.path.join(DEFAULT_EVIDENCE_DIR, "store_subsequent.db")
 BASE_STORE_PATH = r"C:\Users\pavan\PROJECTS\_ui-verify\multi_test\store.db"
 BIN_DIR = r"C:\Users\pavan\PROJECTS\Mayasaba-App\native\Mayasaba\bin\x64\Release"
 EXE_PATH = os.path.join(BIN_DIR, "Mayasaba.exe")
 XBF_PATH = os.path.join(BIN_DIR, "MainWindow.xbf")
+
+
+class EvidenceContext:
+    """Encapsulates all filesystem paths and runtime locks for an isolated verification run."""
+    def __init__(self, evidence_dir=None):
+        target = evidence_dir or os.environ.get("MAYASABA_EVIDENCE_DIR", DEFAULT_EVIDENCE_DIR)
+        self.evidence_dir = os.path.abspath(target)
+        self.screenshots_dir = os.path.join(self.evidence_dir, "screenshots")
+        self.store_first_run = os.path.join(self.evidence_dir, "store_firstrun.db")
+        self.store_subsequent = os.path.join(self.evidence_dir, "store_subsequent.db")
+        self.trace_first_run = os.path.join(self.evidence_dir, "ui-trace-firstrun.log")
+        self.trace_subsequent = os.path.join(self.evidence_dir, "ui-trace-subsequent.log")
+        self.log_file = os.path.join(self.evidence_dir, "verification.log")
+        self.lock_file = os.path.join(self.evidence_dir, "verify.lock")
+        self.manifest_file = os.path.join(self.evidence_dir, "evidence-manifest.json")
+        self.lock_fd = None
+
+    def prepare_first_run_environment(self):
+        """Removes pre-existing first-run store files in this context and returns process env."""
+        for f in [self.store_first_run, self.store_first_run + "-wal", self.store_first_run + "-shm"]:
+            if os.path.exists(f):
+                try: os.remove(f)
+                except Exception: pass
+        env = os.environ.copy()
+        env["MAYASABA_STORE_PATH"] = self.store_first_run
+        env["MAYASABA_UI_TRACE"] = self.trace_first_run
+        return env
+
+    def prepare_subsequent_environment(self, base_store=BASE_STORE_PATH):
+        """Copies base store into subsequent store for this context and returns process env."""
+        for f in [self.store_subsequent, self.store_subsequent + "-wal", self.store_subsequent + "-shm"]:
+            if os.path.exists(f):
+                try: os.remove(f)
+                except Exception: pass
+        assert os.path.exists(base_store), f"Base store {base_store} missing"
+        shutil.copy2(base_store, self.store_subsequent)
+        env = os.environ.copy()
+        env["MAYASABA_STORE_PATH"] = self.store_subsequent
+        env["MAYASABA_UI_TRACE"] = self.trace_subsequent
+        return env
 
 log_handle = None
 
@@ -119,9 +160,12 @@ def capture_hwnd_to_png(hwnd, path):
     img.save(path)
     return True
 
-def capture_screenshot(win, filename, label=""):
-    evidence_dir = os.environ.get("MAYASABA_EVIDENCE_DIR", EVIDENCE_DIR)
-    path = os.path.join(evidence_dir, "screenshots", filename)
+def capture_screenshot(win, filename, label="", ctx=None):
+    if ctx is not None:
+        path = os.path.join(ctx.screenshots_dir, filename)
+    else:
+        evidence_dir = os.environ.get("MAYASABA_EVIDENCE_DIR", DEFAULT_EVIDENCE_DIR)
+        path = os.path.join(evidence_dir, "screenshots", filename)
     try:
         ok = capture_hwnd_to_png(win.handle, path)
         if ok:
@@ -182,13 +226,15 @@ def invoke_control(ctrl):
         pass
     return False
 
-def _run_verification(evidence_dir):
+def _run_verification(evidence_dir_or_ctx):
+    if isinstance(evidence_dir_or_ctx, EvidenceContext):
+        ctx = evidence_dir_or_ctx
+    else:
+        ctx = EvidenceContext(evidence_dir_or_ctx)
+
     log("=========================================================================")
     log("STARTING FOCUSED NATIVE VERIFICATION: PHASE 2 & PHASE 3 UX IMPLEMENTATION")
     log("=========================================================================")
-
-    store_path_first_run = os.path.join(evidence_dir, "store_firstrun.db")
-    store_path_subsequent = os.path.join(evidence_dir, "store_subsequent.db")
 
     exe_hash = sha256_of(EXE_PATH)
     xbf_hash = sha256_of(XBF_PATH)
@@ -201,8 +247,8 @@ def _run_verification(evidence_dir):
             "exe_sha256": exe_hash,
             "xbf_path": XBF_PATH,
             "xbf_sha256": xbf_hash,
-            "first_run_store": store_path_first_run,
-            "subsequent_store": store_path_subsequent,
+            "first_run_store": ctx.store_first_run,
+            "subsequent_store": ctx.store_subsequent,
         },
         "tests": {},
         "measurements": {}
@@ -219,16 +265,9 @@ def _run_verification(evidence_dir):
     # PART A: FIRST-RUN JOURNEY & WELCOME ACTION STYLES
     # =========================================================================
     log("\n--- PART A: First-Run Journey & Welcome Action Styles ---")
-    for f in [STORE_PATH_FIRST_RUN, STORE_PATH_FIRST_RUN + "-wal", STORE_PATH_FIRST_RUN + "-shm"]:
-        if os.path.exists(f):
-            try: os.remove(f)
-            except Exception: pass
-
-    env_first = os.environ.copy()
-    env_first["MAYASABA_STORE_PATH"] = STORE_PATH_FIRST_RUN
-    env_first["MAYASABA_UI_TRACE"] = os.path.join(EVIDENCE_DIR, "ui-trace-firstrun.log")
-
+    env_first = ctx.prepare_first_run_environment()
     proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env_first)
+    log(f"Launched Mayasaba.exe in clean store mode (PID {proc.pid})")
     log(f"Launched Mayasaba.exe in clean store mode (PID {proc.pid})")
 
     try:
@@ -249,7 +288,7 @@ def _run_verification(evidence_dir):
         # 1. Welcome Screen Heading
         obs_welcome = H.observe_by_name(win, "Welcome to Mayasaba", retries=10)
         assert obs_welcome.is_found, f"Welcome heading missing on first run: {obs_welcome.status}"
-        capture_screenshot(win, "01_welcome_screen.png", "Welcome Screen with hero art and CLI readiness")
+        capture_screenshot(win, "01_welcome_screen.png", "Welcome Screen with hero art and CLI readiness", ctx=ctx)
 
         # 2. Action Styles on Welcome (Primary and Secondary)
         obs_next = H.observe_by_aid(win, "NextButton", retries=5)
@@ -264,19 +303,19 @@ def _run_verification(evidence_dir):
         assert nr.width() > 0 and nr.height() > 0, "NextButton collapsed"
         assert sr.width() > 0 and sr.height() > 0, "SkipButton collapsed"
 
-        # Check keyboard focus appearance on NextButton
-        next_btn.set_focus()
+        # Check keyboard focus appearance on SkipButton
+        skip_btn.set_focus()
         time.sleep(0.3)
-        assert next_btn.has_keyboard_focus(), "NextButton must accept keyboard focus"
+        assert skip_btn.has_keyboard_focus(), "SkipButton must accept keyboard focus"
 
-        # Tab navigation from NextButton to SkipButton
-        log("Testing Tab key navigation from NextButton to SkipButton...")
+        # Tab navigation from SkipButton to NextButton (natural forward XAML tab order)
+        log("Testing Tab key navigation from SkipButton to NextButton...")
         H.send_key_to_window(hwnd, 0x09) # VK_TAB
         time.sleep(0.4)
-        assert skip_btn.has_keyboard_focus(), "SkipButton must receive focus after Tab"
+        assert next_btn.has_keyboard_focus(), "NextButton must receive focus after Tab"
 
-        # 3. Enter on SkipButton advances to Screen 2 (FolderScreen)
-        log("Testing Enter key on SkipButton to advance to Screen 2...")
+        # 3. Enter on NextButton advances to Screen 2 (FolderScreen)
+        log("Testing Enter key on NextButton to advance to Screen 2...")
         H.send_key_to_window(hwnd, 0x0D) # VK_RETURN
         time.sleep(1.2)
 
@@ -284,7 +323,7 @@ def _run_verification(evidence_dir):
         assert obs_back.is_found, "FolderBackButton missing on Screen 2 in FirstRun mode"
         folder_back = obs_back.element
         assert folder_back.is_visible(), "FolderBackButton must be visible in FirstRun mode"
-        capture_screenshot(win, "02_first_run_selector.png", "FolderScreen in FirstRun mode with Back button")
+        capture_screenshot(win, "02_first_run_selector.png", "FolderScreen in FirstRun mode with Back button", ctx=ctx)
 
         # 4. Keyboard Escape on FolderScreen returns to WelcomeScreen
         log("Testing keyboard Escape on FolderScreen returns to WelcomeScreen...")
@@ -320,22 +359,13 @@ def _run_verification(evidence_dir):
     # PART B: PRE-POPULATE ISOLATED DATABASE FOR SUBSEQUENT LAUNCH
     # =========================================================================
     log("--- PART B: Pre-populating Isolated Database for Subsequent Launch ---")
-    for f in [STORE_PATH_SUBSEQUENT, STORE_PATH_SUBSEQUENT + "-wal", STORE_PATH_SUBSEQUENT + "-shm"]:
-        if os.path.exists(f):
-            try: os.remove(f)
-            except Exception: pass
-    assert os.path.exists(BASE_STORE_PATH), f"Base store {BASE_STORE_PATH} missing"
-    shutil.copy2(BASE_STORE_PATH, STORE_PATH_SUBSEQUENT)
-    log(f"Copied established test store from {BASE_STORE_PATH} to {STORE_PATH_SUBSEQUENT}")
+    env_sub = ctx.prepare_subsequent_environment(BASE_STORE_PATH)
+    log(f"Copied established test store from {BASE_STORE_PATH} to {ctx.store_subsequent}")
 
     # =========================================================================
     # PART C: LATER LAUNCH JOURNEY, SELECTOR CONTROLS & ACTION STYLES
     # =========================================================================
     log("\n--- PART C: Later Launch Journey & Selector Controls ---")
-    env_sub = os.environ.copy()
-    env_sub["MAYASABA_STORE_PATH"] = STORE_PATH_SUBSEQUENT
-    env_sub["MAYASABA_UI_TRACE"] = os.path.join(EVIDENCE_DIR, "ui-trace-subsequent.log")
-
     proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env_sub)
     log(f"Launched Mayasaba.exe in subsequent-launch mode (PID {proc.pid})")
 
@@ -365,7 +395,7 @@ def _run_verification(evidence_dir):
 
         obs_exit = H.observe_by_aid(win, "FolderExitButton", retries=5)
         assert obs_exit.is_found and obs_exit.element.is_visible(), "FolderExitButton must be visible in Startup context"
-        capture_screenshot(win, "03_startup_selector_recents.png", "Subsequent launch Screen 2 with recent projects")
+        capture_screenshot(win, "03_startup_selector_recents.png", "Subsequent launch Screen 2 with recent projects", ctx=ctx)
 
         # 2. Action buttons on Screen 2
         obs_choose = H.observe_by_aid(win, "ChooseFolderButton", retries=5)
@@ -389,7 +419,7 @@ def _run_verification(evidence_dir):
         assert obs_create_open.is_found, "CreateAndOpenButton missing in CreateFolderPanel"
         create_and_open = obs_create_open.element
         assert not create_and_open.is_enabled(), "CreateAndOpenButton MUST be disabled when folder name is empty"
-        capture_screenshot(win, "04_create_folder_panel.png", "Create Folder Panel with disabled Create and Open button")
+        capture_screenshot(win, "04_create_folder_panel.png", "Create Folder Panel with disabled Create and Open button", ctx=ctx)
 
         # Dismiss panel via Cancel button
         cancel_create = H.find_by_aid(win, "CancelCreateFolderButton")
@@ -462,7 +492,7 @@ def _run_verification(evidence_dir):
         obs_proj = H.observe_by_name(win, "alpha", retries=10)
         assert obs_proj.is_found, "ChatScreen header for alpha did not appear"
         log("PASS: Bound project alpha successfully; ChatScreen realized.")
-        capture_screenshot(win, "05_chat_screen_alpha.png", "ChatScreen bound to project alpha with docked composer")
+        capture_screenshot(win, "05_chat_screen_alpha.png", "ChatScreen bound to project alpha with docked composer", ctx=ctx)
 
         # Chat header actions:
         start_btn = H.find_by_aid(win, "StartButton")
@@ -481,7 +511,7 @@ def _run_verification(evidence_dir):
         time.sleep(0.8)
         obs_search = H.observe_by_aid(win, "MessageSearchPanel", retries=5)
         assert obs_search.is_found and obs_search.element.is_visible(), "MessageSearchPanel did not open"
-        capture_screenshot(win, "06_search_overlay.png", "Saved-message search overlay (Ctrl+F)")
+        capture_screenshot(win, "06_search_overlay.png", "Saved-message search overlay (Ctrl+F)", ctx=ctx)
 
         # Dismiss search overlay via Escape
         H.send_key_to_window(hwnd, H.VK_ESCAPE)
@@ -570,7 +600,7 @@ def _run_verification(evidence_dir):
         send_btn = H.find_by_aid(win, "SendButton")
         assert send_btn is not None and not send_btn.is_enabled(), "Send button MUST be disabled for closed project"
         log("PASS: Closed project correctly enforces read-only mode, disables Send, and provides Reopen Project button.")
-        capture_screenshot(win, "07_closed_project_chat.png", "Closed project Chat with read-only card and Reopen button")
+        capture_screenshot(win, "07_closed_project_chat.png", "Closed project Chat with read-only card and Reopen button", ctx=ctx)
 
         register_test("closed_project_handling", "PASS", "Closed project gamma enforces read-only, disables Send, displays ReopenButton.")
 
@@ -621,7 +651,7 @@ def _run_verification(evidence_dir):
             r_info = H.verify_control_reachability(ctrl, client_viewport_520)
             log(f"    {cname:18s}: usable {r_info['visible_w']}x{r_info['visible_h']} px within viewport")
 
-        capture_screenshot(win, "08_narrow_520x640.png", "Narrow 520x640 layout with responsive header split")
+        capture_screenshot(win, "08_narrow_520x640.png", "Narrow 520x640 layout with responsive header split", ctx=ctx)
         register_test("narrow_520x640_measurement", "PASS", f"520x640 measured {meas_w:.1f}x{meas_h:.1f} DIPs; all controls reachable inside viewport.")
 
         # 2. Measure 640x480 (Compact short layout & Clipped Problem Card Resolution)
@@ -670,25 +700,27 @@ def _run_verification(evidence_dir):
         sip_obj.ScrollIntoView()
         time.sleep(0.6)
 
-        # Assert intersection of both buttons with the scroller viewport
-        r_choose_scroller = H.verify_control_reachability(choose_btn, sr, min_h=int(20 * scale))
-        r_recheck_scroller = H.verify_control_reachability(recheck_btn, sr, min_h=int(20 * scale))
+        # Intersect clipping regions (scroller viewport AND window client viewport) into combined viewport
+        combined_viewport = H.intersect_rectangles(sr, client_viewport_640)
+        log(f"    Scroller rect:        {sr}")
+        log(f"    Client viewport rect: {client_viewport_640}")
+        log(f"    Combined viewport:    {combined_viewport}")
 
-        # Assert intersection with the overall client viewport
-        r_choose_client = H.verify_control_reachability(choose_btn, client_viewport_640, min_h=int(20 * scale))
-        r_recheck_client = H.verify_control_reachability(recheck_btn, client_viewport_640, min_h=int(20 * scale))
+        # Validate against combined viewport and derive reported dimensions from that intersection
+        r_choose = H.verify_control_reachability(choose_btn, combined_viewport, min_h=int(20 * scale))
+        r_recheck = H.verify_control_reachability(recheck_btn, combined_viewport, min_h=int(20 * scale))
 
-        choose_vis_h_dip = r_choose_scroller["visible_h"] / scale
-        recheck_vis_h_dip = r_recheck_scroller["visible_h"] / scale
-        choose_vis_w_dip = r_choose_scroller["visible_w"] / scale
-        recheck_vis_w_dip = r_recheck_scroller["visible_w"] / scale
+        choose_vis_h_dip = r_choose["visible_h"] / scale
+        recheck_vis_h_dip = r_recheck["visible_h"] / scale
+        choose_vis_w_dip = r_choose["visible_w"] / scale
+        recheck_vis_w_dip = r_recheck["visible_w"] / scale
 
-        log(f"    After scroll: Choose button visible in scroller={choose_vis_w_dip:.1f}x{choose_vis_h_dip:.1f} DIPs (visible={choose_btn.is_visible()})")
-        log(f"    After scroll: Recheck button visible in scroller={recheck_vis_w_dip:.1f}x{recheck_vis_h_dip:.1f} DIPs (visible={recheck_btn.is_visible()})")
-        assert choose_vis_h_dip >= 20.0, f"Choose button visible height {choose_vis_h_dip:.1f} DIPs inside scroller < 20.0"
-        assert recheck_vis_h_dip >= 20.0, f"Recheck button visible height {recheck_vis_h_dip:.1f} DIPs inside scroller < 20.0"
-        assert choose_vis_w_dip >= 40.0, f"Choose button visible width {choose_vis_w_dip:.1f} DIPs inside scroller < 40.0"
-        assert recheck_vis_w_dip >= 40.0, f"Recheck button visible width {recheck_vis_w_dip:.1f} DIPs inside scroller < 40.0"
+        log(f"    After scroll: Choose button visible in combined viewport={choose_vis_w_dip:.1f}x{choose_vis_h_dip:.1f} DIPs (visible={choose_btn.is_visible()})")
+        log(f"    After scroll: Recheck button visible in combined viewport={recheck_vis_w_dip:.1f}x{recheck_vis_h_dip:.1f} DIPs (visible={recheck_btn.is_visible()})")
+        assert choose_vis_h_dip >= 20.0, f"Choose button visible height {choose_vis_h_dip:.1f} DIPs inside combined viewport < 20.0"
+        assert recheck_vis_h_dip >= 20.0, f"Recheck button visible height {recheck_vis_h_dip:.1f} DIPs inside combined viewport < 20.0"
+        assert choose_vis_w_dip >= 40.0, f"Choose button visible width {choose_vis_w_dip:.1f} DIPs inside combined viewport < 40.0"
+        assert recheck_vis_w_dip >= 40.0, f"Recheck button visible width {recheck_vis_w_dip:.1f} DIPs inside combined viewport < 40.0"
 
         # Demonstrate keyboard access: focus appearance on Choose executable
         log("Demonstrating keyboard focus access on problem card buttons...")
@@ -698,11 +730,11 @@ def _run_verification(evidence_dir):
         recheck_btn.set_focus()
         time.sleep(0.3)
         assert recheck_btn.has_keyboard_focus(), "Recheck button must accept keyboard focus"
-        log("PASS: Problem card buttons successfully scrolled and keyboard focused with usable bounds.")
+        log("PASS: Problem card buttons successfully scrolled and keyboard focused with usable bounds in combined viewport.")
 
-        capture_screenshot(win, "09_short_640x480.png", "Compact short 640x480 layout with reachable composer and scrolled card")
+        capture_screenshot(win, "09_short_640x480.png", "Compact short 640x480 layout with reachable composer and scrolled card", ctx=ctx)
         register_test("short_640x480_measurement", "PASS", f"640x480 measured {meas_w:.1f}x{meas_h:.1f} DIPs; composer above fold.")
-        register_test("problem_card_640x480_reachability", "PASS", f"Scroller {scroller_h_dip:.1f} DIPs; Choose ({choose_vis_w_dip:.1f}x{choose_vis_h_dip:.1f}) and Recheck ({recheck_vis_w_dip:.1f}x{recheck_vis_h_dip:.1f}) intersect scroller viewport with usable bounds and keyboard focus.")
+        register_test("problem_card_640x480_reachability", "PASS", f"Scroller {scroller_h_dip:.1f} DIPs; Choose ({choose_vis_w_dip:.1f}x{choose_vis_h_dip:.1f}) and Recheck ({recheck_vis_w_dip:.1f}x{recheck_vis_h_dip:.1f}) intersect combined scroller+client viewport with usable bounds and keyboard focus.")
 
     finally:
         proc.terminate()
@@ -713,7 +745,7 @@ def _run_verification(evidence_dir):
     # =========================================================================
     # SUMMARY & EVIDENCE MANIFEST
     # =========================================================================
-    manifest_path = os.path.join(evidence_dir, "evidence-manifest.json")
+    manifest_path = ctx.manifest_file
     
     total_tests = len(results["tests"])
     passed_tests = sum(1 for t in results["tests"].values() if t["status"] == "PASS")
@@ -731,35 +763,42 @@ def _run_verification(evidence_dir):
 
     log("=========================================================================")
     log(f"FOCUSED NATIVE VERIFICATION SUMMARY: {passed_tests}/{total_tests} PASS (failed: {failed_tests})")
-    log(f"Raw evidence and screenshots saved in: {evidence_dir}")
+    log(f"Raw evidence and screenshots saved in: {ctx.evidence_dir}")
     log("=========================================================================")
     return 0 if failed_tests == 0 else 1
 
-def main():
-    global log_handle
-    evidence_dir = os.environ.get("MAYASABA_EVIDENCE_DIR", EVIDENCE_DIR)
-    screenshots_dir = os.path.join(evidence_dir, "screenshots")
-    lock_file = os.path.join(evidence_dir, "verify.lock")
-    lock_fd = None
+def main(evidence_dir=None):
+    global log_handle, EVIDENCE_DIR, SCREENSHOTS_DIR, STORE_PATH_FIRST_RUN, STORE_PATH_SUBSEQUENT
+    if evidence_dir is None:
+        evidence_dir = os.environ.get("MAYASABA_EVIDENCE_DIR", DEFAULT_EVIDENCE_DIR)
+
+    ctx = EvidenceContext(evidence_dir)
+
+    # Synchronize module globals to locked context for callers that read them
+    EVIDENCE_DIR = ctx.evidence_dir
+    SCREENSHOTS_DIR = ctx.screenshots_dir
+    STORE_PATH_FIRST_RUN = ctx.store_first_run
+    STORE_PATH_SUBSEQUENT = ctx.store_subsequent
 
     # Step 1: Acquire exclusive ownership of the evidence directory BEFORE opening or writing any files
-    os.makedirs(evidence_dir, exist_ok=True)
+    os.makedirs(ctx.evidence_dir, exist_ok=True)
     try:
-        lock_fd = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        ctx.lock_fd = os.open(ctx.lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
     except Exception as e:
         # Refuse cleanly without touching or truncating verification.log or any evidence
-        sys.stderr.write(f"FATAL: Could not acquire verification lock ({lock_file}): {e}\n")
+        sys.stderr.write(f"FATAL: Could not acquire verification lock ({ctx.lock_file}): {e}\n")
         sys.stderr.flush()
         return 1
 
+    old_env_evidence = os.environ.get("MAYASABA_EVIDENCE_DIR")
+    os.environ["MAYASABA_EVIDENCE_DIR"] = ctx.evidence_dir
     try:
         # Step 2: Now that exclusive evidence ownership is acquired, prepare directories and log file
-        os.makedirs(screenshots_dir, exist_ok=True)
-        log_file_path = os.path.join(evidence_dir, "verification.log")
-        log_handle = open(log_file_path, "w", encoding="utf-8")
+        os.makedirs(ctx.screenshots_dir, exist_ok=True)
+        log_handle = open(ctx.log_file, "w", encoding="utf-8")
 
         try:
-            return _run_verification(evidence_dir)
+            return _run_verification(ctx)
         finally:
             if log_handle is not None:
                 try:
@@ -768,15 +807,20 @@ def main():
                     pass
                 log_handle = None
     finally:
+        if old_env_evidence is not None:
+            os.environ["MAYASABA_EVIDENCE_DIR"] = old_env_evidence
+        else:
+            os.environ.pop("MAYASABA_EVIDENCE_DIR", None)
+
         # Step 3: Release ownership through outer finally
-        if lock_fd is not None:
+        if ctx.lock_fd is not None:
             try:
-                os.close(lock_fd)
+                os.close(ctx.lock_fd)
             except Exception:
                 pass
             try:
-                if os.path.exists(lock_file):
-                    os.remove(lock_file)
+                if os.path.exists(ctx.lock_file):
+                    os.remove(ctx.lock_file)
             except Exception:
                 pass
 
