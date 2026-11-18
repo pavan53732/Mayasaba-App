@@ -1,0 +1,278 @@
+import subprocess
+import time
+import os
+import sqlite3
+import hashlib
+import ctypes
+from pywinauto import Desktop
+
+user32 = ctypes.windll.user32
+kernel32 = ctypes.windll.kernel32
+
+th_id = kernel32.GetCurrentThreadId()
+h_th = user32.GetThreadDesktop(th_id)
+h_inp = user32.OpenInputDesktop(0, False, 0x01FF)
+
+def get_desktop_name(h):
+    buf = ctypes.create_unicode_buffer(256)
+    needed = ctypes.c_ulong()
+    res = user32.GetUserObjectInformationW(h, 2, buf, 512, ctypes.byref(needed))
+    return buf.value if res else None
+
+th_name = get_desktop_name(h_th)
+inp_name = get_desktop_name(h_inp)
+print(f"Thread Desktop: '{th_name}', Input Desktop: '{inp_name}'")
+
+switched = False
+if th_name != inp_name:
+    ok = user32.SwitchDesktop(h_th)
+    print(f"SwitchDesktop(h_th) returned {ok}")
+    switched = ok
+
+STORE_PATH = r"C:\Users\pavan\PROJECTS\_ui-verify\multi_test\store.db"
+BIN_DIR = r"C:\Users\pavan\PROJECTS\Mayasaba-App\native\Mayasaba\bin\x64\Release"
+EXE_PATH = os.path.join(BIN_DIR, "Mayasaba.exe")
+DROP_DIR = r"C:\Users\pavan\PROJECTS\_ui-verify\multi_test\drop_test_files"
+ALPHA_ID = "aee9775e-6df2-46f8-a4bf-d926fa4b2cdd"
+
+def establish_foreground(hwnd):
+    handle = int(hwnd)
+    current_thread = kernel32.GetCurrentThreadId()
+    foreground = user32.GetForegroundWindow()
+    if foreground == handle:
+        return True
+    fg_thread = user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
+    app_thread = user32.GetWindowThreadProcessId(handle, None)
+    
+    attached_fg = False
+    attached_app = False
+    if fg_thread and fg_thread != current_thread:
+        attached_fg = bool(user32.AttachThreadInput(current_thread, fg_thread, True))
+    if app_thread and app_thread != current_thread and app_thread != fg_thread:
+        attached_app = bool(user32.AttachThreadInput(current_thread, app_thread, True))
+        
+    user32.BringWindowToTop(handle)
+    user32.SetForegroundWindow(handle)
+    
+    if attached_app:
+        user32.AttachThreadInput(current_thread, app_thread, False)
+    if attached_fg:
+        user32.AttachThreadInput(current_thread, fg_thread, False)
+        
+    deadline = time.time() + 1.0
+    while time.time() < deadline:
+        if user32.GetForegroundWindow() == handle:
+            return True
+        time.sleep(0.05)
+    return user32.GetForegroundWindow() == handle
+
+def send_clean_drag(x1, y1, x2, y2, steps=60, delay=0.02):
+    sw = user32.GetSystemMetrics(0) # SM_CXSCREEN
+    sh = user32.GetSystemMetrics(1) # SM_CYSCREEN
+    
+    def norm_x(x): return int((x * 65535) / (sw - 1))
+    def norm_y(y): return int((y * 65535) / (sh - 1))
+    
+    MOUSEEVENTF_MOVE = 0x0001
+    MOUSEEVENTF_LEFTDOWN = 0x0002
+    MOUSEEVENTF_LEFTUP = 0x0004
+    MOUSEEVENTF_ABSOLUTE = 0x8000
+    
+    # 1. Position cursor over item
+    user32.SetCursorPos(x1, y1)
+    user32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, norm_x(x1), norm_y(y1), 0, 0)
+    # Wait longer than double-click interval (600ms) to ensure NO double-click occurs
+    time.sleep(0.7)
+    
+    # 2. Press left button down to begin drag
+    user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    time.sleep(0.15)
+    
+    # 3. Small initial motion to trigger drag detection
+    user32.mouse_event(MOUSEEVENTF_MOVE, 8, 8, 0, 0)
+    time.sleep(0.05)
+    
+    # 4. Interpolate across screen
+    for i in range(1, steps + 1):
+        cx = int(x1 + (x2 - x1) * (i / float(steps)))
+        cy = int(y1 + (y2 - y1) * (i / float(steps)))
+        user32.SetCursorPos(cx, cy)
+        user32.mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, norm_x(cx), norm_y(cy), 0, 0)
+        time.sleep(delay)
+        
+    time.sleep(0.25)
+    # 5. Release left button
+    user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+single_file = os.path.join(DROP_DIR, "native_drop_single.txt")
+with open(single_file, "rb") as f:
+    single_content = f.read()
+single_sha256 = hashlib.sha256(single_content).hexdigest()
+single_size = len(single_content)
+print(f"Target payload: native_drop_single.txt, size={single_size}, sha256={single_sha256}")
+
+# Clean up any existing drop record in draft_attachments before start
+conn = sqlite3.connect(STORE_PATH)
+conn.execute("DELETE FROM draft_attachments WHERE project_id = ? AND file_name = 'native_drop_single.txt';", (ALPHA_ID,))
+conn.commit()
+contribs_before = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (ALPHA_ID,)).fetchone()[0]
+pending_before = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (ALPHA_ID,)).fetchone()[0]
+conn.close()
+
+env = os.environ.copy()
+env["MAYASABA_STORE_PATH"] = STORE_PATH
+env["MAYASABA_PERF_LOG"] = r"C:\Users\pavan\PROJECTS\_ui-verify\multi_test\perf.json"
+env["MAYASABA_UI_TRACE"] = r"C:\Users\pavan\PROJECTS\_ui-verify\multi_test\ui-trace.log"
+
+maya_proc = None
+exp_proc = None
+try:
+    print("Launching Mayasaba...")
+    maya_proc = subprocess.Popen([EXE_PATH], cwd=BIN_DIR, env=env)
+
+    d = Desktop(backend="uia")
+    deadline = time.time() + 40
+    maya_win = None
+    print("Waiting for Mayasaba window...")
+    while time.time() < deadline:
+        wins = [w for w in d.windows(process=maya_proc.pid)
+                if "Engineering Control Room" in w.window_text() or "Mayasaba" in w.window_text()]
+        if wins:
+            maya_win = wins[0]
+            break
+        time.sleep(1.0)
+
+    if not maya_win:
+        print("FAIL: Mayasaba window did not appear within 40s!")
+        exit(1)
+
+    print(f"Mayasaba window: '{maya_win.window_text()}' (HWND {maya_win.handle})")
+    establish_foreground(maya_win.handle)
+    time.sleep(1.0)
+
+    user32.SetWindowPos(maya_win.handle, 0, 960, 50, 940, 950, 0x0040)
+    time.sleep(0.5)
+
+    def find_by_aid(parent, aid):
+        for d in parent.descendants():
+            if d.element_info.automation_id == aid:
+                return d
+        return None
+
+    def find_by_name(parent, name):
+        for d in parent.descendants():
+            if d.element_info.name == name:
+                return d
+        return None
+
+    composer = find_by_aid(maya_win, "ComposerBox")
+    if not composer:
+        print("On Screen 2, searching for 'Open project alpha' button...")
+        open_alpha = find_by_name(maya_win, "Open project alpha")
+        if not open_alpha:
+            for item in maya_win.descendants():
+                if "open project alpha" in item.window_text().lower():
+                    open_alpha = item
+                    break
+        if open_alpha:
+            print("Invoking Open project alpha...")
+            open_alpha.iface_invoke.Invoke()
+            time.sleep(2.0)
+        composer = find_by_aid(maya_win, "ComposerBox")
+
+    if not composer:
+        print("FAIL: ComposerBox not found!")
+        exit(1)
+
+    comp_rect = composer.rectangle()
+    comp_x = (comp_rect.left + comp_rect.right) // 2
+    comp_y = (comp_rect.top + comp_rect.bottom) // 2
+    print(f"ComposerBox center: ({comp_x}, {comp_y}), rect={comp_rect}")
+
+    print("Launching Explorer...")
+    exp_proc = subprocess.Popen(["explorer.exe", DROP_DIR])
+    time.sleep(3.0)
+
+    exp_win = None
+    for w in d.windows():
+        if "drop_test_files" in w.window_text():
+            exp_win = w
+            break
+
+    if not exp_win:
+        print("FAIL: Explorer window not found!")
+        exit(1)
+
+    print(f"Explorer window: '{exp_win.window_text()}' (HWND {exp_win.handle})")
+    user32.SetWindowPos(exp_win.handle, 0, 50, 50, 880, 950, 0x0040)
+    time.sleep(0.5)
+    establish_foreground(exp_win.handle)
+    time.sleep(0.5)
+
+    target_item = None
+    for item in exp_win.descendants():
+        if "native_drop_single" in item.window_text() and item.element_info.control_type == "ListItem":
+            target_item = item
+            break
+
+    if not target_item:
+        print("FAIL: native_drop_single.txt not found in Explorer!")
+        exit(1)
+
+    item_rect = target_item.rectangle()
+    icon_x = item_rect.left + 18
+    icon_y = (item_rect.top + item_rect.bottom) // 2
+    print(f"Target icon in Explorer: ({icon_x}, {icon_y}), item_rect={item_rect}")
+
+    print(f"Performing clean mouse drag from icon ({icon_x}, {icon_y}) to ({comp_x}, {comp_y})...")
+    establish_foreground(exp_win.handle)
+    time.sleep(0.2)
+    send_clean_drag(icon_x, icon_y, comp_x, comp_y, steps=60, delay=0.02)
+    print("Drop gesture completed. Waiting for processing...")
+
+    time.sleep(3.0)
+
+    conn = sqlite3.connect(STORE_PATH)
+    dropped_records = conn.execute(
+        "SELECT attachment_id, file_name, file_size, status, sha256, staged_path FROM draft_attachments WHERE project_id = ? AND file_name = 'native_drop_single.txt';",
+        (ALPHA_ID,)
+    ).fetchall()
+    contribs_after = conn.execute("SELECT COUNT(*) FROM contributions WHERE project_id = ?;", (ALPHA_ID,)).fetchone()[0]
+    pending_after = conn.execute("SELECT COUNT(*) FROM pending_submissions WHERE project_id = ?;", (ALPHA_ID,)).fetchone()[0]
+    conn.close()
+
+    print(f"Dropped records count: {len(dropped_records)}")
+    for r in dropped_records:
+        print("Record:", r)
+        staged = r[5]
+        if os.path.exists(staged):
+            with open(staged, "rb") as f:
+                staged_bytes = f.read()
+            staged_hash = hashlib.sha256(staged_bytes).hexdigest()
+            print(f"Staged file exists! Size: {len(staged_bytes)}, sha256: {staged_hash}")
+            assert staged_hash == single_sha256, f"Hash mismatch: {staged_hash} vs {single_sha256}"
+        else:
+            print(f"Staged file DOES NOT EXIST: {staged}")
+
+    print(f"Contributions before={contribs_before}, after={contribs_after}")
+    print(f"Pending before={pending_before}, after={pending_after}")
+
+    if exp_win:
+        exp_win.close()
+    if maya_win:
+        maya_win.close()
+
+finally:
+    if maya_proc:
+        try:
+            maya_proc.wait(timeout=3)
+        except Exception:
+            maya_proc.kill()
+    if switched and h_inp:
+        user32.SwitchDesktop(h_inp)
+        print("Restored original input desktop.")
+    if h_inp:
+        user32.CloseDesktop(h_inp)
+
+print("Test finished.")
+

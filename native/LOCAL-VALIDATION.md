@@ -7238,4 +7238,41 @@ The following table categorizes all 32 UX requirements from `docs/THREE-SCREEN-U
 3. **Whole-Product Certification Remains Open**:
    - Live three-agent reply orchestration (UX-14), CLI adapters (Layer 4), Council Engine (Layer 5), Task Engine (Layer 7), Workspace Manager (Layer 8), Validation Engine (Layer 10), and WiX MSI installer remain to be built before whole-product certification can be claimed.
 
+## 32. Scratch Reproducibility Tools Promoted to Version Control (2026-11-18)
+
+The five historical mutations cited above now have a maintained entry point:
+[`tests/run_harness_mutations.py`](tests/run_harness_mutations.py), documented in
+[`tests/HARNESS-MUTATIONS.md`](tests/HARNESS-MUTATIONS.md). It exports a specified
+committed revision into a new evidence directory and mutates only that snapshot.
+Each case requires a clean pass, the exact expected assertion failure, a restored
+pass and byte-identical restoration. Every child uses an isolated bytecode-cache
+lookup prefix. The working checkout is never rewritten by this runner.
+
+The original `scratch/test_mutation.py` and the documented
+`scratch/test_real_explorer_drop9.py` are preserved byte-for-byte as non-executable
+historical text under [`tests/historical/scratch/`](tests/historical/scratch/README.md).
+An inventory records the names, sizes, SHA-256 hashes and dispositions of all 29
+scratch scripts. All original local scratch files remain untouched. Private
+transcript readers, one-off source patchers, superseded oracle sketches and
+additional desktop experiments were not promoted as maintained tests.
+
+Verification against committed source `110d00bd67dac5d92302a2421986da1851345200`:
+
+| Check | Result |
+|---|---|
+| Maintained five-case mutation runner on Windows | 5/5 discriminate; clean and restored targets exit 0, mutants exit 1 at their expected assertions |
+| Working-tree source hashes and snapshot restoration | Unchanged; byte-identical restoration confirmed |
+| Existing output-directory control | Exit 1; existing summary bytes unchanged |
+| Forced child-timeout control | Exit 1, incomplete report, restored snapshot and unchanged working-tree hashes |
+| Existing harness oracles | 100 passing test functions, exit 0 |
+| Managed-Python contract validator | 124 checks, exit 0 |
+
+Raw reports/logs are retained outside Git at
+`C:\Users\pavan\.codex\visualizations\2026\10\16\01a14481-97c4-79a3-bd0c-39889505c645\scratch-promotion-20261118\`.
+The runner records the tested commit, its own source hash, target source hashes,
+interpreter, per-case outcomes and restoration status. These are Python helper
+and source-structure checks, not fresh native builds or UI acceptance. The
+historical Explorer experiment was not executed and establishes no new C11/C12
+result. Physical P01–P06 and whole-product certification remain open.
+
 

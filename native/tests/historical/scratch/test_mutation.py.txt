@@ -1,0 +1,164 @@
+from pathlib import Path
+import subprocess, hashlib, sys
+
+f_acc = Path('native/tests/test_full_ui_acceptance.py')
+clean_acc = f_acc.read_bytes()
+needle_acc = b'if returned or not (paging_bound or selection_attempted):'
+assert clean_acc.count(needle_acc) == 1, f'Expected 1 needle in acceptance, got {clean_acc.count(needle_acc)}'
+
+f_cpp = Path('native/Mayasaba/MainWindow.xaml.cpp')
+clean_cpp = f_cpp.read_bytes()
+needle_cpp = b'if (selectorContext_ == SelectorContext::FirstRun)\r\n        {\r\n            ShowWelcome();\r\n            e.Handled(true);\r\n            return;\r\n        }'
+if needle_cpp not in clean_cpp:
+    needle_cpp = b'if (selectorContext_ == SelectorContext::FirstRun)\n        {\n            ShowWelcome();\n            e.Handled(true);\n            return;\n        }'
+assert clean_cpp.count(needle_cpp) == 1, f'Expected 1 needle in cpp, got {clean_cpp.count(needle_cpp)}'
+
+f_app = Path('native/Mayasaba/App.xaml')
+clean_app = f_app.read_bytes()
+needle_app = b'<VisualState x:Name="Disabled">'
+assert clean_app.count(needle_app) >= 3, f'Expected at least 3 Disabled states in App.xaml, got {clean_app.count(needle_app)}'
+
+# Mutant 1: Remove selection_attempted protection
+mutant1 = clean_acc.replace(needle_acc, b'if returned or not paging_bound:  # mutant 1: omit selection_attempted')
+
+# Mutant 2: Delete even when return-to-alpha was not established
+mutant2 = clean_acc.replace(needle_acc, b'if True:  # mutant 2: delete unconditionally')
+
+# Mutant 3: Remove FirstRun Escape handling from OnFolderKeyDown
+mutant3 = clean_cpp.replace(needle_cpp, b'// mutant 3: omit FirstRun handling')
+
+import re
+
+# Mutant 4: Remove entire Disabled visual state block from MayasabaPrimaryAction
+mutant4 = re.sub(
+    rb'<VisualState x:Name="Disabled">.*?</VisualState>',
+    b'<!-- mutant 4: omitted Disabled state -->',
+    clean_app,
+    count=1,
+    flags=re.DOTALL
+)
+
+# Mutant 5: Swap FirstRun (ShowWelcome) and Switching (OnCancelSwitch) dispatch in OnFolderKeyDown
+swap_needle = (
+    b'if (selectorContext_ == SelectorContext::Switching && !activeProject_.empty())\r\n'
+    b'        {\r\n'
+    b'            OnCancelSwitch(nullptr, nullptr);\r\n'
+    b'            e.Handled(true);\r\n'
+    b'            return;\r\n'
+    b'        }\r\n'
+    b'        if (selectorContext_ == SelectorContext::FirstRun)\r\n'
+    b'        {\r\n'
+    b'            ShowWelcome();\r\n'
+    b'            e.Handled(true);\r\n'
+    b'            return;\r\n'
+    b'        }'
+)
+swap_replacement = (
+    b'if (selectorContext_ == SelectorContext::Switching && !activeProject_.empty())\r\n'
+    b'        {\r\n'
+    b'            ShowWelcome();\r\n'
+    b'            e.Handled(true);\r\n'
+    b'            return;\r\n'
+    b'        }\r\n'
+    b'        if (selectorContext_ == SelectorContext::FirstRun)\r\n'
+    b'        {\r\n'
+    b'            OnCancelSwitch(nullptr, nullptr);\r\n'
+    b'            e.Handled(true);\r\n'
+    b'            return;\r\n'
+    b'        }'
+)
+if swap_needle not in clean_cpp:
+    swap_needle = swap_needle.replace(b'\r\n', b'\n')
+    swap_replacement = swap_replacement.replace(b'\r\n', b'\n')
+assert clean_cpp.count(swap_needle) == 1, f"Expected 1 swap needle in cpp, got {clean_cpp.count(swap_needle)}"
+mutant5 = clean_cpp.replace(swap_needle, swap_replacement)
+
+code_m1 = (
+    'import sys; sys.path.insert(0, "native/tests"); '
+    'import test_harness_oracles as T; '
+    'T.test_phase3b_selection_attempt_unconfirmed_restoration_failure_preserves_rows(); '
+    'print("mutant 1 target PASS")'
+)
+
+code_m2 = (
+    'import sys; sys.path.insert(0, "native/tests"); '
+    'import test_harness_oracles as T; '
+    'T.test_phase3b_cleanup_releases_held_load_and_preserves_rows_on_alpha_failure(); '
+    'print("mutant 2 target PASS")'
+)
+
+code_m3 = (
+    'import sys; sys.path.insert(0, "native/tests"); '
+    'import test_harness_oracles as T; '
+    'T.test_ux_journey_semantics_and_escape_preservation(); '
+    'print("mutant 3 target PASS")'
+)
+
+code_m4 = (
+    'import sys; sys.path.insert(0, "native/tests"); '
+    'import test_harness_oracles as T; '
+    'T.test_ux_shared_button_styles_and_focus_visuals(); '
+    'print("mutant 4 target PASS")'
+)
+
+results = {}
+try:
+    # 1. Clean runs
+    for i, code in enumerate([code_m1, code_m2, code_m3, code_m4], 1):
+        r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
+        results[f'clean_{i}_exit'] = r.returncode
+        assert r.returncode == 0, f"Clean check {i} failed: {r.stderr}"
+
+    # 2. Mutant 1
+    f_acc.write_bytes(mutant1)
+    r_mut1 = subprocess.run([sys.executable, '-c', code_m1], capture_output=True, text=True)
+    results['mut1_exit'] = r_mut1.returncode
+    assert r_mut1.returncode != 0 and 'AssertionError' in r_mut1.stderr, "Mutant 1 MUST fail regression 1"
+    f_acc.write_bytes(clean_acc)
+
+    # 3. Mutant 2
+    f_acc.write_bytes(mutant2)
+    r_mut2 = subprocess.run([sys.executable, '-c', code_m2], capture_output=True, text=True)
+    results['mut2_exit'] = r_mut2.returncode
+    assert r_mut2.returncode != 0 and 'AssertionError' in r_mut2.stderr, "Mutant 2 MUST fail regression 2"
+    f_acc.write_bytes(clean_acc)
+
+    # 4. Mutant 3 (remove FirstRun escape handling)
+    f_cpp.write_bytes(mutant3)
+    r_mut3 = subprocess.run([sys.executable, '-c', code_m3], capture_output=True, text=True)
+    results['mut3_exit'] = r_mut3.returncode
+    assert r_mut3.returncode != 0 and 'AssertionError' in r_mut3.stderr, "Mutant 3 MUST fail journey regression"
+    f_cpp.write_bytes(clean_cpp)
+
+    # 5. Mutant 4 (remove Disabled state from App.xaml)
+    f_app.write_bytes(mutant4)
+    r_mut4 = subprocess.run([sys.executable, '-c', code_m4], capture_output=True, text=True)
+    results['mut4_exit'] = r_mut4.returncode
+    assert r_mut4.returncode != 0 and 'AssertionError' in r_mut4.stderr, "Mutant 4 MUST fail style regression"
+    f_app.write_bytes(clean_app)
+
+    # 6. Mutant 5 (swap FirstRun and Switching Escape dispatch)
+    f_cpp.write_bytes(mutant5)
+    r_mut5 = subprocess.run([sys.executable, '-c', code_m3], capture_output=True, text=True)
+    results['mut5_exit'] = r_mut5.returncode
+    assert r_mut5.returncode != 0 and 'AssertionError' in r_mut5.stderr, "Mutant 5 MUST fail journey regression"
+    f_cpp.write_bytes(clean_cpp)
+
+finally:
+    f_acc.write_bytes(clean_acc)
+    f_cpp.write_bytes(clean_cpp)
+    f_app.write_bytes(clean_app)
+    results['restored_acc'] = (f_acc.read_bytes() == clean_acc)
+    results['restored_cpp'] = (f_cpp.read_bytes() == clean_cpp)
+    results['restored_app'] = (f_app.read_bytes() == clean_app)
+
+print('Mutation Discrimination Results:')
+print('  Clean exits:', [results[f'clean_{i}_exit'] for i in range(1, 5)])
+print('  Mutant 1 exit (selection_attempted removed):', results['mut1_exit'])
+print('  Mutant 2 exit (return-to-alpha gate removed):', results['mut2_exit'])
+print('  Mutant 3 exit (FirstRun Escape branch removed):', results['mut3_exit'])
+print('  Mutant 4 exit (Disabled state removed):', results['mut4_exit'])
+print('  Mutant 5 exit (FirstRun & Switching Escape swapped):', results['mut5_exit'])
+print('  All files restored byte-identically:', results['restored_acc'] and results['restored_cpp'] and results['restored_app'])
+assert all([results['restored_acc'], results['restored_cpp'], results['restored_app']])
+print('ALL 5 MUTATIONS DISCRIMINATED SUCCESSFULLY (All mutants exit 1, clean exits 0).')

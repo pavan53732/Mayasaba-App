@@ -1,0 +1,2 @@
+# Preserve original historical source bytes, including line endings and whitespace.
+*.py.txt -text -whitespace

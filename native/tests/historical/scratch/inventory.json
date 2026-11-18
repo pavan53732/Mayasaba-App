@@ -1,0 +1,184 @@
+{
+  "date": "2026-11-18",
+  "baseline_commit": "110d00bd67dac5d92302a2421986da1851345200",
+  "original_files_preserved": true,
+  "scripts": [
+    {
+      "source": "scratch/add_oracle_tests.py",
+      "sha256": "dfba8e65f2704f401a20c7d094038eb396a6b9346752360a639a37bf2ad657e5",
+      "bytes": 7731,
+      "disposition": "local one-off source patcher; resulting changes are versioned"
+    },
+    {
+      "source": "scratch/apply_fixes.py",
+      "sha256": "786187ce3165a55611bc70b430a491714cd3c995a411380156b62616a4465675",
+      "bytes": 6082,
+      "disposition": "local one-off source patcher; resulting changes are versioned"
+    },
+    {
+      "source": "scratch/check_drop_target.py",
+      "sha256": "aef535a8c018819f7aede711e54b2631c6b02546783c026077c92008da6e4acb",
+      "bytes": 1403,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/check_explorer_item.py",
+      "sha256": "52fa1622bbcc7a83780e92bffb2ce73780bf303d6a37da652148effbdf6117ec",
+      "bytes": 684,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/debug_launch.py",
+      "sha256": "d1a72cd36843629a9f8277268498c1a7e1e80f4a96f5403bb53854c8bae01fbe",
+      "bytes": 794,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/dump_explorer_details.py",
+      "sha256": "cc7aeae7100926b7e960a92b58bbb1c74905982b904401a271857221b5057b46",
+      "bytes": 753,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/explore_explorer.py",
+      "sha256": "54854124fc6be0e885ab52b1db8278b3e51744151fe2a579c991d1834ad01fbe",
+      "bytes": 1394,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/find_in_transcript.py",
+      "sha256": "8ac158cb301f9ce87f69d1f1bd99aa7c086287fba95d3780ac83579e5e9643da",
+      "bytes": 511,
+      "disposition": "local reader of private agent transcripts; not promoted"
+    },
+    {
+      "source": "scratch/fix_gwr.py",
+      "sha256": "20b9c0ab55a785f63896b92d87de64c6e0a52360fe79aa55882c6aaed1addaa1",
+      "bytes": 3100,
+      "disposition": "local one-off source patcher; resulting changes are versioned"
+    },
+    {
+      "source": "scratch/fix_indent.py",
+      "sha256": "ffc185cb02a38a7ade598e38ed871fc5aae176f82ed60a3b37a151f2a30b3d64",
+      "bytes": 16601,
+      "disposition": "local one-off source patcher; resulting changes are versioned"
+    },
+    {
+      "source": "scratch/patch_acceptance.py",
+      "sha256": "20f7f94f9bcf6f0c2da9c96f6e36d32868f4a4b7f402a02a7b381151748973ba",
+      "bytes": 8186,
+      "disposition": "local one-off source patcher; resulting changes are versioned"
+    },
+    {
+      "source": "scratch/patch_acceptance_all.py",
+      "sha256": "f3a0c6083aa65b982462bde570b331da086ceeba9051ce10bcb3a4adeae20f14",
+      "bytes": 37078,
+      "disposition": "local one-off source patcher; resulting changes are versioned"
+    },
+    {
+      "source": "scratch/read_step.py",
+      "sha256": "4db890b7797121c0019f2078a92c8d95e4d9a91cfba3a56169dd7fb3350ecd42",
+      "bytes": 383,
+      "disposition": "local reader of private agent transcripts; not promoted"
+    },
+    {
+      "source": "scratch/test_explorer_drag_standalone.py",
+      "sha256": "7ade9c74579b2de71b55d3897739d7826d27adcc171e353ae9228e14a5993b84",
+      "bytes": 5710,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_explorer_drag_to_mayasaba.py",
+      "sha256": "22086162bab2c584a5ea21468c54679346c3da0c14902d1e441a743077d513b4",
+      "bytes": 10363,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_explorer_on_desktop.py",
+      "sha256": "f9e6506740ba57b6fa1491d433422745b4683978bac3d7d7067ad34beeef9bf2",
+      "bytes": 1859,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_journey_oracle.py",
+      "sha256": "c4ba7210c6e9e64a0804528077c99574ba94285419cdb1fbd61d49e8f04ac1e1",
+      "bytes": 3200,
+      "disposition": "local superseded prototype; maintained assertions are in test_harness_oracles.py"
+    },
+    {
+      "source": "scratch/test_launch_isolated.py",
+      "sha256": "d70a63f81c14a9684b4ee520005b695098bbf6d15da5ea9a6c38bbb93f818f24",
+      "bytes": 1876,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_mutation.py",
+      "sha256": "81e8ebbf64af9a6ea4e4dea41f627d8524d5680980661476f4e445e7f9513caa",
+      "bytes": 7404,
+      "archived_as": "native/tests/historical/scratch/test_mutation.py.txt",
+      "disposition": "historical source archived; original preserved locally",
+      "maintained_replacement": "native/tests/run_harness_mutations.py"
+    },
+    {
+      "source": "scratch/test_real_explorer_drop.py",
+      "sha256": "0889dab81a641f4826867df43121e8a3553fc72c36f103a9e8318c2991e71ed1",
+      "bytes": 8019,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_real_explorer_drop2.py",
+      "sha256": "dcc383de40b5a4e4da80e1514ae5999d118b203fee32bdca51abc9097131a16e",
+      "bytes": 7880,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_real_explorer_drop3.py",
+      "sha256": "de0f8084f1d80ab477cb20b8cae07dc6db57a6a81c34425f9369f86fe3662b9c",
+      "bytes": 8841,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_real_explorer_drop4.py",
+      "sha256": "722adb9c29ceb04e8633d795fc38a902807ed684d95c206867d4a79379ae192c",
+      "bytes": 8867,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_real_explorer_drop5.py",
+      "sha256": "0cab91267186821da4352ba8d015c53bf9b001a0c7f52525e6c5433054705b46",
+      "bytes": 9887,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_real_explorer_drop6.py",
+      "sha256": "2f8f6eba28a0edffcf66d125c19796be165428c2f7a258160a6b957a3a8ad492",
+      "bytes": 8949,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_real_explorer_drop7.py",
+      "sha256": "d5978948067d88ff3cbaa12b99142b2d018928f324158337a1e46cdbef3d600d",
+      "bytes": 9152,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_real_explorer_drop8.py",
+      "sha256": "649c02493f546ad6b373e082751237f74aedf83d93759784fa827230d9159366",
+      "bytes": 9841,
+      "disposition": "local desktop experiment or diagnostic; not a maintained acceptance test"
+    },
+    {
+      "source": "scratch/test_real_explorer_drop9.py",
+      "sha256": "10822b10dd089db3ce6aec6742b85240813a23c1d0de53b5d40ece90e741605d",
+      "bytes": 10061,
+      "archived_as": "native/tests/historical/scratch/test_real_explorer_drop9.py.txt",
+      "disposition": "historical source archived; original preserved locally"
+    },
+    {
+      "source": "scratch/test_style_oracle.py",
+      "sha256": "9a66169ea1c67ff0ad76b35c086196e269e05226dd993a1a0bae98dfb7ac3aac",
+      "bytes": 1457,
+      "disposition": "local superseded prototype; maintained assertions are in test_harness_oracles.py"
+    }
+  ]
+}
