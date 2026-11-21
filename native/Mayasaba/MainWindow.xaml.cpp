@@ -268,6 +268,15 @@ namespace winrt::Mayasaba::implementation
             { e.Cancel(true); self->NavigateAsync(true); }
         });
 
+        auto noticeWeak = get_weak();
+        Notice().Closed([noticeWeak](auto const&, auto const&)
+        {
+            if (auto const self = noticeWeak.get())
+            {
+                self->QueueResponsiveLayout();
+            }
+        });
+
         // Window teardown cancels every obsolete animation and releases the handlers.
         auto closedWeak = get_weak();
         Closed([closedWeak](winrt::Windows::Foundation::IInspectable const&,
@@ -781,6 +790,7 @@ namespace winrt::Mayasaba::implementation
         Notice().Message(message);
         Notice().Severity(error ? InfoBarSeverity::Error : InfoBarSeverity::Informational);
         Notice().IsOpen(true);
+        QueueResponsiveLayout();
         if (auto peer=Automation::Peers::FrameworkElementAutomationPeer::FromElement(Notice()))
             peer.RaiseAutomationEvent(Automation::Peers::AutomationEvents::LiveRegionChanged);
     }
@@ -1874,11 +1884,16 @@ namespace winrt::Mayasaba::implementation
             bool const attentionPresent = ActionCenterPanel().Visibility() == Visibility::Visible;
             bool const problemsPresent = ChatProblemCardsScroller()
                 && ChatProblemCardsScroller().Visibility() == Visibility::Visible;
+            double conversationContent = ComposerStack() ? ComposerStack().ActualHeight() : 0.0;
+            if (EmptyChatHero() && EmptyChatHero().Visibility() == Visibility::Visible)
+            {
+                conversationContent += EmptyChatHero().ActualHeight();
+            }
             auto const allocation = mayasaba::ui::AllocateHeaderLayout(
                 chatHeight, headerHeight,
                 attentionPresent ? ActionCenterPanel().ActualHeight() : 0.0,
                 problemsPresent ? ChatProblemCardsScroller().ActualHeight() : 0.0,
-                ComposerStack() ? ComposerStack().ActualHeight() : 0.0,
+                conversationContent,
                 attentionPresent, problemsPresent);
             headerCardPool_ = allocation.pool;
             headerCardsPresent_ = problemsPresent;
@@ -1909,19 +1924,73 @@ namespace winrt::Mayasaba::implementation
         {
             textScale = 1.0;
         }
-        bool const compact = bodyHeight < 430.0 || textScale >= 1.3;
-        if (compact != compactChatBody_)
+        bool const noticeOpen = Notice() && Notice().IsOpen();
+        bool const tight = bodyHeight < 340.0 || (noticeOpen && bodyHeight < 410.0);
+        bool const compact = !tight && (bodyHeight < 430.0 || textScale >= 1.3);
+
+        if (tight != tightChatBody_ || compact != compactChatBody_)
         {
+            tightChatBody_ = tight;
             compactChatBody_ = compact;
-            EmptyChatHeading().FontSize(compact ? 21.0 : 27.0);
-            EmptyChatHeading().MaxWidth(compact ? 420.0 : 560.0);
-            EmptyChatHint().MaxWidth(compact ? 420.0 : 560.0);
-            EmptyChatHero().Spacing(compact ? 8.0 : 12.0);
-            EmptyChatHero().Margin(compact ? Thickness{24, 0, 24, 10} : Thickness{24, 0, 24, 20});
-            EmptyHeroArt().Width(compact ? 120.0 : 176.0);
-            EmptyHeroArt().Height(compact ? 100.0 : 146.0);
+            if (tight)
+            {
+                EmptyChatHeading().FontSize(16.0);
+                EmptyChatHeading().MaxWidth(360.0);
+                EmptyChatHint().FontSize(11.0);
+                EmptyChatHint().MaxWidth(360.0);
+                EmptyChatHero().Spacing(2.0);
+                EmptyChatHero().Margin(Thickness{18, 0, 18, 2});
+                EmptyHeroArt().Width(100.0);
+                EmptyHeroArt().Height(80.0);
+                ComposerBox().MinHeight(44.0);
+                ComposerPanel().Padding(Thickness{8, 4, 8, 4});
+                ComposerHost().Margin(Thickness{18, 0, 18, 2});
+                if (ChatHeaderBorder()) ChatHeaderBorder().Padding(Thickness{18, 4, 18, 4});
+                if (ChatHeaderGrid()) ChatHeaderGrid().RowSpacing(3.0);
+                Notice().Margin(Thickness{18, 2, 18, 2});
+                Notice().MaxHeight(85.0);
+                ChatTopSpacer().Height(GridLength{0, GridUnitType::Pixel});
+            }
+            else if (compact)
+            {
+                EmptyChatHeading().FontSize(21.0);
+                EmptyChatHeading().MaxWidth(420.0);
+                EmptyChatHint().FontSize(13.0);
+                EmptyChatHint().MaxWidth(420.0);
+                EmptyChatHero().Spacing(8.0);
+                EmptyChatHero().Margin(Thickness{24, 0, 24, 10});
+                EmptyHeroArt().Width(120.0);
+                EmptyHeroArt().Height(100.0);
+                ComposerBox().MinHeight(76.0);
+                ComposerPanel().Padding(Thickness{13, 13, 13, 13});
+                ComposerHost().Margin(Thickness{18, 0, 18, 16});
+                if (ChatHeaderBorder()) ChatHeaderBorder().Padding(Thickness{22, 14, 22, 14});
+                if (ChatHeaderGrid()) ChatHeaderGrid().RowSpacing(7.0);
+                Notice().Margin(Thickness{18, 5, 18, 10});
+                Notice().ClearValue(FrameworkElement::MaxHeightProperty());
+                ChatTopSpacer().Height(StarLength());
+            }
+            else
+            {
+                EmptyChatHeading().FontSize(27.0);
+                EmptyChatHeading().MaxWidth(560.0);
+                EmptyChatHint().FontSize(13.0);
+                EmptyChatHint().MaxWidth(560.0);
+                EmptyChatHero().Spacing(12.0);
+                EmptyChatHero().Margin(Thickness{24, 0, 24, 20});
+                EmptyHeroArt().Width(176.0);
+                EmptyHeroArt().Height(146.0);
+                ComposerBox().MinHeight(76.0);
+                ComposerPanel().Padding(Thickness{13, 13, 13, 13});
+                ComposerHost().Margin(Thickness{18, 0, 18, 16});
+                if (ChatHeaderBorder()) ChatHeaderBorder().Padding(Thickness{22, 14, 22, 14});
+                if (ChatHeaderGrid()) ChatHeaderGrid().RowSpacing(7.0);
+                Notice().Margin(Thickness{18, 5, 18, 10});
+                Notice().ClearValue(FrameworkElement::MaxHeightProperty());
+                ChatTopSpacer().Height(StarLength());
+            }
         }
-        bool const showArt = !compact;
+        bool const showArt = !compact && !tight;
         if (showArt != heroArtVisible_)
         {
             heroArtVisible_ = showArt;
@@ -2154,11 +2223,9 @@ namespace winrt::Mayasaba::implementation
         }
     }
 
-    void MainWindow::OnChatBodySizeChanged(IInspectable const&, SizeChangedEventArgs const& e)
+    void MainWindow::QueueResponsiveLayout()
     {
-        if (windowClosed_) return;
-        if (e.PreviousSize().Width == e.NewSize().Width && e.PreviousSize().Height == e.NewSize().Height) return;
-        if (responsiveLayoutQueued_) return;
+        if (windowClosed_ || responsiveLayoutQueued_) return;
         responsiveLayoutQueued_ = true;
         auto weakSelf = get_weak();
         DispatcherQueue().TryEnqueue([weakSelf]()
@@ -2169,6 +2236,13 @@ namespace winrt::Mayasaba::implementation
                 self->ApplyResponsiveLayout();
             }
         });
+    }
+
+    void MainWindow::OnChatBodySizeChanged(IInspectable const&, SizeChangedEventArgs const& e)
+    {
+        if (windowClosed_) return;
+        if (e.PreviousSize().Width == e.NewSize().Width && e.PreviousSize().Height == e.NewSize().Height) return;
+        QueueResponsiveLayout();
     }
 
     void MainWindow::OnRootSizeChanged(IInspectable const&, SizeChangedEventArgs const& e)
@@ -4702,7 +4776,11 @@ namespace winrt::Mayasaba::implementation
             auto root = Content() ? Content().try_as<FrameworkElement>() : nullptr;
             if (root && root.XamlRoot())
             {
-                returnFocus_ = Input::FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>();
+                auto focused = Input::FocusManager::GetFocusedElement(root.XamlRoot()).try_as<Control>();
+                if (focused && focused != NativeFileMenu() && !focused.try_as<MenuFlyoutItem>() && !focused.try_as<MenuBarItem>())
+                {
+                    returnFocus_ = focused;
+                }
             }
         }
         catch (...) {}

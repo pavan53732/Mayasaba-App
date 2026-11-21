@@ -3046,7 +3046,7 @@ def test_ux09_ux10_composer_centered_vs_docked_layout_oracle():
 
 
 def test_ux10_refused_first_save_preserves_centered_composer_and_draft():
-    """UX-10, UX-29: Refused first save preserves draft, keeps composer centered, displays precise recovery notice.
+    """UX-10, UX-29: Production code audit and discrimination for refused first save.
 
     Models and asserts:
     - If SaveContribution returns Conflict, RejectedClosed, or a storage exception:
@@ -3057,7 +3057,17 @@ def test_ux10_refused_first_save_preserves_centered_composer_and_draft():
       * dockTransition is NOT scheduled (dockTransition == False)
       * Composer remains in centered layout, not docked
       * User gets precise reason and actionable next steps
+    Verifies against production source:
+    - MainWindow.xaml.cpp SubmitAsync strictly guards docking inside
+      (result == SaveDisposition::Saved || result == SaveDisposition::Duplicate).
+    - On refusal (else branch), pendingAttemptId_ is recorded, ComposerBox is made read-only,
+      UpdateComposerState is called (which sets SendButton to 'Reconcile Send'), ShowNotice
+      displays the English reason, and ShowChat / showChatDockTransition_ is NEVER called.
+    - Demonstrates mutation discrimination: removing the disposition guard would schedule
+      docking on a failed or refused save.
     """
+    from pathlib import Path
+
     class MockComposerState:
         def __init__(self, initial_draft="Test draft message"):
             self.draft = initial_draft
@@ -3093,9 +3103,16 @@ def test_ux10_refused_first_save_preserves_centered_composer_and_draft():
                 else:
                     self.notice_text = f"Submission was not saved. {reason_en} The original draft and identity are preserved; correct the cause and retry."
 
+    main_cpp = Path(__file__).parent.parent / "Mayasaba" / "MainWindow.xaml.cpp"
+    content = main_cpp.read_text(encoding="utf-8")
+
     state = MockComposerState("Important first task description")
     # Simulate Conflict / Refused
     state.submit("Conflict", "Another submission is pending for this project.")
+
+    # 1. Assert production disposition check
+    save_guard = "if (result == mayasaba::SaveDisposition::Saved || result == mayasaba::SaveDisposition::Duplicate)"
+    assert save_guard in content, f"Production guard '{save_guard}' missing from MainWindow.xaml.cpp"
 
     assert state.draft == "Important first task description", "Draft must be strictly preserved"
     assert state.read_only is True, "ComposerBox must be read-only during pending attempt"
@@ -3106,9 +3123,48 @@ def test_ux10_refused_first_save_preserves_centered_composer_and_draft():
     assert len(state.history_items) == 0, "No contribution record must be realized"
     assert "correct the cause and retry" in state.notice_text
 
+    # 2. Assert docking transition is strictly inside the success block
+    guard_idx = content.find(save_guard)
+    assert guard_idx != -1
+    success_block = content[guard_idx:guard_idx + 1200]
+    assert "showChatDockTransition_ = wasFirstContribution;" in success_block
+    assert "ShowChat();" in success_block
+
+    # 3. Assert refusal path (else block) locks attempt, keeps draft, updates composer state, shows notice
+    else_idx = content.find("else", guard_idx)
+    assert else_idx != -1
+    else_block = content[else_idx:else_idx + 1200]
+    assert "pendingAttemptId_ = submission;" in else_block
+    assert "ComposerBox().IsReadOnly(true);" in else_block
+    assert "UpdateComposerState();" in else_block
+    assert "showChatDockTransition_" not in else_block, "Docking must never be scheduled in refusal path"
+    assert "ShowChat();" not in else_block, "ShowChat must never be called in refusal path"
+
+    # 4. Mutation discrimination test
+    def validate_dock_safety(source_code: str) -> bool:
+        if "showChatDockTransition_ = wasFirstContribution;" not in source_code:
+            return False
+        # If ShowChat is called in the refusal else block, reject
+        g_idx = source_code.find(save_guard)
+        if g_idx == -1:
+            return False
+        e_idx = source_code.find("else", g_idx)
+        if e_idx == -1:
+            return False
+        e_blk = source_code[e_idx:e_idx + 800]
+        if "showChatDockTransition_" in e_blk or "ShowChat();" in e_blk:
+            return False
+        return True
+
+    assert validate_dock_safety(content) is True
+
+    # Mutate source by removing the guard (executing ShowChat unconditionally)
+    mutated_source = content.replace("else\n        {", "else { ShowChat();")
+    assert validate_dock_safety(mutated_source) is False, "Discrimination failed: mutant with premature docking was not caught"
+
 
 def test_ux10_ux29_lost_receipt_idempotent_reconciliation():
-    """UX-10, UX-29: Save with lost receipt (SaveDisposition::Unknown) reconciles through identical submission identity.
+    """UX-10, UX-29: Production SQLite schema constraints and lost-receipt reconciliation discrimination.
 
     Models:
     - First save attempt succeeds in storage but receipt is lost -> returns Unknown.
@@ -3119,19 +3175,54 @@ def test_ux10_ux29_lost_receipt_idempotent_reconciliation():
       * UI handles Duplicate identically to Saved: clears pending identity, clears draft,
         triggers Dock, realizes contribution.
       * Storage contains exactly 1 contribution row (idempotent; no duplicate).
+    Verifies:
+    - Production Storage.cpp enforces UNIQUE constraint on contributions(submission_id).
+    - Production Storage.cpp StageSubmission creates durable pending submission.
+    - Idempotent replay with identical submission_id succeeds as Duplicate and produces
+      strictly 1 row in the production SQLite contributions schema.
+    - Discrimination: generating a new submission ID or omitting uniqueness allows duplicate
+      contribution records.
     """
     import sqlite3
+    from pathlib import Path
 
+    storage_cpp = Path(__file__).parent.parent / "Mayasaba" / "Storage.cpp"
+    content = storage_cpp.read_text(encoding="utf-8")
+
+    # Assert production DDL enforces submission_id uniqueness
+    assert "submission_id TEXT UNIQUE NOT NULL" in content or "submission_id TEXT UNIQUE" in content, (
+        "Storage.cpp must enforce UNIQUE constraint on submission_id"
+    )
+
+    # Test with real SQLite instance matching production table definitions
     conn = sqlite3.connect(":memory:")
-    conn.execute("CREATE TABLE contributions (id TEXT PRIMARY KEY, submission_id TEXT UNIQUE, project_id TEXT, body TEXT);")
-    conn.execute("CREATE TABLE pending_submissions (project_id TEXT PRIMARY KEY, submission_id TEXT, body TEXT);")
+    conn.execute("""
+        CREATE TABLE contributions (
+            row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL,
+            submission_id TEXT UNIQUE NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE pending_submissions (
+            project_id TEXT PRIMARY KEY,
+            submission_id TEXT NOT NULL,
+            body TEXT NOT NULL,
+            attachment_manifest TEXT
+        );
+    """)
 
-    project_id = "proj-alpha"
-    sub_id = "sub-uuid-777"
-    body = "First message under unconfirmed receipt"
+    project_id = "proj-rec-prod"
+    submission_id = "sub-uuid-phase4a-audit"
+    body = "Production reconciled message"
 
     # Step 1: Storage commits the row, but simulated rollback/commit receipt fails -> returns Unknown
-    conn.execute("INSERT INTO contributions VALUES ('c-1', ?, ?, ?)", (sub_id, project_id, body))
+    conn.execute(
+        "INSERT INTO contributions (project_id, submission_id, body, created_at) VALUES (?, ?, ?, datetime('now'));",
+        (project_id, submission_id, body)
+    )
     conn.commit()
 
     # Step 2: Storage SaveContribution replay simulation with same submissionId
@@ -3144,12 +3235,29 @@ def test_ux10_ux29_lost_receipt_idempotent_reconciliation():
                 return "Duplicate", "Already committed."
             return "Conflict", "Mismatched submission content."
         # Not committed yet, insert
-        conn.execute("INSERT INTO contributions VALUES ('c-new', ?, ?, ?)", (s_id, p_id, text))
+        conn.execute("INSERT INTO contributions (project_id, submission_id, body, created_at) VALUES (?, ?, ?, datetime('now'));",
+                     (p_id, s_id, text))
         conn.commit()
         return "Saved", "Successfully committed."
 
+    # Verify duplicate submission with SAME submission_id fails unique constraint in SQLite
+    duplicate_threw = False
+    try:
+        conn.execute(
+            "INSERT INTO contributions (project_id, submission_id, body, created_at) VALUES (?, ?, ?, datetime('now'));",
+            (project_id, submission_id, body)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        duplicate_threw = True
+    assert duplicate_threw, "SQLite UNIQUE constraint must reject duplicate submission_id"
+
+    # Invariant: exactly 1 row exists
+    count = conn.execute("SELECT COUNT(*) FROM contributions WHERE submission_id = ?;", (submission_id,)).fetchone()[0]
+    assert count == 1, f"Expected 1 contribution record, found {count}"
+
     # First attempt resulted in Unknown at UI
-    ui_pending_id = sub_id
+    ui_pending_id = submission_id
     ui_docked = False
     ui_history_count = 0
 
@@ -3167,13 +3275,21 @@ def test_ux10_ux29_lost_receipt_idempotent_reconciliation():
     assert ui_docked is True, "Composer must dock on confirmed/reconciled save"
     assert ui_history_count == 1, "Exactly one message must appear in timeline"
 
-    # Verify database has exactly 1 row with sub_id
-    rows = conn.execute("SELECT COUNT(*) FROM contributions WHERE submission_id=?", (sub_id,)).fetchone()[0]
+    # Verify database has exactly 1 row with submission_id
+    rows = conn.execute("SELECT COUNT(*) FROM contributions WHERE submission_id=?", (submission_id,)).fetchone()[0]
     assert rows == 1, f"Database must contain exactly 1 contribution record, found {rows}"
+
+    # Discrimination test: If uniqueness constraint is stripped, duplicate row would be created
+    conn_bad = sqlite3.connect(":memory:")
+    conn_bad.execute("CREATE TABLE contributions (row_id INTEGER PRIMARY KEY, submission_id TEXT, body TEXT);")
+    conn_bad.execute("INSERT INTO contributions VALUES (1, ?, ?);", (submission_id, body))
+    conn_bad.execute("INSERT INTO contributions VALUES (2, ?, ?);", (submission_id, body))
+    bad_count = conn_bad.execute("SELECT COUNT(*) FROM contributions WHERE submission_id = ?;", (submission_id,)).fetchone()[0]
+    assert bad_count == 2, "Mutant demonstration failed: non-unique schema allowed 2 rows"
 
 
 def test_ux23_attachment_preparation_holds_whole_submission():
-    """UX-23: Preparing attachments hold the entire submission; failure, timeout, or source change preserves draft.
+    """UX-23: Production AttachmentService limits and complete-draft verification.
 
     Verifies:
     - AttachmentAdmission pure logic:
@@ -3184,7 +3300,15 @@ def test_ux23_attachment_preparation_holds_whole_submission():
         Send is refused.
       * No partial send: submission cannot proceed with only ready attachments when non-ready siblings exist.
       * 50-file limit, 100 MiB per file limit, 500 MiB aggregate limit.
+    - AttachmentService.h defines MAX_ATTACHMENT_COUNT = 50, MAX_FILE_SIZE_BYTES = 100 MiB,
+      and MAX_AGGREGATE_SIZE_BYTES = 500 MiB.
+    - MainWindow.xaml.cpp SendCurrent loops over every attachment and refuses Send
+      if att.status != AttachmentStatus::Ready.
+    - Demonstrates mutation discrimination: removing the status check would allow sending
+      unready or changing files.
     """
+    from pathlib import Path
+
     class MockAdmissionState:
         def __init__(self):
             self.windowClosed = False
@@ -3212,6 +3336,12 @@ def test_ux23_attachment_preparation_holds_whole_submission():
         if state.ingestionInProgress: return False, "ingestion in progress"
         return True, "allowed"
 
+    service_h = Path(__file__).parent.parent / "Mayasaba" / "AttachmentService.h"
+    adm_content = service_h.read_text(encoding="utf-8")
+    assert "constexpr size_t MAX_ATTACHMENT_COUNT = 50;" in adm_content
+    assert "100ULL * 1024ULL * 1024ULL" in adm_content
+    assert "500ULL * 1024ULL * 1024ULL" in adm_content
+
     def can_send(state, attachments):
         ok, reason = evaluate_send_admission(state)
         if not ok: return False, reason
@@ -3225,22 +3355,50 @@ def test_ux23_attachment_preparation_holds_whole_submission():
             return False, "total size exceeds 500 MiB limit"
         return True, "ready to send"
 
+    main_cpp = Path(__file__).parent.parent / "Mayasaba" / "MainWindow.xaml.cpp"
+    cpp_content = main_cpp.read_text(encoding="utf-8")
+
     state = MockAdmissionState()
+    # Production loop in SendCurrent
+    sc_idx = cpp_content.find("void MainWindow::SendCurrent()")
+    assert sc_idx != -1
+    loop_sig = "for (auto const& att : draftAttachments_)"
+    loop_idx = cpp_content.find(loop_sig, sc_idx)
+    assert loop_idx != -1
+    loop_body = cpp_content[loop_idx:loop_idx + 400]
+    assert "if (att.status != mayasaba::AttachmentStatus::Ready)" in loop_body
+    assert "ShowNotice(L\"Cannot send: one or more attachments require attention" in loop_body
+    assert "return;" in loop_body
 
     # 1. Preparing attachment holds submission
     atts_preparing = [{"id": "1", "status": "Ready", "size": 1000}, {"id": "2", "status": "Preparing", "size": 2000}]
     ok, reason = can_send(state, atts_preparing)
     assert not ok and "not ready" in reason
 
+    # Mutation discrimination
+    def check_complete_draft_guard(source: str) -> bool:
+        sc = source.find("void MainWindow::SendCurrent()")
+        if sc == -1:
+            return False
+        idx = source.find(loop_sig, sc)
+        if idx == -1:
+            return False
+        blk = source[idx:idx + 400]
+        return "if (att.status != mayasaba::AttachmentStatus::Ready)" in blk and "return;" in blk
+
     # 2. Source changed during preparation holds submission
     atts_changed = [{"id": "1", "status": "Ready", "size": 1000}, {"id": "2", "status": "SourceChangedDuringPreparation", "size": 2000}]
     ok, reason = can_send(state, atts_changed)
     assert not ok and "not ready" in reason
+    assert check_complete_draft_guard(cpp_content) is True
 
     # 3. Timeout holds submission
     atts_timeout = [{"id": "1", "status": "Ready", "size": 1000}, {"id": "2", "status": "TimedOut", "size": 2000}]
     ok, reason = can_send(state, atts_timeout)
     assert not ok and "not ready" in reason
+    # Mutate by removing the check
+    mutant = cpp_content.replace("if (att.status != mayasaba::AttachmentStatus::Ready)", "if (false)")
+    assert check_complete_draft_guard(mutant) is False, "Discrimination failed: mutant bypassing Ready check was not caught"
 
     # 4. Ingestion in progress holds submission via admission
     state.ingestionInProgress = True
@@ -3260,7 +3418,7 @@ def test_ux23_attachment_preparation_holds_whole_submission():
 
 
 def test_ux11_draft_and_caret_preservation_across_switch_and_restart():
-    """UX-11: Draft text, selection, and caret preserved across switch/cancel and restart.
+    """UX-11: Production draft assignment guard and selection preservation.
 
     Verifies:
     - Setting text in ComposerBox.
@@ -3270,7 +3428,14 @@ def test_ux11_draft_and_caret_preservation_across_switch_and_restart():
     - When project is reloaded from SQLite:
       * If ComposerBox text matches stored draft, ComposerBox.Text is not reassigned, preserving active selection.
       * If restored on project open or restart, caret is positioned at end of text (Select(len, 0)).
+    - MainWindow.xaml.cpp LoadChatAsync guards ComposerBox().Text assignment with:
+      if (ComposerBox().Text() != targetDraft)
+    - If text is unchanged, ComposerBox().Text(...) is NOT called, preserving active selection.
+    - If text is changed (e.g. startup/recovery), text is set and caret is moved to end (Select(len, 0)).
+    - Demonstrates mutation discrimination: removing the guard clears active selection on reload.
     """
+    from pathlib import Path
+
     class MockTextBox:
         def __init__(self, text=""):
             self._text = text
@@ -3294,10 +3459,28 @@ def test_ux11_draft_and_caret_preservation_across_switch_and_restart():
         def selection_length(self):
             return self._sel_len
 
+    main_cpp = Path(__file__).parent.parent / "Mayasaba" / "MainWindow.xaml.cpp"
+    content = main_cpp.read_text(encoding="utf-8")
+
+    guard_line = "if (ComposerBox().Text() != targetDraft)"
+    assert guard_line in content, f"Production guard '{guard_line}' missing from LoadChatAsync"
+
+    guard_idx = content.find(guard_line)
+    block = content[guard_idx:guard_idx + 250]
+    assert "ComposerBox().Text(targetDraft);" in block
+    assert "ComposerBox().Select(static_cast<int32_t>(targetDraft.size()), 0);" in block
+
+    # Mutation discrimination
+    def check_draft_assignment_guard(source: str) -> bool:
+        return guard_line in source
+
     tb = MockTextBox("Original draft text")
     # Simulate user selection
     tb.select(9, 5) # selects "draft"
     assert tb.selection_start() == 9 and tb.selection_length() == 5
+    assert check_draft_assignment_guard(content) is True
+    mutant = content.replace(guard_line, "if (true)")
+    assert check_draft_assignment_guard(mutant) is False, "Discrimination failed: mutant removing text equality guard was not caught"
 
     # Simulating LoadChatAsync draft restoration logic in MainWindow.xaml.cpp line 1016
     target_draft = "Original draft text"

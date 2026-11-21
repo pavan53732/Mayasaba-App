@@ -565,7 +565,7 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <Border Grid.Row="0" Background="{ThemeResource MayasabaPanelBrush}"
+                <Border x:Name="ChatHeaderBorder" Grid.Row="0" Background="{ThemeResource MayasabaPanelBrush}"
                         BorderBrush="{ThemeResource MayasabaBorderBrush}"
                         BorderThickness="0,0,0,1" Padding="22,14">
                     <Grid x:Name="ChatHeaderGrid" ColumnSpacing="14" RowSpacing="7">

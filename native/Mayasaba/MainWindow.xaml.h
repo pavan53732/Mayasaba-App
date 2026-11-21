@@ -391,6 +391,7 @@ namespace winrt::Mayasaba::implementation
         bool highContrast_{false};
         // Adaptive layout state, so a size change does not rebuild the screen.
         bool compactChatBody_{false};
+        bool tightChatBody_{false};
         bool heroArtVisible_{true};
         bool readinessStacked_{false};
         bool narrowLayout_{false};
@@ -544,6 +545,7 @@ namespace winrt::Mayasaba::implementation
         bool historyIsNewestWindow_{false};
         void ApplyChatLayout(bool dockTransition);
         void ApplyResponsiveLayout();
+        void QueueResponsiveLayout();
         // Keeps every full CLI name visible: the readiness entries are compact on a
         // wide window and stack vertically on a narrow one.
         void ApplyReadinessLayout(double width);

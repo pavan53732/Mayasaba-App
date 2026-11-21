@@ -206,11 +206,47 @@ def set_text_value(ctrl, text):
             return
     except Exception:
         pass
-    ctrl.set_focus()
-    time.sleep(0.1)
-    ctrl.type_keys("^a{BACKSPACE}", pause=0.05)
-    if text:
-        ctrl.type_keys(text, pause=0.02, with_spaces=True)
+    try:
+        if hasattr(ctrl, "set_edit_text"):
+            ctrl.set_edit_text(text)
+            return
+    except Exception:
+        pass
+    try:
+        ctrl.set_focus()
+        time.sleep(0.1)
+        ctrl.type_keys("^a{BACKSPACE}", pause=0.05)
+        if text:
+            ctrl.type_keys(text, pause=0.02, with_spaces=True)
+    except Exception:
+        pass
+
+
+def select_text_range(ctrl, start_offset, length):
+    try:
+        tpat = ctrl.iface_text
+        doc_range = tpat.DocumentRange.Clone()
+        full_text = doc_range.GetText(-1)
+        total_len = len(full_text)
+        doc_range.MoveEndpointByUnit(0, 0, start_offset)
+        end_move = -(total_len - (start_offset + length))
+        doc_range.MoveEndpointByUnit(1, 0, end_move)
+        doc_range.Select()
+        return True
+    except Exception as e:
+        log(f"select_text_range exception: {e}")
+        return False
+
+
+def get_selected_text(ctrl):
+    try:
+        tpat = ctrl.iface_text
+        sel_array = tpat.GetSelection()
+        if sel_array and sel_array.Length > 0:
+            return sel_array.GetElement(0).GetText(-1)
+    except Exception as e:
+        log(f"get_selected_text exception: {e}")
+    return ""
 
 
 def invoke_control(ctrl):
@@ -330,24 +366,61 @@ def _run_phase4a_verification(ctx):
         screenshots.append(s2)
         register_test("empty_chat_narrow_520x640", "PASS", "520x640 client area measured accurately; composer reachable.")
 
-        # Test 640x480
-        log("Measuring compact short 640x480 logical client area in empty Chat...", ctx=ctx)
+        # Test 640x480 with Notice open (project open notice)
+        log("Measuring compact short 640x480 logical client area in empty Chat with Notice open...", ctx=ctx)
         H.resize_to_logical_client(win, 640, 480)
         time.sleep(1.0)
         H.verify_client_logical_dimensions(hwnd, 640, 480)
         viewport_640 = get_client_screen_viewport(hwnd)
-        r_comp_640 = H.verify_control_reachability(composer_box, viewport_640, min_w=200, min_h=50)
-        assert r_comp_640["visible_w"] >= 200, "ComposerBox must be strictly above the fold at 640x480"
-        s3 = capture_screenshot(win, "03_empty_chat_640x480.png", "Empty Chat at compact 640x480 (hero art collapsed)", ctx=ctx)
+
+        # Notice is already open from project open ("No CLI session was started.")
+        obs_notice = H.observe_by_aid(win, "Notice", retries=5)
+        assert obs_notice.is_found and obs_notice.element.is_visible(), "Notice InfoBar must be open on project open"
+        notice_rect = obs_notice.element.rectangle()
+        assert notice_rect.height() > 0, "Notice must have positive height"
+
+        # Effective viewport is strictly ABOVE Notice
+        effective_viewport = H.Rect(viewport_640.left, viewport_640.top, viewport_640.right, notice_rect.top)
+        assert effective_viewport.height() > 200, f"Effective viewport height {effective_viewport.height()} too small"
+
+        attach_btn = H.find_by_aid(win, "AttachButton")
+        assert attach_btn is not None, "AttachButton missing"
+        send_btn = H.find_by_aid(win, "SendButton")
+        assert send_btn is not None, "SendButton missing"
+
+        # Reachability verification against effective_viewport (above Notice)
+        r_comp_notice = H.verify_control_reachability(composer_box, effective_viewport, min_w=200, min_h=40)
+        r_attach_notice = H.verify_control_reachability(attach_btn, effective_viewport, min_w=60, min_h=20)
+        r_send_notice = H.verify_control_reachability(send_btn, effective_viewport, min_w=60, min_h=20)
+
+        assert r_comp_notice["visible_h"] >= 40, "ComposerBox must be reachable above Notice"
+        assert r_attach_notice["visible_h"] >= 20, "AttachButton must be reachable above Notice"
+        assert r_send_notice["visible_h"] >= 20, "SendButton must be reachable above Notice"
+
+        # Invariant: Composer buttons and box bottom must be strictly <= Notice top
+        assert attach_btn.rectangle().bottom <= notice_rect.top, f"AttachButton clipped by Notice: {attach_btn.rectangle().bottom} > {notice_rect.top}"
+        assert send_btn.rectangle().bottom <= notice_rect.top, f"SendButton clipped by Notice: {send_btn.rectangle().bottom} > {notice_rect.top}"
+        assert composer_box.rectangle().bottom <= notice_rect.top, f"ComposerBox clipped by Notice: {composer_box.rectangle().bottom} > {notice_rect.top}"
+
+        s3 = capture_screenshot(win, "03_empty_chat_640x480.png", "Empty Chat at compact 640x480 with Notice open and unclipped composer", ctx=ctx)
         screenshots.append(s3)
-        register_test("empty_chat_short_640x480", "PASS", "640x480 client area measured accurately; composer reachable above fold.")
+        register_test("empty_chat_short_640x480_notice_open", "PASS", "640x480 client area measured with Notice open; full composer, Attach and Send fully reachable above Notice.")
+
+        # Close Notice to verify layout with Notice closed
+        close_notice_btn = H.find_by_name(obs_notice.element, "Close")
+        if close_notice_btn:
+            invoke_control(close_notice_btn)
+            time.sleep(0.5)
+
+        s3a = capture_screenshot(win, "03a_empty_chat_640x480_notice_closed.png", "Empty Chat at compact 640x480 (Notice closed)", ctx=ctx)
+        screenshots.append(s3a)
 
         # Restore comfortable window size
         H.resize_to_logical_client(win, 800, 600)
         time.sleep(1.0)
 
         # =====================================================================
-        # PART 3: DRAFT ENTRY, SEND ADMISSION & FIRST SAVE (UX-10)
+        # PART 3: DRAFT ENTRY, SEND ADMISSION & FIRST SAVE DOCKING (UX-10)
         # =====================================================================
         log("\n--- PART 3: First Draft Entry & Confirmed Save Docking (UX-10) ---", ctx=ctx)
         send_btn = H.find_by_aid(win, "SendButton")
@@ -357,9 +430,9 @@ def _run_phase4a_verification(ctx):
         first_message = "First message in empty project: Phase 4A verified persistence"
         set_text_value(composer_box, first_message)
         time.sleep(0.5)
-
         assert composer_box.window_text() == first_message, "Draft text setup in ComposerBox failed"
         assert send_btn.is_enabled(), "SendButton must be enabled after entering text"
+
         s4 = capture_screenshot(win, "04_first_draft_ready_to_send.png", "Draft entered in centered composer ready to send", ctx=ctx)
         screenshots.append(s4)
 
@@ -394,11 +467,11 @@ def _run_phase4a_verification(ctx):
         obs_timeline_msg = H.observe_by_name(win, first_message, retries=5)
         assert obs_timeline_msg.is_found, "Realized timeline entry for first message not found"
 
-        # 4. ComposerBox is cleared and ready for new input
+        # 4. Composer text is cleared and focused
         assert composer_box.window_text() == "", "ComposerBox must be cleared after confirmed save"
         assert composer_box.has_keyboard_focus(), "ComposerBox must receive focus after Dock"
 
-        # 5. Measure composer vertical position: now docked under HistoryScroller
+        # 5. Composer is docked at the bottom of the conversation area below timeline
         comp_rect_after = composer_box.rectangle()
         hist_rect = obs_hist.element.rectangle()
         send_rect = send_btn.rectangle()
@@ -407,18 +480,27 @@ def _run_phase4a_verification(ctx):
         assert hist_rect.top < comp_rect_after.top, "HistoryScroller must sit above docked ComposerBox"
         assert send_rect.bottom <= win_rect_after.bottom, "Composer actions must remain within window bounds"
 
-        s5 = capture_screenshot(win, "05_confirmed_first_send_docked.png", "Docked composer below realized timeline after first confirmed save", ctx=ctx)
+        s5 = capture_screenshot(win, "05_confirmed_first_send_docked.png", "Docked composer below realized timeline after confirmed save", ctx=ctx)
         screenshots.append(s5)
         register_test("confirmed_first_send_docking", "PASS", "First send durably saved; hero withdrawn; composer docked; timeline realized; box cleared.")
 
         # =====================================================================
-        # PART 4: DRAFT & FOCUS PRESERVATION ACROSS SWITCH & CANCEL (UX-11)
+        # PART 4: SELECTION, CARET & FOCUS PRESERVATION ACROSS SWITCH & CANCEL (UX-11)
         # =====================================================================
-        log("\n--- PART 4: Draft Preservation Across Switch Project & Cancel (UX-11) ---", ctx=ctx)
-        second_draft = "Second message draft: verifying caret and focus across cancel"
+        log("\n--- PART 4: Selection and Focus Preservation Across Switch Project & Cancel (UX-11) ---", ctx=ctx)
+        second_draft = "Second message selection draft for native verification"
         set_text_value(composer_box, second_draft)
         time.sleep(0.5)
         assert composer_box.window_text() == second_draft
+
+        # Set selection on the word "selection" (index 15, length 9)
+        ok_sel = select_text_range(composer_box, 15, 9)
+        assert ok_sel is True, "select_text_range failed"
+        time.sleep(0.2)
+        sel_read = get_selected_text(composer_box)
+        assert sel_read == "selection", f"Expected selected text 'selection', got '{sel_read}'"
+        assert composer_box.has_keyboard_focus(), "ComposerBox must have keyboard focus"
+        log("PASS: Live UIA selection verified as 'selection' with keyboard focus.", ctx=ctx)
 
         # Open File -> Switch Project
         log("Invoking native File -> Switch Project...", ctx=ctx)
@@ -441,16 +523,25 @@ def _run_phase4a_verification(ctx):
         time.sleep(1.5)
 
         # Verify return to beta Chat with draft preserved
+        # Verify return to beta Chat with draft text, selection, and focus preserved
         obs_header_beta = H.observe_by_name(win, "beta", retries=5)
         assert obs_header_beta.is_found, "Must return to active project beta"
         composer_box_after = H.find_by_aid(win, "ComposerBox")
         assert composer_box_after is not None, "ComposerBox missing after switch cancel"
         assert composer_box_after.window_text() == second_draft, f"Draft text was not preserved across switch cancel: '{composer_box_after.window_text()}'"
         log("PASS: Draft text strictly preserved across switch cancel.", ctx=ctx)
+        assert composer_box_after.window_text() == second_draft, f"Draft text was not preserved: '{composer_box_after.window_text()}'"
 
         s6 = capture_screenshot(win, "06_switch_cancel_draft_preserved.png", "Draft strictly preserved in ComposerBox after switch cancel", ctx=ctx)
+        sel_after = get_selected_text(composer_box_after)
+        assert sel_after == "selection", f"Selection was not preserved across switch cancel: '{sel_after}'"
+        assert composer_box_after.has_keyboard_focus(), "Keyboard focus must be restored to ComposerBox"
+        log("PASS: Active selection ('selection') and focus strictly preserved across switch cancel.", ctx=ctx)
+
+        s6 = capture_screenshot(win, "06_switch_cancel_draft_preserved.png", "Draft and selection preserved in ComposerBox after switch cancel", ctx=ctx)
         screenshots.append(s6)
         register_test("draft_preservation_across_switch_cancel", "PASS", "Draft text strictly preserved across Switch Project cancel.")
+        register_test("draft_and_selection_preservation_across_switch_cancel", "PASS", "Draft text, active selection, and focus strictly preserved across Switch Project cancel.")
 
         # =====================================================================
         # PART 5: RESTART RECOVERY & RESTORED DOCKED STATE (UX-10, UX-11)
@@ -506,6 +597,10 @@ def _run_phase4a_verification(ctx):
         assert obs_box2.is_found, "ComposerBox missing on restart"
         restored_text = obs_box2.element.window_text()
         assert restored_text == second_draft, f"Restored draft mismatch on restart: expected '{second_draft}', got '{restored_text}'"
+
+        # Verify caret on restart is at end (selection length 0)
+        sel_restart = get_selected_text(obs_box2.element)
+        assert sel_restart == "", f"Selection on restart must be empty caret, got '{sel_restart}'"
 
         s7 = capture_screenshot(win2, "07_restart_recovery_docked.png", "Restored Chat opening directly docked with recovered draft", ctx=ctx)
         screenshots.append(s7)

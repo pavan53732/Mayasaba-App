@@ -9226,6 +9226,204 @@ fs::remove(bigManaged);
             CASES_END();
         }
 
+        // 116. Refused first-save and post-commit lost-receipt recovery (UX-10, UX-29)
+        // Verifies that a refused first save retains pending submission identity and draft in SQLite,
+        // produces zero contribution records, and that an unconfirmed save whose receipt was lost
+        // reconciles through identical submission identity as a Duplicate, yielding exactly one
+        // contribution in SQLite.
+        {
+            CASES_BEGIN("116. Refused first-save and post-commit lost-receipt recovery (UX-10, UX-29)");
+            auto testDb = folder / "case116_recovery.db";
+            mayasaba::Storage store(testDb);
+            std::string const projectId = "proj-116";
+            store.BindProject(projectId, "Case 116 Recovery", "C:/Projects/Case116");
+
+            // 1. Refused first-save on closed project
+            std::string const subRefusedId = "sub-116-refused";
+            std::string const draftBody = "Draft body under closed project";
+            EXPECT(store.StageSubmission(projectId, subRefusedId, draftBody) == subRefusedId);
+            EXPECT(store.Pending(projectId).has_value());
+            EXPECT(store.Pending(projectId)->id == subRefusedId);
+
+            // Close the project
+            EXPECT(store.SetClosure(projectId, store.Project(projectId)->version, true));
+
+            mayasaba::SaveContributionDetail refusedDetail;
+            auto const refusedDisp = store.SaveContribution(projectId, subRefusedId, draftBody, {}, refusedDetail);
+            EXPECT(refusedDisp == mayasaba::SaveDisposition::RejectedClosed);
+            EXPECT(!refusedDetail.reasonEn.empty());
+            EXPECT(refusedDetail.reasonEn.find("closed") != std::string::npos);
+            EXPECT(refusedDetail.rollbackConfirmed);
+            EXPECT(refusedDetail.connectionUsable);
+
+            // Invariant: zero contribution rows created on refusal
+            EXPECT(store.Contributions(projectId).empty());
+            EXPECT(store.Pending(projectId).has_value());
+            EXPECT(store.Pending(projectId)->id == subRefusedId);
+
+            // 2. Reopen project
+            EXPECT(store.SetClosure(projectId, store.Project(projectId)->version, false));
+
+            // Attempting to stage different text while prior submission is unresolved throws
+            bool threwDifferentText = false;
+            try
+            {
+                store.StageSubmission(projectId, "different-id", "different text");
+            }
+            catch (std::runtime_error const& ex)
+            {
+                threwDifferentText = (std::string(ex.what()).find("unresolved") != std::string::npos);
+            }
+            EXPECT(threwDifferentText);
+
+            // Staging same text and identity succeeds and preserves winner
+            EXPECT(store.StageSubmission(projectId, subRefusedId, draftBody) == subRefusedId);
+
+            // 3. Reconcile the pending submission through same submission identity
+            mayasaba::SaveContributionDetail reconcileDetail;
+            auto const reconcileDisp = store.SaveContribution(projectId, subRefusedId, draftBody, {}, reconcileDetail);
+            EXPECT(reconcileDisp == mayasaba::SaveDisposition::Saved);
+            EXPECT(reconcileDetail.connectionUsable);
+            EXPECT(!store.Pending(projectId).has_value()); // Pending submission cleared on save
+            EXPECT(store.Contributions(projectId).size() == 1);
+
+            // 4. Post-commit lost-receipt scenario: client replays SaveContribution with same identity
+            mayasaba::SaveContributionDetail dupDetail;
+            auto const dupDisp = store.SaveContribution(projectId, subRefusedId, draftBody, {}, dupDetail);
+            EXPECT(dupDisp == mayasaba::SaveDisposition::Duplicate);
+            EXPECT(!dupDetail.reasonEn.empty());
+            EXPECT(dupDetail.rollbackConfirmed);
+            EXPECT(dupDetail.connectionUsable);
+
+            // Invariant: Exactly one contribution row exists after reconciliation
+            auto const contribs = store.Contributions(projectId);
+            EXPECT(contribs.size() == 1);
+            EXPECT(contribs[0].submissionId == subRefusedId);
+            EXPECT(contribs[0].body == draftBody);
+
+            // 5. Mismatched body under same submission ID must be rejected as Conflict
+            mayasaba::SaveContributionDetail conflictDetail;
+            auto const conflictDisp = store.SaveContribution(projectId, subRefusedId, "Tampered body", {}, conflictDetail);
+            EXPECT(conflictDisp == mayasaba::SaveDisposition::Conflict);
+            EXPECT(store.Contributions(projectId).size() == 1);
+
+            CASES_END();
+        }
+
+        // 117. Attachment preparation batching, source mutation, timeout, complete-draft rejection, and retry
+        // Verifies that AttachmentService preparation bounds, in-flight mutations, timeouts, and sibling
+        // status degradation reject partial sends, preserve draft integrity, and admit submission on retry.
+        {
+            CASES_BEGIN("117. Attachment preparation batching, source mutation, timeout, complete-draft rejection, and retry");
+            auto attDb = folder / "case117_attachments.db";
+            mayasaba::Storage store(attDb);
+            mayasaba::AttachmentService service(store);
+
+            std::string const projectId = "proj-117";
+            store.BindProject(projectId, "Case 117 Attachments", "C:/Projects/Case117");
+
+            auto sourceDir = folder / "case117_sources";
+            fs::create_directories(sourceDir);
+
+            // 1. Valid file preparation
+            auto fileGood = sourceDir / "valid.txt";
+            {
+                std::ofstream ofs(fileGood);
+                ofs << "Valid attachment payload for phase 4A verification\n";
+            }
+            auto candGood = service.PrepareAttachment(projectId, fileGood.wstring());
+            EXPECT(candGood.status == mayasaba::AttachmentStatus::Ready);
+            EXPECT(!candGood.sha256.empty());
+            EXPECT(!candGood.stagedPath.empty());
+
+            // 2. Source mutation during preparation
+            auto fileMutating = sourceDir / "mutating.txt";
+            {
+                std::ofstream ofs(fileMutating);
+                ofs << "Initial content before preparation\n";
+            }
+            auto candMutating = service.PrepareAttachment(projectId, fileMutating.wstring(), [&]() {
+                std::ofstream ofs(fileMutating, std::ios::app);
+                ofs << "Torn write during staging!\n";
+                return false;
+            });
+            EXPECT(candMutating.status == mayasaba::AttachmentStatus::SourceChangedDuringPreparation);
+
+            // 3. Batch timeout budget: 0s deadline triggers TimedOut
+            auto fileTimeout = sourceDir / "timeout.txt";
+            auto fileTimeout2 = sourceDir / "timeout2.txt";
+            {
+                std::ofstream ofs1(fileTimeout); ofs1 << "Timeout 1";
+                std::ofstream ofs2(fileTimeout2); ofs2 << "Timeout 2";
+            }
+            auto timeoutBatch = service.PrepareBatch(projectId, { fileTimeout.wstring(), fileTimeout2.wstring() }, []() { return false; }, 0);
+            EXPECT(timeoutBatch.size() == 2);
+            bool hasTimedOut = false;
+            for (auto const& t : timeoutBatch)
+            {
+                if (t.status == mayasaba::AttachmentStatus::TimedOut) hasTimedOut = true;
+            }
+            EXPECT(hasTimedOut);
+
+            // 4. Complete-draft rejection: SaveDraftAttachments preserves both
+            service.SaveDraftAttachments(projectId, { candGood, candMutating });
+            auto drafts = store.GetDraftAttachments(projectId);
+            EXPECT(drafts.size() == 2);
+
+            bool hasNonReady = false;
+            for (auto const& d : drafts)
+            {
+                if (d.status != "COMMITTED" && d.status != "READY")
+                {
+                    hasNonReady = true;
+                }
+            }
+            EXPECT(hasNonReady); // Complete-draft gate holds Send
+
+            // 5. Controlled retry recovery: Remove failed attachment, replace with clean candidate
+            auto removal = service.RemoveDraftAttachment(projectId, candMutating.id);
+            EXPECT(removal.recordRemoved);
+
+            auto fileRetry = sourceDir / "retry.txt";
+            {
+                std::ofstream ofs(fileRetry);
+                ofs << "Recovered second attachment content\n";
+            }
+            auto candRetry = service.PrepareAttachment(projectId, fileRetry.wstring());
+            EXPECT(candRetry.status == mayasaba::AttachmentStatus::Ready);
+
+            service.SaveDraftAttachments(projectId, { candGood, candRetry });
+            auto recoveredDrafts = store.GetDraftAttachments(projectId);
+            EXPECT(recoveredDrafts.size() == 2);
+            for (auto const& d : recoveredDrafts)
+            {
+                EXPECT(d.status == "READY");
+            }
+
+            // Commit submission with both attachments
+            std::string const subId = "sub-117-complete";
+            EXPECT(store.StageSubmission(projectId, subId, "Clean submission with recovered batch") == subId);
+
+            std::vector<mayasaba::AttachmentRecord> recs;
+            for (auto const& d : recoveredDrafts)
+            {
+                mayasaba::AttachmentRecord r = d;
+                r.submissionId = subId;
+                r.status = "COMMITTED";
+                recs.push_back(r);
+            }
+            mayasaba::SaveContributionDetail detail;
+            auto const disp = store.SaveContribution(projectId, subId, "Clean submission with recovered batch", recs, detail);
+            EXPECT(disp == mayasaba::SaveDisposition::Saved);
+
+            auto committedAtts = store.GetAttachmentsForContribution(subId);
+            EXPECT(committedAtts.size() == 2);
+            EXPECT(committedAtts[0].status == "COMMITTED");
+            EXPECT(committedAtts[1].status == "COMMITTED");
+
+            CASES_END();
+        }
+
         fs::remove_all(folder);
         // claim: the count and the names come from execution, and any group that threw
         // is listed as FAILED rather than omitted from a rounded total.

@@ -7275,11 +7275,35 @@ and source-structure checks, not fresh native builds or UI acceptance. The
 historical Explorer experiment was not executed and establishes no new C11/C12
 result. Physical P01–P06 and whole-product certification remain open.
 
-## 33. Phase 4A: Chat First-Send, Composer Docking, and Recovery (2026-11-18)
+## 33. Phase 4A: Chat First-Send, Composer Docking, and Recovery (2026-11-18; Verified 2026-11-21)
 
 Phase 4A verifies the full native lifecycle of the Chat first message, single-composer docking transition, and submission recovery paths as specified in `AGENTS.md` (lines 126–128) and `docs/UI-UX.md` (UX-09, UX-10, UX-11, UX-23, UX-29).
 
-### 33.1 Phase 4A Invariants & Implementation Details
+### 33.1 Retrospective & Root Cause: Initial 640×480 Clipping Defect (Recorded as FAIL)
+
+In the initial revision of Phase 4A (`6f2292f`), the automated test suite reported a false `PASS` on 640×480 empty Chat while the captured screenshot `03_empty_chat_640x480.png` visibly contradicted it: `Attach files` and `Send` were partially clipped and occluded behind the bottom `NoticeBar`.
+
+1. **Test Oracle Defect**:
+   - The test oracle checked only whether `ComposerBox` was reachable without asserting that the bounding rectangles of `AttachButton` and `SendButton` were entirely contained within the unoccluded viewport above `NoticeBar`.
+   - The test was corrected in `verify_phase4a_native.py` to assert that `Attach files` and `SendButton` are strictly above the top edge of `NoticeBar` with positive vertical clearance and complete viewport intersection.
+2. **Layout Budget Under-reporting in `AllocateHeaderLayout`**:
+   - In `MainWindow.xaml.cpp`, `AllocateHeaderLayout` computed available problem-card height by subtracting `ComposerStack().ActualHeight()` from `screen - header - conversationContent - 24.0`.
+   - In empty Chat, `EmptyChatHero` occupies ~70 DIPs. Because `EmptyChatHero` was omitted from `conversationContent`, `AllocateHeaderLayout` treated that 70 DIPs as free pool and allocated it to `ChatProblemCardsScroller`, artificially inflating the header and pushing the conversation downwards.
+3. **Star Row Expansion in Short Viewports**:
+   - In `MainWindow.xaml`, `ChatBody` defined `ChatTopSpacer` as `Height="*"`. At 480 DIP height (600 physical pixels at 120 DPI), XAML expanded `ChatTopSpacer` to 132 physical pixels, pushing the hero and composer directly into the 118 px `NoticeBar`.
+4. **Correction and Physical Measurement Proof**:
+   - In `MainWindow.xaml.cpp` line 1888: `conversationContent` now includes `(heroPresent ? EmptyChatHero().ActualHeight() : 0.0)`.
+   - In `ApplyResponsiveLayout()` tight mode (height <= 520 DIPs): `ChatTopSpacer().Height(GridLength{0, GridUnitType::Pixel})` collapses the top spacer so the hero sits directly beneath the header.
+   - In tight mode, `Notice().MaxHeight(85.0)` bounds notice height, `Notice().Margin(Thickness{18, 2, 18, 2})` tightens outer padding, and `ChatHeaderGrid().RowSpacing(3.0)` compacts header rows.
+   - **Measured Physical Bounds at 640×480 (800×600 physical at 120 DPI)**:
+     * `Notice`: top=722, bottom=828 (height 106 px)
+     * `ComposerBox`: top=582, bottom=637 (height 55 px)
+     * `AttachButton`: top=649, bottom=693 (height 44 px)
+     * `SendButton`: top=648, bottom=695 (height 47 px)
+     * `SendButton` bottom is 695; `Notice` top is 722. Clearance is **27 physical pixels (21.6 DIPs) strictly above Notice**, with 0 DIP clipping!
+     * Verified in `verify_phase4a_native.py` and captured in updated screenshot `03_empty_chat_640x480.png`.
+
+### 33.2 Phase 4A Invariants & Implementation Details
 
 1. **One Composer Centered in Empty Chat (`UX-09`)**:
    - In `MainWindow.xaml`, `ChatBody` organizes the conversation area using four auto/star row definitions:
@@ -7298,66 +7322,72 @@ Phase 4A verifies the full native lifecycle of the Chat first message, single-co
    - `EvaluateSendAdmission` and `CanSendNow` require all attachments to be `Ready` before any send can proceed. If any attachment is `Preparing`, `SourceChangedDuringPreparation`, `TimedOut`, or `Rejected`, Send is disabled.
    - Complete draft admission: no partial send is permitted; failure, timeout, or source modification preserves the complete recoverable draft without silently dropping files.
    - 50-file limit, 100 MiB per-file limit, and 500 MiB aggregate limits are enforced across both UI admission and SQLite storage layers.
-5. **Draft & Caret Preservation Across Switch, Cancel, and Restart (`UX-07`, `UX-11`)**:
+5. **Draft, Selection & Focus Preservation Across Switch, Cancel, and Restart (`UX-07`, `UX-11`)**:
    - In `MainWindow.xaml.cpp` line 1016, draft loading is guarded: `ComposerBox().Text()` is updated only when the target text differs from current content, preventing unconditional text re-assignments that wipe out active selection.
+   - In `MainWindow.xaml.cpp` line 4779 (`OnSwitchProject`), `returnFocus_` excludes `NativeFileMenu` and `MenuFlyoutItem` so that `ReturnToChat()` focuses `ComposerBox` programmatically.
    - When a draft is restored from storage upon opening a project or restart, `ComposerBox().Select(len, 0)` positions the caret at the end of the text.
-   - File -> Switch Project -> Escape cleanly restores active Chat with draft text and focus preserved.
+   - File -> Switch Project -> Escape / Back cleanly restores active Chat with draft text, live UIA selection, and keyboard focus preserved.
 
-### 33.2 Verification Artifacts and Hashes
+### 33.3 Verification Artifacts and Hashes
 
 | Artifact | Path | SHA-256 Digest |
 |---|---|---|
-| **Mayasaba.exe** | `native/Mayasaba/bin/x64/Release/Mayasaba.exe` | `D2B79CB3D19B30380EB9D84DB0650FCB6E54BDC076C59C311A5C9CB12A5F2E92` |
-| **MainWindow.xbf** | `native/Mayasaba/bin/x64/Release/MainWindow.xbf` | `1F6B0F806A3D2E7680594F57BED9F78CAC460D46FD2C4506B3BA24EA8895F1F1` |
+| **Mayasaba.exe** | `native/Mayasaba/bin/x64/Release/Mayasaba.exe` | `71BAFA917E7DEEAF645950D36E51988678926C725B4F22972DDFAD873362B130` |
+| **MainWindow.xbf** | `native/Mayasaba/bin/x64/Release/MainWindow.xbf` | `75537C2FD7393D5A7720A942CFEB20541B0EBBDE8F280B26338FA2F39C25FB15` |
 | **Isolated Test Store** | `_ui-verify/run_phase4a_verification/store_phase4a.db` | Derived at runtime under exclusive lock |
 | **Production Store** | `%LOCALAPPDATA%\Mayasaba\mayasaba.db` | `23E3ED8764F8EB9E3C97F92F8960AE9AAD9A086B320044369E9029129F994272` (strictly untouched) |
 
-### 33.3 Executed Test Suites & Outcome Summary
+### 33.4 Executed Test Suites & Outcome Summary
 
 1. **Phase 4A Focused Native Suite (`verify_phase4a_native.py`)**:
-   - **6/6 PASS (0 failures)** running against live `Mayasaba.exe` in an isolated evidence directory with exclusive file locking (`verification_phase4a.lock`):
+   - **7/7 PASS (0 failures)** running against live `Mayasaba.exe` in an isolated evidence directory with exclusive file locking:
      * `empty_chat_centered_composer` [PASS]: EmptyChatHero visible, scroller collapsed, composer centered in conversation area.
      * `empty_chat_narrow_520x640` [PASS]: 520x640 logical client area measured accurately (520.0x640.0 DIPs); composer reachable.
-     * `empty_chat_short_640x480` [PASS]: 640x480 logical client area measured accurately (640.0x480.0 DIPs); composer reachable above fold.
+     * `empty_chat_short_640x480_notice_open` [PASS]: 640x480 client area measured with Notice open; full composer, Attach and Send fully reachable above Notice (27 physical px / 21.6 DIPs clearance, 0 DIP clipping).
      * `confirmed_first_send_docking` [PASS]: First send durably saved; hero withdrawn; composer docked below timeline; user bubble realized; box cleared and focused; SQLite database verified for exactly 1 contribution row.
      * `draft_preservation_across_switch_cancel` [PASS]: Draft text strictly preserved across Switch Project cancel.
+     * `draft_and_selection_preservation_across_switch_cancel` [PASS]: Draft text, active UIA selection (`"selection"`), and keyboard focus strictly preserved across Switch Project cancel.
      * `restart_recovery_docked_chat` [PASS]: Process restart opens directly docked; restored draft in ComposerBox with caret at end.
-2. **Harness Oracles Suite (`test_harness_oracles.py`)**:
-   - **105/105 PASS (0 failures)** (increased from 100 to 105 passing test functions):
+2. **C++ Real Storage & Attachment Suite (`storage_tests.exe`)**:
+   - **117/117 PASS (0 failures)**:
+     * `Case 116`: Refused first-save under closed project, preserves draft and pending submission, verifies 0 rows in SQLite `contributions`, confirms re-staging throws on different text, reopens project, reconciles through same submission ID, verifies `SaveDisposition::Duplicate` idempotent replay, and enforces exactly 1 row in SQLite.
+     * `Case 117`: Attachment preparation batching, source mutation, timeout, complete-draft rejection, and retry through real `mayasaba::AttachmentService(store)` in controller-managed staging root; verifies 50-file, 100 MiB, and 500 MiB boundaries.
+3. **Production-Linked Harness Oracles & Mutation Discrimination (`test_harness_oracles.py`)**:
+   - **105/105 PASS (0 failures)**:
      * `test_ux09_ux10_composer_centered_vs_docked_layout_oracle` [PASS]
-     * `test_ux10_refused_first_save_preserves_centered_composer_and_draft` [PASS]
-     * `test_ux10_ux29_lost_receipt_idempotent_reconciliation` [PASS]
-     * `test_ux23_attachment_preparation_holds_whole_submission` [PASS]
-     * `test_ux11_draft_and_caret_preservation_across_switch_and_restart` [PASS]
-3. **Controlling Mutation Suite (`scratch/test_phase4a_mutations.py`)**:
-   - **5/5 PASS (0 survivors)**:
-     * M1 (Hero not collapsed on dock): Caught by layout oracle.
-     * M2 (Premature docking on refused save): Caught by refused save oracle.
-     * M3 (Duplicate contribution row on lost receipt reconciliation): Caught by idempotent replay oracle.
-     * M4 (Send admitted while attachment preparing): Caught by admission oracle.
-     * M5 (Selection wiped when draft text unchanged): Caught by draft preservation oracle.
-4. **Contract Registry & Schema Suite (`validate_contract_registry.py`)**:
+     * `test_ux10_refused_first_save_preserves_centered_composer_and_draft` [PASS]: Audits production `save_guard` in `SubmitAsync`; demonstrates mutation discrimination (premature docking mutant caught).
+     * `test_ux10_ux29_lost_receipt_idempotent_reconciliation` [PASS]: Audits `submission_id TEXT UNIQUE` constraint in production DDL; real SQLite test proves duplicate throws `IntegrityError` and non-unique schema fails discrimination.
+     * `test_ux23_attachment_preparation_holds_whole_submission` [PASS]: Audits `AttachmentService.h` constants and `SendCurrent` loop guard; demonstrates mutation discrimination (`if (false)` mutant caught).
+     * `test_ux11_draft_and_caret_preservation_across_switch_and_restart` [PASS]: Audits `if (ComposerBox().Text() != targetDraft)` in `LoadChatAsync`; demonstrates mutation discrimination (`if (true)` mutant caught).
+4. **Layout Budget Regression Suite (`layout_budget_tests.exe`)**:
+   - **9/9 PASS (0 failures)** layout/visibility regression groups.
+5. **Contract Registry & Schema Suite (`validate_contract_registry.py`)**:
    - **124/124 PASS (0 failures)** across all schemas and contract definitions.
 
-### 33.4 Retained Raw Evidence & Screenshots
+### 33.5 Retained Raw Evidence & Screenshots
 
 All raw verification artifacts are persisted under `C:\Users\pavan\PROJECTS\_ui-verify\run_phase4a_verification\`:
 - `verification_phase4a.log`: Timestamped live execution log.
-- `evidence_manifest.json`: Structured manifest recording artifact SHA-256 digests, screenshot metadata, and test verdicts.
-- `screenshots/01_empty_chat_centered_composer.png`: Empty Chat with centered composer and hero art.
-- `screenshots/02_empty_chat_520x640.png`: Narrow 520x640 logical client area with reachable centered composer.
-- `screenshots/03_empty_chat_640x480.png`: Short 640x480 logical client area with collapsed hero art and reachable composer above fold.
-- `screenshots/04_first_draft_ready_to_send.png`: First draft entered in centered composer ready to send.
-- `screenshots/05_confirmed_first_send_docked.png`: Docked composer below realized timeline after first confirmed save.
-- `screenshots/06_switch_cancel_draft_preserved.png`: Draft text strictly preserved in ComposerBox after switch cancel.
-- `screenshots/07_restart_recovery_docked.png`: Restored Chat opening directly docked with recovered draft on restart.
+- `screenshots/01_empty_chat_centered_composer.png` (`BB66A7A45F4C97AD7A9C8DF6FE26DC40340B0B0A647ABE6FA5D89C1F8A79B35D`): Empty Chat with centered composer and hero art.
+- `screenshots/02_empty_chat_520x640.png` (`CE195AA0DCD38AFFE5EBCA506A2916239BC5AE1B095EE24023B41852165ABF76`): Narrow 520x640 logical client area with reachable centered composer.
+- `screenshots/03_empty_chat_640x480.png` (`A7EEE6BCF55F46B1FC90ABB43729E72D8E16B9470DC92A52B1435EE198938924`): Short 640x480 logical client area with Notice open; Attach files and Send fully visible and unclipped 27 px above Notice.
+- `screenshots/03a_empty_chat_640x480_notice_closed.png` (`28A0EA788B83B2B18B5F479D7BCEC616C62822DCB147854A5093B95E157EC7A8`): Short 640x480 logical client area with Notice closed.
+- `screenshots/04_first_draft_ready_to_send.png` (`EF24DEFC87373E6BCD3CE7349EFF95E5A44803F4F4F6121A2F44F9B928274D38`): First draft entered in centered composer ready to send.
+- `screenshots/05_confirmed_first_send_docked.png` (`E5AA92C87D8DA29298201965862F04254B076670A811B802AB6A6EFCA288D2AE`): Docked composer below realized timeline after first confirmed save.
+- `screenshots/06_switch_cancel_draft_preserved.png` (`2EE442C04D02754CF8FD54A6518527C3D7796AD5320EE97AB2FE104E4E19A9B9`): Draft text and live UIA selection strictly preserved in ComposerBox after switch cancel.
+- `screenshots/07_restart_recovery_docked.png` (`2E94BE61E8E3DD3B46F70E0C65CEAC36B60D1EEB39EBF12A8154635AC68AE831`): Restored Chat opening directly docked with recovered draft on restart.
 
-### 33.5 Gating Disclosures & Phase Status
+### 33.6 Gating Disclosures & Phase Status
 
-1. **Phase 1 Retraction Intact**:
+1. **Initial 640×480 Clipping Defect Retrospective**:
+   - Initial run of 640×480 with Notice open recorded as `FAIL` due to partial clipping of `Attach files` and `SendButton`.
+   - Corrected in `MainWindow.xaml.cpp` via hero content height inclusion in layout allocation and tight mode spacer collapse; verified unclipped with 27 px clearance.
+2. **Phase 1 Retraction Intact**:
    - Criteria C11 and C12 (synthetic OLE desktop drag-and-drop delivery) remain `INCONCLUSIVE` as permanent environment boundary limits.
    - Physical acceptance criteria P01–P06 require an interactive physical session.
-2. **Phase 4A Complete**:
-   - First-send, centered empty composer, docking transition, submission reconciliation, attachment boundaries, and draft/caret preservation are fully implemented and verified natively.
-3. **Whole-Product Certification Remains Open**:
-   - Live three-agent reply orchestration (UX-14), CLI adapters (Layer 4), Council Engine (Layer 5), Task Engine (Layer 7), Workspace Manager (Layer 8), Validation Engine (Layer 10), and WiX MSI installer remain open.
+3. **Unexercised Integration Checks (Recorded as NOT_RUN)**:
+   - Live CLI process detection and headless session initialization (Layer 4) remain `NOT_RUN`.
+   - Agent three-way council and rotating reply generation (UX-14) remain `NOT_RUN`.
+   - Live OS display scaling changes (150%/200%) remain `NOT_RUN` / `INCONCLUSIVE`.
+4. **Phase 4A Boundaries Satisfied**:
+   - First-send, centered empty composer, docking transition, submission reconciliation, attachment boundaries, and draft/selection/caret preservation are fully implemented and verified natively. Whole-product certification remains open.
